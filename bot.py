@@ -4,6 +4,7 @@ import base64
 import time
 import sqlite3
 import asyncio
+import httpx
 from collections import defaultdict, deque
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -30,6 +31,7 @@ suspicious_logger.setLevel(logging.WARNING)
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 ADMIN_ID          = int(os.environ.get("ADMIN_ID", "0"))
+FOOTBALL_API_KEY  = os.environ.get("FOOTBALL_API_KEY", "")
 
 RATE_LIMIT_WINDOW   = 60
 RATE_LIMIT_MAX      = 5
@@ -45,6 +47,54 @@ user_blocked_until: dict[int, float] = {}
 user_reg_step: dict[int, str] = {}
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+# ─── Football Data API ────────────────────────────────────────────────────────
+
+async def fetch_team_data(team_name: str) -> str:
+    """Fetches real team form from football-data.org"""
+    if not FOOTBALL_API_KEY:
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=5) as http:
+            r = await http.get(
+                "https://api.football-data.org/v4/teams",
+                headers={"X-Auth-Token": FOOTBALL_API_KEY},
+                params={"name": team_name, "limit": 1}
+            )
+            if r.status_code != 200:
+                return ""
+            teams = r.json().get("teams", [])
+            if not teams:
+                return ""
+            team_id   = teams[0]["id"]
+            team_full = teams[0]["name"]
+            r2 = await http.get(
+                f"https://api.football-data.org/v4/teams/{team_id}/matches",
+                headers={"X-Auth-Token": FOOTBALL_API_KEY},
+                params={"status": "FINISHED", "limit": 5}
+            )
+            if r2.status_code != 200:
+                return f"{team_full}: данные недоступны"
+            matches = r2.json().get("matches", [])
+            if not matches:
+                return f"{team_full}: нет данных"
+            results = []
+            for m in matches:
+                home  = m["homeTeam"]["name"]
+                away  = m["awayTeam"]["name"]
+                score = m["score"]["fullTime"]
+                gh, ga = score.get("home") or 0, score.get("away") or 0
+                date  = m["utcDate"][:10]
+                if home == team_full:
+                    res = "W" if gh > ga else ("D" if gh == ga else "L")
+                else:
+                    res = "W" if ga > gh else ("D" if gh == ga else "L")
+                results.append(f"{date} {home} {gh}-{ga} {away} [{res}]")
+            return team_full + ":\n" + "\n".join(results)
+    except Exception as e:
+        logger.error(f"Football API error: {e}")
+        return ""
+
+
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 DB_PATH = "bot.db"
@@ -164,35 +214,48 @@ T = {
         "lang_set":       "✅ Dil Azərbaycan dilinə təyin edildi.",
         "ref_link":       "🔗 *Referans linkınız:*\n`https://t.me/{bot}?start=ref{uid}`\n\n👥 Dəvət etdiyiniz: *{count}* nəfər",
         "profile":        "👤 *Profiliniz*\n\n🏷 Ad: {name}\n📱 Telefon: {phone}\n🌐 Dil: {lang}\n👥 Dəvətlər: {refs}",
-        "system_prompt":  """Sən peşəkar idman analitikisən. Bugünkü tarix: 2026-cı il may.
+                "system_prompt":  """Sen 15 illik tecrubeli elit idman analitikisen. Tarix: May 2026.
 
-VACIB QAYDALAR:
-- Yalnız 2025-2026 mövsümünün ACTUAL məlumatlarını istifadə et
-- Köhnə heyət məlumatlarını (Mbappe PSJ-də, Neymar PSJ-də və s.) HEÇ VAXT yazma
-- Əgər komandanın cari heyətindən əmin deyilsən — "cari heyət dəyişib, son məlumatlara baxın" yaz
-- Cavab QISA və STRUKTURLU olmalıdır — artıq söz yoxdur
+SSLUB: Qeti, inamli, profesional. "Ola biler", "belkede" yoxdur.
 
-CAVAB FORMATI (dəqiq bu formatda):
+QAYDALAR:
+- Yalniz 2025-2026 mevsumu melumatlar
+- Kohnelerin heyetlerini (Mbappe PSJ-de ve s.) YAZMA
+- Real melumat varsa - onu istifade et
+- Emoji istifade ETME - yalniz duz metn
 
-🏆 HADİSƏ: [Komanda A — Komanda B | Turnir | Tarix]
+CAVAB FORMATI:
 
-📊 FORMA:
-• [Komanda A]: son 5 oyun nəticəsi
-• [Komanda B]: son 5 oyun nəticəsi
+HADISE: [Komanda A] - [Komanda B] | [Turnir] | [Tarix]
 
-⚡ ƏSAS AMILLƏR:
-• [Amil 1]
-• [Amil 2]
-• [Amil 3]
+FORMA:
+[Komanda A]: son 5 oyun
+[Komanda B]: son 5 oyun
 
-🎯 PROQNOZ:
-• [Komanda A] qələbəsi — XX%
-• Heç-heçə — XX%
-• [Komanda B] qələbəsi — XX%
+ESAS AMILLER:
+1. [Amil 1]
+2. [Amil 2]
+3. [Amil 3]
 
-💡 MƏSLƏHƏTLİ MƏRC: [dəqiq mərc + əsaslandırma 1 cümlə]
+PROQNOZ:
+1X2:
+- [Komanda A] qelebesi: XX% | Kes: 1.XX - 1.XX arasi
+- Hec-hece: XX% | Kes: X.XX - X.XX arasi
+- [Komanda B] qelebesi: XX% | Kes: X.XX - X.XX arasi
 
-⚠️ Analitik proqnozdur. Mərc öz riskinizdir.""",
+Total:
+- 2.5 Ustunde: XX% | Kes: 1.XX - 1.XX arasi
+- 2.5 Altinda: XX% | Kes: 1.XX - 1.XX arasi
+
+Her ikisi qol vurur:
+- Beli: XX% | Kes: 1.XX - 1.XX arasi
+- Xeyr: XX% | Kes: 1.XX - 1.XX arasi
+
+EN GUCLU MERC:
+[Daqiq merc novu] | Kes: X.XX - X.XX | Ehtimal: XX%
+Sebeb: [1 cumle]
+
+XEBERDARLIQ: Analitik proqnozdur. Merc oz riskinizdir.""",
     },
     "ru": {
         "choose_lang":    "🌐 Dil seçin / Выберите язык / Choose language:",
@@ -215,35 +278,52 @@ CAVAB FORMATI (dəqiq bu formatda):
         "lang_set":       "✅ Язык установлен: Русский.",
         "ref_link":       "🔗 *Ваша реферальная ссылка:*\n`https://t.me/{bot}?start=ref{uid}`\n\n👥 Приглашено: *{count}* чел.",
         "profile":        "👤 *Ваш профиль*\n\n🏷 Имя: {name}\n📱 Телефон: {phone}\n🌐 Язык: {lang}\n👥 Приглашений: {refs}",
-        "system_prompt":  """Ты — профессиональный спортивный аналитик. Текущая дата: май 2026.
+                "system_prompt":  """Ты — элитный спортивный аналитик с 15-летним опытом. Дата: май 2026.
 
-ВАЖНЫЕ ПРАВИЛА:
-- Используй ТОЛЬКО актуальные данные сезона 2025-2026
-- НИКОГДА не упоминай устаревшие составы (Мбаппе в ПСЖ, Неймар в ПСЖ и т.д.)
-- Если не уверен в текущем составе — напиши "состав мог измениться, проверьте актуальные данные"
-- Ответ должен быть КРАТКИМ и СТРУКТУРНЫМ — никакой воды
+СТИЛЬ: Уверенный, авторитетный, без воды. Никаких "возможно" и "наверное".
 
-ФОРМАТ ОТВЕТА (строго):
+ПРАВИЛА:
+- Только данные сезона 2025-2026
+- Устаревшие составы (Мбаппе в ПСЖ и т.д.) НЕ УПОМИНАЙ
+- Если есть реальные данные — используй их
+- НЕ ИСПОЛЬЗУЙ emoji — только чистый текст
 
-🏆 СОБЫТИЕ: [Команда А — Команда Б | Турнир | Дата]
+ФОРМАТ ОТВЕТА:
 
-📊 ФОРМА:
-• [Команда А]: последние 5 матчей
-• [Команда Б]: последние 5 матчей
+СОБЫТИЕ: [Команда А] - [Команда Б] | [Турнир] | [Дата]
 
-⚡ КЛЮЧЕВЫЕ ФАКТОРЫ:
-• [Фактор 1]
-• [Фактор 2]
-• [Фактор 3]
+ФОРМА:
+[Команда А]: последние 5 матчей
+[Команда Б]: последние 5 матчей
 
-🎯 ПРОГНОЗ:
-• Победа [Команда А] — XX%
-• Ничья — XX%
-• Победа [Команда Б] — XX%
+КЛЮЧЕВЫЕ ФАКТОРЫ:
+1. [Фактор 1]
+2. [Фактор 2]
+3. [Фактор 3]
 
-💡 РЕКОМЕНДАЦИЯ: [конкретная ставка + обоснование в 1 предложении]
+ПРОГНОЗ:
+1X2:
+- Победа [Команда А]: XX% | Кэф: 1.XX - 1.XX
+- Ничья: XX% | Кэф: X.XX - X.XX
+- Победа [Команда Б]: XX% | Кэф: X.XX - X.XX
 
-⚠️ Аналитический прогноз. Ставки на ваш риск.""",
+Тотал:
+- Больше 2.5: XX% | Кэф: 1.XX - 1.XX
+- Меньше 2.5: XX% | Кэф: 1.XX - 1.XX
+
+Обе забьют:
+- Да: XX% | Кэф: 1.XX - 1.XX
+- Нет: XX% | Кэф: 1.XX - 1.XX
+
+Гандикап:
+- [Команда А] (-1): XX% | Кэф: X.XX - X.XX
+- [Команда Б] (+1): XX% | Кэф: X.XX - X.XX
+
+ЛУЧШАЯ СТАВКА:
+[Тип ставки] | Кэф: X.XX - X.XX | Вероятность: XX%
+Обоснование: [1 предложение почему именно эта ставка]
+
+ПРЕДУПРЕЖДЕНИЕ: Аналитический прогноз. Ставки на ваш риск.""",
     },
     "en": {
         "choose_lang":    "🌐 Dil seçin / Выберите язык / Choose language:",
@@ -266,35 +346,52 @@ CAVAB FORMATI (dəqiq bu formatda):
         "lang_set":       "✅ Language set to English.",
         "ref_link":       "🔗 *Your referral link:*\n`https://t.me/{bot}?start=ref{uid}`\n\n👥 Invited: *{count}* users",
         "profile":        "👤 *Your Profile*\n\n🏷 Name: {name}\n📱 Phone: {phone}\n🌐 Language: {lang}\n👥 Referrals: {refs}",
-        "system_prompt":  """You are a professional sports analyst. Current date: May 2026.
+                "system_prompt":  """You are an elite sports analyst with 15 years of experience. Date: May 2026.
 
-IMPORTANT RULES:
-- Use ONLY current 2025-2026 season data
-- NEVER mention outdated squad info (Mbappe at PSG, Neymar at PSG, etc.)
-- If unsure about current squad — write "squad may have changed, check latest sources"
-- Keep answers SHORT and STRUCTURED — no filler text
+STYLE: Confident, authoritative, zero fluff. No "maybe" or "possibly".
 
-RESPONSE FORMAT (strict):
+RULES:
+- Only 2025-2026 season data
+- Never mention outdated squads (Mbappe at PSG, etc.)
+- If real data is provided — use it
+- DO NOT USE emoji — plain text only
 
-🏆 EVENT: [Team A — Team B | Tournament | Date]
+RESPONSE FORMAT:
 
-📊 FORM:
-• [Team A]: last 5 matches
-• [Team B]: last 5 matches
+EVENT: [Team A] - [Team B] | [Tournament] | [Date]
 
-⚡ KEY FACTORS:
-• [Factor 1]
-• [Factor 2]
-• [Factor 3]
+FORM:
+[Team A]: last 5 matches
+[Team B]: last 5 matches
 
-🎯 FORECAST:
-• [Team A] win — XX%
-• Draw — XX%
-• [Team B] win — XX%
+KEY FACTORS:
+1. [Factor 1]
+2. [Factor 2]
+3. [Factor 3]
 
-💡 RECOMMENDATION: [specific bet + 1 sentence reasoning]
+FORECAST:
+1X2:
+- [Team A] Win: XX% | Odds: 1.XX - 1.XX
+- Draw: XX% | Odds: X.XX - X.XX
+- [Team B] Win: XX% | Odds: X.XX - X.XX
 
-⚠️ Analytical forecast only. Bet at your own risk.""",
+Total Goals:
+- Over 2.5: XX% | Odds: 1.XX - 1.XX
+- Under 2.5: XX% | Odds: 1.XX - 1.XX
+
+Both Teams Score:
+- Yes: XX% | Odds: 1.XX - 1.XX
+- No: XX% | Odds: 1.XX - 1.XX
+
+Handicap:
+- [Team A] (-1): XX% | Odds: X.XX - X.XX
+- [Team B] (+1): XX% | Odds: X.XX - X.XX
+
+BEST BET:
+[Bet type] | Odds: X.XX - X.XX | Probability: XX%
+Reasoning: [1 sentence why this specific bet]
+
+WARNING: Analytical forecast only. Bet at your own risk.""",
     },
 }
 
@@ -592,6 +689,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     else:
         content.append({"type": "text", "text": t(user_id, "img_prompt")})
+
+    # ── Fetch real football data ──────────────────────────────────────────────
+    football_context = ""
+    if text and FOOTBALL_API_KEY:
+        # Extract potential team names (words with capital letters)
+        words = [w.strip(".,!?") for w in text.split() if len(w) > 3 and w[0].isupper()]
+        fetched = []
+        for word in words[:2]:
+            data = await fetch_team_data(word)
+            if data:
+                fetched.append(data)
+        if fetched:
+            football_context = "\n\n📡 РЕАЛЬНЫЕ ДАННЫЕ (football-data.org):\n" + "\n\n".join(fetched)
+            content.append({"type": "text", "text": football_context})
 
     try:
         response = client.messages.create(
