@@ -511,7 +511,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=1024,
             system=t(user_id, "system_prompt"),
             messages=[{"role": "user", "content": content}]
