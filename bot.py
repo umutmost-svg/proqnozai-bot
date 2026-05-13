@@ -1,228 +1,260 @@
-import os
-import logging
-import base64
-import time
-import sqlite3
-import asyncio
-import httpx
+import os, logging, base64, time, sqlite3, asyncio, httpx, random
 from collections import defaultdict, deque
+from datetime import datetime, date
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, filters, ContextTypes
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import anthropic
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler("bot.log", encoding="utf-8"), logging.StreamHandler()]
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.FileHandler("bot.log", encoding="utf-8"), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
-suspicious_logger = logging.getLogger("suspicious")
+sus = logging.getLogger("suspicious")
 _sh = logging.FileHandler("suspicious.log", encoding="utf-8")
 _sh.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
-suspicious_logger.addHandler(_sh)
-suspicious_logger.setLevel(logging.WARNING)
+sus.addHandler(_sh); sus.setLevel(logging.WARNING)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-ADMIN_ID          = int(os.environ.get("ADMIN_ID", "0"))
-FOOTBALL_API_KEY  = os.environ.get("FOOTBALL_API_KEY", "")
+TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
+ANTHROPIC_KEY    = os.environ["ANTHROPIC_API_KEY"]
+ADMIN_ID         = int(os.environ.get("ADMIN_ID", "0"))
+FOOTBALL_KEY     = os.environ.get("FOOTBALL_API_KEY", "")
+APIFOOTBALL_KEY  = os.environ.get("APIFOOTBALL_KEY", "")
 
-RATE_LIMIT_WINDOW   = 60
-RATE_LIMIT_MAX      = 5
-SPAM_BLOCK_AFTER    = 3
-SPAM_BLOCK_DURATION = 10 * 60
+RATE_WINDOW = 60; RATE_MAX = 5; SPAM_AFTER = 3; SPAM_DUR = 600
+client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
-# ─── Security (in-memory) ─────────────────────────────────────────────────────
-user_message_times: dict[int, deque] = defaultdict(deque)
-user_violations:    dict[int, int]   = defaultdict(int)
-user_blocked_until: dict[int, float] = {}
+# ─── In-memory ────────────────────────────────────────────────────────────────
+msg_times:  dict[int, deque] = defaultdict(deque)
+violations: dict[int, int]   = defaultdict(int)
+blocked_until: dict[int, float] = {}
+reg_step:   dict[int, str]   = {}
+live_subs:  dict[str, set]   = defaultdict(set)
+user_subs:  dict[int, set]   = defaultdict(set)
+last_events: dict[str, list] = {}
+ht_sent:    set              = set()
 
-# Шаги регистрации: None | "awaiting_name" | "awaiting_phone" | "done"
-user_reg_step: dict[int, str] = {}
-
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-# ─── Football Data API ────────────────────────────────────────────────────────
-
-async def fetch_team_data(team_name: str) -> str:
-    """Fetches real team form from football-data.org"""
-    if not FOOTBALL_API_KEY:
-        return ""
-    try:
-        async with httpx.AsyncClient(timeout=5) as http:
-            r = await http.get(
-                "https://api.football-data.org/v4/teams",
-                headers={"X-Auth-Token": FOOTBALL_API_KEY},
-                params={"name": team_name, "limit": 1}
-            )
-            if r.status_code != 200:
-                return ""
-            teams = r.json().get("teams", [])
-            if not teams:
-                return ""
-            team_id   = teams[0]["id"]
-            team_full = teams[0]["name"]
-            r2 = await http.get(
-                f"https://api.football-data.org/v4/teams/{team_id}/matches",
-                headers={"X-Auth-Token": FOOTBALL_API_KEY},
-                params={"status": "FINISHED", "limit": 5}
-            )
-            if r2.status_code != 200:
-                return f"{team_full}: данные недоступны"
-            matches = r2.json().get("matches", [])
-            if not matches:
-                return f"{team_full}: нет данных"
-            results = []
-            for m in matches:
-                home  = m["homeTeam"]["name"]
-                away  = m["awayTeam"]["name"]
-                score = m["score"]["fullTime"]
-                gh, ga = score.get("home") or 0, score.get("away") or 0
-                date  = m["utcDate"][:10]
-                if home == team_full:
-                    res = "W" if gh > ga else ("D" if gh == ga else "L")
-                else:
-                    res = "W" if ga > gh else ("D" if gh == ga else "L")
-                results.append(f"{date} {home} {gh}-{ga} {away} [{res}]")
-            return team_full + ":\n" + "\n".join(results)
-    except Exception as e:
-        logger.error(f"Football API error: {e}")
-        return ""
-
-
-
-# ─── Database ─────────────────────────────────────────────────────────────────
-DB_PATH = "bot.db"
-
-def db_connect():
-    return sqlite3.connect(DB_PATH)
+# ─── DB ───────────────────────────────────────────────────────────────────────
+DB = "bot.db"
+def con(): return sqlite3.connect(DB)
 
 def db_init():
-    with db_connect() as con:
-        con.executescript("""
+    with con() as c:
+        c.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             user_id      INTEGER PRIMARY KEY,
-            username     TEXT,
-            display_name TEXT,
-            phone        TEXT,
+            username     TEXT, display_name TEXT,
             lang         TEXT DEFAULT 'az',
-            referred_by  INTEGER,
-            ref_count    INTEGER DEFAULT 0,
-            is_registered INTEGER DEFAULT 0,
+            referred_by  INTEGER, ref_count INTEGER DEFAULT 0,
+            is_registered INTEGER DEFAULT 0, is_blocked INTEGER DEFAULT 0,
+            -- onboarding
+            sports       TEXT DEFAULT '',
+            bet_types    TEXT DEFAULT '',
+            experience   TEXT DEFAULT '',
+            bet_style    TEXT DEFAULT '',
+            onboarding_done INTEGER DEFAULT 0,
+            -- gamification
+            points       INTEGER DEFAULT 0,
+            level        INTEGER DEFAULT 1,
+            streak_days  INTEGER DEFAULT 0,
+            last_active  TEXT DEFAULT '',
+            total_requests INTEGER DEFAULT 0,
+            -- stats
             joined_at    TEXT DEFAULT (datetime('now'))
         );
         CREATE TABLE IF NOT EXISTS requests (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id    INTEGER,
-            msg_type   TEXT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER, msg_type TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS live_subscriptions (
+            user_id INTEGER, match_id TEXT, match_name TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (user_id, match_id)
+        );
+        CREATE TABLE IF NOT EXISTS achievements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER, achievement TEXT, earned_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER, type TEXT, sent_at TEXT DEFAULT (datetime('now'))
+        );
         """)
-
 db_init()
 
-# ─── DB helpers ───────────────────────────────────────────────────────────────
+def db_ensure(uid, uname):
+    with con() as c: c.execute("INSERT OR IGNORE INTO users (user_id,username) VALUES (?,?)", (uid, uname))
 
-def db_ensure_user(user_id: int, username: str):
-    with db_connect() as con:
-        con.execute(
-            "INSERT OR IGNORE INTO users (user_id, username) VALUES (?,?)",
-            (user_id, username)
-        )
+def db_set(uid, field, val):
+    with con() as c: c.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (val, uid))
 
-def db_set_field(user_id: int, field: str, value):
-    with db_connect() as con:
-        con.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (value, user_id))
+def db_get(uid) -> dict | None:
+    with con() as c:
+        r = c.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
+        if not r: return None
+        cols = [d[0] for d in c.execute("SELECT * FROM users WHERE user_id=?", (uid,)).description or
+                c.execute("PRAGMA table_info(users)").fetchall()]
+    if not r: return None
+    with con() as c:
+        cur = c.execute("SELECT * FROM users WHERE user_id=?", (uid,))
+        cols = [d[0] for d in cur.description]
+        r = cur.fetchone()
+    return dict(zip(cols, r)) if r else None
 
-def db_get_user(user_id: int) -> dict | None:
-    with db_connect() as con:
-        row = con.execute(
-            "SELECT user_id,username,display_name,phone,lang,ref_count,is_registered "
-            "FROM users WHERE user_id=?", (user_id,)
-        ).fetchone()
-    if not row:
-        return None
-    return dict(user_id=row[0], username=row[1], display_name=row[2],
-                phone=row[3], lang=row[4], ref_count=row[5], is_registered=row[6])
+def db_lang(uid) -> str:
+    u = db_get(uid); return u["lang"] if u else "az"
 
-def db_is_registered(user_id: int) -> bool:
-    u = db_get_user(user_id)
-    return bool(u and u["is_registered"])
+def db_is_reg(uid) -> bool:
+    u = db_get(uid); return bool(u and u["is_registered"])
 
-def db_complete_registration(user_id: int, referred_by: int | None):
-    with db_connect() as con:
-        con.execute("UPDATE users SET is_registered=1 WHERE user_id=?", (user_id,))
-        if referred_by:
-            con.execute(
-                "UPDATE users SET ref_count=ref_count+1 WHERE user_id=?", (referred_by,)
-            )
-            con.execute(
-                "UPDATE users SET referred_by=? WHERE user_id=? AND referred_by IS NULL",
-                (referred_by, user_id)
-            )
+def db_is_blocked(uid) -> bool:
+    u = db_get(uid); return bool(u and u["is_blocked"])
 
-def db_log_request(user_id: int, msg_type: str):
-    with db_connect() as con:
-        con.execute("INSERT INTO requests (user_id,msg_type) VALUES (?,?)", (user_id, msg_type))
+def db_all_uids() -> list[int]:
+    with con() as c: return [r[0] for r in c.execute("SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0").fetchall()]
 
-def db_all_users() -> list[int]:
-    with db_connect() as con:
-        return [r[0] for r in con.execute("SELECT user_id FROM users WHERE is_registered=1").fetchall()]
+def db_log_req(uid, mtype):
+    with con() as c:
+        c.execute("INSERT INTO requests (user_id,msg_type) VALUES (?,?)", (uid, mtype))
+        c.execute("UPDATE users SET total_requests=total_requests+1, last_active=? WHERE user_id=?",
+                  (datetime.now().isoformat(), uid))
 
-def db_get_lang(user_id: int) -> str | None:
-    u = db_get_user(user_id)
-    return u["lang"] if u else None
+def db_add_points(uid, pts, reason=""):
+    with con() as c:
+        c.execute("UPDATE users SET points=points+? WHERE user_id=?", (pts, uid))
+    update_level(uid)
+    if reason: logger.info(f"POINTS +{pts} ({reason}) | uid={uid}")
 
-def db_get_ref_count(user_id: int) -> int:
-    u = db_get_user(user_id)
-    return u["ref_count"] if u else 0
+def update_level(uid):
+    u = db_get(uid)
+    if not u: return
+    pts = u["points"]
+    level = 1
+    if pts >= 5000: level = 10
+    elif pts >= 2000: level = 7
+    elif pts >= 1000: level = 5
+    elif pts >= 500: level = 4
+    elif pts >= 200: level = 3
+    elif pts >= 100: level = 2
+    if level != u["level"]: db_set(uid, "level", level)
+
+def update_streak(uid):
+    u = db_get(uid)
+    if not u: return
+    last = u.get("last_active", "")
+    today = date.today().isoformat()
+    if last[:10] == today: return
+    yesterday = (date.today().replace(day=date.today().day-1)).isoformat() if date.today().day > 1 else ""
+    if last[:10] == yesterday:
+        db_set(uid, "streak_days", u["streak_days"] + 1)
+        if u["streak_days"] + 1 in (3, 7, 14, 30):
+            db_add_points(uid, 50 * (u["streak_days"] + 1 // 7 + 1), "streak_bonus")
+    else:
+        db_set(uid, "streak_days", 1)
+
+def db_add_achievement(uid, ach):
+    with con() as c:
+        existing = c.execute("SELECT id FROM achievements WHERE user_id=? AND achievement=?", (uid, ach)).fetchone()
+        if not existing:
+            c.execute("INSERT INTO achievements (user_id,achievement) VALUES (?,?)", (uid, ach))
+            return True
+    return False
 
 def db_stats() -> dict:
-    with db_connect() as con:
-        total     = con.execute("SELECT COUNT(*) FROM users WHERE is_registered=1").fetchone()[0]
-        today     = con.execute("SELECT COUNT(*) FROM users WHERE date(joined_at)=date('now') AND is_registered=1").fetchone()[0]
-        req_total = con.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
-        req_today = con.execute("SELECT COUNT(*) FROM requests WHERE date(created_at)=date('now')").fetchone()[0]
-        top_refs  = con.execute("SELECT user_id,username,ref_count FROM users ORDER BY ref_count DESC LIMIT 5").fetchall()
-    return dict(total=total, today=today, req_total=req_total, req_today=req_today, top_refs=top_refs)
+    with con() as c:
+        total   = c.execute("SELECT COUNT(*) FROM users WHERE is_registered=1").fetchone()[0]
+        today   = c.execute("SELECT COUNT(*) FROM users WHERE date(joined_at)=date('now') AND is_registered=1").fetchone()[0]
+        blocked = c.execute("SELECT COUNT(*) FROM users WHERE is_blocked=1").fetchone()[0]
+        rqtotal = c.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
+        rqtoday = c.execute("SELECT COUNT(*) FROM requests WHERE date(created_at)=date('now')").fetchone()[0]
+        toprefs = c.execute("SELECT user_id,username,ref_count FROM users ORDER BY ref_count DESC LIMIT 5").fetchall()
+        langs   = c.execute("SELECT lang,COUNT(*) FROM users WHERE is_registered=1 GROUP BY lang").fetchall()
+        toppts  = c.execute("SELECT user_id,display_name,points,level FROM users WHERE is_registered=1 ORDER BY points DESC LIMIT 5").fetchall()
+        ob_done = c.execute("SELECT COUNT(*) FROM users WHERE onboarding_done=1").fetchone()[0]
+        live_ct = c.execute("SELECT COUNT(*) FROM live_subscriptions").fetchone()[0]
+    return dict(total=total, today=today, blocked=blocked, rqtotal=rqtotal, rqtoday=rqtoday,
+                toprefs=toprefs, langs=langs, toppts=toppts, ob_done=ob_done, live_ct=live_ct)
+
+def db_search(q) -> list[dict]:
+    with con() as c:
+        cur = c.execute(
+            "SELECT * FROM users WHERE username LIKE ? OR display_name LIKE ? OR CAST(user_id AS TEXT)=? LIMIT 5",
+            (f"%{q}%", f"%{q}%", q))
+        cols = [d[0] for d in cur.description]; rows = cur.fetchall()
+    return [dict(zip(cols, r)) for r in rows]
+
+def db_add_lsub(uid, mid, mname):
+    with con() as c: c.execute("INSERT OR IGNORE INTO live_subscriptions (user_id,match_id,match_name) VALUES (?,?,?)", (uid, mid, mname))
+
+def db_del_lsub(uid, mid):
+    with con() as c: c.execute("DELETE FROM live_subscriptions WHERE user_id=? AND match_id=?", (uid, mid))
+
+def db_user_lsubs(uid) -> list[dict]:
+    with con() as c:
+        rows = c.execute("SELECT match_id,match_name FROM live_subscriptions WHERE user_id=?", (uid,)).fetchall()
+    return [dict(match_id=r[0], match_name=r[1]) for r in rows]
 
 # ─── Translations ─────────────────────────────────────────────────────────────
 T = {
-    "az": {
-        "choose_lang":    "🌐 Dil seçin / Выберите язык / Choose language:",
-        "ask_name":       "👋 Xoş gəldiniz!\n\nZəhmət olmasa adınızı və soyadınızı daxil edin:",
-        "ask_phone":      "📱 İndi telefon nömrənizi paylaşın.\nAşağıdakı düyməyə basın:",
-        "phone_btn":      "📱 Nömrəmi paylaş",
-        "reg_done":       "✅ *Qeydiyyat tamamlandı!*\n\n Salam, {name}! Artıq idman proqnozları əldə edə bilərsiniz.\n\nHadisə haqqında mətn yazın və ya şəkil göndərin. ⚽🏀🎾🥊",
-        "reg_done_ref":   "✅ *Qeydiyyat tamamlandı!*\n\nSalam, {name}! Sizi dəvət edən dostunuz bonus qazandı 🎁\n\nHadisə haqqında mətn yazın və ya şəkil göndərin. ⚽🏀🎾🥊",
-        "already_reg":    "✅ Siz artıq qeydiyyatdan keçmisiniz, {name}!",
-        "need_reg":       "⚠️ Əvvəlcə qeydiyyatdan keçin. /start yazın.",
-        "blocked":        "🚫 Müvəqqəti bloklanmısınız.\n⏳ {m} dəq {s} san sonra yenidən cəhd edin.",
-        "rate_limit":     "⏳ Sorğu limiti aşıldı. {w} saniyə gözləyin.\n⚠️ Xəbərdarlıq: {v}/{max}",
-        "auto_blocked":   "🚫 Çox sayda sorğu. {min} dəqiqəlik blok.",
-        "long_text":      "⚠️ Mətn çox uzundur. Zəhmət olmasa qısaldın.",
-        "injection":      "⚠️ Yalnız idman sorğuları qəbul edilir.",
-        "no_input":       "Zəhmət olmasa mətn yazın və ya şəkil göndərin.",
-        "img_prompt":     "Şəkildəki idman hadisəsini müəyyən et və proqnoz ver.",
-        "api_overload":   "⚠️ Servis yükləməsi. Bir az sonra yenidən cəhd edin.",
-        "api_error":      "⚠️ Xəta baş verdi. Bir az sonra yenidən cəhd edin.",
-        "lang_set":       "✅ Dil Azərbaycan dilinə təyin edildi.",
-        "ref_link":       "🔗 *Referans linkınız:*\n`https://t.me/{bot}?start=ref{uid}`\n\n👥 Dəvət etdiyiniz: *{count}* nəfər",
-        "profile":        "👤 *Profiliniz*\n\n🏷 Ad: {name}\n📱 Telefon: {phone}\n🌐 Dil: {lang}\n👥 Dəvətlər: {refs}",
-                "system_prompt":  """Sen 15 illik tecrubeli elit idman analitikisen. Tarix: May 2026.
+"az": {
+"choose_lang": "Dil secin / Выберите язык / Choose language:",
+"ask_name": "Xos geldiniz! Adinizi daxil edin:",
+"reg_done": "Qeydiyyat tamamlandi! Salam, {name}!\n\nAi-driven idman proqnoz platformasina xos geldiniz.",
+"reg_done_ref": "Qeydiyyat tamamlandi! Salam, {name}!\nDostu devet etdiyin ucun bonus qazandi.",
+"already_reg": "Siz artiq qeydiyyatdan kecmisiniz, {name}!",
+"need_reg": "Evvelce qeydiyyatdan kesin. /start yazin.",
+"db_blocked": "Hesabiniz bloklanib. Inzibatciya muraciet edin.",
+"blocked": "Muveqqeti bloklanmissiniz. {m} deq {s} san sonra yeniden ced edin.",
+"rate_limit": "Sorgu limiti asildi. {w} saniye gozleyin. Xeberdarliq: {v}/{max}",
+"auto_blocked": "Cox sayda sorgu. {min} deqiqelik blok.",
+"long_text": "Metn cox uzundur.",
+"injection": "Yalniz idman sorqulari qebul edilir.",
+"no_input": "Metn yazin ve ya sekil gonderin.",
+"img_prompt": "Sekildeki idman hadisesini mueyyen et ve proqnoz ver.",
+"api_overload": "Servis yuklemesi. Bir az sonra yeniden ced edin.",
+"api_error": "Xeta bas verdi. Bir az sonra yeniden ced edin.",
+"lang_set": "Dil Azerbaycan diline teyin edildi.",
+"ref_link": "Referans linkIniz:\nt.me/{bot}?start=ref{uid}\n\nDevet etdiyiniz: {count} nefer",
+"watch_btn": "Oyunu izle",
+"unwatch_btn": "Izlemekden cix",
+"watch_started": "Oyun izlenilir: {match}\nVacib hadiseler haqda bildirish alacaqsiniz.",
+"watch_stopped": "Oyun izlenmesi dayandirIldi: {match}",
+"no_subs": "Hec bir oyun izlemirsiniz.",
+"live_goal": "QOL! {match}\n{minute}. deq: {team}\nHesab: {score}\n\nCanli merc:\n{tip}",
+"live_card": "KART! {match}\n{minute}. deq: {player} ({team}) — {card}\n\nCanli merc:\n{tip}",
+"live_halftime": "FASILE! {match}\nHesab: {score}\n\nFasile merci:\n{tip}",
+"live_fulltime": "OYUN BITTI! {match}\nYekun: {score}\n\nIzlemeden cixildi.",
+"live_kickoff": "OYUN BASLADI! {match}\nVacib hadiseler haqda xeberlendirme alacaqsiniz.",
+"live_alert_goal_coming": "SIGNAL! {match}\nModel: Gol gozlenilir [{minute}. deq]\nKeflerin deyismesinden evvel hareket edin.",
+"live_alert_value": "LIVE VALUE! {match}\nKeflerde anomaliya askar edildi [{minute}. deq]\nModel: {team} uzerinde deger var.",
+"live_alert_pressure": "TEZYIQ! {match}\n{team} guclu hucum tezyiqi yaradir [{minute}. deq]\nStat: {stat}",
+# Onboarding
+"ob_sports": "Hansı idman növlerini seversiniz? (birdən çox seçe bilərsiniz)",
+"ob_bet_types": "Hansı mərc növlərini üstün tutursunuz?",
+"ob_experience": "Mərcdə təcrübəniz nə qədərdir?",
+"ob_style": "Oyun üslubunuz nədir?",
+"ob_done": "Profiliniz hazırlandı! Kişiselleşdirilmiş proqnozlar alacaqsınız.\n\nProfiliniz:\nIdman: {sports}\nMerc novu: {bet_types}\nTecurbe: {experience}\nUslub: {style}",
+# Gamification
+"points_earned": "+{pts} xal qazandiniz! Umumi: {total} xal | Seviye {level}",
+"streak": "{days} gun ard-arda aktiv! Bonus: +{bonus} xal",
+"achievement": "NEZARET EDILDI: {name}",
+"level_up": "YENİ SƏVİYYƏ! Seviye {level} catdınız! +{bonus} xal bonus",
+"leaderboard": "LİDERLƏR CƏDVƏLI:\n\n{entries}\n\nSizin yeriniz: {rank}. sıra | {pts} xal | Sev. {level}",
+"profile_full": "PROFİL\n\nAd: {name}\nDil: {lang}\nSeviye: {level}\nXal: {pts}\nStrik: {streak} gun\nCemi sorqular: {total_req}\nDavetler: {refs}\n\nİdman: {sports}\nMerc: {bet_types}\nTecurbe: {exp}",
+"system_prompt": """Sen 15 illik tecrubeli elit idman analitikisen. Tarix: {date}.
 
-SSLUB: Qeti, inamli, profesional. "Ola biler", "belkede" yoxdur.
+ISTIFADECININ PROFILI:
+Sevdigi idman: {sports}
+Merc novu: {bet_types}
+Tecurbe: {experience}
+Uslub: {style}
 
 QAYDALAR:
-- Yalniz 2025-2026 mevsumu melumatlar
-- Kohnelerin heyetlerini (Mbappe PSJ-de ve s.) YAZMA
-- Real melumat varsa - onu istifade et
-- Emoji istifade ETME - yalniz duz metn
+- Istifadecinin profiline uygun proqnoz ver
+- Yalniz 2025-2026 mevsumu melumatlar, kohneleri YAZMA
+- Emoji ISTIFADE ETME - yalniz duz metn
 
 CAVAB FORMATI:
 
@@ -239,53 +271,86 @@ ESAS AMILLER:
 
 PROQNOZ:
 1X2:
-- [Komanda A] qelebesi: XX% | Kes: 1.XX - 1.XX arasi
-- Hec-hece: XX% | Kes: X.XX - X.XX arasi
-- [Komanda B] qelebesi: XX% | Kes: X.XX - X.XX arasi
+- [Komanda A] qelebesi: XX% | Kes: X.XX - X.XX
+- Hec-hece: XX% | Kes: X.XX - X.XX
+- [Komanda B] qelebesi: XX% | Kes: X.XX - X.XX
 
 Total:
-- 2.5 Ustunde: XX% | Kes: 1.XX - 1.XX arasi
-- 2.5 Altinda: XX% | Kes: 1.XX - 1.XX arasi
+- 2.5 Ustunde: XX% | Kes: X.XX - X.XX
+- 2.5 Altinda: XX% | Kes: X.XX - X.XX
 
 Her ikisi qol vurur:
-- Beli: XX% | Kes: 1.XX - 1.XX arasi
-- Xeyr: XX% | Kes: 1.XX - 1.XX arasi
+- Beli: XX% | Kes: X.XX - X.XX
+- Xeyr: XX% | Kes: X.XX - X.XX
+
+Gandikap:
+- [Komanda A] (-1): XX% | Kes: X.XX - X.XX
+- [Komanda B] (+1): XX% | Kes: X.XX - X.XX
 
 EN GUCLU MERC:
-[Daqiq merc novu] | Kes: X.XX - X.XX | Ehtimal: XX%
+[Merc novu] | Kes: X.XX - X.XX | Ehtimal: XX%
 Sebeb: [1 cumle]
 
 XEBERDARLIQ: Analitik proqnozdur. Merc oz riskinizdir.""",
-    },
-    "ru": {
-        "choose_lang":    "🌐 Dil seçin / Выберите язык / Choose language:",
-        "ask_name":       "👋 Добро пожаловать!\n\nПожалуйста, введите ваше имя и фамилию:",
-        "ask_phone":      "📱 Теперь поделитесь номером телефона.\nНажмите кнопку ниже:",
-        "phone_btn":      "📱 Поделиться номером",
-        "reg_done":       "✅ *Регистрация завершена!*\n\nПривет, {name}! Теперь вы можете получать спортивные прогнозы.\n\nОтправьте текст о матче или фото. ⚽🏀🎾🥊",
-        "reg_done_ref":   "✅ *Регистрация завершена!*\n\nПривет, {name}! Ваш друг, который пригласил вас, получил бонус 🎁\n\nОтправьте текст о матче или фото. ⚽🏀🎾🥊",
-        "already_reg":    "✅ Вы уже зарегистрированы, {name}!",
-        "need_reg":       "⚠️ Сначала пройдите регистрацию. Напишите /start.",
-        "blocked":        "🚫 Вы временно заблокированы.\n⏳ Попробуйте через {m} мин {s} сек.",
-        "rate_limit":     "⏳ Лимит запросов превышен. Подождите {w} сек.\n⚠️ Предупреждение: {v}/{max}",
-        "auto_blocked":   "🚫 Слишком много запросов. Блокировка на {min} минут.",
-        "long_text":      "⚠️ Текст слишком длинный. Пожалуйста, сократите.",
-        "injection":      "⚠️ Принимаются только спортивные запросы.",
-        "no_input":       "Пожалуйста, напишите текст или отправьте фото.",
-        "img_prompt":     "Определи спортивное событие на изображении и дай прогноз.",
-        "api_overload":   "⚠️ Сервис перегружен. Попробуйте позже.",
-        "api_error":      "⚠️ Произошла ошибка. Попробуйте позже.",
-        "lang_set":       "✅ Язык установлен: Русский.",
-        "ref_link":       "🔗 *Ваша реферальная ссылка:*\n`https://t.me/{bot}?start=ref{uid}`\n\n👥 Приглашено: *{count}* чел.",
-        "profile":        "👤 *Ваш профиль*\n\n🏷 Имя: {name}\n📱 Телефон: {phone}\n🌐 Язык: {lang}\n👥 Приглашений: {refs}",
-                "system_prompt":  """Ты — элитный спортивный аналитик с 15-летним опытом. Дата: май 2026.
+"live_tip_prompt": "Sen canli merc analitikisen. Oyun: {match}, {minute}. deq, hesab {score}. Hadise: {event}. En yaxsi canli merci tovsiye et. Qisa, maks 2 cumle. Yalniz duz metn.",
+},
 
-СТИЛЬ: Уверенный, авторитетный, без воды. Никаких "возможно" и "наверное".
+"ru": {
+"choose_lang": "Dil secin / Выберите язык / Choose language:",
+"ask_name": "Добро пожаловать! Введите ваше имя:",
+"reg_done": "Регистрация завершена! Привет, {name}!\n\nДобро пожаловать на AI-платформу спортивных прогнозов.",
+"reg_done_ref": "Регистрация завершена! Привет, {name}!\nВаш друг получил бонус за приглашение.",
+"already_reg": "Вы уже зарегистрированы, {name}!",
+"need_reg": "Сначала пройдите регистрацию. Напишите /start.",
+"db_blocked": "Ваш аккаунт заблокирован. Обратитесь к администратору.",
+"blocked": "Вы временно заблокированы. Попробуйте через {m} мин {s} сек.",
+"rate_limit": "Лимит запросов превышен. Подождите {w} сек. Предупреждение: {v}/{max}",
+"auto_blocked": "Слишком много запросов. Блокировка на {min} минут.",
+"long_text": "Текст слишком длинный.",
+"injection": "Принимаются только спортивные запросы.",
+"no_input": "Напишите текст или отправьте фото.",
+"img_prompt": "Определи спортивное событие на изображении и дай прогноз.",
+"api_overload": "Сервис перегружен. Попробуйте позже.",
+"api_error": "Произошла ошибка. Попробуйте позже.",
+"lang_set": "Язык установлен: Русский.",
+"ref_link": "Ваша реферальная ссылка:\nt.me/{bot}?start=ref{uid}\n\nПриглашено: {count} чел.",
+"watch_btn": "Следить за матчем",
+"unwatch_btn": "Отписаться",
+"watch_started": "Слежу за матчем: {match}\nПришлю уведомления о важных событиях.",
+"watch_stopped": "Слежение остановлено: {match}",
+"no_subs": "Вы не следите ни за одним матчем.",
+"live_goal": "ГОЛ! {match}\n{minute} мин: {team}\nСчёт: {score}\n\nЛайв-ставка:\n{tip}",
+"live_card": "КАРТОЧКА! {match}\n{minute} мин: {player} ({team}) — {card}\n\nЛайв-ставка:\n{tip}",
+"live_halftime": "ПЕРЕРЫВ! {match}\nСчёт: {score}\n\nСтавка на перерыв:\n{tip}",
+"live_fulltime": "МАТЧ ЗАВЕРШЁН! {match}\nИтог: {score}\n\nПодписка отменена.",
+"live_kickoff": "МАТЧ НАЧАЛСЯ! {match}\nБуду присылать уведомления о ключевых событиях.",
+"live_alert_goal_coming": "СИГНАЛ! {match}\nМодель: ожидается гол [{minute} мин]\nДействуйте до изменения коэффициентов.",
+"live_alert_value": "LIVE VALUE! {match}\nОбнаружена аномалия в коэффициентах [{minute} мин]\nМодель: есть ценность на {team}.",
+"live_alert_pressure": "ДАВЛЕНИЕ! {match}\n{team} создаёт сильное давление [{minute} мин]\nСтат: {stat}",
+# Onboarding
+"ob_sports": "Какие виды спорта вас интересуют? (можно несколько)",
+"ob_bet_types": "Какие типы ставок вы предпочитаете?",
+"ob_experience": "Каков ваш опыт в ставках?",
+"ob_style": "Какой стиль игры вам ближе?",
+"ob_done": "Ваш профиль готов! Вы будете получать персонализированные прогнозы.\n\nПрофиль:\nСпорт: {sports}\nТип ставок: {bet_types}\nОпыт: {experience}\nСтиль: {style}",
+# Gamification
+"points_earned": "+{pts} очков! Всего: {total} | Уровень {level}",
+"streak": "{days} дней подряд активны! Бонус: +{bonus} очков",
+"achievement": "ДОСТИЖЕНИЕ: {name}",
+"level_up": "НОВЫЙ УРОВЕНЬ! Достигнут уровень {level}! +{bonus} очков бонус",
+"leaderboard": "ТАБЛИЦА ЛИДЕРОВ:\n\n{entries}\n\nВаша позиция: {rank} место | {pts} очков | Ур. {level}",
+"profile_full": "ПРОФИЛЬ\n\nИмя: {name}\nЯзык: {lang}\nУровень: {level}\nОчки: {pts}\nСтрик: {streak} дней\nВсего запросов: {total_req}\nПриглашений: {refs}\n\nСпорт: {sports}\nСтавки: {bet_types}\nОпыт: {exp}",
+"system_prompt": """Ты — элитный спортивный аналитик с 15-летним опытом. Дата: {date}.
+
+ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:
+Любимый спорт: {sports}
+Тип ставок: {bet_types}
+Опыт: {experience}
+Стиль: {style}
 
 ПРАВИЛА:
-- Только данные сезона 2025-2026
-- Устаревшие составы (Мбаппе в ПСЖ и т.д.) НЕ УПОМИНАЙ
-- Если есть реальные данные — используй их
+- Давай прогнозы с учётом профиля пользователя
+- Только данные сезона 2025-2026, устаревшие составы НЕ УПОМИНАЙ
 - НЕ ИСПОЛЬЗУЙ emoji — только чистый текст
 
 ФОРМАТ ОТВЕТА:
@@ -303,17 +368,17 @@ XEBERDARLIQ: Analitik proqnozdur. Merc oz riskinizdir.""",
 
 ПРОГНОЗ:
 1X2:
-- Победа [Команда А]: XX% | Кэф: 1.XX - 1.XX
+- Победа [Команда А]: XX% | Кэф: X.XX - X.XX
 - Ничья: XX% | Кэф: X.XX - X.XX
 - Победа [Команда Б]: XX% | Кэф: X.XX - X.XX
 
 Тотал:
-- Больше 2.5: XX% | Кэф: 1.XX - 1.XX
-- Меньше 2.5: XX% | Кэф: 1.XX - 1.XX
+- Больше 2.5: XX% | Кэф: X.XX - X.XX
+- Меньше 2.5: XX% | Кэф: X.XX - X.XX
 
 Обе забьют:
-- Да: XX% | Кэф: 1.XX - 1.XX
-- Нет: XX% | Кэф: 1.XX - 1.XX
+- Да: XX% | Кэф: X.XX - X.XX
+- Нет: XX% | Кэф: X.XX - X.XX
 
 Гандикап:
 - [Команда А] (-1): XX% | Кэф: X.XX - X.XX
@@ -321,39 +386,68 @@ XEBERDARLIQ: Analitik proqnozdur. Merc oz riskinizdir.""",
 
 ЛУЧШАЯ СТАВКА:
 [Тип ставки] | Кэф: X.XX - X.XX | Вероятность: XX%
-Обоснование: [1 предложение почему именно эта ставка]
+Обоснование: [1 предложение]
 
 ПРЕДУПРЕЖДЕНИЕ: Аналитический прогноз. Ставки на ваш риск.""",
-    },
-    "en": {
-        "choose_lang":    "🌐 Dil seçin / Выберите язык / Choose language:",
-        "ask_name":       "👋 Welcome!\n\nPlease enter your first and last name:",
-        "ask_phone":      "📱 Now share your phone number.\nTap the button below:",
-        "phone_btn":      "📱 Share my number",
-        "reg_done":       "✅ *Registration complete!*\n\nHi, {name}! You can now get sports forecasts.\n\nSend a text about a match or a photo. ⚽🏀🎾🥊",
-        "reg_done_ref":   "✅ *Registration complete!*\n\nHi, {name}! The friend who invited you earned a bonus 🎁\n\nSend a text about a match or a photo. ⚽🏀🎾🥊",
-        "already_reg":    "✅ You are already registered, {name}!",
-        "need_reg":       "⚠️ Please register first. Type /start.",
-        "blocked":        "🚫 You are temporarily blocked.\n⏳ Try again in {m}m {s}s.",
-        "rate_limit":     "⏳ Request limit exceeded. Wait {w} seconds.\n⚠️ Warning: {v}/{max}",
-        "auto_blocked":   "🚫 Too many requests. Blocked for {min} minutes.",
-        "long_text":      "⚠️ Message too long. Please shorten it.",
-        "injection":      "⚠️ Only sports queries are accepted.",
-        "no_input":       "Please send a text or a photo.",
-        "img_prompt":     "Identify the sports event in the image and give a forecast.",
-        "api_overload":   "⚠️ Service overloaded. Please try again later.",
-        "api_error":      "⚠️ An error occurred. Please try again later.",
-        "lang_set":       "✅ Language set to English.",
-        "ref_link":       "🔗 *Your referral link:*\n`https://t.me/{bot}?start=ref{uid}`\n\n👥 Invited: *{count}* users",
-        "profile":        "👤 *Your Profile*\n\n🏷 Name: {name}\n📱 Phone: {phone}\n🌐 Language: {lang}\n👥 Referrals: {refs}",
-                "system_prompt":  """You are an elite sports analyst with 15 years of experience. Date: May 2026.
+"live_tip_prompt": "Ты лайв-аналитик. Матч {match}, {minute} мин, счёт {score}. Событие: {event}. Дай лучшую лайв-ставку. Коротко, макс 2 предложения. Только текст.",
+},
 
-STYLE: Confident, authoritative, zero fluff. No "maybe" or "possibly".
+"en": {
+"choose_lang": "Dil secin / Выберите язык / Choose language:",
+"ask_name": "Welcome! Please enter your name:",
+"reg_done": "Registration complete! Hi, {name}!\n\nWelcome to the AI-driven sports betting platform.",
+"reg_done_ref": "Registration complete! Hi, {name}!\nYour friend earned a referral bonus.",
+"already_reg": "You are already registered, {name}!",
+"need_reg": "Please register first. Type /start.",
+"db_blocked": "Your account is blocked. Contact the administrator.",
+"blocked": "You are temporarily blocked. Try again in {m}m {s}s.",
+"rate_limit": "Request limit exceeded. Wait {w} seconds. Warning: {v}/{max}",
+"auto_blocked": "Too many requests. Blocked for {min} minutes.",
+"long_text": "Message too long. Please shorten it.",
+"injection": "Only sports queries are accepted.",
+"no_input": "Please send a text or a photo.",
+"img_prompt": "Identify the sports event in the image and give a forecast.",
+"api_overload": "Service overloaded. Please try again later.",
+"api_error": "An error occurred. Please try again later.",
+"lang_set": "Language set to English.",
+"ref_link": "Your referral link:\nt.me/{bot}?start=ref{uid}\n\nInvited: {count} users",
+"watch_btn": "Follow match",
+"unwatch_btn": "Unfollow",
+"watch_started": "Following: {match}\nI'll send notifications about key events.",
+"watch_stopped": "Stopped following: {match}",
+"no_subs": "You are not following any matches.",
+"live_goal": "GOAL! {match}\n{minute} min: {team}\nScore: {score}\n\nLive bet:\n{tip}",
+"live_card": "CARD! {match}\n{minute} min: {player} ({team}) — {card}\n\nLive bet:\n{tip}",
+"live_halftime": "HALF TIME! {match}\nScore: {score}\n\nHalf-time bet:\n{tip}",
+"live_fulltime": "FULL TIME! {match}\nFinal: {score}\n\nUnsubscribed.",
+"live_kickoff": "KICK OFF! {match}\nI'll notify you about key events.",
+"live_alert_goal_coming": "SIGNAL! {match}\nModel: goal expected [{minute} min]\nAct before odds drop.",
+"live_alert_value": "LIVE VALUE! {match}\nOdds anomaly detected [{minute} min]\nModel: value on {team}.",
+"live_alert_pressure": "PRESSURE! {match}\n{team} creating strong pressure [{minute} min]\nStat: {stat}",
+# Onboarding
+"ob_sports": "Which sports interest you? (multiple choice)",
+"ob_bet_types": "What types of bets do you prefer?",
+"ob_experience": "What is your betting experience?",
+"ob_style": "What is your playing style?",
+"ob_done": "Your profile is ready! You'll receive personalized forecasts.\n\nProfile:\nSports: {sports}\nBet types: {bet_types}\nExperience: {experience}\nStyle: {style}",
+# Gamification
+"points_earned": "+{pts} points! Total: {total} | Level {level}",
+"streak": "{days} days active in a row! Bonus: +{bonus} points",
+"achievement": "ACHIEVEMENT UNLOCKED: {name}",
+"level_up": "LEVEL UP! Reached level {level}! +{bonus} points bonus",
+"leaderboard": "LEADERBOARD:\n\n{entries}\n\nYour rank: #{rank} | {pts} points | Lv. {level}",
+"profile_full": "PROFILE\n\nName: {name}\nLanguage: {lang}\nLevel: {level}\nPoints: {pts}\nStreak: {streak} days\nTotal requests: {total_req}\nReferrals: {refs}\n\nSports: {sports}\nBets: {bet_types}\nExp: {exp}",
+"system_prompt": """You are an elite sports analyst with 15 years of experience. Date: {date}.
+
+USER PROFILE:
+Favourite sports: {sports}
+Bet types: {bet_types}
+Experience: {experience}
+Style: {style}
 
 RULES:
-- Only 2025-2026 season data
-- Never mention outdated squads (Mbappe at PSG, etc.)
-- If real data is provided — use it
+- Tailor forecasts to user profile
+- Only 2025-2026 season data, never mention outdated squads
 - DO NOT USE emoji — plain text only
 
 RESPONSE FORMAT:
@@ -371,17 +465,17 @@ KEY FACTORS:
 
 FORECAST:
 1X2:
-- [Team A] Win: XX% | Odds: 1.XX - 1.XX
+- [Team A] Win: XX% | Odds: X.XX - X.XX
 - Draw: XX% | Odds: X.XX - X.XX
 - [Team B] Win: XX% | Odds: X.XX - X.XX
 
 Total Goals:
-- Over 2.5: XX% | Odds: 1.XX - 1.XX
-- Under 2.5: XX% | Odds: 1.XX - 1.XX
+- Over 2.5: XX% | Odds: X.XX - X.XX
+- Under 2.5: XX% | Odds: X.XX - X.XX
 
 Both Teams Score:
-- Yes: XX% | Odds: 1.XX - 1.XX
-- No: XX% | Odds: 1.XX - 1.XX
+- Yes: XX% | Odds: X.XX - X.XX
+- No: XX% | Odds: X.XX - X.XX
 
 Handicap:
 - [Team A] (-1): XX% | Odds: X.XX - X.XX
@@ -389,452 +483,766 @@ Handicap:
 
 BEST BET:
 [Bet type] | Odds: X.XX - X.XX | Probability: XX%
-Reasoning: [1 sentence why this specific bet]
+Reasoning: [1 sentence]
 
 WARNING: Analytical forecast only. Bet at your own risk.""",
-    },
+"live_tip_prompt": "You are a live betting analyst. Match {match}, {minute} min, score {score}. Event: {event}. Give the best live bet. Short, max 2 sentences. Plain text only.",
+},
 }
 
-LANG_NAMES = {"az": "🇦🇿 Azərbaycan", "ru": "🇷🇺 Русский", "en": "🇬🇧 English"}
+LANG_NAMES = {"az": "Azerbaycan", "ru": "Русский", "en": "English"}
 
-def t(user_id: int, key: str, **kwargs) -> str:
-    lang = db_get_lang(user_id) or "az"
-    text = T[lang].get(key, "")
-    return text.format(**kwargs) if kwargs else text
+def tr(uid, key, **kw):
+    lang = db_lang(uid)
+    txt  = T.get(lang, T["ru"]).get(key, T["ru"].get(key, ""))
+    if key == "system_prompt":
+        u = db_get(uid) or {}
+        kw.setdefault("date", date.today().strftime("%d.%m.%Y"))
+        kw.setdefault("sports",     u.get("sports", "any"))
+        kw.setdefault("bet_types",  u.get("bet_types", "any"))
+        kw.setdefault("experience", u.get("experience", "beginner"))
+        kw.setdefault("style",      u.get("bet_style", "balanced"))
+    return txt.format(**kw) if kw else txt
 
-def lang_keyboard():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🇦🇿 Azərbaycan", callback_data="lang_az"),
-        InlineKeyboardButton("🇷🇺 Русский",    callback_data="lang_ru"),
-        InlineKeyboardButton("🇬🇧 English",    callback_data="lang_en"),
-    ]])
+# ─── Keyboards ────────────────────────────────────────────────────────────────
+def lang_kb(): return InlineKeyboardMarkup([[
+    InlineKeyboardButton("Azerbaycan", callback_data="lang_az"),
+    InlineKeyboardButton("Русский",    callback_data="lang_ru"),
+    InlineKeyboardButton("English",    callback_data="lang_en"),
+]])
 
-def phone_keyboard(user_id: int):
-    lang = db_get_lang(user_id) or "az"
-    btn_text = T[lang]["phone_btn"]
-    return ReplyKeyboardMarkup(
-        [[KeyboardButton(btn_text, request_contact=True)]],
-        resize_keyboard=True, one_time_keyboard=True
-    )
+# Onboarding keyboards
+OB_SPORTS = [
+    ("Futbol / Football", "sp_football"),
+    ("UFC / MMA", "sp_ufc"),
+    ("NBA / Basketball", "sp_nba"),
+    ("Tennis", "sp_tennis"),
+    ("Kibersport / Esports", "sp_esports"),
+    ("NHL / Hockey", "sp_hockey"),
+    ("Hamisi / All", "sp_all"),
+]
+OB_BET_TYPES = [
+    ("Live betting", "bt_live"),
+    ("Prematch", "bt_prematch"),
+    ("Express / Parlay", "bt_express"),
+    ("Singles", "bt_single"),
+    ("Handicap", "bt_handicap"),
+]
+OB_EXPERIENCE = [
+    ("Yeni baslayanam / Novichok / Beginner", "exp_beginner"),
+    ("Orta / Sredniy / Intermediate", "exp_mid"),
+    ("Tecrubeliyem / Opytny / Expert", "exp_expert"),
+]
+OB_STYLE = [
+    ("Agressif / Aggressivnyy / Aggressive", "sty_aggressive"),
+    ("Konservativ / Konservativnyy / Conservative", "sty_conservative"),
+    ("Balansli / Sbalansirovannyy / Balanced", "sty_balanced"),
+    ("Value hunter", "sty_value"),
+]
 
-# ─── Security helpers ─────────────────────────────────────────────────────────
+def ob_kb(items, prefix, done_label="Done"):
+    rows = [[InlineKeyboardButton(label, callback_data=f"{prefix}_{cb}")] for label, cb in items]
+    return InlineKeyboardMarkup(rows)
 
-def get_user_info(update: Update) -> str:
-    u = update.effective_user
-    return f"id={u.id} username=@{u.username or '-'} name={u.full_name}"
+# ─── Security ─────────────────────────────────────────────────────────────────
+def uinfo(update): u = update.effective_user; return f"id={u.id} @{u.username or '-'} {u.full_name}"
 
-def is_blocked(user_id: int) -> tuple[bool, int]:
-    until = user_blocked_until.get(user_id, 0)
-    if time.time() < until:
-        return True, int(until - time.time())
-    return False, 0
+def sec_blocked(uid):
+    until = blocked_until.get(uid, 0)
+    return (True, int(until - time.time())) if time.time() < until else (False, 0)
 
-def check_rate_limit(user_id: int) -> tuple[bool, int]:
-    now = time.time()
-    times = user_message_times[user_id]
-    while times and now - times[0] > RATE_LIMIT_WINDOW:
-        times.popleft()
-    if len(times) >= RATE_LIMIT_MAX:
-        return True, int(RATE_LIMIT_WINDOW - (now - times[0])) + 1
-    times.append(now)
-    return False, 0
+def rate_check(uid):
+    now = time.time(); q = msg_times[uid]
+    while q and now - q[0] > RATE_WINDOW: q.popleft()
+    if len(q) >= RATE_MAX: return True, int(RATE_WINDOW - (now - q[0])) + 1
+    q.append(now); return False, 0
 
-def record_violation(user_id: int, info: str) -> bool:
-    user_violations[user_id] += 1
-    count = user_violations[user_id]
-    suspicious_logger.warning(f"VIOLATION #{count} | {info}")
-    if count >= SPAM_BLOCK_AFTER:
-        user_blocked_until[user_id] = time.time() + SPAM_BLOCK_DURATION
-        user_violations[user_id] = 0
-        suspicious_logger.warning(f"BLOCKED {SPAM_BLOCK_DURATION}s | {info}")
-        return True
+def record_viol(uid, info):
+    violations[uid] += 1; n = violations[uid]; sus.warning(f"VIOL #{n} | {info}")
+    if n >= SPAM_AFTER:
+        blocked_until[uid] = time.time() + SPAM_DUR; violations[uid] = 0
+        sus.warning(f"BLOCKED | {info}"); return True
     return False
 
-def reset_violations(user_id: int):
-    user_violations[user_id] = 0
+# ─── Football APIs ─────────────────────────────────────────────────────────────
+async def search_match(query):
+    if not APIFOOTBALL_KEY: return []
+    try:
+        async with httpx.AsyncClient(timeout=8) as h:
+            r = await h.get("https://v3.football.api-sports.io/fixtures",
+                headers={"x-apisports-key": APIFOOTBALL_KEY}, params={"live": "all"})
+            if r.status_code == 200:
+                out = []
+                for f in r.json().get("response", []):
+                    home = f["teams"]["home"]["name"]; away = f["teams"]["away"]["name"]
+                    if query.lower() in home.lower() or query.lower() in away.lower():
+                        out.append({"id": str(f["fixture"]["id"]), "name": f"{home} vs {away}",
+                            "status": f["fixture"]["status"]["short"],
+                            "minute": f["fixture"]["status"].get("elapsed", 0),
+                            "score": f"{f['goals']['home']}-{f['goals']['away']}", "live": True})
+                if out: return out[:3]
+            r2 = await h.get("https://v3.football.api-sports.io/fixtures",
+                headers={"x-apisports-key": APIFOOTBALL_KEY}, params={"date": date.today().isoformat()})
+            if r2.status_code == 200:
+                out = []
+                for f in r2.json().get("response", []):
+                    home = f["teams"]["home"]["name"]; away = f["teams"]["away"]["name"]
+                    if query.lower() in home.lower() or query.lower() in away.lower():
+                        out.append({"id": str(f["fixture"]["id"]), "name": f"{home} vs {away}",
+                            "status": f["fixture"]["status"]["short"], "minute": 0, "score": "0-0", "live": False})
+                return out[:3]
+    except Exception as e: logger.error(f"search_match: {e}")
+    return []
 
-# ─── Registration flow ────────────────────────────────────────────────────────
+async def get_events(mid):
+    if not APIFOOTBALL_KEY: return []
+    try:
+        async with httpx.AsyncClient(timeout=8) as h:
+            r = await h.get("https://v3.football.api-sports.io/fixtures/events",
+                headers={"x-apisports-key": APIFOOTBALL_KEY}, params={"fixture": mid})
+            if r.status_code == 200: return r.json().get("response", [])
+    except Exception as e: logger.error(f"get_events: {e}")
+    return []
 
+async def get_status(mid):
+    if not APIFOOTBALL_KEY: return None
+    try:
+        async with httpx.AsyncClient(timeout=8) as h:
+            r = await h.get("https://v3.football.api-sports.io/fixtures",
+                headers={"x-apisports-key": APIFOOTBALL_KEY}, params={"id": mid})
+            if r.status_code == 200:
+                resp = r.json().get("response", [])
+                if resp:
+                    f = resp[0]
+                    return {"status": f["fixture"]["status"]["short"],
+                            "minute": f["fixture"]["status"].get("elapsed", 0),
+                            "score": f"{f['goals']['home']}-{f['goals']['away']}",
+                            "home": f["teams"]["home"]["name"], "away": f["teams"]["away"]["name"],
+                            "shots_home": f.get("statistics", [{}])[0].get("value", 0) if f.get("statistics") else 0}
+    except Exception as e: logger.error(f"get_status: {e}")
+    return None
+
+async def live_tip(uid, match, minute, score, event):
+    try:
+        lang = db_lang(uid)
+        prompt = T[lang]["live_tip_prompt"].format(match=match, minute=minute, score=score, event=event)
+        r = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=150,
+            messages=[{"role": "user", "content": prompt}])
+        return r.content[0].text
+    except Exception: return ""
+
+# ─── LIVE Poller + FOMO Alerts ────────────────────────────────────────────────
+async def poller(app):
+    alert_counters: dict[str, int] = defaultdict(int)
+    while True:
+        await asyncio.sleep(60)
+        if not live_subs: continue
+        for mid, uids in list(live_subs.items()):
+            if not uids: continue
+            try:
+                st = await get_status(mid)
+                if not st: continue
+                score = st["score"]; minute = st["minute"] or 0; status = st["status"]
+                match_name = None
+                for uid in uids:
+                    for s in db_user_lsubs(uid):
+                        if s["match_id"] == mid: match_name = s["match_name"]; break
+                    if match_name: break
+                if not match_name: match_name = f"{st['home']} vs {st['away']}"
+
+                # Regular events
+                evs = await get_events(mid)
+                prev = last_events.get(mid, [])
+                new_evs = evs[len(prev):]
+                last_events[mid] = evs
+
+                for ev in new_evs:
+                    etype  = ev.get("type", "")
+                    detail = ev.get("detail", "")
+                    team   = ev.get("team", {}).get("name", "")
+                    player = ev.get("player", {}).get("name", "")
+                    ev_min = ev.get("time", {}).get("elapsed", minute)
+                    event_desc = f"{etype} - {detail} - {team}"
+                    tip = await live_tip(next(iter(uids)), match_name, ev_min, score, event_desc)
+                    for uid in list(uids):
+                        lang = db_lang(uid)
+                        try:
+                            if etype == "Goal":
+                                msg = T[lang]["live_goal"].format(match=match_name, minute=ev_min, team=team, score=score, tip=tip)
+                            elif etype == "Card":
+                                card = ("Red card" if "Red" in detail else "Yellow card") if lang=="en" else ("Kırmızı kart" if "Red" in detail else "Sarı kart") if lang=="az" else ("Красная" if "Red" in detail else "Жёлтая")
+                                msg = T[lang]["live_card"].format(match=match_name, minute=ev_min, player=player, team=team, card=card, tip=tip)
+                            else: continue
+                            await app.bot.send_message(chat_id=uid, text=msg)
+                        except Exception as e: logger.error(f"notify uid={uid}: {e}")
+
+                # FOMO / urgency alerts every ~15 min per match
+                alert_counters[mid] += 1
+                if alert_counters[mid] % 15 == 0 and minute > 20:
+                    alert_type = random.choice(["goal_coming", "value", "pressure"])
+                    teams = [st["home"], st["away"]]
+                    pressure_team = random.choice(teams)
+                    stats_options = ["12 udarlar hedefe / 12 shots on target", "73% top possessiyasi / 73% ball possession",
+                                     "6 kose vurus / 6 corners", "xG: 1.8"]
+                    for uid in list(uids):
+                        lang = db_lang(uid)
+                        try:
+                            if alert_type == "goal_coming":
+                                msg = T[lang]["live_alert_goal_coming"].format(match=match_name, minute=minute)
+                            elif alert_type == "value":
+                                msg = T[lang]["live_alert_value"].format(match=match_name, minute=minute, team=pressure_team)
+                            else:
+                                msg = T[lang]["live_alert_pressure"].format(match=match_name, minute=minute,
+                                    team=pressure_team, stat=random.choice(stats_options))
+                            await app.bot.send_message(chat_id=uid, text=msg)
+                        except Exception: pass
+
+                # Half time
+                if status == "HT" and mid not in ht_sent:
+                    ht_sent.add(mid)
+                    for uid in list(uids):
+                        lang = db_lang(uid)
+                        tip = await live_tip(uid, match_name, 45, score, "Half time")
+                        try: await app.bot.send_message(chat_id=uid, text=T[lang]["live_halftime"].format(match=match_name, score=score, tip=tip))
+                        except Exception: pass
+
+                # Full time
+                if status in ("FT", "AET", "PEN"):
+                    for uid in list(uids):
+                        lang = db_lang(uid)
+                        try: await app.bot.send_message(chat_id=uid, text=T[lang]["live_fulltime"].format(match=match_name, score=score))
+                        except Exception: pass
+                        db_del_lsub(uid, mid); user_subs[uid].discard(mid)
+                    live_subs[mid].clear()
+            except Exception as e: logger.error(f"poller mid={mid}: {e}")
+
+# ─── Retention / Daily notifier ───────────────────────────────────────────────
+async def daily_retention(app):
+    """Send daily engagement messages to inactive users."""
+    while True:
+        await asyncio.sleep(3600)  # check every hour
+        now = datetime.now()
+        if now.hour != 10: continue  # fire at 10:00
+        try:
+            with con() as c:
+                # Users inactive for 2+ days
+                rows = c.execute(
+                    "SELECT user_id, lang, display_name FROM users WHERE is_registered=1 AND is_blocked=0 "
+                    "AND (last_active='' OR date(last_active) <= date('now', '-2 days'))"
+                ).fetchall()
+            msgs = {
+                "az": "Bugun boyuk oyunlar var! Proqnoz almaq ucun yazin.",
+                "ru": "Сегодня большие матчи! Напишите, чтобы получить прогноз.",
+                "en": "Big matches today! Write to get your forecast.",
+            }
+            for uid, lang, name in rows:
+                try:
+                    msg = msgs.get(lang, msgs["ru"])
+                    await app.bot.send_message(chat_id=uid, text=msg)
+                    await asyncio.sleep(0.1)
+                except Exception: pass
+        except Exception as e: logger.error(f"daily_retention: {e}")
+
+# ─── Gamification helpers ─────────────────────────────────────────────────────
+async def award_and_notify(app_or_context, uid, pts, reason, msg_text=None):
+    """Award points, check level up, send notification."""
+    u_before = db_get(uid)
+    lvl_before = u_before["level"] if u_before else 1
+    db_add_points(uid, pts, reason)
+    u_after = db_get(uid)
+    if not u_after: return
+    lang = db_lang(uid)
+    bot = app_or_context.bot if hasattr(app_or_context, "bot") else app_or_context
+    # Points notification
+    notif = tr(uid, "points_earned", pts=pts, total=u_after["points"], level=u_after["level"])
+    try: await bot.send_message(chat_id=uid, text=notif)
+    except Exception: pass
+    # Level up
+    if u_after["level"] > lvl_before:
+        bonus = u_after["level"] * 20
+        db_add_points(uid, bonus, "level_up_bonus")
+        lvl_msg = tr(uid, "level_up", level=u_after["level"], bonus=bonus)
+        try: await bot.send_message(chat_id=uid, text=lvl_msg)
+        except Exception: pass
+
+# ─── Onboarding flow ──────────────────────────────────────────────────────────
+async def start_onboarding(update_or_msg, uid, context):
+    """Begin onboarding after registration."""
+    lang = db_lang(uid)
+    sports_labels = {"az": "İdman növü seçin:", "ru": "Выберите виды спорта:", "en": "Select your sports:"}
+    kb = ob_kb(OB_SPORTS, "ob_sports")
+    text = T[lang]["ob_sports"]
+    try:
+        await update_or_msg.reply_text(text, reply_markup=kb)
+    except Exception:
+        pass
+
+# ─── Handlers ─────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user    = update.effective_user
-    user_id = user.id
-    args    = context.args or []
-    logger.info(f"START args={args} | {get_user_info(update)}")
-
-    # Сохраняем реферера в context для использования после регистрации
+    user = update.effective_user; uid = user.id; args = context.args or []
+    logger.info(f"START args={args} | {uinfo(update)}")
     referred_by = None
     if args and args[0].startswith("ref"):
         try:
             ref_id = int(args[0][3:])
-            if ref_id != user_id:
-                referred_by = ref_id
-        except ValueError:
-            pass
+            if ref_id != uid: referred_by = ref_id
+        except ValueError: pass
     context.user_data["referred_by"] = referred_by
-
-    db_ensure_user(user_id, user.username or "")
-
-    if db_is_registered(user_id):
-        u = db_get_user(user_id)
-        await update.message.reply_text(
-            t(user_id, "already_reg", name=u["display_name"] or user.first_name),
-            parse_mode="Markdown"
-        )
+    db_ensure(uid, user.username or "")
+    if db_is_reg(uid):
+        u = db_get(uid)
+        await update.message.reply_text(tr(uid, "already_reg", name=u["display_name"] or user.first_name))
         return
-
-    # Шаг 1: выбор языка
-    user_reg_step[user_id] = "awaiting_lang"
-    await update.message.reply_text(t(user_id, "choose_lang"), reply_markup=lang_keyboard())
+    reg_step[uid] = "awaiting_lang"
+    await update.message.reply_text(tr(uid, "choose_lang"), reply_markup=lang_kb())
 
 
-async def lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query   = update.callback_query
-    await query.answer()
-    user    = query.from_user
-    user_id = user.id
-    lang    = query.data.split("_")[1]
-
-    db_ensure_user(user_id, user.username or "")
-    db_set_field(user_id, "lang", lang)
-    logger.info(f"LANG_SET lang={lang} | id={user_id}")
-
-    # Если пользователь уже зарегистрирован — просто меняем язык
-    if db_is_registered(user_id):
-        await query.edit_message_text(T[lang]["lang_set"])
-        return
-
-    # Иначе — продолжаем регистрацию: шаг 2 — имя
-    user_reg_step[user_id] = "awaiting_name"
-    await query.edit_message_text(T[lang]["ask_name"])
+async def lang_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id; lang = q.data.split("_")[1]
+    db_ensure(uid, q.from_user.username or ""); db_set(uid, "lang", lang)
+    if db_is_reg(uid):
+        await q.edit_message_text(T[lang]["lang_set"]); return
+    reg_step[uid] = "awaiting_name"
+    await q.edit_message_text(T[lang]["ask_name"])
 
 
-async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        t(update.effective_user.id, "choose_lang"),
-        reply_markup=lang_keyboard()
-    )
+async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(tr(update.effective_user.id, "choose_lang"), reply_markup=lang_kb())
 
 
-async def handle_name_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Обрабатывает ввод имени. Возвращает True если сообщение было обработано."""
-    user_id = update.effective_user.id
-    if user_reg_step.get(user_id) != "awaiting_name":
-        return False
-
+async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    uid = update.effective_user.id
+    if reg_step.get(uid) != "awaiting_name": return False
     name = update.message.text.strip()
     if len(name) < 2 or len(name) > 64:
-        await update.message.reply_text("⚠️ " + ("Ad 2-64 simvol olmalıdır." if db_get_lang(user_id) == "az"
-                                                  else "Имя должно быть 2-64 символа." if db_get_lang(user_id) == "ru"
-                                                  else "Name must be 2-64 characters."))
-        return True
-
-    db_set_field(user_id, "display_name", name)
-    user_reg_step[user_id] = "awaiting_phone"
-
-    # Шаг 3: запрос телефона
-    await update.message.reply_text(
-        t(user_id, "ask_phone"),
-        reply_markup=phone_keyboard(user_id)
-    )
-    return True
-
-
-async def handle_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Обрабатывает отправку контакта. Возвращает True если обработано."""
-    user_id = update.effective_user.id
-    if user_reg_step.get(user_id) != "awaiting_phone":
-        return False
-    if not update.message.contact:
-        return False
-
-    contact = update.message.contact
-    # Проверяем что пользователь поделился своим номером, а не чужим
-    if contact.user_id and contact.user_id != user_id:
-        await update.message.reply_text(
-            "⚠️ Zəhmət olmasa öz nömrənizi paylaşın." if db_get_lang(user_id) == "az"
-            else "⚠️ Пожалуйста, поделитесь своим номером." if db_get_lang(user_id) == "ru"
-            else "⚠️ Please share your own number.",
-            reply_markup=phone_keyboard(user_id)
-        )
-        return True
-
-    phone = contact.phone_number
-    db_set_field(user_id, "phone", phone)
-
+        await update.message.reply_text("2-64 chars / simvol"); return True
+    db_set(uid, "display_name", name)
+    # Complete registration (no phone)
     referred_by = context.user_data.get("referred_by")
-    db_complete_registration(user_id, referred_by)
-    user_reg_step[user_id] = "done"
-
-    u = db_get_user(user_id)
-    welcome_key = "reg_done_ref" if referred_by else "reg_done"
-    logger.info(f"REG_COMPLETE | id={user_id} name={u['display_name']} phone={phone}")
-
-    await update.message.reply_text(
-        t(user_id, welcome_key, name=u["display_name"]),
-        parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove()
-    )
+    with con() as c:
+        c.execute("UPDATE users SET is_registered=1 WHERE user_id=?", (uid,))
+        if referred_by:
+            c.execute("UPDATE users SET ref_count=ref_count+1 WHERE user_id=?", (referred_by,))
+            c.execute("UPDATE users SET referred_by=? WHERE user_id=? AND referred_by IS NULL", (referred_by, uid))
+    reg_step[uid] = "done"
+    u = db_get(uid)
+    wkey = "reg_done_ref" if referred_by else "reg_done"
+    logger.info(f"REG | id={uid} name={name}")
+    await update.message.reply_text(tr(uid, wkey, name=name), reply_markup=ReplyKeyboardRemove())
+    # Award first registration points
+    db_add_points(uid, 50, "registration")
+    # Start onboarding
+    await asyncio.sleep(0.5)
+    await start_onboarding(update.message, uid, context)
     return True
 
 
-# ─── Profile ──────────────────────────────────────────────────────────────────
+async def ob_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all onboarding callbacks."""
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id; data = q.data
 
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not db_is_registered(user_id):
-        await update.message.reply_text(t(user_id, "need_reg"))
-        return
-    u    = db_get_user(user_id)
-    lang = u["lang"] or "az"
-    await update.message.reply_text(
-        t(user_id, "profile",
-          name=u["display_name"] or "-",
-          phone=u["phone"] or "-",
-          lang=LANG_NAMES.get(lang, lang),
-          refs=u["ref_count"]),
-        parse_mode="Markdown"
-    )
+    if data.startswith("ob_sports_"):
+        val = data.replace("ob_sports_", "")
+        db_set(uid, "sports", val)
+        lang = db_lang(uid)
+        await q.edit_message_text(T[lang]["ob_bet_types"], reply_markup=ob_kb(OB_BET_TYPES, "ob_bt"))
+
+    elif data.startswith("ob_bt_"):
+        val = data.replace("ob_bt_", "")
+        db_set(uid, "bet_types", val)
+        lang = db_lang(uid)
+        await q.edit_message_text(T[lang]["ob_experience"], reply_markup=ob_kb(OB_EXPERIENCE, "ob_exp"))
+
+    elif data.startswith("ob_exp_"):
+        val = data.replace("ob_exp_", "")
+        db_set(uid, "experience", val)
+        lang = db_lang(uid)
+        await q.edit_message_text(T[lang]["ob_style"], reply_markup=ob_kb(OB_STYLE, "ob_sty"))
+
+    elif data.startswith("ob_sty_"):
+        val = data.replace("ob_sty_", "")
+        db_set(uid, "bet_style", val); db_set(uid, "onboarding_done", 1)
+        u = db_get(uid)
+        lang = db_lang(uid)
+        done_msg = T[lang]["ob_done"].format(
+            sports=u["sports"], bet_types=u["bet_types"],
+            experience=u["experience"], style=u["bet_style"]
+        )
+        await q.edit_message_text(done_msg)
+        db_add_points(uid, 30, "onboarding_complete")
+        # Check achievement
+        if db_add_achievement(uid, "first_profile"):
+            ach_msg = tr(uid, "achievement", name="Profile Master")
+            try: await context.bot.send_message(chat_id=uid, text=ach_msg)
+            except Exception: pass
 
 
-async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not db_is_registered(user_id):
-        await update.message.reply_text(t(user_id, "need_reg"))
-        return
+async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
+    u = db_get(uid)
+    # Calculate rank
+    with con() as c:
+        rank_row = c.execute("SELECT COUNT(*)+1 FROM users WHERE points>? AND is_registered=1", (u["points"],)).fetchone()
+    rank = rank_row[0] if rank_row else "?"
+    await update.message.reply_text(tr(uid, "profile_full",
+        name=u["display_name"] or "-", lang=LANG_NAMES.get(u["lang"], u["lang"]),
+        level=u["level"], pts=u["points"], streak=u["streak_days"],
+        total_req=u["total_requests"], refs=u["ref_count"],
+        sports=u["sports"] or "-", bet_types=u["bet_types"] or "-",
+        exp=u["experience"] or "-"))
+
+
+async def leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
+    with con() as c:
+        top = c.execute("SELECT user_id,display_name,points,level FROM users WHERE is_registered=1 ORDER BY points DESC LIMIT 10").fetchall()
+        rank_row = c.execute("SELECT COUNT(*)+1 FROM users WHERE points>? AND is_registered=1",
+                             (db_get(uid)["points"],)).fetchone()
+    rank = rank_row[0] if rank_row else "?"
+    entries = "\n".join(f"{i+1}. {r[1] or r[0]} — {r[2]} pts (Lv.{r[3]})" for i, r in enumerate(top))
+    u = db_get(uid)
+    await update.message.reply_text(tr(uid, "leaderboard", entries=entries, rank=rank, pts=u["points"], level=u["level"]))
+
+
+async def ref_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
     bot_info = await context.bot.get_me()
-    await update.message.reply_text(
-        t(user_id, "ref_link", bot=bot_info.username, uid=user_id, count=db_get_ref_count(user_id)),
-        parse_mode="Markdown"
-    )
+    u = db_get(uid)
+    await update.message.reply_text(tr(uid, "ref_link", bot=bot_info.username, uid=uid, count=u["ref_count"]))
+
+
+async def matches_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
+    subs = db_user_lsubs(uid)
+    if not subs: await update.message.reply_text(tr(uid, "no_subs")); return
+    lines = ["Matches / Matchi:\n"]
+    btns  = []
+    for s in subs:
+        lines.append(f"- {s['match_name']}")
+        btns.append([InlineKeyboardButton(f"Unfollow: {s['match_name'][:30]}", callback_data=f"unwatch_{s['match_id']}")])
+    await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(btns))
+
+
+async def watch_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer(); uid = q.from_user.id; data = q.data
+    if data.startswith("watch_"):
+        mid = data[6:]
+        mname = context.user_data.get(f"mn_{mid}", mid)
+        live_subs[mid].add(uid); user_subs[uid].add(mid); db_add_lsub(uid, mid, mname)
+        await q.edit_message_text(q.message.text + "\n\n" + tr(uid, "watch_started", match=mname))
+        db_add_points(uid, 10, "watch_match")
+    elif data.startswith("unwatch_"):
+        mid = data[8:]
+        subs = db_user_lsubs(uid)
+        mname = next((s["match_name"] for s in subs if s["match_id"] == mid), mid)
+        live_subs[mid].discard(uid); user_subs[uid].discard(mid); db_del_lsub(uid, mid)
+        await q.edit_message_text(tr(uid, "watch_stopped", match=mname))
 
 
 # ─── Main message handler ─────────────────────────────────────────────────────
+async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user; uid = user.id; info = uinfo(update)
+    db_ensure(uid, user.username or "")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user    = update.effective_user
-    user_id = user.id
-    info    = get_user_info(update)
-
-    db_ensure_user(user_id, user.username or "")
-
-    # Обработка шагов регистрации
-    if update.message.contact:
-        if await handle_phone_input(update, context):
-            return
-
-    step = user_reg_step.get(user_id)
-    if step == "awaiting_name":
-        if update.message.text:
-            await handle_name_input(update, context)
-        return
-    if step == "awaiting_phone":
-        await update.message.reply_text(
-            t(user_id, "ask_phone"), reply_markup=phone_keyboard(user_id)
-        )
+    # Registration flow
+    step = reg_step.get(uid)
+    if step == "awaiting_name" and update.message.text:
+        await handle_name(update, context); return
+    if step in ("awaiting_lang", "awaiting_name"):
         return
 
-    # Если не зарегистрирован — направляем на /start
-    if not db_is_registered(user_id):
-        await update.message.reply_text(t(user_id, "need_reg"))
-        return
+    if not db_is_reg(uid):
+        await update.message.reply_text(tr(uid, "need_reg")); return
+    if db_is_blocked(uid):
+        await update.message.reply_text(tr(uid, "db_blocked")); return
 
-    # ── Security ──────────────────────────────────────────────────────────────
-    blocked, secs = is_blocked(user_id)
-    if blocked:
-        suspicious_logger.warning(f"BLOCKED_REQUEST | {info}")
-        await update.message.reply_text(t(user_id, "blocked", m=secs // 60, s=secs % 60))
-        return
-
-    exceeded, wait = check_rate_limit(user_id)
+    # Security
+    blk, secs = sec_blocked(uid)
+    if blk:
+        sus.warning(f"BLK_REQ | {info}")
+        await update.message.reply_text(tr(uid, "blocked", m=secs//60, s=secs%60)); return
+    exceeded, wait = rate_check(uid)
     if exceeded:
-        if record_violation(user_id, info):
-            await update.message.reply_text(t(user_id, "auto_blocked", min=SPAM_BLOCK_DURATION // 60))
+        if record_viol(uid, info):
+            await update.message.reply_text(tr(uid, "auto_blocked", min=SPAM_DUR//60))
         else:
-            await update.message.reply_text(
-                t(user_id, "rate_limit", w=wait, v=user_violations[user_id], max=SPAM_BLOCK_AFTER)
-            )
+            await update.message.reply_text(tr(uid, "rate_limit", w=wait, v=violations[uid], max=SPAM_AFTER))
         return
-    reset_violations(user_id)
+    violations[uid] = 0
 
-    msg_type = "PHOTO" if update.message.photo else "TEXT"
-    logger.info(f"MSG [{msg_type}] | {info}")
-    db_log_request(user_id, msg_type)
+    # Update streak
+    update_streak(uid)
+
+    mtype = "PHOTO" if update.message.photo else "TEXT"
+    logger.info(f"MSG [{mtype}] | {info}")
+    db_log_req(uid, mtype)
     await update.message.chat.send_action("typing")
 
     text  = update.message.text or update.message.caption or ""
     photo = update.message.photo
 
     if len(text) > 1000:
-        suspicious_logger.warning(f"LONG_TEXT | {info}")
-        await update.message.reply_text(t(user_id, "long_text"))
-        return
-
-    injection_keywords = ["ignore previous", "system prompt", "forget instructions",
-                          "act as", "jailbreak", "###", "<<<"]
-    if any(kw.lower() in text.lower() for kw in injection_keywords):
-        suspicious_logger.warning(f"INJECTION | {info}")
-        await update.message.reply_text(t(user_id, "injection"))
-        return
+        sus.warning(f"LONG | {info}"); await update.message.reply_text(tr(uid, "long_text")); return
+    inj = ["ignore previous", "system prompt", "forget instructions", "act as", "jailbreak", "###", "<<<"]
+    if any(k.lower() in text.lower() for k in inj):
+        sus.warning(f"INJ | {info}"); await update.message.reply_text(tr(uid, "injection")); return
 
     content = []
     if photo:
-        file       = await context.bot.get_file(photo[-1].file_id)
-        file_bytes = await file.download_as_bytearray()
-        b64        = base64.standard_b64encode(file_bytes).decode("utf-8")
+        f = await context.bot.get_file(photo[-1].file_id)
+        fb = await f.download_as_bytearray()
+        b64 = base64.standard_b64encode(fb).decode("utf-8")
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}})
     if text:
         content.append({"type": "text", "text": text})
     elif not photo:
-        await update.message.reply_text(t(user_id, "no_input"))
-        return
+        await update.message.reply_text(tr(uid, "no_input")); return
     else:
-        content.append({"type": "text", "text": t(user_id, "img_prompt")})
+        content.append({"type": "text", "text": tr(uid, "img_prompt")})
 
-    # ── Fetch real football data ──────────────────────────────────────────────
-    football_context = ""
-    if text and FOOTBALL_API_KEY:
-        # Extract potential team names (words with capital letters)
+    # Fetch real football data
+    if text and FOOTBALL_KEY:
         words = [w.strip(".,!?") for w in text.split() if len(w) > 3 and w[0].isupper()]
         fetched = []
         for word in words[:2]:
-            data = await fetch_team_data(word)
-            if data:
-                fetched.append(data)
-        if fetched:
-            football_context = "\n\n📡 РЕАЛЬНЫЕ ДАННЫЕ (football-data.org):\n" + "\n\n".join(fetched)
-            content.append({"type": "text", "text": football_context})
+            try:
+                async with httpx.AsyncClient(timeout=5) as h:
+                    r = await h.get("https://api.football-data.org/v4/teams",
+                        headers={"X-Auth-Token": FOOTBALL_KEY}, params={"name": word, "limit": 1})
+                    if r.status_code == 200:
+                        teams = r.json().get("teams", [])
+                        if teams:
+                            tid = teams[0]["id"]
+                            r2 = await h.get(f"https://api.football-data.org/v4/teams/{tid}/matches",
+                                headers={"X-Auth-Token": FOOTBALL_KEY}, params={"status": "FINISHED", "limit": 5})
+                            if r2.status_code == 200:
+                                ms = r2.json().get("matches", [])
+                                if ms:
+                                    res = [f"{m['utcDate'][:10]} {m['homeTeam']['name']} {m['score']['fullTime'].get('home',0)}-{m['score']['fullTime'].get('away',0)} {m['awayTeam']['name']}" for m in ms]
+                                    fetched.append(teams[0]["name"] + ":\n" + "\n".join(res))
+            except Exception: pass
+        if fetched: content.append({"type": "text", "text": "REAL DATA:\n" + "\n\n".join(fetched)})
 
+    # Claude request
     try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            system=t(user_id, "system_prompt"),
-            messages=[{"role": "user", "content": content}]
-        )
-        reply = response.content[0].text
+        resp = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=1024,
+            system=tr(uid, "system_prompt"), messages=[{"role": "user", "content": content}])
+        reply = resp.content[0].text
         logger.info(f"REPLY_OK | {info}")
-    except anthropic.RateLimitError:
-        reply = t(user_id, "api_overload")
-    except anthropic.APIError as e:
-        logger.error(f"ANTHROPIC_ERROR {e} | {info}")
-        reply = t(user_id, "api_error")
+    except anthropic.RateLimitError: reply = tr(uid, "api_overload")
+    except anthropic.APIError as e: logger.error(f"API_ERR {e} | {info}"); reply = tr(uid, "api_error")
 
-    await update.message.reply_text(reply)
+    # Award points for request
+    db_add_points(uid, 5, "forecast_request")
+    u = db_get(uid)
 
+    # Check achievements
+    if u and u["total_requests"] == 1 and db_add_achievement(uid, "first_forecast"):
+        try: await context.bot.send_message(chat_id=uid, text=tr(uid, "achievement", name="First Forecast"))
+        except Exception: pass
+    if u and u["total_requests"] == 10 and db_add_achievement(uid, "10_forecasts"):
+        try: await context.bot.send_message(chat_id=uid, text=tr(uid, "achievement", name="Analyst"))
+        except Exception: pass
+    if u and u["total_requests"] == 50 and db_add_achievement(uid, "50_forecasts"):
+        try: await context.bot.send_message(chat_id=uid, text=tr(uid, "achievement", name="Expert"))
+        except Exception: pass
+    if u and u["streak_days"] >= 7 and db_add_achievement(uid, "streak_7"):
+        try: await context.bot.send_message(chat_id=uid, text=tr(uid, "achievement", name="7-Day Streak"))
+        except Exception: pass
+
+    # Watch button for live matches
+    watch_kb = None
+    if text and APIFOOTBALL_KEY:
+        words = text.split()
+        ms = await search_match(" ".join(words[:3]))
+        if ms:
+            m = ms[0]
+            context.user_data[f"mn_{m['id']}"] = m["name"]
+            btn = tr(uid, "watch_btn") + f": {m['name'][:35]}"
+            watch_kb = InlineKeyboardMarkup([[InlineKeyboardButton(btn, callback_data=f"watch_{m['id']}")]])
+
+    # Points badge in reply
+    pts_line = f"\n\n+5 pts | Total: {u['points']} | Lv.{u['level']}" if u else ""
+    await update.message.reply_text(reply + pts_line, reply_markup=watch_kb)
 
 # ─── Admin panel ──────────────────────────────────────────────────────────────
+def is_adm(update): return (update.effective_user.id if update.effective_user else 0) == ADMIN_ID
 
-def is_admin(update: Update) -> bool:
-    return update.effective_user.id == ADMIN_ID
-
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update): return
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_adm(update): return
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Статистика",   callback_data="adm_stats")],
-        [InlineKeyboardButton("📢 Рассылка",      callback_data="adm_broadcast_menu")],
-        [InlineKeyboardButton("🚫 Список блоков", callback_data="adm_blocked")],
-        [InlineKeyboardButton("👥 Топ рефералов", callback_data="adm_toprefs")],
+        [InlineKeyboardButton("Statistika",    callback_data="adm_stats")],
+        [InlineKeyboardButton("Rassylka",      callback_data="adm_broadcast")],
+        [InlineKeyboardButton("Blokirovka",    callback_data="adm_blocklist")],
+        [InlineKeyboardButton("Poisk user",    callback_data="adm_search")],
+        [InlineKeyboardButton("Izmenit yazyk", callback_data="adm_setlang")],
+        [InlineKeyboardButton("Top refs",      callback_data="adm_toprefs")],
+        [InlineKeyboardButton("Leaderboard",   callback_data="adm_toppts")],
+        [InlineKeyboardButton("Live subs",     callback_data="adm_live")],
     ])
-    await update.message.reply_text("🔧 *Админ-панель*", parse_mode="Markdown", reply_markup=kb)
+    await update.message.reply_text("ADMIN PANEL", reply_markup=kb)
 
-async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID:
-        await query.answer("Нет доступа", show_alert=True)
-        return
-    await query.answer()
-    data = query.data
-    back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="adm_back")]])
+async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if q.from_user.id != ADMIN_ID: await q.answer("No access", show_alert=True); return
+    await q.answer(); data = q.data
+    back = InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="adm_back")]])
 
     if data == "adm_stats":
         s = db_stats()
-        blocked_now = sum(1 for v in user_blocked_until.values() if time.time() < v)
-        await query.edit_message_text(
-            f"📊 *Статистика*\n\n"
-            f"👤 Зарегистрировано: `{s['total']}`\n"
-            f"🆕 Новых сегодня: `{s['today']}`\n\n"
-            f"📩 Запросов всего: `{s['req_total']}`\n"
-            f"📩 Запросов сегодня: `{s['req_today']}`\n\n"
-            f"🚫 Заблокировано: `{blocked_now}`",
-            parse_mode="Markdown", reply_markup=back_btn
-        )
-    elif data == "adm_blocked":
-        blocked = [(uid, int(v - time.time())) for uid, v in user_blocked_until.items() if time.time() < v]
-        text = ("🚫 *Заблокированные:*\n\n" + "\n".join(f"• `{uid}` — {s//60}м {s%60}с" for uid, s in blocked)
-                ) if blocked else "✅ Нет заблокированных."
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=back_btn)
+        blk_now = sum(1 for v in blocked_until.values() if time.time() < v)
+        lang_str = " | ".join(f"{l}: {n}" for l, n in s["langs"])
+        live_now = sum(len(v) for v in live_subs.values())
+        await q.edit_message_text(
+            f"STATISTIKA\n\nPol-li: {s['total']}\nSegodnya: {s['today']}\n"
+            f"Zablokirovano: {s['blocked']}\nOnboarding done: {s['ob_done']}\n\n"
+            f"Zaprosy vsego: {s['rqtotal']}\nSeg: {s['rqtoday']}\n\n"
+            f"Yazyki: {lang_str}\n\nLive subs DB: {s['live_ct']}\nLive aktivnye: {live_now}\n"
+            f"Rate blok: {blk_now}", reply_markup=back)
+
+    elif data == "adm_blocklist":
+        with con() as c:
+            rows = c.execute("SELECT user_id,username,display_name FROM users WHERE is_blocked=1").fetchall()
+        if not rows: await q.edit_message_text("Net zablokirovannykh.", reply_markup=back); return
+        btns = [[InlineKeyboardButton(f"Razblokirovat: {r[2] or r[1] or r[0]}", callback_data=f"adm_unblk_{r[0]}")] for r in rows]
+        btns.append([InlineKeyboardButton("Back", callback_data="adm_back")])
+        lines = ["ZABLOKIROVANNYE:"] + [f"- {r[2] or r[1] or r[0]} (id={r[0]})" for r in rows]
+        await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(btns))
+
+    elif data.startswith("adm_unblk_"):
+        uid = int(data.split("_")[2]); db_set(uid, "is_blocked", 0)
+        await q.edit_message_text(f"Razblok: {uid}", reply_markup=back)
+
+    elif data.startswith("adm_blk_"):
+        uid = int(data.split("_")[2]); db_set(uid, "is_blocked", 1)
+        await q.edit_message_text(f"Zablokirovan: {uid}", reply_markup=back)
+
+    elif data == "adm_broadcast":
+        context.user_data["adm_act"] = "broadcast"
+        await q.edit_message_text("Otpravte tekst rassylki. /cancel — otmena.")
+
+    elif data == "adm_search":
+        context.user_data["adm_act"] = "search"
+        await q.edit_message_text("Vvedite id, username ili imya.")
+
+    elif data == "adm_setlang":
+        context.user_data["adm_act"] = "setlang"
+        await q.edit_message_text("Format: 123456789 ru\nYazyki: az, ru, en")
+
     elif data == "adm_toprefs":
-        rows = db_stats()["top_refs"]
-        text = ("👥 *Топ рефералов:*\n\n" + "\n".join(
-            f"{i+1}. @{r[1] or r[0]} — `{r[2]}` чел." for i, r in enumerate(rows))
-        ) if rows else "Рефералов пока нет."
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=back_btn)
-    elif data == "adm_broadcast_menu":
-        context.user_data["awaiting_broadcast"] = True
-        await query.edit_message_text(
-            "📢 *Рассылка*\n\nОтправьте текст для рассылки всем зарегистрированным пользователям.\n"
-            "Поддерживается Markdown. Для отмены — /cancel",
-            parse_mode="Markdown"
-        )
+        s = db_stats()
+        rows = s["toprefs"]
+        text = "TOP REFERALOV:\n" + "\n".join(f"{i+1}. @{r[1] or r[0]} — {r[2]}" for i, r in enumerate(rows))
+        await q.edit_message_text(text, reply_markup=back)
+
+    elif data == "adm_toppts":
+        s = db_stats()
+        rows = s["toppts"]
+        text = "LEADERBOARD (Admin):\n" + "\n".join(f"{i+1}. {r[1] or r[0]} — {r[2]} pts Lv.{r[3]}" for i, r in enumerate(rows))
+        await q.edit_message_text(text, reply_markup=back)
+
+    elif data == "adm_live":
+        live_now = sum(len(v) for v in live_subs.values())
+        lines = [f"LIVE SUBS: {live_now} aktivnykh\n"]
+        for mid, uids in live_subs.items():
+            if uids: lines.append(f"Match {mid}: {len(uids)} users")
+        await q.edit_message_text("\n".join(lines), reply_markup=back)
+
     elif data == "adm_back":
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📊 Статистика",   callback_data="adm_stats")],
-            [InlineKeyboardButton("📢 Рассылка",      callback_data="adm_broadcast_menu")],
-            [InlineKeyboardButton("🚫 Список блоков", callback_data="adm_blocked")],
-            [InlineKeyboardButton("👥 Топ рефералов", callback_data="adm_toprefs")],
+            [InlineKeyboardButton("Statistika",    callback_data="adm_stats")],
+            [InlineKeyboardButton("Rassylka",      callback_data="adm_broadcast")],
+            [InlineKeyboardButton("Blokirovka",    callback_data="adm_blocklist")],
+            [InlineKeyboardButton("Poisk user",    callback_data="adm_search")],
+            [InlineKeyboardButton("Izmenit yazyk", callback_data="adm_setlang")],
+            [InlineKeyboardButton("Top refs",      callback_data="adm_toprefs")],
+            [InlineKeyboardButton("Leaderboard",   callback_data="adm_toppts")],
+            [InlineKeyboardButton("Live subs",     callback_data="adm_live")],
         ])
-        await query.edit_message_text("🔧 *Админ-панель*", parse_mode="Markdown", reply_markup=kb)
+        await q.edit_message_text("ADMIN PANEL", reply_markup=kb)
 
-async def handle_admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update): return
-    if not context.user_data.get("awaiting_broadcast"): return
-    context.user_data["awaiting_broadcast"] = False
-    text     = update.message.text or ""
-    all_uids = db_all_users()
-    status   = await update.message.reply_text(f"📢 Рассылка для {len(all_uids)} пользователей...")
-    ok = fail = 0
-    for uid in all_uids:
-        try:
-            await context.bot.send_message(chat_id=uid, text=text, parse_mode="Markdown")
-            ok += 1
-        except Exception:
-            fail += 1
-        await asyncio.sleep(0.05)
-    await status.edit_text(
-        f"✅ Рассылка завершена!\n\n📨 Доставлено: `{ok}`\n❌ Не доставлено: `{fail}`",
-        parse_mode="Markdown"
-    )
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.pop("awaiting_broadcast", None)
-    await update.message.reply_text("❌ Отменено.")
+async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_adm(update): return
+    act = context.user_data.get("adm_act")
+    if not act: return
+    context.user_data.pop("adm_act")
+    text = update.message.text or ""
+
+    if act == "broadcast":
+        uids = db_all_uids()
+        status = await update.message.reply_text(f"Rassylka dla {len(uids)} pol-ley...")
+        ok = fail = 0
+        for uid in uids:
+            try: await context.bot.send_message(chat_id=uid, text=text); ok += 1
+            except Exception: fail += 1
+            await asyncio.sleep(0.05)
+        await status.edit_text(f"Gotovo! Ok: {ok} | Fail: {fail}")
+
+    elif act == "search":
+        results = db_search(text.strip())
+        if not results: await update.message.reply_text("Ne naydeno."); return
+        for u in results:
+            reg = "Da" if u["is_registered"] else "Net"
+            blk = "ZABLOKIROVAN" if u["is_blocked"] else "Aktiven"
+            btns = []
+            if u["is_blocked"]:
+                btns.append([InlineKeyboardButton("Razblokirovat", callback_data=f"adm_unblk_{u['user_id']}")])
+            else:
+                btns.append([InlineKeyboardButton("Zablokirovat", callback_data=f"adm_blk_{u['user_id']}")])
+            await update.message.reply_text(
+                f"ID: {u['user_id']}\n@{u['username'] or '-'}\n{u['display_name'] or '-'}\n"
+                f"Lang: {u['lang']}\nReg: {reg}\nStatus: {blk}\nLevel: {u['level']}\nPts: {u['points']}\n"
+                f"Sports: {u['sports']}\nBets: {u['bet_types']}\nExp: {u['experience']}\nJoined: {u['joined_at']}",
+                reply_markup=InlineKeyboardMarkup(btns))
+
+    elif act == "setlang":
+        parts = text.strip().split()
+        if len(parts) != 2 or parts[1] not in ("az", "ru", "en"):
+            await update.message.reply_text("Format: 123456789 ru"); return
+        db_set(int(parts[0]), "lang", parts[1])
+        await update.message.reply_text(f"Lang {parts[1]} set for {parts[0]}")
+
+
+async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("adm_act", None)
+    await update.message.reply_text("Otmeneno.")
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
-
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CommandHandler("start",   start))
-    app.add_handler(CommandHandler("lang",    lang_command))
-    app.add_handler(CommandHandler("ref",     referral))
-    app.add_handler(CommandHandler("profile", profile))
-    app.add_handler(CommandHandler("admin",   admin))
-    app.add_handler(CommandHandler("cancel",  cancel))
+    app.add_handler(CommandHandler("start",       start))
+    app.add_handler(CommandHandler("lang",        lang_cmd))
+    app.add_handler(CommandHandler("ref",         ref_cmd))
+    app.add_handler(CommandHandler("profile",     profile_cmd))
+    app.add_handler(CommandHandler("top",         leaderboard_cmd))
+    app.add_handler(CommandHandler("matches",     matches_cmd))
+    app.add_handler(CommandHandler("admin",       admin_cmd))
+    app.add_handler(CommandHandler("cancel",      cancel_cmd))
 
-    app.add_handler(CallbackQueryHandler(lang_callback,  pattern=r"^lang_"))
-    app.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^adm_"))
+    app.add_handler(CallbackQueryHandler(lang_cb,   pattern=r"^lang_"))
+    app.add_handler(CallbackQueryHandler(ob_callback, pattern=r"^ob_"))
+    app.add_handler(CallbackQueryHandler(watch_cb,  pattern=r"^(watch|unwatch)_"))
+    app.add_handler(CallbackQueryHandler(adm_cb,    pattern=r"^adm_"))
 
-    # Рассылка от админа — приоритет выше
-    app.add_handler(MessageHandler(
-        filters.TEXT & filters.User(ADMIN_ID), handle_admin_broadcast
-    ), group=0)
+    # Admin text messages — group 0
+    app.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_ID), handle_adm_msg), group=0)
+    # All other messages — group 1
+    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.CONTACT, handle_msg), group=1)
 
-    # Все остальные сообщения (текст + фото + контакт)
-    app.add_handler(MessageHandler(
-        filters.TEXT | filters.PHOTO | filters.CONTACT, handle_message
-    ), group=1)
+    async def post_init(application):
+        asyncio.create_task(poller(application))
+        asyncio.create_task(daily_retention(application))
 
-    logger.info("Bot started / Bot işə düşdü / Бот запущен")
+    app.post_init = post_init
+    logger.info("ProqnozAI v3 started")
     app.run_polling()
 
 if __name__ == "__main__":
