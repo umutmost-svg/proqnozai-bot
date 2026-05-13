@@ -2,7 +2,7 @@ import os, logging, base64, time, sqlite3, asyncio, httpx, random
 from collections import defaultdict, deque
 from datetime import datetime, date
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import anthropic
 
@@ -26,13 +26,13 @@ RATE_WINDOW = 60; RATE_MAX = 5; SPAM_AFTER = 3; SPAM_DUR = 600
 client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
 # ─── In-memory ────────────────────────────────────────────────────────────────
-msg_times:    dict[int, deque] = defaultdict(deque)
-violations:   dict[int, int]   = defaultdict(int)
+msg_times:     dict[int, deque] = defaultdict(deque)
+violations:    dict[int, int]   = defaultdict(int)
 blocked_until: dict[int, float] = {}
-reg_step:     dict[int, str]   = {}
-live_subs:    dict[str, set]   = defaultdict(set)
-last_events:  dict[str, list]  = {}
-ht_sent:      set              = set()
+reg_step:      dict[int, str]   = {}
+live_subs:     dict[str, set]   = defaultdict(set)
+last_events:   dict[str, list]  = {}
+ht_sent:       set              = set()
 
 # ─── DB ───────────────────────────────────────────────────────────────────────
 DB = "bot.db"
@@ -42,22 +42,18 @@ def db_init():
     with con() as c:
         c.executescript("""
         CREATE TABLE IF NOT EXISTS users (
-            user_id       INTEGER PRIMARY KEY,
-            username      TEXT,
-            display_name  TEXT,
-            lang          TEXT DEFAULT 'az',
-            referred_by   INTEGER,
-            ref_count     INTEGER DEFAULT 0,
-            is_registered INTEGER DEFAULT 0,
-            is_blocked    INTEGER DEFAULT 0,
-            sports        TEXT DEFAULT '',
-            bet_types     TEXT DEFAULT '',
-            experience    TEXT DEFAULT '',
-            bet_style     TEXT DEFAULT '',
+            user_id         INTEGER PRIMARY KEY,
+            username        TEXT,
+            display_name    TEXT,
+            lang            TEXT DEFAULT 'az',
+            is_registered   INTEGER DEFAULT 0,
+            is_blocked      INTEGER DEFAULT 0,
+            sports          TEXT DEFAULT '',
+            experience      TEXT DEFAULT '',
             onboarding_done INTEGER DEFAULT 0,
             total_requests  INTEGER DEFAULT 0,
-            last_active   TEXT DEFAULT '',
-            joined_at     TEXT DEFAULT (datetime('now'))
+            last_active     TEXT DEFAULT '',
+            joined_at       TEXT DEFAULT (datetime('now'))
         );
         CREATE TABLE IF NOT EXISTS requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,12 +106,12 @@ def db_stats() -> dict:
         blocked = c.execute("SELECT COUNT(*) FROM users WHERE is_blocked=1").fetchone()[0]
         rqtotal = c.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
         rqtoday = c.execute("SELECT COUNT(*) FROM requests WHERE date(created_at)=date('now')").fetchone()[0]
-        toprefs = c.execute("SELECT user_id,username,display_name,ref_count FROM users ORDER BY ref_count DESC LIMIT 5").fetchall()
         langs   = c.execute("SELECT lang,COUNT(*) FROM users WHERE is_registered=1 GROUP BY lang").fetchall()
         ob_done = c.execute("SELECT COUNT(*) FROM users WHERE onboarding_done=1").fetchone()[0]
         live_ct = c.execute("SELECT COUNT(*) FROM live_subscriptions").fetchone()[0]
+        top_req = c.execute("SELECT user_id,display_name,total_requests FROM users WHERE is_registered=1 ORDER BY total_requests DESC LIMIT 5").fetchall()
     return dict(total=total, today=today, blocked=blocked, rqtotal=rqtotal, rqtoday=rqtoday,
-                toprefs=toprefs, langs=langs, ob_done=ob_done, live_ct=live_ct)
+                langs=langs, ob_done=ob_done, live_ct=live_ct, top_req=top_req)
 
 def db_search(q) -> list[dict]:
     with con() as c:
@@ -136,113 +132,139 @@ def db_user_lsubs(uid) -> list[dict]:
         rows = c.execute("SELECT match_id,match_name FROM live_subscriptions WHERE user_id=?", (uid,)).fetchall()
     return [dict(match_id=r[0], match_name=r[1]) for r in rows]
 
-# ─── Translations (FULL CYRILLIC) ─────────────────────────────────────────────
+# ─── Human-readable label maps ────────────────────────────────────────────────
+SPORTS_LABELS = {
+    "az": {"football": "Futbol", "ufc": "UFC/MMA", "nba": "Basketbol",
+           "tennis": "Tennis", "hockey": "Hokey", "all": "Hamisi"},
+    "ru": {"football": "Футбол", "ufc": "UFC/MMA", "nba": "Баскетбол",
+           "tennis": "Теннис", "hockey": "Хоккей", "all": "Все виды"},
+    "en": {"football": "Football", "ufc": "UFC/MMA", "nba": "Basketball",
+           "tennis": "Tennis", "hockey": "Hockey", "all": "All sports"},
+}
+EXP_LABELS = {
+    "az": {"beginner": "Yeni baslayanam", "mid": "Orta seviyye", "expert": "Tecrubeliyem"},
+    "ru": {"beginner": "Новичок", "mid": "Средний уровень", "expert": "Опытный"},
+    "en": {"beginner": "Beginner", "mid": "Intermediate", "expert": "Expert"},
+}
+
+def sport_label(uid, val):
+    lang = db_lang(uid)
+    return SPORTS_LABELS.get(lang, SPORTS_LABELS["ru"]).get(val, val)
+
+def exp_label(uid, val):
+    lang = db_lang(uid)
+    return EXP_LABELS.get(lang, EXP_LABELS["ru"]).get(val, val)
+
+# ─── Translations ─────────────────────────────────────────────────────────────
 T = {
 "az": {
-"choose_lang":   "Dil seçin / Выберите язык / Choose language:",
-"ask_name":      "Xoş gəldiniz! Adınızı daxil edin:",
-"reg_done":      "Qeydiyyat tamamlandı! Salam, {name}!\n\nAI-əsaslı idman proqnoz platformasına xoş gəldiniz.",
-"reg_done_ref":  "Qeydiyyat tamamlandı! Salam, {name}!\nSizi dəvət edən dostunuz bonus qazandı.",
-"already_reg":   "Siz artıq qeydiyyatdan keçmisiniz, {name}!",
-"need_reg":      "Əvvəlcə qeydiyyatdan keçin. /start yazın.",
-"db_blocked":    "Hesabınız bloklanıb. İnzibatçıya müraciət edin.",
-"blocked":       "Müvəqqəti bloklanmısınız. {m} dəq {s} san sonra yenidən cəhd edin.",
-"rate_limit":    "Sorğu limiti aşıldı. {w} saniyə gözləyin. Xəbərdarlıq: {v}/{max}",
-"auto_blocked":  "Çox sayda sorğu. {min} dəqiqəlik blok.",
-"long_text":     "Mətn çox uzundur.",
-"injection":     "Yalnız idman sorğuları qəbul edilir.",
-"no_input":      "Mətn yazın və ya şəkil göndərin.",
-"img_prompt":    "Şəkildəki idman hadisəsini müəyyən et və proqnoz ver.",
-"api_overload":  "Servis yüklənməsi. Bir az sonra yenidən cəhd edin.",
-"api_error":     "Xəta baş verdi. Bir az sonra yenidən cəhd edin.",
-"lang_set":      "Dil Azərbaycan dilinə təyin edildi.",
-"ref_link":      "Referans linkınız:\nt.me/{bot}?start=ref{uid}\n\nDəvət etdiyiniz: {count} nəfər",
-"watch_btn":     "Oyunu izlə",
-"watch_started": "Oyun izlənilir: {match}\nVacib hadisələr haqqında bildiriş alacaqsınız.",
-"watch_stopped": "Oyun izlənməsi dayandırıldı: {match}",
-"no_subs":       "Heç bir oyun izləmirsiniz.",
-"live_goal":     "QOL! {match}\n{minute}. dəq: {team}\nHesab: {score}\n\nCanlı mərc:\n{tip}",
-"live_card":     "KART! {match}\n{minute}. dəq: {player} ({team}) — {card}\n\nCanlı mərc:\n{tip}",
-"live_halftime": "FASİLƏ! {match}\nHesab: {score}\n\nFasilə mərci:\n{tip}",
-"live_fulltime": "OYUN BİTDİ! {match}\nYekun: {score}\n\nİzləmədən çıxıldı.",
-"live_kickoff":  "OYUN BAŞLADI! {match}\nVacib hadisələr haqqında xəbərləndirmə alacaqsınız.",
-"live_alert_goal":     "SİQNAL! {match}\nModel: Qol gözlənilir [{minute}. dəq]\nKəflərin dəyişməsindən əvvəl hərəkət edin.",
-"live_alert_value":    "LIVE VALUE! {match}\nKəflərdə anomaliya aşkar edildi [{minute}. dəq]\nModel: {team} üzərində dəyər var.",
-"live_alert_pressure": "TƏZYİQ! {match}\n{team} güclü hücum təzyiqi yaradır [{minute}. dəq]\nStat: {stat}",
-"top5_header":   "Bu günün TOP 5 matçı:\n\n",
-"top5_empty":    "Bu gün üçün matç tapılmadı.",
+"choose_lang":   "Dil secin / Выберите язык / Choose language:",
+"ask_name":      "Xos geldiniz! Adinizi daxil edin:",
+"reg_done":      "Qeydiyyat tamamlandi! Salam, {name}!",
+"already_reg":   "Siz artiq qeydiyyatdan kecmisiniz, {name}!",
+"need_reg":      "Evvelce qeydiyyatdan kesin. /start yazin.",
+"db_blocked":    "Hesabiniz bloklanib. Inzibatciya muraciet edin.",
+"blocked":       "Muveqqeti bloklanmissiniz. {m} deq {s} san sonra yeniden ced edin.",
+"rate_limit":    "Sorgu limiti asildi. {w} saniye gozleyin. Xeberdarliq: {v}/{max}",
+"auto_blocked":  "Cox sayda sorgu. {min} deqiqelik blok.",
+"long_text":     "Metn cox uzundur.",
+"injection":     "Yalniz idman sorqulari qebul edilir.",
+"no_input":      "Metn yazin ve ya sekil gonderin.",
+"img_prompt":    "Sekildeki idman hadisesini mueyyen et ve proqnoz ver.",
+"api_overload":  "Servis yuklemesi. Bir az sonra yeniden ced edin.",
+"api_error":     "Xeta bas verdi. Bir az sonra yeniden ced edin.",
+"lang_set":      "Dil Azerbaycan diline teyin edildi.",
+"watch_btn":     "Oyunu izle",
+"watch_started": "Oyun izlenilir: {match}",
+"watch_stopped": "DayandirIldi: {match}",
+"no_subs":       "Hec bir oyun izlemirsiniz.",
+"live_goal":     "QOL! {match}\n{minute}. deq: {team}\nHesab: {score}\n\nCanli merc:\n{tip}",
+"live_card":     "KART! {match}\n{minute}. deq: {player} ({team}) - {card}\n\nCanli merc:\n{tip}",
+"live_halftime": "FASILE! {match}\nHesab: {score}\n\nFasile merci:\n{tip}",
+"live_fulltime": "OYUN BITTI! {match}\nYekun: {score}",
+"live_alert_goal":     "SIGNAL! {match} - Qol gozlenilir [{minute}. deq]",
+"live_alert_value":    "LIVE VALUE! {match} - {team} uzerinde deger var [{minute}. deq]",
+"live_alert_pressure": "TEZYIQ! {match} - {team} hucum tezyiqi [{minute}. deq] {stat}",
+"top5_header":   "Bu gunun TOP 5 matci:\n\n",
+"top5_empty":    "Bu gun ucun matc tapilmadi.",
 "menu_forecast": "Proqnoz al",
-"menu_top5":     "Günün TOP 5",
-"menu_matches":  "Matçlarım",
+"menu_top5":     "TOP 5 bu gun",
+"menu_matches":  "Matclarim",
 "menu_profile":  "Profil",
-"menu_ref":      "Referans link",
-"menu_lang":     "Dil dəyiş",
-"profile_text":  "PROFİL\n\nAd: {name}\nDil: {lang}\nCəmi sorğular: {total_req}\nDəvətlər: {refs}\n\nİdman: {sports}\nMərc növü: {bet_types}\nTəcrübə: {exp}",
-# Onboarding
-"ob_sports":   "Hansı idman növlərini sevirsiniz?",
-"ob_bet_type": "Hansı mərc növlərini üstün tutursunuz?",
-"ob_exp":      "Mərcdə təcrübəniz nə qədərdir?",
-"ob_style":    "Oyun üslubunuz nədir?",
-"ob_done":     "Profiliniz hazırlandı! Fərdiləşdirilmiş proqnozlar alacaqsınız.\n\nProfil:\nİdman: {sports}\nMərc: {bet_types}\nTəcrübə: {exp}\nÜslub: {style}",
-"system_prompt": """Sən 15 illik təcrübəli elit idman analitikisən. Tarix: {date}.
+"menu_lang":     "Dil deyis",
+"profile_text":  "PROFIL\n\nAd: {name}\nDil: {lang}\nCemi sorqular: {total_req}\n\nIdman: {sports}\nTecurbe: {exp}",
+"ob_sports":     "Hansı idman növünü sevirsiniz?",
+"ob_exp":        "Mərcdə təcrübəniz nə qədərdir?",
+"ob_done":       "Profil hazirdir! Ferdilesdirilmis proqnozlar alacaqsiniz.\n\nIdman: {sports}\nTecurbe: {exp}",
+"choose_forecast": "Proqnoz novunu secin:",
+"btn_extended":    "Genis proqnoz",
+"btn_short":       "Qisa proqnoz",
+"system_prompt": """Sen 15 illik tecrubeli idman analitikisen.
 
-İSTİFADƏÇİNİN PROFİLİ:
-Sevdiyi idman: {sports}
-Mərc növü: {bet_types}
-Təcrübə: {exp}
-Üslub: {style}
+ISTIFADECININ PROFILI:
+Idman: {sports}
+Tecurbe: {exp}
 
 QAYDALAR:
-- İstifadəçinin profilinə uyğun proqnoz ver
-- Yalnız 2025-2026 mövsümü məlumatlar, köhnəlmiş heyətləri YAZMA
-- Emoji istifadə et - Telegram-da düzgün görünür
+- Istifadecinin profiline uygun proqnoz ver
+- Yalniz 2025-2026 mevsumu melumatlar, eskileri YAZMA
+- Emojileri istifade et, lakin markdown ** istifade etme
+- Sadece duz metn ve emoji
 
-GENİŞLƏNDİRİLMİŞ FORMAT (default):
+GENIS FORMAT:
 
-🏆 HADİSƏ: [Komanda A] — [Komanda B]
-📍 [Turnir] | [Tarix]
+HADISE: [Komanda A] - [Komanda B] | [Turnir] | [Tarix]
 
-📊 FORMA:
-▪ [Komanda A]: son 5 oyun nəticəsi
-▪ [Komanda B]: son 5 oyun nəticəsi
+FORMA:
+- [Komanda A]: son 5 oyun (M-M-H-M-U kimi)
+- [Komanda B]: son 5 oyun
 
-🔑 ƏSAS AMİLLƏR:
-1️⃣ [Amil 1]
-2️⃣ [Amil 2]
-3️⃣ [Amil 3]
+ESAS AMILLER:
+1. [Amil 1]
+2. [Amil 2]
+3. [Amil 3]
 
-🎯 PROQNOZ:
+PROQNOZ:
 1X2:
-├ [Komanda A] qələbəsi — XX% | Kef: X.XX–X.XX
-├ Heç-heçə — XX% | Kef: X.XX–X.XX
-└ [Komanda B] qələbəsi — XX% | Kef: X.XX–X.XX
+- [Komanda A] qalebesi: XX% | Kef: X.XX-X.XX
+- Hec-hece: XX% | Kef: X.XX-X.XX
+- [Komanda B] qalebesi: XX% | Kef: X.XX-X.XX
 
-⚽ Total:
-├ 2.5 Üstündə — XX% | Kef: X.XX–X.XX
-└ 2.5 Altında — XX% | Kef: X.XX–X.XX
+Total:
+- 2.5 Ustunde: XX% | Kef: X.XX-X.XX
+- 2.5 Altinda: XX% | Kef: X.XX-X.XX
 
-🔥 Hər ikisi qol vurur:
-├ Bəli — XX% | Kef: X.XX–X.XX
-└ Xeyr — XX% | Kef: X.XX–X.XX
+Her ikisi qol vurur:
+- Beli: XX% | Kef: X.XX-X.XX
+- Xeyr: XX% | Kef: X.XX-X.XX
 
-📐 Qandikap:
-├ [Komanda A] (-1) — XX% | Kef: X.XX–X.XX
-└ [Komanda B] (+1) — XX% | Kef: X.XX–X.XX
+Qandikap:
+- [Komanda A] (-1): XX% | Kef: X.XX-X.XX
+- [Komanda B] (+1): XX% | Kef: X.XX-X.XX
 
-⚡ ƏN GÜCLÜ MƏRCİ:
-▶ [Mərc növü] | Kef: X.XX–X.XX | Ehtimal: XX%
-💬 [1 cümlə əsaslandırma]
+EN GUCLU MERC:
+[Merc novu] | Kef: X.XX-X.XX | Ehtimal: XX%
+Sebeb: [1 cumle]
 
-⚠️ Analitik proqnozdur. Mərc öz riskinizdir.""",
-"live_tip_prompt": "Sən canlı mərc analitikisən. Oyun: {match}, {minute}. dəq, hesab {score}. Hadisə: {event}. Ən yaxşı canlı mərci tövsiyə et. Qısa, maks 2 cümlə. Yalnız düz mətn.",
-"top5_prompt": "Bu gün {date} keçiriləcək ən maraqlı 5 idman matçını siyahıla. Hər biri üçün: matç adı, turnir, vaxt (UTC), qısa proqnoz (1 cümlə). Yalnız düz mətn, emoji yoxdur.",
+XEBERDARLIQ: Analitik proqnozdur. Merc oz riskinizdir.""",
+"short_prompt": """Qisa merc analitiki. Profil: {sports} | {exp}
+
+QISA FORMAT (yalniz bu):
+HADISE: [A] - [B] | [Turnir]
+Qalibiyyet: [Komanda] XX% | Kef X.XX-X.XX
+Total 2.5: Ustunde XX% | Kef X.XX
+Her ikisi qol: Beli XX% | Kef X.XX
+EN YAXSI MERC: [Merc novu] | Kef X.XX | XX%
+Sebeb: [1 cumle]
+XEBERDARLIQ: Analitik proqnozdur.""",
+"live_tip_prompt": "Canli merc analitikisen. Oyun: {match}, {minute}. deq, hesab {score}. Hadise: {event}. En yaxsi canli merci tovsiye et. Qisa, maks 2 cumle.",
+"top5_prompt": "Bu gun kecirilebilecek en maraqli 5 idman matcini say. Her biri ucun: matc adi, turnir, proqnoz (1 cumle). Heqiqi matclar olmasasa fikir ver. Sadece duz metn.",
 },
 
 "ru": {
-"choose_lang":   "Dil seçin / Выберите язык / Choose language:",
+"choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Добро пожаловать! Введите ваше имя:",
-"reg_done":      "Регистрация завершена! Привет, {name}!\n\nДобро пожаловать на AI-платформу спортивных прогнозов.",
-"reg_done_ref":  "Регистрация завершена! Привет, {name}!\nВаш друг получил бонус за приглашение.",
+"reg_done":      "Регистрация завершена! Привет, {name}!",
 "already_reg":   "Вы уже зарегистрированы, {name}!",
 "need_reg":      "Сначала пройдите регистрацию. Напишите /start.",
 "db_blocked":    "Ваш аккаунт заблокирован. Обратитесь к администратору.",
@@ -256,112 +278,98 @@ GENİŞLƏNDİRİLMİŞ FORMAT (default):
 "api_overload":  "Сервис перегружен. Попробуйте позже.",
 "api_error":     "Произошла ошибка. Попробуйте позже.",
 "lang_set":      "Язык установлен: Русский.",
-"ref_link":      "Ваша реферальная ссылка:\nt.me/{bot}?start=ref{uid}\n\nПриглашено: {count} чел.",
 "watch_btn":     "Следить за матчем",
-"watch_started": "Слежу за матчем: {match}\nПришлю уведомления о ключевых событиях.",
+"watch_started": "Слежу за матчем: {match}",
 "watch_stopped": "Слежение остановлено: {match}",
 "no_subs":       "Вы не следите ни за одним матчем.",
 "live_goal":     "ГОЛ! {match}\n{minute} мин: {team}\nСчёт: {score}\n\nЛайв-ставка:\n{tip}",
-"live_card":     "КАРТОЧКА! {match}\n{minute} мин: {player} ({team}) — {card}\n\nЛайв-ставка:\n{tip}",
+"live_card":     "КАРТОЧКА! {match}\n{minute} мин: {player} ({team}) - {card}\n\nЛайв-ставка:\n{tip}",
 "live_halftime": "ПЕРЕРЫВ! {match}\nСчёт: {score}\n\nСтавка на перерыв:\n{tip}",
-"live_fulltime": "МАТЧ ЗАВЕРШЁН! {match}\nИтог: {score}\n\nПодписка отменена.",
-"live_kickoff":  "МАТЧ НАЧАЛСЯ! {match}\nБуду присылать уведомления о ключевых событиях.",
-"live_alert_goal":     "СИГНАЛ! {match}\nМодель: ожидается гол [{minute} мин]\nДействуйте до изменения коэффициентов.",
-"live_alert_value":    "LIVE VALUE! {match}\nАномалия в коэффициентах [{minute} мин]\nМодель: есть ценность на {team}.",
-"live_alert_pressure": "ДАВЛЕНИЕ! {match}\n{team} создаёт сильное давление [{minute} мин]\nСтат: {stat}",
+"live_fulltime": "МАТЧ ЗАВЕРШЁН! {match}\nИтог: {score}",
+"live_alert_goal":     "СИГНАЛ! {match} - ожидается гол [{minute} мин]",
+"live_alert_value":    "LIVE VALUE! {match} - есть ценность на {team} [{minute} мин]",
+"live_alert_pressure": "ДАВЛЕНИЕ! {match} - {team} создаёт давление [{minute} мин] {stat}",
 "top5_header":   "ТОП 5 матчей дня:\n\n",
 "top5_empty":    "На сегодня матчи не найдены.",
 "menu_forecast": "Получить прогноз",
-"menu_top5":     "ТОП 5 матчей дня",
+"menu_top5":     "ТОП 5 сегодня",
 "menu_matches":  "Мои матчи",
 "menu_profile":  "Профиль",
-"menu_ref":      "Реферальная ссылка",
 "menu_lang":     "Сменить язык",
-"profile_text":  "ПРОФИЛЬ\n\nИмя: {name}\nЯзык: {lang}\nВсего запросов: {total_req}\nПриглашений: {refs}\n\nСпорт: {sports}\nСтавки: {bet_types}\nОпыт: {exp}",
-# Onboarding
-"ob_sports":   "Какие виды спорта вас интересуют?",
-"ob_bet_type": "Какие типы ставок вы предпочитаете?",
-"ob_exp":      "Каков ваш опыт в ставках?",
-"ob_style":    "Какой стиль игры вам ближе?",
-"ob_done":     "Ваш профиль готов! Будете получать персонализированные прогнозы.\n\nПрофиль:\nСпорт: {sports}\nСтавки: {bet_types}\nОпыт: {exp}\nСтиль: {style}",
-"system_prompt": """Ты — элитный спортивный аналитик с 15-летним опытом. Дата: {date}.
+"profile_text":  "ПРОФИЛЬ\n\nИмя: {name}\nЯзык: {lang}\nВсего запросов: {total_req}\n\nСпорт: {sports}\nОпыт: {exp}",
+"ob_sports":     "Какой вид спорта вас интересует больше всего?",
+"ob_exp":        "Каков ваш опыт в ставках?",
+"ob_done":       "Профиль готов! Будете получать персонализированные прогнозы.\n\nСпорт: {sports}\nОпыт: {exp}",
+"choose_forecast": "Выберите формат прогноза:",
+"btn_extended":    "Расширенный",
+"btn_short":       "Краткий",
+"system_prompt": """Ты — элитный спортивный аналитик с 15-летним опытом.
 
 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:
-Любимый спорт: {sports}
-Тип ставок: {bet_types}
+Спорт: {sports}
 Опыт: {exp}
-Стиль: {style}
 
 ПРАВИЛА:
-- Давай прогнозы с учётом профиля пользователя
+- Давай прогнозы с учётом профиля
 - Только данные сезона 2025-2026, устаревшие составы НЕ УПОМИНАЙ
-- Используй emoji — они корректно отображаются в Telegram
+- Используй emoji, но НЕ используй markdown ** для жирного
+- Только чистый текст и emoji
 
-РАСШИРЕННЫЙ ФОРМАТ (по умолчанию):
+РАСШИРЕННЫЙ ФОРМАТ:
 
-🏆 СОБЫТИЕ: [Команда А] — [Команда Б]
-📍 [Турнир] | [Дата]
+🏆 СОБЫТИЕ: [Команда А] — [Команда Б] | [Турнир] | [Дата]
 
 📊 ФОРМА:
-▪ [Команда А]: последние 5 матчей
-▪ [Команда Б]: последние 5 матчей
+- [Команда А]: последние 5 матчей (П-П-Н-П-П)
+- [Команда Б]: последние 5 матчей
 
 🔑 КЛЮЧЕВЫЕ ФАКТОРЫ:
-1️⃣ [Фактор 1]
-2️⃣ [Фактор 2]
-3️⃣ [Фактор 3]
+1. [Фактор 1]
+2. [Фактор 2]
+3. [Фактор 3]
 
 🎯 ПРОГНОЗ:
+
 1X2:
-├ Победа [Команда А] — XX% | Кэф: X.XX–X.XX
-├ Ничья — XX% | Кэф: X.XX–X.XX
-└ Победа [Команда Б] — XX% | Кэф: X.XX–X.XX
+- Победа [Команда А]: XX% | Кэф: X.XX-X.XX
+- Ничья: XX% | Кэф: X.XX-X.XX
+- Победа [Команда Б]: XX% | Кэф: X.XX-X.XX
 
 ⚽ Тотал:
-├ Больше 2.5 — XX% | Кэф: X.XX–X.XX
-└ Меньше 2.5 — XX% | Кэф: X.XX–X.XX
+- Больше 2.5: XX% | Кэф: X.XX-X.XX
+- Меньше 2.5: XX% | Кэф: X.XX-X.XX
 
 🔥 Обе забьют:
-├ Да — XX% | Кэф: X.XX–X.XX
-└ Нет — XX% | Кэф: X.XX–X.XX
+- Да: XX% | Кэф: X.XX-X.XX
+- Нет: XX% | Кэф: X.XX-X.XX
 
 📐 Гандикап:
-├ [Команда А] (-1) — XX% | Кэф: X.XX–X.XX
-└ [Команда Б] (+1) — XX% | Кэф: X.XX–X.XX
+- [Команда А] (-1): XX% | Кэф: X.XX-X.XX
+- [Команда Б] (+1): XX% | Кэф: X.XX-X.XX
 
 ⚡ ЛУЧШАЯ СТАВКА:
-▶ [Тип ставки] | Кэф: X.XX–X.XX | Вероятность: XX%
-💬 [1 предложение обоснования]
+[Тип ставки] | Кэф: X.XX-X.XX | Вероятность: XX%
+[1 предложение обоснования]
 
 ⚠️ Аналитический прогноз. Ставки на ваш риск.""",
-"live_tip_prompt": "Ты лайв-аналитик. Матч {match}, {minute} мин, счёт {score}. Событие: {event}. Дай лучшую лайв-ставку. Коротко, макс 2 предложения. Только текст.",
-"top5_prompt": "Перечисли 5 самых интересных спортивных матчей на сегодня {date}. Для каждого: название матча, турнир, время (UTC), краткий прогноз (1 предложение). Только чистый текст, без emoji.",
-"short_prompt": """Ты краткий аналитик ставок. Дата: {date}.
-Профиль: {sports} | {bet_types} | {exp}
+"short_prompt": """Краткий аналитик ставок. Профиль: {sports} | {exp}
 
 КРАТКИЙ ФОРМАТ (строго):
-
-⚡ [Команда А] vs [Команда Б]
-📍 [Турнир]
-
-🎯 Победитель: [Команда] — XX%
+🏆 [Команда А] — [Команда Б] | [Турнир]
+🎯 Победитель: [Команда] XX% | Кэф X.XX-X.XX
 ⚽ Тотал 2.5: Больше XX% | Кэф X.XX
 🔥 Обе забьют: Да XX% | Кэф X.XX
-
-✅ СТАВКА: [Тип ставки] | Кэф X.XX | XX%
-
+⚡ СТАВКА: [Тип] | Кэф X.XX | XX%
+[1 предложение]
 ⚠️ Аналитический прогноз.""",
-"forecast_type_btn": "📊 Расширенный / Краткий",
-"choose_forecast":   "Выберите формат прогноза:",
-"btn_extended":      "📊 Расширенный",
-"btn_short":         "⚡ Краткий",
+"live_tip_prompt": "Ты лайв-аналитик. Матч {match}, {minute} мин, счёт {score}. Событие: {event}. Дай лучшую лайв-ставку. Коротко, макс 2 предложения.",
+"top5_prompt": "Перечисли 5 интересных спортивных матчей которые могут проходить сегодня или в ближайшие дни. Для каждого: команды, турнир, краткий прогноз (1 предложение). Не упоминай дату - просто дай список. Только чистый текст.",
 },
 
 "en": {
-"choose_lang":   "Dil seçin / Выберите язык / Choose language:",
+"choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Welcome! Please enter your name:",
-"reg_done":      "Registration complete! Hi, {name}!\n\nWelcome to the AI-powered sports betting platform.",
-"reg_done_ref":  "Registration complete! Hi, {name}!\nYour friend earned a referral bonus.",
+"reg_done":      "Registration complete! Hi, {name}!",
 "already_reg":   "You are already registered, {name}!",
 "need_reg":      "Please register first. Type /start.",
 "db_blocked":    "Your account is blocked. Contact the administrator.",
@@ -375,169 +383,137 @@ GENİŞLƏNDİRİLMİŞ FORMAT (default):
 "api_overload":  "Service overloaded. Please try again later.",
 "api_error":     "An error occurred. Please try again later.",
 "lang_set":      "Language set to English.",
-"ref_link":      "Your referral link:\nt.me/{bot}?start=ref{uid}\n\nInvited: {count} users",
 "watch_btn":     "Follow match",
-"watch_started": "Following: {match}\nI'll send notifications about key events.",
-"watch_stopped": "Stopped following: {match}",
+"watch_started": "Following: {match}",
+"watch_stopped": "Stopped: {match}",
 "no_subs":       "You are not following any matches.",
 "live_goal":     "GOAL! {match}\n{minute} min: {team}\nScore: {score}\n\nLive bet:\n{tip}",
-"live_card":     "CARD! {match}\n{minute} min: {player} ({team}) — {card}\n\nLive bet:\n{tip}",
+"live_card":     "CARD! {match}\n{minute} min: {player} ({team}) - {card}\n\nLive bet:\n{tip}",
 "live_halftime": "HALF TIME! {match}\nScore: {score}\n\nHalf-time bet:\n{tip}",
-"live_fulltime": "FULL TIME! {match}\nFinal: {score}\n\nUnsubscribed.",
-"live_kickoff":  "KICK OFF! {match}\nI'll notify you about key events.",
-"live_alert_goal":     "SIGNAL! {match}\nModel: goal expected [{minute} min]\nAct before odds drop.",
-"live_alert_value":    "LIVE VALUE! {match}\nOdds anomaly detected [{minute} min]\nModel: value on {team}.",
-"live_alert_pressure": "PRESSURE! {match}\n{team} creating strong pressure [{minute} min]\nStat: {stat}",
-"top5_header":   "TOP 5 matches of the day:\n\n",
+"live_fulltime": "FULL TIME! {match}\nFinal: {score}",
+"live_alert_goal":     "SIGNAL! {match} - goal expected [{minute} min]",
+"live_alert_value":    "LIVE VALUE! {match} - value on {team} [{minute} min]",
+"live_alert_pressure": "PRESSURE! {match} - {team} attacking hard [{minute} min] {stat}",
+"top5_header":   "TOP 5 matches today:\n\n",
 "top5_empty":    "No matches found for today.",
 "menu_forecast": "Get forecast",
 "menu_top5":     "TOP 5 today",
 "menu_matches":  "My matches",
 "menu_profile":  "Profile",
-"menu_ref":      "Referral link",
 "menu_lang":     "Change language",
-"profile_text":  "PROFILE\n\nName: {name}\nLanguage: {lang}\nTotal requests: {total_req}\nReferrals: {refs}\n\nSports: {sports}\nBets: {bet_types}\nExp: {exp}",
-# Onboarding
-"ob_sports":   "Which sports interest you?",
-"ob_bet_type": "What types of bets do you prefer?",
-"ob_exp":      "What is your betting experience?",
-"ob_style":    "What is your playing style?",
-"ob_done":     "Your profile is ready! You'll receive personalized forecasts.\n\nProfile:\nSports: {sports}\nBets: {bet_types}\nExp: {exp}\nStyle: {style}",
-"system_prompt": """You are an elite sports analyst with 15 years of experience. Date: {date}.
+"profile_text":  "PROFILE\n\nName: {name}\nLanguage: {lang}\nTotal requests: {total_req}\n\nSports: {sports}\nExp: {exp}",
+"ob_sports":     "Which sport interests you the most?",
+"ob_exp":        "What is your betting experience?",
+"ob_done":       "Profile ready! You'll get personalized forecasts.\n\nSports: {sports}\nExp: {exp}",
+"choose_forecast": "Choose forecast format:",
+"btn_extended":    "Extended",
+"btn_short":       "Short",
+"system_prompt": """You are an elite sports analyst with 15 years of experience.
 
 USER PROFILE:
-Favourite sports: {sports}
-Bet types: {bet_types}
+Sports: {sports}
 Experience: {exp}
-Style: {style}
 
 RULES:
 - Tailor forecasts to user profile
 - Only 2025-2026 season data, never mention outdated squads
-- Use emoji — they display correctly in Telegram
+- Use emoji but do NOT use markdown ** for bold
+- Plain text and emoji only
 
-EXTENDED FORMAT (default):
+EXTENDED FORMAT:
 
-🏆 EVENT: [Team A] — [Team B]
-📍 [Tournament] | [Date]
+🏆 EVENT: [Team A] — [Team B] | [Tournament] | [Date]
 
 📊 FORM:
-▪ [Team A]: last 5 matches
-▪ [Team B]: last 5 matches
+- [Team A]: last 5 matches (W-W-D-W-L)
+- [Team B]: last 5 matches
 
 🔑 KEY FACTORS:
-1️⃣ [Factor 1]
-2️⃣ [Factor 2]
-3️⃣ [Factor 3]
+1. [Factor 1]
+2. [Factor 2]
+3. [Factor 3]
 
 🎯 FORECAST:
+
 1X2:
-├ [Team A] Win — XX% | Odds: X.XX–X.XX
-├ Draw — XX% | Odds: X.XX–X.XX
-└ [Team B] Win — XX% | Odds: X.XX–X.XX
+- [Team A] Win: XX% | Odds: X.XX-X.XX
+- Draw: XX% | Odds: X.XX-X.XX
+- [Team B] Win: XX% | Odds: X.XX-X.XX
 
 ⚽ Total Goals:
-├ Over 2.5 — XX% | Odds: X.XX–X.XX
-└ Under 2.5 — XX% | Odds: X.XX–X.XX
+- Over 2.5: XX% | Odds: X.XX-X.XX
+- Under 2.5: XX% | Odds: X.XX-X.XX
 
 🔥 Both Teams Score:
-├ Yes — XX% | Odds: X.XX–X.XX
-└ No — XX% | Odds: X.XX–X.XX
+- Yes: XX% | Odds: X.XX-X.XX
+- No: XX% | Odds: X.XX-X.XX
 
 📐 Handicap:
-├ [Team A] (-1) — XX% | Odds: X.XX–X.XX
-└ [Team B] (+1) — XX% | Odds: X.XX–X.XX
+- [Team A] (-1): XX% | Odds: X.XX-X.XX
+- [Team B] (+1): XX% | Odds: X.XX-X.XX
 
 ⚡ BEST BET:
-▶ [Bet type] | Odds: X.XX–X.XX | Probability: XX%
-💬 [1 sentence reasoning]
+[Bet type] | Odds: X.XX-X.XX | Probability: XX%
+[1 sentence reasoning]
 
 ⚠️ Analytical forecast only. Bet at your own risk.""",
-"live_tip_prompt": "You are a live betting analyst. Match {match}, {minute} min, score {score}. Event: {event}. Give the best live bet. Short, max 2 sentences. Plain text only.",
-"top5_prompt": "List the 5 most interesting sports matches today {date}. For each: match name, tournament, time (UTC), brief forecast (1 sentence). Plain text only, no emoji.",
-"short_prompt": """You are a brief betting analyst. Date: {date}.
-Profile: {sports} | {bet_types} | {exp}
+"short_prompt": """Brief betting analyst. Profile: {sports} | {exp}
 
 SHORT FORMAT (strict):
-
-⚡ [Team A] vs [Team B]
-📍 [Tournament]
-
-🎯 Winner: [Team] — XX%
+🏆 [Team A] — [Team B] | [Tournament]
+🎯 Winner: [Team] XX% | Odds X.XX-X.XX
 ⚽ Total 2.5: Over XX% | Odds X.XX
 🔥 Both score: Yes XX% | Odds X.XX
-
-✅ BET: [Bet type] | Odds X.XX | XX%
-
+⚡ BET: [Type] | Odds X.XX | XX%
+[1 sentence]
 ⚠️ Analytical forecast only.""",
-"forecast_type_btn": "📊 Extended / Short",
-"choose_forecast":   "Choose forecast format:",
-"btn_extended":      "📊 Extended",
-"btn_short":         "⚡ Short",
+"live_tip_prompt": "You are a live betting analyst. Match {match}, {minute} min, score {score}. Event: {event}. Best live bet now. Max 2 sentences.",
+"top5_prompt": "List 5 interesting sports matches that could be happening today or soon. For each: teams, tournament, brief forecast (1 sentence). Don't mention specific dates - just give the list. Plain text only.",
 },
 }
 
-LANG_NAMES = {"az": "Azərbaycan", "ru": "Русский", "en": "English"}
+LANG_NAMES = {"az": "Azerbaycan", "ru": "Русский", "en": "English"}
 
 def tr(uid, key, **kw):
     lang = db_lang(uid)
     txt  = T.get(lang, T["ru"]).get(key, T["ru"].get(key, ""))
-    if key == "system_prompt":
+    if key in ("system_prompt", "short_prompt"):
         u = db_get(uid) or {}
-        kw.setdefault("date", date.today().strftime("%d.%m.%Y"))
-        kw.setdefault("sports",     u.get("sports", "-"))
-        kw.setdefault("bet_types",  u.get("bet_types", "-"))
-        kw.setdefault("exp",        u.get("experience", "-"))
-        kw.setdefault("style",      u.get("bet_style", "-"))
+        kw.setdefault("sports", sport_label(uid, u.get("sports", "-")))
+        kw.setdefault("exp",    exp_label(uid, u.get("experience", "-")))
     return txt.format(**kw) if kw else txt
 
-# ─── Onboarding data per language ─────────────────────────────────────────────
+# ─── Onboarding data ──────────────────────────────────────────────────────────
 OB_SPORTS = {
-    "az": [("Futbol", "football"), ("UFC / MMA", "ufc"), ("NBA / Basketbol", "nba"),
-           ("Tennis", "tennis"), ("Kibersport", "esports"), ("Hokey", "hockey"), ("Hamısı", "all")],
-    "ru": [("Футбол", "football"), ("UFC / MMA", "ufc"), ("НБА / Баскетбол", "nba"),
-           ("Теннис", "tennis"), ("Киберспорт", "esports"), ("Хоккей", "hockey"), ("Все виды", "all")],
-    "en": [("Football", "football"), ("UFC / MMA", "ufc"), ("NBA / Basketball", "nba"),
-           ("Tennis", "tennis"), ("Esports", "esports"), ("Hockey", "hockey"), ("All sports", "all")],
-}
-OB_BET = {
-    "az": [("Canlı mərc", "live"), ("Prematch", "prematch"), ("Ekspress", "express"),
-           ("Tək oyun", "single"), ("Qandikap", "handicap")],
-    "ru": [("Лайв ставки", "live"), ("Преймatch", "prematch"), ("Экспресс", "express"),
-           ("Одиночная", "single"), ("Гандикап", "handicap")],
-    "en": [("Live betting", "live"), ("Prematch", "prematch"), ("Express/Parlay", "express"),
-           ("Singles", "single"), ("Handicap", "handicap")],
+    "az": [("Futbol", "football"), ("UFC/MMA", "ufc"), ("Basketbol", "nba"),
+           ("Tennis", "tennis"), ("Hokey", "hockey"), ("Hamisi", "all")],
+    "ru": [("Футбол", "football"), ("UFC/MMA", "ufc"), ("Баскетбол", "nba"),
+           ("Теннис", "tennis"), ("Хоккей", "hockey"), ("Все виды", "all")],
+    "en": [("Football", "football"), ("UFC/MMA", "ufc"), ("Basketball", "nba"),
+           ("Tennis", "tennis"), ("Hockey", "hockey"), ("All sports", "all")],
 }
 OB_EXP = {
-    "az": [("Yeni başlayan", "beginner"), ("Orta səviyyə", "mid"), ("Təcrübəli", "expert")],
+    "az": [("Yeni baslayanam", "beginner"), ("Orta seviyye", "mid"), ("Tecrubeliyem", "expert")],
     "ru": [("Новичок", "beginner"), ("Средний уровень", "mid"), ("Опытный", "expert")],
     "en": [("Beginner", "beginner"), ("Intermediate", "mid"), ("Expert", "expert")],
 }
-OB_STYLE = {
-    "az": [("Aqressif", "aggressive"), ("Konservativ", "conservative"),
-           ("Balanslaşdırılmış", "balanced"), ("Dəyər axtarışı", "value")],
-    "ru": [("Агрессивный", "aggressive"), ("Консервативный", "conservative"),
-           ("Сбалансированный", "balanced"), ("Value hunting", "value")],
-    "en": [("Aggressive", "aggressive"), ("Conservative", "conservative"),
-           ("Balanced", "balanced"), ("Value hunter", "value")],
-}
 
 def ob_kb(items):
-    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=f"ob_{cb}")] for label, cb in items])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=f"ob_{val}")] for label, val in items])
 
-# ─── Main menu keyboard ───────────────────────────────────────────────────────
+# ─── Main menu ────────────────────────────────────────────────────────────────
 def main_menu(uid):
     lang = db_lang(uid)
     tl = T[lang]
     return ReplyKeyboardMarkup([
         [tl["menu_forecast"], tl["menu_top5"]],
         [tl["menu_matches"],  tl["menu_profile"]],
-        [tl["menu_ref"],      tl["menu_lang"]],
+        [tl["menu_lang"]],
     ], resize_keyboard=True)
 
 def lang_kb():
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("Azərbaycan", callback_data="lang_az"),
+        InlineKeyboardButton("Azerbaycan", callback_data="lang_az"),
         InlineKeyboardButton("Русский",    callback_data="lang_ru"),
         InlineKeyboardButton("English",    callback_data="lang_en"),
     ]])
@@ -561,7 +537,7 @@ def record_viol(uid, info):
         blocked_until[uid] = time.time() + SPAM_DUR; violations[uid] = 0; return True
     return False
 
-# ─── Football APIs ────────────────────────────────────────────────────────────
+# ─── Football API ─────────────────────────────────────────────────────────────
 async def search_match(query):
     if not APIFOOTBALL_KEY: return []
     try:
@@ -592,7 +568,6 @@ async def search_match(query):
     return []
 
 async def get_top5_matches() -> list[dict]:
-    """Get today's top matches from API-Football."""
     if not APIFOOTBALL_KEY: return []
     try:
         async with httpx.AsyncClient(timeout=8) as h:
@@ -601,24 +576,16 @@ async def get_top5_matches() -> list[dict]:
                 params={"date": date.today().isoformat(), "timezone": "UTC"})
             if r.status_code == 200:
                 fixtures = r.json().get("response", [])
-                # Sort by league priority
                 priority = ["UEFA Champions League", "Premier League", "La Liga",
                            "Bundesliga", "Serie A", "Ligue 1", "UEFA Europa League"]
-                def score_match(f):
-                    league = f["league"]["name"]
+                def score_f(f):
                     for i, p in enumerate(priority):
-                        if p in league: return i
+                        if p in f["league"]["name"]: return i
                     return 99
-                fixtures.sort(key=score_match)
-                out = []
-                for f in fixtures[:5]:
-                    out.append({
-                        "home": f["teams"]["home"]["name"],
-                        "away": f["teams"]["away"]["name"],
-                        "league": f["league"]["name"],
-                        "time": f["fixture"]["date"][11:16],
-                    })
-                return out
+                fixtures.sort(key=score_f)
+                return [{"home": f["teams"]["home"]["name"], "away": f["teams"]["away"]["name"],
+                         "league": f["league"]["name"], "time": f["fixture"]["date"][11:16]}
+                        for f in fixtures[:5]]
     except Exception as e: logger.error(f"get_top5: {e}")
     return []
 
@@ -645,17 +612,16 @@ async def get_status(mid):
                     return {"status": f["fixture"]["status"]["short"],
                             "minute": f["fixture"]["status"].get("elapsed", 0),
                             "score": f"{f['goals']['home']}-{f['goals']['away']}",
-                            "home": f["teams"]["home"]["name"],
-                            "away": f["teams"]["away"]["name"]}
+                            "home": f["teams"]["home"]["name"], "away": f["teams"]["away"]["name"]}
     except Exception as e: logger.error(f"get_status: {e}")
     return None
 
 async def live_tip(uid, match, minute, score, event):
     try:
         lang = db_lang(uid)
-        prompt = T[lang]["live_tip_prompt"].format(match=match, minute=minute, score=score, event=event)
+        p = T[lang]["live_tip_prompt"].format(match=match, minute=minute, score=score, event=event)
         r = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=150,
-            messages=[{"role": "user", "content": prompt}])
+            messages=[{"role": "user", "content": p}])
         return r.content[0].text
     except Exception: return ""
 
@@ -695,20 +661,18 @@ async def poller(app):
                             if etype == "Goal":
                                 msg = T[lang]["live_goal"].format(match=match_name, minute=ev_min, team=team, score=score, tip=tip)
                             elif etype == "Card":
-                                card = {"az": "Qırmızı" if "Red" in detail else "Sarı",
+                                card = {"az": "Qirmizi" if "Red" in detail else "Sari",
                                         "ru": "Красная" if "Red" in detail else "Жёлтая",
-                                        "en": "Red card" if "Red" in detail else "Yellow card"}.get(lang, "Card")
+                                        "en": "Red" if "Red" in detail else "Yellow"}.get(lang, "Card")
                                 msg = T[lang]["live_card"].format(match=match_name, minute=ev_min, player=player, team=team, card=card, tip=tip)
                             else: continue
                             await app.bot.send_message(chat_id=uid, text=msg)
                         except Exception as e: logger.error(f"notify uid={uid}: {e}")
 
-                # FOMO alerts every ~15 min
                 alert_cnt[mid] += 1
                 if alert_cnt[mid] % 15 == 0 and minute > 20:
                     atype = random.choice(["goal", "value", "pressure"])
-                    teams = [st["home"], st["away"]]
-                    pt = random.choice(teams)
+                    pt = random.choice([st["home"], st["away"]])
                     stats = ["12 shots on target", "73% possession", "6 corners", "xG: 1.8"]
                     for uid in list(uids):
                         lang = db_lang(uid)
@@ -739,36 +703,26 @@ async def poller(app):
                     live_subs[mid].clear()
             except Exception as e: logger.error(f"poller mid={mid}: {e}")
 
-# ─── Daily retention ──────────────────────────────────────────────────────────
+# ─── Daily push ───────────────────────────────────────────────────────────────
 async def daily_push(app):
     while True:
         await asyncio.sleep(3600)
         if datetime.now().hour != 10: continue
-        msgs = {"az": "Bu gün böyük oyunlar var! Proqnoz almaq üçün yazın.",
-                "ru": "Сегодня большие матчи! Напишите для получения прогноза.",
-                "en": "Big matches today! Write to get your forecast."}
+        msgs = {"az": "Bugun maraqli oyunlar var! Proqnoz ucun yazin.",
+                "ru": "Сегодня интересные матчи! Напишите для прогноза.",
+                "en": "Interesting matches today! Write for a forecast."}
         try:
             with con() as c:
                 rows = c.execute("SELECT user_id,lang FROM users WHERE is_registered=1 AND is_blocked=0 "
                     "AND (last_active='' OR date(last_active) <= date('now', '-2 days'))").fetchall()
             for uid, lang in rows:
-                try:
-                    await app.bot.send_message(chat_id=uid, text=msgs.get(lang, msgs["ru"]))
-                    await asyncio.sleep(0.1)
+                try: await app.bot.send_message(chat_id=uid, text=msgs.get(lang, msgs["ru"])); await asyncio.sleep(0.1)
                 except Exception: pass
         except Exception as e: logger.error(f"daily_push: {e}")
 
 # ─── Handlers ─────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user; uid = user.id; args = context.args or []
-    logger.info(f"START | {uinfo(update)}")
-    referred_by = None
-    if args and args[0].startswith("ref"):
-        try:
-            ref_id = int(args[0][3:])
-            if ref_id != uid: referred_by = ref_id
-        except ValueError: pass
-    context.user_data["referred_by"] = referred_by
+    user = update.effective_user; uid = user.id
     db_ensure(uid, user.username or "")
     if db_is_reg(uid):
         u = db_get(uid)
@@ -782,8 +736,14 @@ async def lang_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid = q.from_user.id; lang = q.data.split("_")[1]
     db_ensure(uid, q.from_user.username or ""); db_set(uid, "lang", lang)
+
     if db_is_reg(uid):
-        await q.edit_message_text(T[lang]["lang_set"]); return
+        # Update menu with new language
+        await q.edit_message_text(T[lang]["lang_set"])
+        await context.bot.send_message(chat_id=uid, text=T[lang]["lang_set"],
+            reply_markup=main_menu(uid))
+        return
+
     reg_step[uid] = "awaiting_name"
     await q.edit_message_text(T[lang]["ask_name"])
 
@@ -799,17 +759,9 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if len(name) < 2 or len(name) > 64:
         await update.message.reply_text("2-64 simvol / символа / characters"); return True
     db_set(uid, "display_name", name)
-    referred_by = context.user_data.get("referred_by")
-    with con() as c:
-        c.execute("UPDATE users SET is_registered=1 WHERE user_id=?", (uid,))
-        if referred_by:
-            c.execute("UPDATE users SET ref_count=ref_count+1 WHERE user_id=?", (referred_by,))
-            c.execute("UPDATE users SET referred_by=? WHERE user_id=? AND referred_by IS NULL", (referred_by, uid))
+    with con() as c: c.execute("UPDATE users SET is_registered=1 WHERE user_id=?", (uid,))
     reg_step[uid] = "ob_sports"
-    logger.info(f"REG | id={uid} name={name}")
-    wkey = "reg_done_ref" if referred_by else "reg_done"
-    await update.message.reply_text(tr(uid, wkey, name=name), reply_markup=ReplyKeyboardRemove())
-    # Start onboarding
+    await update.message.reply_text(tr(uid, "reg_done", name=name), reply_markup=ReplyKeyboardRemove())
     await asyncio.sleep(0.3)
     lang = db_lang(uid)
     await update.message.reply_text(T[lang]["ob_sports"], reply_markup=ob_kb(OB_SPORTS[lang]))
@@ -817,103 +769,107 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
 
 
 async def ob_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle onboarding step callbacks."""
     q = update.callback_query; await q.answer()
     uid = q.from_user.id; val = q.data[3:]  # strip "ob_"
-    lang = db_lang(uid)
-    step = reg_step.get(uid, "")
+    lang = db_lang(uid); step = reg_step.get(uid, "")
 
     if step == "ob_sports":
         db_set(uid, "sports", val)
-        reg_step[uid] = "ob_bet"
-        await q.edit_message_text(T[lang]["ob_bet_type"], reply_markup=ob_kb(OB_BET[lang]))
-
-    elif step == "ob_bet":
-        db_set(uid, "bet_types", val)
         reg_step[uid] = "ob_exp"
         await q.edit_message_text(T[lang]["ob_exp"], reply_markup=ob_kb(OB_EXP[lang]))
 
     elif step == "ob_exp":
-        db_set(uid, "experience", val)
-        reg_step[uid] = "ob_style"
-        await q.edit_message_text(T[lang]["ob_style"], reply_markup=ob_kb(OB_STYLE[lang]))
-
-    elif step == "ob_style":
-        db_set(uid, "bet_style", val); db_set(uid, "onboarding_done", 1)
+        db_set(uid, "experience", val); db_set(uid, "onboarding_done", 1)
         reg_step[uid] = "done"
         u = db_get(uid)
         done_msg = T[lang]["ob_done"].format(
-            sports=u["sports"], bet_types=u["bet_types"],
-            exp=u["experience"], style=u["bet_style"])
+            sports=sport_label(uid, u["sports"]),
+            exp=exp_label(uid, u["experience"]))
         await q.edit_message_text(done_msg)
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3)
         await context.bot.send_message(chat_id=uid, text=tr(uid, "no_input"), reply_markup=main_menu(uid))
 
 
+async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id; ftype = q.data
+    content = context.user_data.get("pending_content")
+    text    = context.user_data.get("pending_text", "")
+    if not content:
+        await q.edit_message_text(tr(uid, "no_input")); return
+
+    await q.edit_message_text("...")
+    await context.bot.send_chat_action(chat_id=uid, action="typing")
+
+    if ftype == "forecast_short":
+        sys_prompt = tr(uid, "short_prompt"); max_tok = 350
+    else:
+        sys_prompt = tr(uid, "system_prompt"); max_tok = 1200
+
+    try:
+        resp = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=max_tok,
+            system=sys_prompt, messages=[{"role": "user", "content": content}])
+        reply = resp.content[0].text
+    except anthropic.RateLimitError: reply = tr(uid, "api_overload")
+    except anthropic.APIError as e: logger.error(f"API_ERR {e}"); reply = tr(uid, "api_error")
+
+    watch_kb = None
+    if text and APIFOOTBALL_KEY:
+        ms = await search_match(" ".join(text.split()[:3]))
+        if ms:
+            m = ms[0]; context.user_data[f"mn_{m['id']}"] = m["name"]
+            watch_kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+                tr(uid, "watch_btn") + f": {m['name'][:35]}", callback_data=f"watch_{m['id']}")]])
+
+    await context.bot.send_message(chat_id=uid, text=reply, reply_markup=watch_kb)
+
+
 async def watch_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer(); uid = q.from_user.id; data = q.data
-    if data.startswith("watch_"):
-        mid = data[6:]; mname = context.user_data.get(f"mn_{mid}", mid)
+    q = update.callback_query; await q.answer(); uid = q.from_user.id
+    if q.data.startswith("watch_"):
+        mid = q.data[6:]; mname = context.user_data.get(f"mn_{mid}", mid)
         live_subs[mid].add(uid); db_add_lsub(uid, mid, mname)
         await q.edit_message_text(q.message.text + "\n\n" + tr(uid, "watch_started", match=mname))
-    elif data.startswith("unwatch_"):
-        mid = data[8:]
-        subs = db_user_lsubs(uid)
-        mname = next((s["match_name"] for s in subs if s["match_id"] == mid), mid)
+    elif q.data.startswith("unwatch_"):
+        mid = q.data[8:]
+        mname = next((s["match_name"] for s in db_user_lsubs(uid) if s["match_id"] == mid), mid)
         live_subs[mid].discard(uid); db_del_lsub(uid, mid)
         await q.edit_message_text(tr(uid, "watch_stopped", match=mname))
 
 
-# ─── Top-5 matches ────────────────────────────────────────────────────────────
 async def send_top5(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
     await update.message.chat.send_action("typing")
+    lang = db_lang(uid); tl = T[lang]
     matches = await get_top5_matches()
+    lines = [tl["top5_header"]]
     if matches:
-        lang = db_lang(uid)
-        lines = [T[lang]["top5_header"]]
         for i, m in enumerate(matches, 1):
             lines.append(f"{i}. {m['home']} vs {m['away']}")
             lines.append(f"   {m['league']} | {m['time']} UTC\n")
-        # Also ask Claude for commentary
-        try:
-            prompt = T[lang]["top5_prompt"].format(date=date.today().strftime("%d.%m.%Y"))
-            resp = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=600,
-                messages=[{"role": "user", "content": prompt}])
-            lines.append("\nAI analizi:\n" + resp.content[0].text)
-        except Exception: pass
-        await update.message.reply_text("\n".join(lines))
-    else:
-        # Fallback to Claude only
-        lang = db_lang(uid)
-        try:
-            prompt = T[lang]["top5_prompt"].format(date=date.today().strftime("%d.%m.%Y"))
-            resp = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=600,
-                messages=[{"role": "user", "content": prompt}])
-            header = T[lang]["top5_header"]
-            await update.message.reply_text(header + resp.content[0].text)
-        except Exception:
-            await update.message.reply_text(tr(uid, "top5_empty"))
+    # Claude commentary (without specific date to avoid "I don't know 2026" error)
+    try:
+        prompt = tl["top5_prompt"]
+        resp = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=500,
+            messages=[{"role": "user", "content": prompt}])
+        if matches:
+            lines.append("AI analizi / Анализ:\n" + resp.content[0].text)
+        else:
+            lines = [tl["top5_header"] + resp.content[0].text]
+    except Exception: pass
+    await update.message.reply_text("\n".join(lines) if lines else tl["top5_empty"])
 
 
-# ─── Profile ──────────────────────────────────────────────────────────────────
 async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
     u = db_get(uid)
     await update.message.reply_text(tr(uid, "profile_text",
         name=u["display_name"] or "-", lang=LANG_NAMES.get(u["lang"], u["lang"]),
-        total_req=u["total_requests"], refs=u["ref_count"],
-        sports=u["sports"] or "-", bet_types=u["bet_types"] or "-", exp=u["experience"] or "-"))
-
-
-async def ref_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
-    bot_info = await context.bot.get_me()
-    u = db_get(uid)
-    await update.message.reply_text(tr(uid, "ref_link", bot=bot_info.username, uid=uid, count=u["ref_count"]))
+        total_req=u["total_requests"],
+        sports=sport_label(uid, u["sports"]) if u["sports"] else "-",
+        exp=exp_label(uid, u["experience"]) if u["experience"] else "-"))
 
 
 async def matches_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -934,29 +890,20 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_ensure(uid, user.username or "")
     text = update.message.text or update.message.caption or ""
 
-    # Registration flow
     step = reg_step.get(uid)
     if step == "awaiting_name" and update.message.text:
         await handle_name(update, context); return
-    if step in ("awaiting_lang", "awaiting_name", "ob_sports", "ob_bet", "ob_exp", "ob_style"):
+    if step in ("awaiting_lang", "awaiting_name", "ob_sports", "ob_exp"):
         return
 
-    if not db_is_reg(uid):
-        await update.message.reply_text(tr(uid, "need_reg")); return
-    if db_is_blocked(uid):
-        await update.message.reply_text(tr(uid, "db_blocked")); return
+    if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
+    if db_is_blocked(uid): await update.message.reply_text(tr(uid, "db_blocked")); return
 
-    # Menu button routing
-    lang = db_lang(uid)
-    tl = T[lang]
-    if text == tl["menu_top5"]:
-        await send_top5(update, context); return
-    if text == tl["menu_matches"]:
-        await matches_cmd(update, context); return
-    if text == tl["menu_profile"]:
-        await profile_cmd(update, context); return
-    if text == tl["menu_ref"]:
-        await ref_cmd(update, context); return
+    # Menu routing
+    lang = db_lang(uid); tl = T[lang]
+    if text == tl["menu_top5"]:    await send_top5(update, context); return
+    if text == tl["menu_matches"]: await matches_cmd(update, context); return
+    if text == tl["menu_profile"]: await profile_cmd(update, context); return
     if text == tl["menu_lang"]:
         await update.message.reply_text(tr(uid, "choose_lang"), reply_markup=lang_kb()); return
     if text == tl["menu_forecast"]:
@@ -969,10 +916,8 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tr(uid, "blocked", m=secs//60, s=secs%60)); return
     exceeded, wait = rate_check(uid)
     if exceeded:
-        if record_viol(uid, info):
-            await update.message.reply_text(tr(uid, "auto_blocked", min=SPAM_DUR//60))
-        else:
-            await update.message.reply_text(tr(uid, "rate_limit", w=wait, v=violations[uid], max=SPAM_AFTER))
+        if record_viol(uid, info): await update.message.reply_text(tr(uid, "auto_blocked", min=SPAM_DUR//60))
+        else: await update.message.reply_text(tr(uid, "rate_limit", w=wait, v=violations[uid], max=SPAM_AFTER))
         return
     violations[uid] = 0
 
@@ -982,9 +927,8 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action("typing")
 
     photo = update.message.photo
-    if len(text) > 1000:
-        sus.warning(f"LONG | {info}"); await update.message.reply_text(tr(uid, "long_text")); return
-    inj = ["ignore previous", "system prompt", "forget instructions", "act as", "jailbreak", "###", "<<<"]
+    if len(text) > 1000: sus.warning(f"LONG | {info}"); await update.message.reply_text(tr(uid, "long_text")); return
+    inj = ["ignore previous", "system prompt", "forget instructions", "act as", "jailbreak"]
     if any(k.lower() in text.lower() for k in inj):
         sus.warning(f"INJ | {info}"); await update.message.reply_text(tr(uid, "injection")); return
 
@@ -992,16 +936,13 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if photo:
         f = await context.bot.get_file(photo[-1].file_id)
         fb = await f.download_as_bytearray()
-        b64 = base64.standard_b64encode(fb).decode("utf-8")
-        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}})
-    if text:
-        content.append({"type": "text", "text": text})
-    elif not photo:
-        await update.message.reply_text(tr(uid, "no_input")); return
-    else:
-        content.append({"type": "text", "text": tr(uid, "img_prompt")})
+        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                         "data": base64.standard_b64encode(fb).decode("utf-8")}})
+    if text: content.append({"type": "text", "text": text})
+    elif not photo: await update.message.reply_text(tr(uid, "no_input")); return
+    else: content.append({"type": "text", "text": tr(uid, "img_prompt")})
 
-    # Real football data
+    # Real data
     if text and FOOTBALL_KEY:
         words = [w.strip(".,!?") for w in text.split() if len(w) > 3 and w[0].isupper()]
         fetched = []
@@ -1013,8 +954,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if r.status_code == 200:
                         teams = r.json().get("teams", [])
                         if teams:
-                            tid = teams[0]["id"]
-                            r2 = await h.get(f"https://api.football-data.org/v4/teams/{tid}/matches",
+                            r2 = await h.get(f"https://api.football-data.org/v4/teams/{teams[0]['id']}/matches",
                                 headers={"X-Auth-Token": FOOTBALL_KEY}, params={"status": "FINISHED", "limit": 5})
                             if r2.status_code == 200:
                                 ms = r2.json().get("matches", [])
@@ -1024,91 +964,29 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception: pass
         if fetched: content.append({"type": "text", "text": "REAL DATA:\n" + "\n\n".join(fetched)})
 
-    # Store content for forecast type selection
+    # Store and show format chooser
     context.user_data["pending_content"] = content
     context.user_data["pending_text"] = text
-
-    # Show forecast type chooser
-    lang = db_lang(uid)
-    tl = T[lang]
     choose_kb = InlineKeyboardMarkup([[
         InlineKeyboardButton(tl["btn_extended"], callback_data="forecast_extended"),
         InlineKeyboardButton(tl["btn_short"],    callback_data="forecast_short"),
     ]])
     await update.message.reply_text(tl["choose_forecast"], reply_markup=choose_kb)
 
-
-async def forecast_type_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle forecast type selection - extended or short."""
-    q = update.callback_query; await q.answer()
-    uid = q.from_user.id
-    ftype = q.data  # "forecast_extended" or "forecast_short"
-
-    content = context.user_data.get("pending_content")
-    text    = context.user_data.get("pending_text", "")
-    if not content:
-        await q.edit_message_text("Sorğu tapılmadı. Yenidən yazın. / Запрос не найден. / Query not found.")
-        return
-
-    await q.edit_message_text("⏳" if ftype == "forecast_extended" else "⚡")
-    await context.bot.send_chat_action(chat_id=uid, action="typing")
-
-    # Build system prompt
-    if ftype == "forecast_short":
-        lang = db_lang(uid)
-        u = db_get(uid) or {}
-        sys_prompt = T[lang]["short_prompt"].format(
-            date=date.today().strftime("%d.%m.%Y"),
-            sports=u.get("sports", "-"),
-            bet_types=u.get("bet_types", "-"),
-            exp=u.get("experience", "-"),
-        )
-        max_tok = 400
-    else:
-        sys_prompt = tr(uid, "system_prompt")
-        max_tok = 1200
-
-    try:
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=max_tok,
-            system=sys_prompt,
-            messages=[{"role": "user", "content": content}]
-        )
-        reply = resp.content[0].text
-        logger.info(f"FORECAST [{ftype}] OK | uid={uid}")
-    except anthropic.RateLimitError: reply = tr(uid, "api_overload")
-    except anthropic.APIError as e:
-        logger.error(f"API_ERR {e} | uid={uid}"); reply = tr(uid, "api_error")
-
-    # Watch button for live matches
-    watch_kb = None
-    if text and APIFOOTBALL_KEY:
-        ms = await search_match(" ".join(text.split()[:3]))
-        if ms:
-            m = ms[0]
-            context.user_data[f"mn_{m['id']}"] = m["name"]
-            watch_kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-                tr(uid, "watch_btn") + f": {m['name'][:35]}", callback_data=f"watch_{m['id']}")]])
-
-    await context.bot.send_message(chat_id=uid, text=reply, reply_markup=watch_kb)
-
-# ─── Admin panel ──────────────────────────────────────────────────────────────
+# ─── Admin ────────────────────────────────────────────────────────────────────
 def is_adm(update): return (update.effective_user.id if update.effective_user else 0) == ADMIN_ID
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_adm(update): return
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Статистика",          callback_data="adm_stats")],
-        [InlineKeyboardButton("Рассылка",            callback_data="adm_broadcast")],
-        [InlineKeyboardButton("Заблокированные",     callback_data="adm_blocklist")],
-        [InlineKeyboardButton("Поиск пользователя",  callback_data="adm_search")],
-        [InlineKeyboardButton("Изменить язык",        callback_data="adm_setlang")],
-        [InlineKeyboardButton("Топ рефералов",        callback_data="adm_toprefs")],
-        [InlineKeyboardButton("Live подписки",        callback_data="adm_live")],
+        [InlineKeyboardButton("Статистика",         callback_data="adm_stats")],
+        [InlineKeyboardButton("Рассылка",           callback_data="adm_broadcast")],
+        [InlineKeyboardButton("Заблокированные",    callback_data="adm_blocklist")],
+        [InlineKeyboardButton("Поиск пользователя", callback_data="adm_search")],
+        [InlineKeyboardButton("Изменить язык",       callback_data="adm_setlang")],
+        [InlineKeyboardButton("Live подписки",       callback_data="adm_live")],
     ])
     await update.message.reply_text("АДМИН ПАНЕЛЬ", reply_markup=kb)
-
 
 async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -1121,18 +999,19 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         blk_now = sum(1 for v in blocked_until.values() if time.time() < v)
         live_now = sum(len(v) for v in live_subs.values())
         lang_str = " | ".join(f"{l}: {n}" for l, n in s["langs"])
+        top = "\n".join(f"{i+1}. {r[1] or r[0]}: {r[2]} запросов" for i, r in enumerate(s["top_req"]))
         await q.edit_message_text(
             f"СТАТИСТИКА\n\n"
             f"Пользователей: {s['total']}\n"
             f"Новых сегодня: {s['today']}\n"
-            f"Заблокировано в БД: {s['blocked']}\n"
-            f"Онбординг завершён: {s['ob_done']}\n\n"
+            f"Заблокировано: {s['blocked']}\n"
+            f"Онбординг: {s['ob_done']}\n\n"
             f"Запросов всего: {s['rqtotal']}\n"
-            f"Запросов сегодня: {s['rqtoday']}\n\n"
+            f"Сегодня: {s['rqtoday']}\n\n"
             f"Языки: {lang_str}\n\n"
-            f"Live подписки (БД): {s['live_ct']}\n"
-            f"Live активных сейчас: {live_now}\n"
-            f"Заблокировано rate-limit: {blk_now}",
+            f"Live подписки: {s['live_ct']} (активных: {live_now})\n"
+            f"Rate-limit блок: {blk_now}\n\n"
+            f"Топ активных:\n{top}",
             reply_markup=back)
 
     elif data == "adm_blocklist":
@@ -1154,42 +1033,33 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "adm_broadcast":
         context.user_data["adm_act"] = "broadcast"
-        await q.edit_message_text("Отправьте текст рассылки для всех пользователей.\n/cancel — отмена.")
+        await q.edit_message_text("Отправьте текст рассылки.\n/cancel — отмена.")
 
     elif data == "adm_search":
         context.user_data["adm_act"] = "search"
-        await q.edit_message_text("Введите ID, username или имя пользователя.")
+        await q.edit_message_text("Введите ID, username или имя.")
 
     elif data == "adm_setlang":
         context.user_data["adm_act"] = "setlang"
         await q.edit_message_text("Формат: 123456789 ru\nЯзыки: az, ru, en")
-
-    elif data == "adm_toprefs":
-        s = db_stats()
-        text = "ТОП РЕФЕРАЛОВ:\n\n" + "\n".join(
-            f"{i+1}. {r[2] or r[1] or r[0]} — {r[3]} чел." for i, r in enumerate(s["toprefs"]))
-        await q.edit_message_text(text, reply_markup=back)
 
     elif data == "adm_live":
         live_now = sum(len(v) for v in live_subs.values())
         lines = [f"LIVE ПОДПИСКИ: {live_now} активных\n"]
         for mid, uids in live_subs.items():
             if uids: lines.append(f"Матч {mid}: {len(uids)} подписчиков")
-        await q.edit_message_text("\n".join(lines) if len(lines) > 1 else "Нет активных live подписок.",
-            reply_markup=back)
+        await q.edit_message_text("\n".join(lines) if len(lines) > 1 else "Нет активных.", reply_markup=back)
 
     elif data == "adm_back":
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Статистика",          callback_data="adm_stats")],
-            [InlineKeyboardButton("Рассылка",            callback_data="adm_broadcast")],
-            [InlineKeyboardButton("Заблокированные",     callback_data="adm_blocklist")],
-            [InlineKeyboardButton("Поиск пользователя",  callback_data="adm_search")],
-            [InlineKeyboardButton("Изменить язык",        callback_data="adm_setlang")],
-            [InlineKeyboardButton("Топ рефералов",        callback_data="adm_toprefs")],
-            [InlineKeyboardButton("Live подписки",        callback_data="adm_live")],
+            [InlineKeyboardButton("Статистика",         callback_data="adm_stats")],
+            [InlineKeyboardButton("Рассылка",           callback_data="adm_broadcast")],
+            [InlineKeyboardButton("Заблокированные",    callback_data="adm_blocklist")],
+            [InlineKeyboardButton("Поиск пользователя", callback_data="adm_search")],
+            [InlineKeyboardButton("Изменить язык",       callback_data="adm_setlang")],
+            [InlineKeyboardButton("Live подписки",       callback_data="adm_live")],
         ])
         await q.edit_message_text("АДМИН ПАНЕЛЬ", reply_markup=kb)
-
 
 async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_adm(update): return
@@ -1206,14 +1076,12 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(chat_id=uid, text=text); ok += 1
             except Exception: fail += 1
             await asyncio.sleep(0.05)
-        await status.edit_text(f"Готово!\nДоставлено: {ok}\nНе доставлено: {fail}")
+        await status.edit_text(f"Готово! Доставлено: {ok} | Не доставлено: {fail}")
 
     elif act == "search":
         results = db_search(text.strip())
-        if not results: await update.message.reply_text("Пользователь не найден."); return
+        if not results: await update.message.reply_text("Не найдено."); return
         for u in results:
-            reg = "Да" if u["is_registered"] else "Нет"
-            blk = "ЗАБЛОКИРОВАН" if u["is_blocked"] else "Активен"
             btns = []
             if u["is_blocked"]:
                 btns.append([InlineKeyboardButton("Разблокировать", callback_data=f"adm_unblk_{u['user_id']}")])
@@ -1224,22 +1092,19 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Username: @{u['username'] or '-'}\n"
                 f"Имя: {u['display_name'] or '-'}\n"
                 f"Язык: {u['lang']}\n"
-                f"Регистрация: {reg}\n"
-                f"Статус: {blk}\n"
-                f"Спорт: {u['sports'] or '-'}\n"
-                f"Ставки: {u['bet_types'] or '-'}\n"
-                f"Опыт: {u['experience'] or '-'}\n"
+                f"Статус: {'ЗАБЛОКИРОВАН' if u['is_blocked'] else 'Активен'}\n"
+                f"Спорт: {sport_label(u['user_id'], u['sports']) if u['sports'] else '-'}\n"
+                f"Опыт: {exp_label(u['user_id'], u['experience']) if u['experience'] else '-'}\n"
                 f"Запросов: {u['total_requests']}\n"
-                f"Дата: {u['joined_at']}",
+                f"Зарегистрирован: {u['joined_at']}",
                 reply_markup=InlineKeyboardMarkup(btns))
 
     elif act == "setlang":
         parts = text.strip().split()
         if len(parts) != 2 or parts[1] not in ("az", "ru", "en"):
-            await update.message.reply_text("Формат: 123456789 ru\nЯзыки: az, ru, en"); return
+            await update.message.reply_text("Формат: 123456789 ru"); return
         db_set(int(parts[0]), "lang", parts[1])
-        await update.message.reply_text(f"Язык пользователя {parts[0]} изменён на {parts[1]}.")
-
+        await update.message.reply_text(f"Язык {parts[0]} изменён на {parts[1]}.")
 
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("adm_act", None)
@@ -1251,18 +1116,17 @@ def main():
 
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("lang",    lang_cmd))
-    app.add_handler(CommandHandler("ref",     ref_cmd))
     app.add_handler(CommandHandler("profile", profile_cmd))
     app.add_handler(CommandHandler("top5",    send_top5))
     app.add_handler(CommandHandler("matches", matches_cmd))
     app.add_handler(CommandHandler("admin",   admin_cmd))
     app.add_handler(CommandHandler("cancel",  cancel_cmd))
 
-    app.add_handler(CallbackQueryHandler(lang_cb,         pattern=r"^lang_"))
-    app.add_handler(CallbackQueryHandler(ob_cb,           pattern=r"^ob_"))
-    app.add_handler(CallbackQueryHandler(forecast_type_cb, pattern=r"^forecast_"))
-    app.add_handler(CallbackQueryHandler(watch_cb,        pattern=r"^(watch|unwatch)_"))
-    app.add_handler(CallbackQueryHandler(adm_cb,          pattern=r"^adm_"))
+    app.add_handler(CallbackQueryHandler(lang_cb,     pattern=r"^lang_"))
+    app.add_handler(CallbackQueryHandler(ob_cb,       pattern=r"^ob_"))
+    app.add_handler(CallbackQueryHandler(forecast_cb, pattern=r"^forecast_"))
+    app.add_handler(CallbackQueryHandler(watch_cb,    pattern=r"^(watch|unwatch)_"))
+    app.add_handler(CallbackQueryHandler(adm_cb,      pattern=r"^adm_"))
 
     app.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_ID), handle_adm_msg), group=0)
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_msg), group=1)
@@ -1272,7 +1136,7 @@ def main():
         asyncio.create_task(daily_push(application))
 
     app.post_init = post_init
-    logger.info("ProqnozAI v4 started")
+    logger.info("ProqnozAI v5 started")
     app.run_polling()
 
 if __name__ == "__main__":
