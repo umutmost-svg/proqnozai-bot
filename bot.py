@@ -161,6 +161,23 @@ T = {
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Xoş gəldiniz! Adınızı daxil edin:",
 "reg_done":      "Qeydiyyat tamamlandı! Salam, {name}!",
+"welcome_intro": """ProqnozAI-yə xoş gəldiniz!
+
+Mən AI-əsaslı idman mərc analitikiyəm. Nə edə bilərəm:
+
+• İstənilən matç üzrə proqnoz — komanda adını yazın və ya cədvəl şəkli göndərin
+• Geniş analiz — forma, amillər, bütün mərc növləri keflər ilə
+• Qısa proqnoz — 5 saniyədə əsas mərc
+• Canlı bildirişlər — matçı izləyirəm, hadisələri real vaxtda göndərirəm
+
+2 sual cavablayın — sizə uyğun proqnozlar seçim.""",
+"post_onboarding": """Hazırdır! İndi matç adı yazın — məsələn:
+
+Barselona Alavés
+Real Madrid Arsenal
+PSJ Manchester City
+
+Və ya oyun cədvəlinin şəklini göndərin.""",
 "already_reg":   "Siz artıq qeydiyyatdan keçmisiniz, {name}!",
 "need_reg":      "Əvvəlcə qeydiyyatdan keçin. /start yazın.",
 "db_blocked":    "Hesabınız bloklanıb. İnzibatçıya müraciət edin.",
@@ -185,10 +202,7 @@ T = {
 "live_alert_goal":     "SİQNAL! {match} - Qol gözlənilir [{minute}. dəq]",
 "live_alert_value":    "LIVE VALUE! {match} - {team} üzərində dəyər var [{minute}. dəq]",
 "live_alert_pressure": "TƏZYİQ! {match} - {team} hücum təzyiqi [{minute}. dəq] {stat}",
-"top5_header":   "Bu günün TOP 5 matçı:\n\n",
-"top5_empty":    "Bu gün üçün matç tapılmadı.",
 "menu_forecast": "Proqnoz al",
-"menu_top5":     "TOP 5 bu gün",
 "menu_matches":  "Matçlarım",
 "menu_profile":  "Profil",
 "menu_lang":     "Dil dəyiş",
@@ -199,71 +213,89 @@ T = {
 "choose_forecast": "Proqnoz növünü seçin:",
 "btn_extended":    "Geniş proqnoz",
 "btn_short":       "Qısa proqnoz",
-"system_prompt": """Sən 15 illik təcrübəli idman analitikisən.
+"system_prompt": """Sən peşəkar idman analitikisən. Dürüst və real proqnozlar ver.
 
-İSTİFADƏÇİNİN PROFİLİ:
-İdman: {sports}
-Təcrübə: {exp}
+PROFİL: İdman: {sports} | Təcrübə: {exp}
 
-QAYDALAR:
-- İstifadəçinin profilinə uyğun proqnoz ver
-- Yalnız 2025-2026 mövsümü məlumatlar, köhnəlmiş heyətləri YAZMA
-- Emoji istifadə et, lakin markdown ** istifadə etmə
-- Sadəcə düz mətn və emoji
+VACIB QAYDALAR:
+1. Komandanı tərk etmiş oyunçuları HEÇ VAXT qeyd etmə
+2. Cari heyəti bilmirsənsə "heyət məlumatı yoxlanılır" yaz — UYDURMА
+3. Keflər REAL olmalıdır: fаvorit 1.20-1.60, bərabər 2.20-3.00, tоtal 2.5 1.70-2.10
+4. Markdown ** istifadə etmə — yalnız mətn və emoji
+5. Real faktorları analiz et: forma, ev/dəhliz, motivasiya
 
-GENİŞ FORMAT:
+FORMAT:
 
-HADİSƏ: [Komanda A] - [Komanda B] | [Turnir] | [Tarix]
+🏆 [Komanda A] — [Komanda B]
+📍 [Turnir] | [Tarix]
 
-FORMA:
-- [Komanda A]: son 5 oyun (Q-Q-H-Q-U kimi)
-- [Komanda B]: son 5 oyun
+📊 FORMA (son 5 oyun):
+[Komanda A]: [nəticələr və ya "məlumat yoxlanılır"]
+[Komanda B]: [nəticələr və ya "məlumat yoxlanılır"]
 
-ƏSAS AMİLLƏR:
-1. [Amil 1]
-2. [Amil 2]
-3. [Amil 3]
+🔍 ANALİZ:
+[Matça real təsir edən 3-4 əsas amil. Konkret və aydın.]
 
-PROQNOZ:
+🎯 PROQNOZ:
+
 1X2:
-- [Komanda A] qələbəsi: XX% | Kef: X.XX-X.XX
-- Heç-heçə: XX% | Kef: X.XX-X.XX
-- [Komanda B] qələbəsi: XX% | Kef: X.XX-X.XX
+[Komanda A] — XX% | Kef: X.XX-X.XX
+Heç-heçə — XX% | Kef: X.XX-X.XX
+[Komanda B] — XX% | Kef: X.XX-X.XX
 
-Total:
-- 2.5 Üstündə: XX% | Kef: X.XX-X.XX
-- 2.5 Altında: XX% | Kef: X.XX-X.XX
+⚽ Total qol:
+2.5 Üstündə — XX% | Kef: X.XX-X.XX
+2.5 Altında — XX% | Kef: X.XX-X.XX
 
-Hər ikisi qol vurur:
-- Bəli: XX% | Kef: X.XX-X.XX
-- Xeyr: XX% | Kef: X.XX-X.XX
+🔥 Hər ikisi qol vurur:
+Bəli — XX% | Kef: X.XX-X.XX
+Xeyr — XX% | Kef: X.XX-X.XX
 
-Qandikap:
-- [Komanda A] (-1): XX% | Kef: X.XX-X.XX
-- [Komanda B] (+1): XX% | Kef: X.XX-X.XX
+📐 Asiya handicapı:
+[Komanda A] (-1) — XX% | Kef: X.XX-X.XX
+[Komanda B] (+1) — XX% | Kef: X.XX-X.XX
 
-ƏN GÜCLÜ MƏRCİ:
-[Mərc növü] | Kef: X.XX-X.XX | Ehtimal: XX%
-[1 cümlə əsaslandırma]
+⚡ ƏN YAXŞI MƏRCİ:
+[Konkret növ] | Kef: X.XX-X.XX
+[Niyə məhz bu mərc — 1-2 cümlə real əsaslandırma]
 
-⚠️ Analitik proqnozdur. Mərc öz riskinizdir.""",
-"short_prompt": """Qısa mərc analitiki. Profil: {sports} | {exp}
+⚠️ Analitik proqnozdur, nəticə zəmanəti deyil.""",
+"short_prompt": """Qısa proqnoz. Profil: {sports} | {exp}
 
-🏆 [A] — [B] | [Turnir]
-🎯 Qalibiyyət: [Komanda] XX% | Kef X.XX-X.XX
-⚽ Total 2.5: Üstündə XX% | Kef X.XX
-🔥 Hər ikisi qol: Bəli XX% | Kef X.XX
-⚡ ƏN YAXŞI MƏRCİ: [Mərc növü] | Kef X.XX | XX%
-[1 cümlə]
+QАYDALAR: real keflər, getmiş oyunçuları qeyd etmə, yalnız mətn və emoji.
+
+FORMAT:
+🏆 [Komanda A] — [Komanda B] | [Turnir]
+🎯 Favorit: [Komanda] XX% | Kef X.XX-X.XX
+⚽ Total 2.5 üstündə: XX% | Kef X.XX-X.XX
+🔥 Hər ikisi qol Bəli: XX% | Kef X.XX-X.XX
+⚡ MƏRCİ: [növü] | Kef X.XX-X.XX
+[1 cümlə — niyə]
 ⚠️ Analitik proqnozdur.""",
 "live_tip_prompt": "Canlı mərc analitikisən. Oyun: {match}, {minute}. dəq, hesab {score}. Hadisə: {event}. Ən yaxşı canlı mərci tövsiyə et. Qısa, maks 2 cümlə.",
-"top5_prompt": "Bu gün keçirilə bilən ən maraqlı 5 idman matçını say. Hər biri üçün: matç adı, turnir, proqnoz (1 cümlə). Sadəcə düz mətn.",
 },
 
 "ru": {
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Добро пожаловать! Введите ваше имя:",
 "reg_done":      "Регистрация завершена! Привет, {name}!",
+"welcome_intro": """Добро пожаловать в ProqnozAI!
+
+Я — AI-аналитик спортивных ставок. Вот что я умею:
+
+• Прогноз на любой матч — напишите команды или отправьте фото расписания
+• Расширенный анализ — форма, факторы, все виды ставок с коэффициентами
+• Краткий прогноз — только главная ставка за 5 секунд
+• Live уведомления — слежу за матчем и присылаю события в реальном времени
+
+Ответьте на 2 быстрых вопроса — подберу прогнозы под вас.""",
+"post_onboarding": """Готово! Теперь напишите название матча — например:
+
+Барселона Алавес
+Реал Мадрид Арсенал
+ПСЖ Манчестер Сити
+
+Или отправьте фото расписания матчей.""",
 "already_reg":   "Вы уже зарегистрированы, {name}!",
 "need_reg":      "Сначала пройдите регистрацию. Напишите /start.",
 "db_blocked":    "Ваш аккаунт заблокирован. Обратитесь к администратору.",
@@ -288,10 +320,7 @@ Qandikap:
 "live_alert_goal":     "СИГНАЛ! {match} - ожидается гол [{minute} мин]",
 "live_alert_value":    "LIVE VALUE! {match} - есть ценность на {team} [{minute} мин]",
 "live_alert_pressure": "ДАВЛЕНИЕ! {match} - {team} создаёт давление [{minute} мин] {stat}",
-"top5_header":   "ТОП 5 матчей дня:\n\n",
-"top5_empty":    "На сегодня матчи не найдены.",
 "menu_forecast": "Получить прогноз",
-"menu_top5":     "ТОП 5 сегодня",
 "menu_matches":  "Мои матчи",
 "menu_profile":  "Профиль",
 "menu_lang":     "Сменить язык",
@@ -302,73 +331,95 @@ Qandikap:
 "choose_forecast": "Выберите формат прогноза:",
 "btn_extended":    "Расширенный",
 "btn_short":       "Краткий",
-"system_prompt": """Ты — элитный спортивный аналитик с 15-летним опытом.
+"system_prompt": """Ты — профессиональный спортивный аналитик. Твоя задача — давать честные, реалистичные прогнозы.
 
-ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:
-Спорт: {sports}
-Опыт: {exp}
+ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ: Спорт: {sports} | Опыт: {exp}
 
-ПРАВИЛА:
-- Давай прогнозы с учётом профиля
-- Только данные сезона 2025-2026, устаревшие составы НЕ УПОМИНАЙ
-- Используй emoji, но НЕ используй markdown ** для жирного
-- Только чистый текст и emoji
+КРИТИЧЕСКИ ВАЖНЫЕ ПРАВИЛА:
+1. НИКОГДА не упоминай игроков которые покинули клуб (Мбаппе ушёл из ПСЖ в 2024, Неймар давно не в ПСЖ и т.д.)
+2. Если не знаешь актуальный состав — пиши "состав уточняется" — НЕ ПРИДУМЫВАЙ
+3. Коэффициенты должны быть РЕАЛИСТИЧНЫМИ для букмекеров:
+   - Явный фаворит: 1.20-1.60
+   - Небольшое преимущество: 1.60-2.20
+   - Равные команды: 2.20-3.00
+   - Андердог: 3.00-8.00
+   - Тотал 2.5 больше/меньше обычно: 1.70-2.10
+   - Обе забьют да/нет: 1.60-2.20
+4. НЕ используй markdown ** — только чистый текст и emoji
+5. Анализируй реальные факторы: форму, домашний/гостевой фактор, мотивацию, травмы если известны
 
-РАСШИРЕННЫЙ ФОРМАТ:
+ФОРМАТ ОТВЕТА:
 
-🏆 СОБЫТИЕ: [Команда А] — [Команда Б] | [Турнир] | [Дата]
+🏆 [Команда А] — [Команда Б]
+📍 [Турнир] | [Дата если известна]
 
-📊 ФОРМА:
-- [Команда А]: последние 5 матчей (П-П-Н-П-П)
-- [Команда Б]: последние 5 матчей
+📊 ФОРМА (последние 5 матчей):
+[Команда А]: [результаты или "данные уточняются"]
+[Команда Б]: [результаты или "данные уточняются"]
 
-🔑 КЛЮЧЕВЫЕ ФАКТОРЫ:
-1. [Фактор 1]
-2. [Фактор 2]
-3. [Фактор 3]
+🔍 АНАЛИЗ:
+[3-4 ключевых фактора которые реально влияют на матч. Конкретно и по делу.]
 
 🎯 ПРОГНОЗ:
 
 1X2:
-- Победа [Команда А]: XX% | Кэф: X.XX-X.XX
-- Ничья: XX% | Кэф: X.XX-X.XX
-- Победа [Команда Б]: XX% | Кэф: X.XX-X.XX
+[Команда А] — XX% | Кэф: X.XX-X.XX
+Ничья — XX% | Кэф: X.XX-X.XX
+[Команда Б] — XX% | Кэф: X.XX-X.XX
 
-⚽ Тотал:
-- Больше 2.5: XX% | Кэф: X.XX-X.XX
-- Меньше 2.5: XX% | Кэф: X.XX-X.XX
+⚽ Тотал голов:
+Больше 2.5 — XX% | Кэф: X.XX-X.XX
+Меньше 2.5 — XX% | Кэф: X.XX-X.XX
 
 🔥 Обе забьют:
-- Да: XX% | Кэф: X.XX-X.XX
-- Нет: XX% | Кэф: X.XX-X.XX
+Да — XX% | Кэф: X.XX-X.XX
+Нет — XX% | Кэф: X.XX-X.XX
 
-📐 Гандикап:
-- [Команда А] (-1): XX% | Кэф: X.XX-X.XX
-- [Команда Б] (+1): XX% | Кэф: X.XX-X.XX
+📐 Азиатский гандикап:
+[Команда А] (-1) — XX% | Кэф: X.XX-X.XX
+[Команда Б] (+1) — XX% | Кэф: X.XX-X.XX
 
 ⚡ ЛУЧШАЯ СТАВКА:
-[Тип ставки] | Кэф: X.XX-X.XX | Вероятность: XX%
-[1 предложение обоснования]
+[Конкретный тип] | Кэф: X.XX-X.XX
+[Почему именно эта ставка — 1-2 предложения с реальным обоснованием]
 
-⚠️ Аналитический прогноз. Ставки на ваш риск.""",
-"short_prompt": """Краткий аналитик ставок. Профиль: {sports} | {exp}
+⚠️ Это аналитический прогноз, не гарантия результата.""",
+"short_prompt": """Краткий прогноз. Профиль: {sports} | {exp}
 
-КРАТКИЙ ФОРМАТ (строго):
+ПРАВИЛА: реалистичные коэффициенты, не упоминай ушедших игроков, только чистый текст и emoji.
+
+ФОРМАТ:
 🏆 [Команда А] — [Команда Б] | [Турнир]
-🎯 Победитель: [Команда] XX% | Кэф X.XX-X.XX
-⚽ Тотал 2.5: Больше XX% | Кэф X.XX
-🔥 Обе забьют: Да XX% | Кэф X.XX
-⚡ СТАВКА: [Тип] | Кэф X.XX | XX%
-[1 предложение]
+🎯 Фаворит: [Команда] XX% | Кэф X.XX-X.XX
+⚽ Тотал 2.5 больше: XX% | Кэф X.XX-X.XX
+🔥 Обе забьют Да: XX% | Кэф X.XX-X.XX
+⚡ СТАВКА: [тип ставки] | Кэф X.XX-X.XX
+[1 предложение — почему]
 ⚠️ Аналитический прогноз.""",
 "live_tip_prompt": "Ты лайв-аналитик. Матч {match}, {minute} мин, счёт {score}. Событие: {event}. Дай лучшую лайв-ставку. Коротко, макс 2 предложения.",
-"top5_prompt": "Перечисли 5 интересных спортивных матчей которые могут проходить сегодня или в ближайшие дни. Для каждого: команды, турнир, краткий прогноз (1 предложение). Не упоминай дату - просто дай список. Только чистый текст.",
 },
 
 "en": {
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Welcome! Please enter your name:",
 "reg_done":      "Registration complete! Hi, {name}!",
+"welcome_intro": """Welcome to ProqnozAI!
+
+I'm an AI sports betting analyst. Here's what I do:
+
+• Forecast for any match — type the teams or send a schedule photo
+• Extended analysis — form, key factors, all bet types with odds
+• Short forecast — just the main bet in 5 seconds
+• Live alerts — I follow the match and send events in real time
+
+Answer 2 quick questions — I'll personalize your forecasts.""",
+"post_onboarding": """All set! Now type a match name — for example:
+
+Barcelona Alavés
+Real Madrid Arsenal
+PSG Manchester City
+
+Or send a photo of the match schedule.""",
 "already_reg":   "You are already registered, {name}!",
 "need_reg":      "Please register first. Type /start.",
 "db_blocked":    "Your account is blocked. Contact the administrator.",
@@ -393,10 +444,7 @@ Qandikap:
 "live_alert_goal":     "SIGNAL! {match} - goal expected [{minute} min]",
 "live_alert_value":    "LIVE VALUE! {match} - value on {team} [{minute} min]",
 "live_alert_pressure": "PRESSURE! {match} - {team} attacking hard [{minute} min] {stat}",
-"top5_header":   "TOP 5 matches today:\n\n",
-"top5_empty":    "No matches found for today.",
 "menu_forecast": "Get forecast",
-"menu_top5":     "TOP 5 today",
 "menu_matches":  "My matches",
 "menu_profile":  "Profile",
 "menu_lang":     "Change language",
@@ -407,67 +455,69 @@ Qandikap:
 "choose_forecast": "Choose forecast format:",
 "btn_extended":    "Extended",
 "btn_short":       "Short",
-"system_prompt": """You are an elite sports analyst with 15 years of experience.
+"system_prompt": """You are a professional sports analyst. Your job is to give honest, realistic forecasts.
 
-USER PROFILE:
-Sports: {sports}
-Experience: {exp}
+USER PROFILE: Sports: {sports} | Experience: {exp}
 
-RULES:
-- Tailor forecasts to user profile
-- Only 2025-2026 season data, never mention outdated squads
-- Use emoji but do NOT use markdown ** for bold
-- Plain text and emoji only
+CRITICAL RULES:
+1. NEVER mention players who left the club (Mbappe left PSG in 2024, etc.)
+2. If you don't know the current squad — write "squad data pending" — DO NOT invent
+3. Odds must be REALISTIC for bookmakers:
+   - Clear favorite: 1.20-1.60 | Slight edge: 1.60-2.20
+   - Even match: 2.20-3.00 | Underdog: 3.00-8.00
+   - Over/Under 2.5: 1.70-2.10 | BTTS Yes/No: 1.60-2.20
+4. Do NOT use markdown ** — plain text and emoji only
+5. Analyze real factors: form, home/away, motivation, injuries if known
 
-EXTENDED FORMAT:
+RESPONSE FORMAT:
 
-🏆 EVENT: [Team A] — [Team B] | [Tournament] | [Date]
+🏆 [Team A] — [Team B]
+📍 [Tournament] | [Date if known]
 
-📊 FORM:
-- [Team A]: last 5 matches (W-W-D-W-L)
-- [Team B]: last 5 matches
+📊 FORM (last 5 matches):
+[Team A]: [results or "data pending"]
+[Team B]: [results or "data pending"]
 
-🔑 KEY FACTORS:
-1. [Factor 1]
-2. [Factor 2]
-3. [Factor 3]
+🔍 ANALYSIS:
+[3-4 key factors that genuinely affect this match. Specific and factual.]
 
 🎯 FORECAST:
 
 1X2:
-- [Team A] Win: XX% | Odds: X.XX-X.XX
-- Draw: XX% | Odds: X.XX-X.XX
-- [Team B] Win: XX% | Odds: X.XX-X.XX
+[Team A] — XX% | Odds: X.XX-X.XX
+Draw — XX% | Odds: X.XX-X.XX
+[Team B] — XX% | Odds: X.XX-X.XX
 
 ⚽ Total Goals:
-- Over 2.5: XX% | Odds: X.XX-X.XX
-- Under 2.5: XX% | Odds: X.XX-X.XX
+Over 2.5 — XX% | Odds: X.XX-X.XX
+Under 2.5 — XX% | Odds: X.XX-X.XX
 
 🔥 Both Teams Score:
-- Yes: XX% | Odds: X.XX-X.XX
-- No: XX% | Odds: X.XX-X.XX
+Yes — XX% | Odds: X.XX-X.XX
+No — XX% | Odds: X.XX-X.XX
 
-📐 Handicap:
-- [Team A] (-1): XX% | Odds: X.XX-X.XX
-- [Team B] (+1): XX% | Odds: X.XX-X.XX
+📐 Asian Handicap:
+[Team A] (-1) — XX% | Odds: X.XX-X.XX
+[Team B] (+1) — XX% | Odds: X.XX-X.XX
 
 ⚡ BEST BET:
-[Bet type] | Odds: X.XX-X.XX | Probability: XX%
-[1 sentence reasoning]
+[Specific type] | Odds: X.XX-X.XX
+[Why this bet — 1-2 sentences with real reasoning]
 
-⚠️ Analytical forecast only. Bet at your own risk.""",
-"short_prompt": """Brief betting analyst. Profile: {sports} | {exp}
+⚠️ Analytical forecast, not a guaranteed result.""",
+"short_prompt": """Short forecast. Profile: {sports} | {exp}
 
-SHORT FORMAT (strict):
+RULES: realistic odds, never mention departed players, plain text and emoji only.
+
+FORMAT:
 🏆 [Team A] — [Team B] | [Tournament]
-🎯 Winner: [Team] XX% | Odds X.XX-X.XX
-⚽ Total 2.5: Over XX% | Odds X.XX
-🔥 Both score: Yes XX% | Odds X.XX
-⚡ BET: [Type] | Odds X.XX | XX%
-[1 sentence]
-⚠️ Analytical forecast only.""",
+🎯 Favourite: [Team] XX% | Odds X.XX-X.XX
+⚽ Over 2.5: XX% | Odds X.XX-X.XX
+🔥 BTTS Yes: XX% | Odds X.XX-X.XX
+⚡ BET: [type] | Odds X.XX-X.XX
+[1 sentence — why]
+⚠️ Analytical forecast.""",
 "live_tip_prompt": "You are a live betting analyst. Match {match}, {minute} min, score {score}. Event: {event}. Best live bet now. Max 2 sentences.",
-"top5_prompt": "List 5 interesting sports matches that could be happening today or soon. For each: teams, tournament, brief forecast (1 sentence). Don't mention specific dates - just give the list. Plain text only.",
 },
 }
 
@@ -505,9 +555,8 @@ def main_menu(uid):
     lang = db_lang(uid)
     tl = T[lang]
     return ReplyKeyboardMarkup([
-        [tl["menu_forecast"], tl["menu_top5"]],
-        [tl["menu_matches"],  tl["menu_profile"]],
-        [tl["menu_lang"]],
+        [tl["menu_forecast"], tl["menu_matches"]],
+        [tl["menu_profile"],  tl["menu_lang"]],
     ], resize_keyboard=True)
 
 def lang_kb():
@@ -566,27 +615,6 @@ async def search_match(query):
     except Exception as e: logger.error(f"search_match: {e}")
     return []
 
-async def get_top5_matches() -> list[dict]:
-    if not APIFOOTBALL_KEY: return []
-    try:
-        async with httpx.AsyncClient(timeout=8) as h:
-            r = await h.get("https://v3.football.api-sports.io/fixtures",
-                headers={"x-apisports-key": APIFOOTBALL_KEY},
-                params={"date": date.today().isoformat(), "timezone": "UTC"})
-            if r.status_code == 200:
-                fixtures = r.json().get("response", [])
-                priority = ["UEFA Champions League", "Premier League", "La Liga",
-                           "Bundesliga", "Serie A", "Ligue 1", "UEFA Europa League"]
-                def score_f(f):
-                    for i, p in enumerate(priority):
-                        if p in f["league"]["name"]: return i
-                    return 99
-                fixtures.sort(key=score_f)
-                return [{"home": f["teams"]["home"]["name"], "away": f["teams"]["away"]["name"],
-                         "league": f["league"]["name"], "time": f["fixture"]["date"][11:16]}
-                        for f in fixtures[:5]]
-    except Exception as e: logger.error(f"get_top5: {e}")
-    return []
 
 async def get_events(mid):
     if not APIFOOTBALL_KEY: return []
@@ -763,6 +791,8 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     await update.message.reply_text(tr(uid, "reg_done", name=name), reply_markup=ReplyKeyboardRemove())
     await asyncio.sleep(0.3)
     lang = db_lang(uid)
+    await update.message.reply_text(T[lang]["welcome_intro"])
+    await asyncio.sleep(0.5)
     await update.message.reply_text(T[lang]["ob_sports"], reply_markup=ob_kb(OB_SPORTS[lang]))
     return True
 
@@ -786,7 +816,8 @@ async def ob_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             exp=exp_label(uid, u["experience"]))
         await q.edit_message_text(done_msg)
         await asyncio.sleep(0.3)
-        await context.bot.send_message(chat_id=uid, text=tr(uid, "no_input"), reply_markup=main_menu(uid))
+        lang2 = db_lang(uid)
+        await context.bot.send_message(chat_id=uid, text=T[lang2]["post_onboarding"], reply_markup=main_menu(uid))
 
 
 async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -836,29 +867,6 @@ async def watch_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(tr(uid, "watch_stopped", match=mname))
 
 
-async def send_top5(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
-    await update.message.chat.send_action("typing")
-    lang = db_lang(uid); tl = T[lang]
-    matches = await get_top5_matches()
-    lines = [tl["top5_header"]]
-    if matches:
-        for i, m in enumerate(matches, 1):
-            lines.append(f"{i}. {m['home']} vs {m['away']}")
-            lines.append(f"   {m['league']} | {m['time']} UTC\n")
-    # Claude commentary (without specific date to avoid "I don't know 2026" error)
-    try:
-        prompt = tl["top5_prompt"]
-        resp = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=500,
-            messages=[{"role": "user", "content": prompt}])
-        if matches:
-            lines.append("AI analizi / Анализ:\n" + resp.content[0].text)
-        else:
-            lines = [tl["top5_header"] + resp.content[0].text]
-    except Exception: pass
-    await update.message.reply_text("\n".join(lines) if lines else tl["top5_empty"])
-
 
 async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -900,7 +908,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Menu routing
     lang = db_lang(uid); tl = T[lang]
-    if text == tl["menu_top5"]:    await send_top5(update, context); return
     if text == tl["menu_matches"]: await matches_cmd(update, context); return
     if text == tl["menu_profile"]: await profile_cmd(update, context); return
     if text == tl["menu_lang"]:
@@ -1116,7 +1123,6 @@ def main():
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("lang",    lang_cmd))
     app.add_handler(CommandHandler("profile", profile_cmd))
-    app.add_handler(CommandHandler("top5",    send_top5))
     app.add_handler(CommandHandler("matches", matches_cmd))
     app.add_handler(CommandHandler("admin",   admin_cmd))
     app.add_handler(CommandHandler("cancel",  cancel_cmd))
