@@ -135,14 +135,14 @@ def db_user_lsubs(uid) -> list[dict]:
 # ─── Human-readable label maps ────────────────────────────────────────────────
 SPORTS_LABELS = {
     "az": {"football": "Futbol", "ufc": "UFC/MMA", "nba": "Basketbol",
-           "tennis": "Tennis", "hockey": "Hokey", "all": "Hamisi"},
+           "tennis": "Tennis", "hockey": "Hokey", "all": "Hamısı"},
     "ru": {"football": "Футбол", "ufc": "UFC/MMA", "nba": "Баскетбол",
            "tennis": "Теннис", "hockey": "Хоккей", "all": "Все виды"},
     "en": {"football": "Football", "ufc": "UFC/MMA", "nba": "Basketball",
            "tennis": "Tennis", "hockey": "Hockey", "all": "All sports"},
 }
 EXP_LABELS = {
-    "az": {"beginner": "Yeni baslayanam", "mid": "Orta seviyye", "expert": "Tecrubeliyem"},
+    "az": {"beginner": "Yeni başlayanam", "mid": "Orta səviyyə", "expert": "Təcrübəliyəm"},
     "ru": {"beginner": "Новичок", "mid": "Средний уровень", "expert": "Опытный"},
     "en": {"beginner": "Beginner", "mid": "Intermediate", "expert": "Expert"},
 }
@@ -159,106 +159,105 @@ def exp_label(uid, val):
 T = {
 "az": {
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
-"ask_name":      "Xos geldiniz! Adinizi daxil edin:",
-"reg_done":      "Qeydiyyat tamamlandi! Salam, {name}!",
-"already_reg":   "Siz artiq qeydiyyatdan kecmisiniz, {name}!",
-"need_reg":      "Evvelce qeydiyyatdan kesin. /start yazin.",
-"db_blocked":    "Hesabiniz bloklanib. Inzibatciya muraciet edin.",
-"blocked":       "Muveqqeti bloklanmissiniz. {m} deq {s} san sonra yeniden ced edin.",
-"rate_limit":    "Sorgu limiti asildi. {w} saniye gozleyin. Xeberdarliq: {v}/{max}",
-"auto_blocked":  "Cox sayda sorgu. {min} deqiqelik blok.",
-"long_text":     "Metn cox uzundur.",
-"injection":     "Yalniz idman sorqulari qebul edilir.",
-"no_input":      "Metn yazin ve ya sekil gonderin.",
-"img_prompt":    "Sekildeki idman hadisesini mueyyen et ve proqnoz ver.",
-"api_overload":  "Servis yuklemesi. Bir az sonra yeniden ced edin.",
-"api_error":     "Xeta bas verdi. Bir az sonra yeniden ced edin.",
-"lang_set":      "Dil Azerbaycan diline teyin edildi.",
-"watch_btn":     "Oyunu izle",
-"watch_started": "Oyun izlenilir: {match}",
-"watch_stopped": "DayandirIldi: {match}",
-"no_subs":       "Hec bir oyun izlemirsiniz.",
-"live_goal":     "QOL! {match}\n{minute}. deq: {team}\nHesab: {score}\n\nCanli merc:\n{tip}",
-"live_card":     "KART! {match}\n{minute}. deq: {player} ({team}) - {card}\n\nCanli merc:\n{tip}",
-"live_halftime": "FASILE! {match}\nHesab: {score}\n\nFasile merci:\n{tip}",
-"live_fulltime": "OYUN BITTI! {match}\nYekun: {score}",
-"live_alert_goal":     "SIGNAL! {match} - Qol gozlenilir [{minute}. deq]",
-"live_alert_value":    "LIVE VALUE! {match} - {team} uzerinde deger var [{minute}. deq]",
-"live_alert_pressure": "TEZYIQ! {match} - {team} hucum tezyiqi [{minute}. deq] {stat}",
-"top5_header":   "Bu gunun TOP 5 matci:\n\n",
-"top5_empty":    "Bu gun ucun matc tapilmadi.",
+"ask_name":      "Xoş gəldiniz! Adınızı daxil edin:",
+"reg_done":      "Qeydiyyat tamamlandı! Salam, {name}!",
+"already_reg":   "Siz artıq qeydiyyatdan keçmisiniz, {name}!",
+"need_reg":      "Əvvəlcə qeydiyyatdan keçin. /start yazın.",
+"db_blocked":    "Hesabınız bloklanıb. İnzibatçıya müraciət edin.",
+"blocked":       "Müvəqqəti bloklanmısınız. {m} dəq {s} san sonra yenidən cəhd edin.",
+"rate_limit":    "Sorğu limiti aşıldı. {w} saniyə gözləyin. Xəbərdarlıq: {v}/{max}",
+"auto_blocked":  "Çox sayda sorğu. {min} dəqiqəlik blok.",
+"long_text":     "Mətn çox uzundur.",
+"injection":     "Yalnız idman sorğuları qəbul edilir.",
+"no_input":      "Mətn yazın və ya şəkil göndərin.",
+"img_prompt":    "Şəkildəki idman hadisəsini müəyyən et və proqnoz ver.",
+"api_overload":  "Servis yüklənməsi. Bir az sonra yenidən cəhd edin.",
+"api_error":     "Xəta baş verdi. Bir az sonra yenidən cəhd edin.",
+"lang_set":      "Dil Azərbaycan dilinə təyin edildi.",
+"watch_btn":     "Oyunu izlə",
+"watch_started": "Oyun izlənilir: {match}",
+"watch_stopped": "Dayandırıldı: {match}",
+"no_subs":       "Heç bir oyun izləmirsiniz.",
+"live_goal":     "QOL! {match}\n{minute}. dəq: {team}\nHesab: {score}\n\nCanlı mərc:\n{tip}",
+"live_card":     "KART! {match}\n{minute}. dəq: {player} ({team}) - {card}\n\nCanlı mərc:\n{tip}",
+"live_halftime": "FASİLƏ! {match}\nHesab: {score}\n\nFasilə mərci:\n{tip}",
+"live_fulltime": "OYUN BİTDİ! {match}\nYekun: {score}",
+"live_alert_goal":     "SİQNAL! {match} - Qol gözlənilir [{minute}. dəq]",
+"live_alert_value":    "LIVE VALUE! {match} - {team} üzərində dəyər var [{minute}. dəq]",
+"live_alert_pressure": "TƏZYİQ! {match} - {team} hücum təzyiqi [{minute}. dəq] {stat}",
+"top5_header":   "Bu günün TOP 5 matçı:\n\n",
+"top5_empty":    "Bu gün üçün matç tapılmadı.",
 "menu_forecast": "Proqnoz al",
-"menu_top5":     "TOP 5 bu gun",
-"menu_matches":  "Matclarim",
+"menu_top5":     "TOP 5 bu gün",
+"menu_matches":  "Matçlarım",
 "menu_profile":  "Profil",
-"menu_lang":     "Dil deyis",
-"profile_text":  "PROFIL\n\nAd: {name}\nDil: {lang}\nCemi sorqular: {total_req}\n\nIdman: {sports}\nTecurbe: {exp}",
+"menu_lang":     "Dil dəyiş",
+"profile_text":  "PROFİL\n\nAd: {name}\nDil: {lang}\nCəmi sorğular: {total_req}\n\nİdman: {sports}\nTəcrübə: {exp}",
 "ob_sports":     "Hansı idman növünü sevirsiniz?",
 "ob_exp":        "Mərcdə təcrübəniz nə qədərdir?",
-"ob_done":       "Profil hazirdir! Ferdilesdirilmis proqnozlar alacaqsiniz.\n\nIdman: {sports}\nTecurbe: {exp}",
-"choose_forecast": "Proqnoz novunu secin:",
-"btn_extended":    "Genis proqnoz",
-"btn_short":       "Qisa proqnoz",
-"system_prompt": """Sen 15 illik tecrubeli idman analitikisen.
+"ob_done":       "Profil hazırdır! Fərdiləşdirilmiş proqnozlar alacaqsınız.\n\nİdman: {sports}\nTəcrübə: {exp}",
+"choose_forecast": "Proqnoz növünü seçin:",
+"btn_extended":    "Geniş proqnoz",
+"btn_short":       "Qısa proqnoz",
+"system_prompt": """Sən 15 illik təcrübəli idman analitikisən.
 
-ISTIFADECININ PROFILI:
-Idman: {sports}
-Tecurbe: {exp}
+İSTİFADƏÇİNİN PROFİLİ:
+İdman: {sports}
+Təcrübə: {exp}
 
 QAYDALAR:
-- Istifadecinin profiline uygun proqnoz ver
-- Yalniz 2025-2026 mevsumu melumatlar, eskileri YAZMA
-- Emojileri istifade et, lakin markdown ** istifade etme
-- Sadece duz metn ve emoji
+- İstifadəçinin profilinə uyğun proqnoz ver
+- Yalnız 2025-2026 mövsümü məlumatlar, köhnəlmiş heyətləri YAZMA
+- Emoji istifadə et, lakin markdown ** istifadə etmə
+- Sadəcə düz mətn və emoji
 
-GENIS FORMAT:
+GENİŞ FORMAT:
 
-HADISE: [Komanda A] - [Komanda B] | [Turnir] | [Tarix]
+HADİSƏ: [Komanda A] - [Komanda B] | [Turnir] | [Tarix]
 
 FORMA:
-- [Komanda A]: son 5 oyun (M-M-H-M-U kimi)
+- [Komanda A]: son 5 oyun (Q-Q-H-Q-U kimi)
 - [Komanda B]: son 5 oyun
 
-ESAS AMILLER:
+ƏSAS AMİLLƏR:
 1. [Amil 1]
 2. [Amil 2]
 3. [Amil 3]
 
 PROQNOZ:
 1X2:
-- [Komanda A] qalebesi: XX% | Kef: X.XX-X.XX
-- Hec-hece: XX% | Kef: X.XX-X.XX
-- [Komanda B] qalebesi: XX% | Kef: X.XX-X.XX
+- [Komanda A] qələbəsi: XX% | Kef: X.XX-X.XX
+- Heç-heçə: XX% | Kef: X.XX-X.XX
+- [Komanda B] qələbəsi: XX% | Kef: X.XX-X.XX
 
 Total:
-- 2.5 Ustunde: XX% | Kef: X.XX-X.XX
-- 2.5 Altinda: XX% | Kef: X.XX-X.XX
+- 2.5 Üstündə: XX% | Kef: X.XX-X.XX
+- 2.5 Altında: XX% | Kef: X.XX-X.XX
 
-Her ikisi qol vurur:
-- Beli: XX% | Kef: X.XX-X.XX
+Hər ikisi qol vurur:
+- Bəli: XX% | Kef: X.XX-X.XX
 - Xeyr: XX% | Kef: X.XX-X.XX
 
 Qandikap:
 - [Komanda A] (-1): XX% | Kef: X.XX-X.XX
 - [Komanda B] (+1): XX% | Kef: X.XX-X.XX
 
-EN GUCLU MERC:
-[Merc novu] | Kef: X.XX-X.XX | Ehtimal: XX%
-Sebeb: [1 cumle]
+ƏN GÜCLÜ MƏRCİ:
+[Mərc növü] | Kef: X.XX-X.XX | Ehtimal: XX%
+[1 cümlə əsaslandırma]
 
-XEBERDARLIQ: Analitik proqnozdur. Merc oz riskinizdir.""",
-"short_prompt": """Qisa merc analitiki. Profil: {sports} | {exp}
+⚠️ Analitik proqnozdur. Mərc öz riskinizdir.""",
+"short_prompt": """Qısa mərc analitiki. Profil: {sports} | {exp}
 
-QISA FORMAT (yalniz bu):
-HADISE: [A] - [B] | [Turnir]
-Qalibiyyet: [Komanda] XX% | Kef X.XX-X.XX
-Total 2.5: Ustunde XX% | Kef X.XX
-Her ikisi qol: Beli XX% | Kef X.XX
-EN YAXSI MERC: [Merc novu] | Kef X.XX | XX%
-Sebeb: [1 cumle]
-XEBERDARLIQ: Analitik proqnozdur.""",
-"live_tip_prompt": "Canli merc analitikisen. Oyun: {match}, {minute}. deq, hesab {score}. Hadise: {event}. En yaxsi canli merci tovsiye et. Qisa, maks 2 cumle.",
-"top5_prompt": "Bu gun kecirilebilecek en maraqli 5 idman matcini say. Her biri ucun: matc adi, turnir, proqnoz (1 cumle). Heqiqi matclar olmasasa fikir ver. Sadece duz metn.",
+🏆 [A] — [B] | [Turnir]
+🎯 Qalibiyyət: [Komanda] XX% | Kef X.XX-X.XX
+⚽ Total 2.5: Üstündə XX% | Kef X.XX
+🔥 Hər ikisi qol: Bəli XX% | Kef X.XX
+⚡ ƏN YAXŞI MƏRCİ: [Mərc növü] | Kef X.XX | XX%
+[1 cümlə]
+⚠️ Analitik proqnozdur.""",
+"live_tip_prompt": "Canlı mərc analitikisən. Oyun: {match}, {minute}. dəq, hesab {score}. Hadisə: {event}. Ən yaxşı canlı mərci tövsiyə et. Qısa, maks 2 cümlə.",
+"top5_prompt": "Bu gün keçirilə bilən ən maraqlı 5 idman matçını say. Hər biri üçün: matç adı, turnir, proqnoz (1 cümlə). Sadəcə düz mətn.",
 },
 
 "ru": {
@@ -486,14 +485,14 @@ def tr(uid, key, **kw):
 # ─── Onboarding data ──────────────────────────────────────────────────────────
 OB_SPORTS = {
     "az": [("Futbol", "football"), ("UFC/MMA", "ufc"), ("Basketbol", "nba"),
-           ("Tennis", "tennis"), ("Hokey", "hockey"), ("Hamisi", "all")],
+           ("Tennis", "tennis"), ("Hokey", "hockey"), ("Hamısı", "all")],
     "ru": [("Футбол", "football"), ("UFC/MMA", "ufc"), ("Баскетбол", "nba"),
            ("Теннис", "tennis"), ("Хоккей", "hockey"), ("Все виды", "all")],
     "en": [("Football", "football"), ("UFC/MMA", "ufc"), ("Basketball", "nba"),
            ("Tennis", "tennis"), ("Hockey", "hockey"), ("All sports", "all")],
 }
 OB_EXP = {
-    "az": [("Yeni baslayanam", "beginner"), ("Orta seviyye", "mid"), ("Tecrubeliyem", "expert")],
+    "az": [("Yeni başlayanam", "beginner"), ("Orta səviyyə", "mid"), ("Təcrübəliyəm", "expert")],
     "ru": [("Новичок", "beginner"), ("Средний уровень", "mid"), ("Опытный", "expert")],
     "en": [("Beginner", "beginner"), ("Intermediate", "mid"), ("Expert", "expert")],
 }
