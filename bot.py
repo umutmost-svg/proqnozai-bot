@@ -33,9 +33,20 @@ blocked_until: dict[int, float] = {}
 reg_step:      dict[int, str]   = {}
 live_subs:     dict[str, set]   = defaultdict(set)
 mostbet_cache: dict              = {}   # cache: key -> (timestamp, data)
-MOSTBET_CACHE_TTL = 300           # 5 minutes cache
+MOSTBET_CACHE_TTL = 600           # 10 minutes cache
 last_events:   dict[str, list]  = {}
 ht_sent:       set              = set()
+
+UNIVERSAL_WELCOME = """ProqnozAI
+
+Azərbaycan: Dil seçin aşağıda
+Русский: Выберите язык ниже
+English: Choose language below
+Türkçe: Aşağıdan dil seçin
+Қазақша: Төменде тілді таңдаңыз
+O'zbek: Quyida tilni tanlang
+العربية: اختر اللغة أدناه
+"""
 
 # ─── DB ───────────────────────────────────────────────────────────────────────
 DB = "bot.db"
@@ -143,11 +154,23 @@ SPORTS_LABELS = {
            "tennis": "Теннис", "hockey": "Хоккей", "all": "Все виды"},
     "en": {"football": "Football", "ufc": "UFC/MMA", "nba": "Basketball",
            "tennis": "Tennis", "hockey": "Hockey", "all": "All sports"},
+    "tr": {"football": "Futbol", "ufc": "UFC/MMA", "nba": "Basketbol",
+           "tennis": "Tenis", "hockey": "Hokey", "all": "Tümü"},
+    "kz": {"football": "Футбол", "ufc": "UFC/MMA", "nba": "Баскетбол",
+           "tennis": "Теннис", "hockey": "Хоккей", "all": "Барлығы"},
+    "uz": {"football": "Futbol", "ufc": "UFC/MMA", "nba": "Basketbol",
+           "tennis": "Tennis", "hockey": "Xokkey", "all": "Barchasi"},
+    "ar": {"football": "كرة القدم", "ufc": "UFC/MMA", "nba": "كرة السلة",
+           "tennis": "تنس", "hockey": "هوكي", "all": "جميع الرياضات"},
 }
 EXP_LABELS = {
     "az": {"beginner": "Yeni başlayanam", "mid": "Orta səviyyə", "expert": "Təcrübəliyəm"},
     "ru": {"beginner": "Новичок", "mid": "Средний уровень", "expert": "Опытный"},
     "en": {"beginner": "Beginner", "mid": "Intermediate", "expert": "Expert"},
+    "tr": {"beginner": "Yeni başlayan", "mid": "Orta seviye", "expert": "Deneyimli"},
+    "kz": {"beginner": "Жаңадан бастаған", "mid": "Орта деңгей", "expert": "Тәжірибелі"},
+    "uz": {"beginner": "Yangi boshlagan", "mid": "O'rta daraja", "expert": "Tajribali"},
+    "ar": {"beginner": "مبتدئ", "mid": "متوسط", "expert": "خبير"},
 }
 
 def sport_label(uid, val):
@@ -525,13 +548,442 @@ FORMAT:
 ⚠️ Analytical forecast.""",
 "live_tip_prompt": "You are a live betting analyst. Match {match}, {minute} min, score {score}. Event: {event}. Best live bet now. Max 2 sentences.",
 },
+"tr": {
+"choose_lang":   "Dil seçin / Выберите язык / Choose language:",
+"ask_name":      "Hoş geldiniz! Adınızı girin:",
+"reg_done":      "Kayıt tamamlandı! Merhaba, {name}!",
+"already_reg":   "Zaten kayıtlısınız, {name}!",
+"need_reg":      "Önce kayıt olun. /start yazın.",
+"db_blocked":    "Hesabınız engellendi. Yöneticiye başvurun.",
+"blocked":       "Geçici olarak engellendi. {m} dk {s} sn sonra tekrar deneyin.",
+"rate_limit":    "İstek limiti aşıldı. {w} saniye bekleyin. Uyarı: {v}/{max}",
+"auto_blocked":  "Çok fazla istek. {min} dakika engel.",
+"long_text":     "Metin çok uzun.",
+"injection":     "Yalnızca spor sorguları kabul edilir.",
+"no_input":      "Metin yazın veya fotoğraf gönderin.",
+"img_prompt":    "Görseldeki spor etkinliğini belirle ve tahmin ver.",
+"api_overload":  "Servis aşırı yüklendi. Lütfen daha sonra tekrar deneyin.",
+"api_error":     "Bir hata oluştu. Lütfen daha sonra tekrar deneyin.",
+"lang_set":      "Dil Türkçe olarak ayarlandı.",
+"watch_btn":     "Maçı takip et",
+"watch_started": "Maç takip ediliyor: {match}",
+"watch_stopped": "Takip durduruldu: {match}",
+"no_subs":       "Hiçbir maçı takip etmiyorsunuz.",
+"live_goal":     "GOL! {match}\n{minute}. dk: {team}\nSkor: {score}\n\nCanlı bahis:\n{tip}",
+"live_card":     "KART! {match}\n{minute}. dk: {player} ({team}) - {card}\n\nCanlı bahis:\n{tip}",
+"live_halftime": "DEVRE ARASI! {match}\nSkor: {score}\n\nDevre arası bahsi:\n{tip}",
+"live_fulltime": "MAÇ BİTTİ! {match}\nSonuç: {score}",
+"live_alert_goal":     "SİNYAL! {match} - Gol bekleniyor [{minute}. dk]",
+"live_alert_value":    "CANLI DEĞER! {match} - {team} üzerinde değer var [{minute}. dk]",
+"live_alert_pressure": "BASKI! {match} - {team} güçlü baskı yapıyor [{minute}. dk] {stat}",
+"menu_forecast": "Tahmin al",
+"menu_matches":  "Maçlarım",
+"menu_profile":  "Profil",
+"menu_lang":     "Dil değiştir",
+"profile_text":  "PROFİL\n\nAd: {name}\nDil: {lang}\nToplam istek: {total_req}\n\nSpor: {sports}\nDeneyim: {exp}",
+"ob_sports":     "En çok hangi sporu seviyorsunuz?",
+"ob_exp":        "Bahis deneyiminiz nedir?",
+"ob_done":       "Profil hazır! Kişiselleştirilmiş tahminler alacaksınız.\n\nSpor: {sports}\nDeneyim: {exp}",
+"welcome_intro": """ProqnozAI'ye hoş geldiniz!
+
+Ben bir AI spor bahis analistiyim. Yapabileceklerim:
+
+• Herhangi bir maç için tahmin — takım adlarını yazın veya program fotoğrafı gönderin
+• Genişletilmiş analiz — form, faktörler, tüm bahis türleri oranlarla
+• Kısa tahmin — 5 saniyede sadece ana bahis
+• Canlı bildirimler — maçı takip eder, olayları gerçek zamanlı gönderirim
+
+2 hızlı soruyu yanıtlayın — tahminleri kişiselleştireyim.""",
+"post_onboarding": "Hazır! Şimdi bir maç adı yazın — örneğin:\n\nBarcelona Alavés\nReal Madrid Arsenal\nPSG Manchester City\n\nYa da maç programının fotoğrafını gönderin.",
+"choose_forecast": "Tahmin formatını seçin:",
+"btn_extended":    "Genişletilmiş",
+"btn_short":       "Kısa",
+"system_prompt": """Sen profesyonel bir spor analistisin. Dürüst ve gerçekçi tahminler ver.
+
+PROFİL: Spor: {sports} | Deneyim: {exp}
+
+KRİTİK KURALLAR:
+0. Eğer istekte "GERÇEK MOSTBET ORANLAR" varsa — YALNIZCA bu oranları kullan
+1. Kulübü terk eden oyuncuları HİÇBİR ZAMAN belirtme
+2. Güncel kadroyu bilmiyorsan "kadro kontrol ediliyor" yaz — UYDURMA
+3. Oranlar GERÇEKÇI olmalı: favori 1.20-1.60, eşit 2.20-3.00, toplam 2.5 1.70-2.10
+4. Markdown ** KULLANMA — yalnızca metin ve emoji
+
+FORMAT:
+
+🏆 [Takım A] — [Takım B]
+📍 [Turnuva] | [Tarih]
+
+📊 FORM (son 5 maç):
+[Takım A]: [sonuçlar]
+[Takım B]: [sonuçlar]
+
+🔍 ANALİZ:
+[Maça gerçekten etkileyen 3-4 faktör]
+
+🎯 TAHMİN:
+
+1X2:
+[Takım A] — XX% | Oran: X.XX-X.XX
+Beraberlik — XX% | Oran: X.XX-X.XX
+[Takım B] — XX% | Oran: X.XX-X.XX
+
+⚽ Toplam Gol:
+2.5 Üstü — XX% | Oran: X.XX-X.XX
+2.5 Altı — XX% | Oran: X.XX-X.XX
+
+🔥 İki Takım da Gol Atar:
+Evet — XX% | Oran: X.XX-X.XX
+Hayır — XX% | Oran: X.XX-X.XX
+
+📐 Handikap:
+[Takım A] (-1) — XX% | Oran: X.XX-X.XX
+[Takım B] (+1) — XX% | Oran: X.XX-X.XX
+
+⚡ EN İYİ BAHİS:
+[Bahis türü] | Oran: X.XX-X.XX
+[Neden bu bahis — 1-2 cümle]
+
+⚠️ Analitik tahmin, sonuç garantisi değildir.""",
+"short_prompt": """Kısa tahmin. Profil: {sports} | {exp}
+KURALLAR: gerçekçi oranlar, ayrılan oyuncuları belirtme, yalnızca metin ve emoji.
+FORMAT:
+🏆 [Takım A] — [Takım B] | [Turnuva]
+🎯 Favori: [Takım] XX% | Oran X.XX-X.XX
+⚽ 2.5 Üstü: XX% | Oran X.XX-X.XX
+🔥 İTGO Evet: XX% | Oran X.XX-X.XX
+⚡ BAHİS: [tür] | Oran X.XX-X.XX
+[1 cümle]
+⚠️ Analitik tahmin.""",
+"live_tip_prompt": "Canlı bahis analistisin. Maç {match}, {minute}. dk, skor {score}. Olay: {event}. En iyi canlı bahsi öner. Kısa, max 2 cümle.",
+},
+
+"kz": {
+"choose_lang":   "Dil seçin / Выберите язык / Choose language:",
+"ask_name":      "Қош келдіңіз! Атыңызды енгізіңіз:",
+"reg_done":      "Тіркеу аяқталды! Сәлем, {name}!",
+"already_reg":   "Сіз бұрыннан тіркелгенсіз, {name}!",
+"need_reg":      "Алдымен тіркеліңіз. /start жазыңыз.",
+"db_blocked":    "Сіздің аккаунтыңыз бұғатталған. Әкімшіге хабарласыңыз.",
+"blocked":       "Уақытша бұғатталдыңыз. {m} мин {s} сек кейін қайталаңыз.",
+"rate_limit":    "Сұраныс шегі асылды. {w} секунд күтіңіз. Ескерту: {v}/{max}",
+"auto_blocked":  "Тым көп сұраныс. {min} минуттық бұғат.",
+"long_text":     "Мәтін тым ұзын.",
+"injection":     "Тек спорт сұраныстары қабылданады.",
+"no_input":      "Мәтін жазыңыз немесе фото жіберіңіз.",
+"img_prompt":    "Суреттегі спорт оқиғасын анықта және болжам бер.",
+"api_overload":  "Қызмет шамадан тыс жүктелді. Кейінірек қайталаңыз.",
+"api_error":     "Қате орын алды. Кейінірек қайталаңыз.",
+"lang_set":      "Тіл қазақша деп орнатылды.",
+"watch_btn":     "Матчты бақылау",
+"watch_started": "Матч бақылануда: {match}",
+"watch_stopped": "Бақылау тоқтатылды: {match}",
+"no_subs":       "Сіз ешбір матчты бақыламайсыз.",
+"live_goal":     "ГОЛ! {match}\n{minute} мин: {team}\nЕсеп: {score}\n\nТікелей эфир ставкасы:\n{tip}",
+"live_card":     "КАРТОЧКА! {match}\n{minute} мин: {player} ({team}) - {card}\n\nТікелей ставка:\n{tip}",
+"live_halftime": "ҮЗІЛІС! {match}\nЕсеп: {score}\n\nҮзіліс ставкасы:\n{tip}",
+"live_fulltime": "МАЧ АЯҚТАЛДЫ! {match}\nҚорытынды: {score}",
+"live_alert_goal":     "СИГНАЛ! {match} - гол күтілуде [{minute} мин]",
+"live_alert_value":    "ТІКЕЛЕЙ ЭФИР! {match} - {team} бойынша мән бар [{minute} мин]",
+"live_alert_pressure": "ҚЫСЫМ! {match} - {team} күшті шабуыл [{minute} мин] {stat}",
+"menu_forecast": "Болжам алу",
+"menu_matches":  "Матчтарым",
+"menu_profile":  "Профиль",
+"menu_lang":     "Тілді өзгерту",
+"profile_text":  "ПРОФИЛЬ\n\nАты: {name}\nТіл: {lang}\nЖалпы сұраныстар: {total_req}\n\nСпорт: {sports}\nТәжірибе: {exp}",
+"ob_sports":     "Қандай спортты ұнатасыз?",
+"ob_exp":        "Ставкалардағы тәжірибеңіз қандай?",
+"ob_done":       "Профиль дайын! Жекелендірілген болжамдар аласыз.\n\nСпорт: {sports}\nТәжірибе: {exp}",
+"welcome_intro": """ProqnozAI-ге қош келдіңіз!
+
+Мен AI спорт ставкалар аналитигімін. Не істей аламын:
+
+• Кез келген матч болжамы — командалар атын жазыңыз немесе кесте фотосын жіберіңіз
+• Толық талдау — форма, факторлар, барлық ставка түрлері коэффициенттермен
+• Қысқа болжам — 5 секундта негізгі ставка
+• Тікелей хабарламалар — матчты бақылаймын, оқиғаларды нақты уақытта жіберемін
+
+2 сұраққа жауап беріңіз — болжамдарды жекелендіремін.""",
+"post_onboarding": "Дайын! Матч атын жазыңыз — мысалы:\n\nБарселона Алавес\nРеал Мадрид Арсенал\nПСЖ Манчестер Сити\n\nНемесе матч кестесінің фотосын жіберіңіз.",
+"choose_forecast": "Болжам форматын таңдаңыз:",
+"btn_extended":    "Толық",
+"btn_short":       "Қысқаша",
+"system_prompt": """Сен кәсіби спорт аналитикісің. Адал және нақты болжамдар бер.
+
+ПРОФИЛЬ: Спорт: {sports} | Тәжірибе: {exp}
+
+МАҢЫЗДЫ ЕРЕЖЕЛЕР:
+0. Егер сұранымда "НАҚТЫ MOSTBET КОЭФФИЦИЕНТТЕРІ" болса — ТЕК осыларды қолдан
+1. Клубты тастаған ойыншыларды ЕШҚАшан атама
+2. Қолданыстағы құраманы білмесең "құрам тексерілуде" деп жаз — ОЙДАН ШЫҒАРМА
+3. Коэффициенттер НАҚТЫ болуы керек: фаворит 1.20-1.60, тең 2.20-3.00, тотал 2.5 1.70-2.10
+4. Markdown ** ҚОЛДАНБА — тек мәтін және emoji
+
+ФОРМАТ:
+
+🏆 [Команда А] — [Команда Б]
+📍 [Турнир] | [Күні]
+
+📊 ФОРМА (соңғы 5 матч):
+[Команда А]: [нәтижелер]
+[Команда Б]: [нәтижелер]
+
+🔍 ТАЛДАУ:
+[Матчқа нақты әсер ететін 3-4 фактор]
+
+🎯 БОЛЖАМ:
+
+1X2:
+[Команда А] — XX% | Коэф: X.XX-X.XX
+Тең — XX% | Коэф: X.XX-X.XX
+[Команда Б] — XX% | Коэф: X.XX-X.XX
+
+⚽ Жалпы гол:
+2.5 Жоғары — XX% | Коэф: X.XX-X.XX
+2.5 Төмен — XX% | Коэф: X.XX-X.XX
+
+🔥 Екі команда да гол соғады:
+Иә — XX% | Коэф: X.XX-X.XX
+Жоқ — XX% | Коэф: X.XX-X.XX
+
+⚡ ЕҢ ЖАҚСЫ СТАВКА:
+[Ставка түрі] | Коэф: X.XX-X.XX
+[Неге дәл осы ставка — 1-2 сөйлем]
+
+⚠️ Аналитикалық болжам, нәтиже кепілі емес.""",
+"short_prompt": """Қысқа болжам. Профиль: {sports} | {exp}
+ЕРЕЖЕЛЕР: нақты коэффициенттер, кеткен ойыншыларды атама, тек мәтін және emoji.
+FORMAT:
+🏆 [А] — [Б] | [Турнир]
+🎯 Фаворит: [Команда] XX% | Коэф X.XX-X.XX
+⚽ 2.5 жоғары: XX% | Коэф X.XX-X.XX
+🔥 Екеуі де: Иә XX% | Коэф X.XX-X.XX
+⚡ СТАВКА: [түрі] | Коэф X.XX-X.XX
+[1 сөйлем]
+⚠️ Аналитикалық болжам.""",
+"live_tip_prompt": "Тікелей ставка аналитигісің. Матч {match}, {minute} мин, есеп {score}. Оқиға: {event}. Үздік тікелей ставканы ұсын. Қысқа, максимум 2 сөйлем.",
+},
+
+"uz": {
+"choose_lang":   "Dil seçin / Выберите язык / Choose language:",
+"ask_name":      "Xush kelibsiz! Ismingizni kiriting:",
+"reg_done":      "Ro'yxatdan o'tish yakunlandi! Salom, {name}!",
+"already_reg":   "Siz allaqachon ro'yxatdan o'tgansiz, {name}!",
+"need_reg":      "Avval ro'yxatdan o'ting. /start yozing.",
+"db_blocked":    "Hisobingiz bloklangan. Administrator bilan bog'laning.",
+"blocked":       "Vaqtincha bloklandi. {m} daq {s} soniyadan keyin qayta urinib ko'ring.",
+"rate_limit":    "So'rovlar limiti oshib ketdi. {w} soniya kuting. Ogohlantirish: {v}/{max}",
+"auto_blocked":  "Juda ko'p so'rovlar. {min} daqiqalik blok.",
+"long_text":     "Matn juda uzun.",
+"injection":     "Faqat sport so'rovlari qabul qilinadi.",
+"no_input":      "Matn yozing yoki rasm yuboring.",
+"img_prompt":    "Rasmdagi sport tadbirini aniqlang va bashorat bering.",
+"api_overload":  "Xizmat haddan tashqari yuklangan. Keyinroq urinib ko'ring.",
+"api_error":     "Xatolik yuz berdi. Keyinroq urinib ko'ring.",
+"lang_set":      "Til o'zbek tiliga o'rnatildi.",
+"watch_btn":     "O'yinni kuzatish",
+"watch_started": "O'yin kuzatilmoqda: {match}",
+"watch_stopped": "Kuzatish to'xtatildi: {match}",
+"no_subs":       "Siz hech qanday o'yinni kuzatmayapsiz.",
+"live_goal":     "GOL! {match}\n{minute} daq: {team}\nHisob: {score}\n\nLive stavka:\n{tip}",
+"live_card":     "KARTOCHKA! {match}\n{minute} daq: {player} ({team}) - {card}\n\nLive stavka:\n{tip}",
+"live_halftime": "TANAFFUS! {match}\nHisob: {score}\n\nTanaffus stavkasi:\n{tip}",
+"live_fulltime": "O'YIN TUGADI! {match}\nYakuniy: {score}",
+"live_alert_goal":     "SIGNAL! {match} - gol kutilmoqda [{minute} daq]",
+"live_alert_value":    "LIVE VALUE! {match} - {team} bo'yicha qiymat bor [{minute} daq]",
+"live_alert_pressure": "BOSIM! {match} - {team} kuchli hujum [{minute} daq] {stat}",
+"menu_forecast": "Bashorat olish",
+"menu_matches":  "Mening o'yinlarim",
+"menu_profile":  "Profil",
+"menu_lang":     "Tilni o'zgartirish",
+"profile_text":  "PROFIL\n\nIsm: {name}\nTil: {lang}\nJami so'rovlar: {total_req}\n\nSport: {sports}\nTajriba: {exp}",
+"ob_sports":     "Qaysi sportni yaxshi ko'rasiz?",
+"ob_exp":        "Stavkalardagi tajribangiz qanday?",
+"ob_done":       "Profil tayyor! Shaxsiylashtirilgan bashoratlar olasiz.\n\nSport: {sports}\nTajriba: {exp}",
+"welcome_intro": """ProqnozAI-ga xush kelibsiz!
+
+Men AI sport stavkalari analitikiman. Nima qila olaman:
+
+• Istalgan o'yin uchun bashorat — jamoa nomini yozing yoki jadval rasmini yuboring
+• Kengaytirilgan tahlil — shakl, omillar, barcha stavka turlari koeffitsientlar bilan
+• Qisqa bashorat — 5 soniyada asosiy stavka
+• Jonli bildirishnomalar — o'yinni kuzataman, voqealarni real vaqtda yuboraman
+
+2 ta tezkor savolga javob bering — bashoratlarni shaxsiylashtiraman.""",
+"post_onboarding": "Tayyor! O'yin nomini yozing — masalan:\n\nBarcelona Alavés\nReal Madrid Arsenal\nPSG Manchester City\n\nYoki o'yin jadvalining rasmini yuboring.",
+"choose_forecast": "Bashorat formatini tanlang:",
+"btn_extended":    "Kengaytirilgan",
+"btn_short":       "Qisqa",
+"system_prompt": """Sen professional sport analitikisisan. Halol va real bashoratlar ber.
+
+PROFIL: Sport: {sports} | Tajriba: {exp}
+
+MUHIM QOIDALAR:
+0. Agar so'rovda "HAQIQIY MOSTBET KOEFFITSIENTLARI" bo'lsa — FAQAT shularni ishlatish
+1. Klubni tark etgan o'yinchilarni HECH QACHON eslatma
+2. Joriy tarkibni bilmasang "tarkib tekshirilmoqda" deb yoz — O'YLAB TOPMA
+3. Koeffitsientlar REAL bo'lishi kerak: favorit 1.20-1.60, teng 2.20-3.00, total 2.5 1.70-2.10
+4. Markdown ** ISHLATMA — faqat matn va emoji
+
+FORMAT:
+
+🏆 [Jamoa A] — [Jamoa B]
+📍 [Turnir] | [Sana]
+
+📊 SHAKL (oxirgi 5 o'yin):
+[Jamoa A]: [natijalar]
+[Jamoa B]: [natijalar]
+
+🔍 TAHLIL:
+[O'yinga haqiqatan ta'sir qiluvchi 3-4 omil]
+
+🎯 BASHORAT:
+
+1X2:
+[Jamoa A] — XX% | Koef: X.XX-X.XX
+Durrang — XX% | Koef: X.XX-X.XX
+[Jamoa B] — XX% | Koef: X.XX-X.XX
+
+⚽ Jami gol:
+2.5 dan yuqori — XX% | Koef: X.XX-X.XX
+2.5 dan past — XX% | Koef: X.XX-X.XX
+
+🔥 Ikkala jamoa ham gol uradi:
+Ha — XX% | Koef: X.XX-X.XX
+Yo'q — XX% | Koef: X.XX-X.XX
+
+⚡ ENG YAXSHI STAVKA:
+[Stavka turi] | Koef: X.XX-X.XX
+[Nima uchun — 1-2 jumla]
+
+⚠️ Tahliliy bashorat, natija kafolati emas.""",
+"short_prompt": """Qisqa bashorat. Profil: {sports} | {exp}
+QOIDALAR: real koeffitsientlar, ketgan o'yinchilarni eslatma, faqat matn va emoji.
+FORMAT:
+🏆 [A] — [B] | [Turnir]
+🎯 Favorit: [Jamoa] XX% | Koef X.XX-X.XX
+⚽ 2.5 yuqori: XX% | Koef X.XX-X.XX
+🔥 Ikkala ham: Ha XX% | Koef X.XX-X.XX
+⚡ STAVKA: [turi] | Koef X.XX-X.XX
+[1 jumla]
+⚠️ Tahliliy bashorat.""",
+"live_tip_prompt": "Sen jonli stavkalar analitikisisan. O'yin {match}, {minute} daq, hisob {score}. Voqea: {event}. Eng yaxshi jonli stavkani tavsiya et. Qisqa, max 2 jumla.",
+},
+
+"ar": {
+"choose_lang":   "Dil seçin / Выберите язык / Choose language:",
+"ask_name":      "مرحباً! أدخل اسمك:",
+"reg_done":      "اكتمل التسجيل! مرحباً، {name}!",
+"already_reg":   "أنت مسجل بالفعل، {name}!",
+"need_reg":      "سجّل أولاً. اكتب /start.",
+"db_blocked":    "حسابك محظور. تواصل مع المسؤول.",
+"blocked":       "محظور مؤقتاً. حاول بعد {m} دقيقة {s} ثانية.",
+"rate_limit":    "تجاوزت حد الطلبات. انتظر {w} ثانية. تحذير: {v}/{max}",
+"auto_blocked":  "طلبات كثيرة جداً. حظر لمدة {min} دقيقة.",
+"long_text":     "النص طويل جداً.",
+"injection":     "يُقبل فقط استفسارات رياضية.",
+"no_input":      "اكتب نصاً أو أرسل صورة.",
+"img_prompt":    "حدد الحدث الرياضي في الصورة وقدّم توقعاً.",
+"api_overload":  "الخدمة مثقلة. حاول لاحقاً.",
+"api_error":     "حدث خطأ. حاول لاحقاً.",
+"lang_set":      "تم ضبط اللغة على العربية.",
+"watch_btn":     "تابع المباراة",
+"watch_started": "جارٍ متابعة: {match}",
+"watch_stopped": "توقفت المتابعة: {match}",
+"no_subs":       "لا تتابع أي مباراة.",
+"live_goal":     "هدف! {match}\n{minute} د: {team}\nالنتيجة: {score}\n\nرهان مباشر:\n{tip}",
+"live_card":     "بطاقة! {match}\n{minute} د: {player} ({team}) - {card}\n\nرهان مباشر:\n{tip}",
+"live_halftime": "نهاية الشوط! {match}\nالنتيجة: {score}\n\nرهان الاستراحة:\n{tip}",
+"live_fulltime": "انتهت المباراة! {match}\nالنتيجة النهائية: {score}",
+"live_alert_goal":     "إشارة! {match} - هدف متوقع [{minute} د]",
+"live_alert_value":    "قيمة مباشرة! {match} - قيمة على {team} [{minute} د]",
+"live_alert_pressure": "ضغط! {match} - {team} يضغط بقوة [{minute} د] {stat}",
+"menu_forecast": "احصل على توقع",
+"menu_matches":  "مبارياتي",
+"menu_profile":  "الملف الشخصي",
+"menu_lang":     "تغيير اللغة",
+"profile_text":  "الملف الشخصي\n\nالاسم: {name}\nاللغة: {lang}\nإجمالي الطلبات: {total_req}\n\nالرياضة: {sports}\nالخبرة: {exp}",
+"ob_sports":     "ما هي الرياضة المفضلة لديك؟",
+"ob_exp":        "ما هي خبرتك في الرهانات؟",
+"ob_done":       "الملف جاهز! ستحصل على توقعات مخصصة.\n\nالرياضة: {sports}\nالخبرة: {exp}",
+"welcome_intro": """مرحباً بك في ProqnozAI!
+
+أنا محلل رهانات رياضية بالذكاء الاصطناعي. ما أستطيع فعله:
+
+• توقع لأي مباراة — اكتب أسماء الفرق أو أرسل صورة الجدول
+• تحليل موسع — الشكل، العوامل، جميع أنواع الرهانات مع الأرباح
+• توقع قصير — الرهان الرئيسي في 5 ثوانٍ
+• تنبيهات مباشرة — أتابع المباراة وأرسل الأحداث فورياً
+
+أجب على سؤالين سريعين لأخصص التوقعات لك.""",
+"post_onboarding": "جاهز! اكتب الآن اسم المباراة — مثلاً:\n\nبرشلونة ألافيس\nريال مدريد آرسنال\nPSG مانشستر سيتي\n\nأو أرسل صورة جدول المباريات.",
+"choose_forecast": "اختر تنسيق التوقع:",
+"btn_extended":    "موسع",
+"btn_short":       "مختصر",
+"system_prompt": """أنت محلل رياضي محترف. قدم توقعات صادقة وواقعية.
+
+الملف: الرياضة: {sports} | الخبرة: {exp}
+
+قواعد حرجة:
+0. إذا كان الطلب يحتوي على "أرباح موستبت الحقيقية" — استخدم هذه الأرباح فقط
+1. لا تذكر أبداً لاعبين غادروا الناديكن
+2. إذا كنت لا تعرف التشكيلة الحالية اكتب "قيد المراجعة" — لا تخترع
+3. الأرباح يجب أن تكون واقعية: المفضل 1.20-1.60، متكافئ 2.20-3.00، الأهداف 2.5 بين 1.70-2.10
+4. لا تستخدم Markdown ** — نص عادي وإيموجي فقط
+
+الصيغة:
+
+🏆 [الفريق أ] — [الفريق ب]
+📍 [البطولة] | [التاريخ]
+
+📊 الشكل (آخر 5 مباريات):
+[الفريق أ]: [النتائج]
+[الفريق ب]: [النتائج]
+
+🔍 التحليل:
+[3-4 عوامل تؤثر فعلاً على المباراة]
+
+🎯 التوقع:
+
+1X2:
+[الفريق أ] — XX% | ربح: X.XX-X.XX
+تعادل — XX% | ربح: X.XX-X.XX
+[الفريق ب] — XX% | ربح: X.XX-X.XX
+
+⚽ إجمالي الأهداف:
+أكثر من 2.5 — XX% | ربح: X.XX-X.XX
+أقل من 2.5 — XX% | ربح: X.XX-X.XX
+
+🔥 كلا الفريقين يسجل:
+نعم — XX% | ربح: X.XX-X.XX
+لا — XX% | ربح: X.XX-X.XX
+
+⚡ أفضل رهان:
+[نوع الرهان] | ربح: X.XX-X.XX
+[السبب — جملة أو جملتان]
+
+⚠️ توقع تحليلي، ليس ضماناً للنتيجة.""",
+"short_prompt": """توقع قصير. الملف: {sports} | {exp}
+القواعد: أرباح واقعية، لا تذكر لاعبين مغادرين، نص وإيموجي فقط.
+الصيغة:
+🏆 [أ] — [ب] | [البطولة]
+🎯 المفضل: [الفريق] XX% | ربح X.XX-X.XX
+⚽ أكثر 2.5: XX% | ربح X.XX-X.XX
+🔥 كلاهما يسجل: نعم XX% | ربح X.XX-X.XX
+⚡ الرهان: [النوع] | ربح X.XX-X.XX
+[جملة واحدة]
+⚠️ توقع تحليلي.""",
+"live_tip_prompt": "أنت محلل رهانات مباشرة. المباراة {match}، الدقيقة {minute}، النتيجة {score}. الحدث: {event}. اقترح أفضل رهان مباشر. مختصر، جملتان كحد أقصى.",
+},
+
 }
 
 LANG_NAMES = {"az": "Azerbaycan", "ru": "Русский", "en": "English"}
 
 def tr(uid, key, **kw):
     lang = db_lang(uid)
-    txt  = T.get(lang, T["ru"]).get(key, T["ru"].get(key, ""))
+    # Fallback chain: current lang -> ru -> en -> empty string
+    txt = T.get(lang, {}).get(key) or T.get("ru", {}).get(key) or T.get("en", {}).get(key, "")
     if key in ("system_prompt", "short_prompt"):
         u = db_get(uid) or {}
         kw.setdefault("sports", sport_label(uid, u.get("sports", "-")))
@@ -546,11 +998,23 @@ OB_SPORTS = {
            ("Теннис", "tennis"), ("Хоккей", "hockey"), ("Все виды", "all")],
     "en": [("Football", "football"), ("UFC/MMA", "ufc"), ("Basketball", "nba"),
            ("Tennis", "tennis"), ("Hockey", "hockey"), ("All sports", "all")],
+    "tr": [("Futbol", "football"), ("UFC/MMA", "ufc"), ("Basketbol", "nba"),
+           ("Tenis", "tennis"), ("Hokey", "hockey"), ("Tümü", "all")],
+    "kz": [("Футбол", "football"), ("UFC/MMA", "ufc"), ("Баскетбол", "nba"),
+           ("Теннис", "tennis"), ("Хоккей", "hockey"), ("Барлығы", "all")],
+    "uz": [("Futbol", "football"), ("UFC/MMA", "ufc"), ("Basketbol", "nba"),
+           ("Tennis", "tennis"), ("Xokkey", "hockey"), ("Barchasi", "all")],
+    "ar": [("كرة القدم", "football"), ("UFC/MMA", "ufc"), ("كرة السلة", "nba"),
+           ("تنس", "tennis"), ("هوكي", "hockey"), ("جميع الرياضات", "all")],
 }
 OB_EXP = {
     "az": [("Yeni başlayanam", "beginner"), ("Orta səviyyə", "mid"), ("Təcrübəliyəm", "expert")],
     "ru": [("Новичок", "beginner"), ("Средний уровень", "mid"), ("Опытный", "expert")],
     "en": [("Beginner", "beginner"), ("Intermediate", "mid"), ("Expert", "expert")],
+    "tr": [("Yeni başlayan", "beginner"), ("Orta seviye", "mid"), ("Deneyimli", "expert")],
+    "kz": [("Жаңадан бастаған", "beginner"), ("Орта деңгей", "mid"), ("Тәжірибелі", "expert")],
+    "uz": [("Yangi boshlagan", "beginner"), ("O'rta daraja", "mid"), ("Tajribali", "expert")],
+    "ar": [("مبتدئ", "beginner"), ("متوسط", "mid"), ("خبير", "expert")],
 }
 
 def ob_kb(items):
@@ -566,11 +1030,21 @@ def main_menu(uid):
     ], resize_keyboard=True)
 
 def lang_kb():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("Azerbaycan", callback_data="lang_az"),
-        InlineKeyboardButton("Русский",    callback_data="lang_ru"),
-        InlineKeyboardButton("English",    callback_data="lang_en"),
-    ]])
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Azərbaycan", callback_data="lang_az"),
+            InlineKeyboardButton("Русский",    callback_data="lang_ru"),
+            InlineKeyboardButton("English",    callback_data="lang_en"),
+        ],
+        [
+            InlineKeyboardButton("Türkçe",     callback_data="lang_tr"),
+            InlineKeyboardButton("Қазақша",    callback_data="lang_kz"),
+            InlineKeyboardButton("O'zbek",     callback_data="lang_uz"),
+        ],
+        [
+            InlineKeyboardButton("العربية",    callback_data="lang_ar"),
+        ],
+    ])
 
 # ─── Security ─────────────────────────────────────────────────────────────────
 def uinfo(update): u = update.effective_user; return f"id={u.id} @{u.username or '-'} {u.full_name}"
@@ -662,9 +1136,12 @@ async def live_tip(uid, match, minute, score, event):
 # ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
 
 async def _mostbet_load_matches() -> list:
-    """Load all matches from Mostbet with caching (5 min TTL)."""
+    """Load all matches from Mostbet with caching (10 min TTL).
+    Returns cached data if available, even if stale, on 429."""
     cache_key = "all_matches"
     now = time.time()
+
+    # Return fresh cache
     if cache_key in mostbet_cache:
         ts, data = mostbet_cache[cache_key]
         if now - ts < MOSTBET_CACHE_TTL:
@@ -672,33 +1149,57 @@ async def _mostbet_load_matches() -> list:
 
     all_matches = []
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as h:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as h:
             last_id = 0
+            page = 0
             while True:
+                # Rate limit: wait between pages
+                if page > 0:
+                    await asyncio.sleep(1.0)
+                page += 1
                 r = await h.get(
                     f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/list",
-                    headers={"Accept": "application/json"},
+                    headers={"Accept": "application/json", "User-Agent": "ProqnozAI/1.0"},
                     params={"lastId": last_id, "locale": "en", "limit": 100}
                 )
                 if r.status_code == 429:
-                    logger.warning("Mostbet 429 - using cached data")
+                    logger.warning(f"Mostbet 429 on page {page}")
+                    # Return stale cache if exists
+                    if cache_key in mostbet_cache:
+                        _, stale = mostbet_cache[cache_key]
+                        logger.info(f"Returning stale cache: {len(stale)} matches")
+                        return stale
+                    # Wait and retry once
+                    await asyncio.sleep(3)
+                    r2 = await h.get(
+                        f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/list",
+                        headers={"Accept": "application/json", "User-Agent": "ProqnozAI/1.0"},
+                        params={"lastId": 0, "locale": "en", "limit": 100}
+                    )
+                    if r2.status_code == 200:
+                        matches = r2.json().get("lineMatches", [])
+                        all_matches.extend(matches)
                     break
                 if r.status_code != 200:
-                    logger.error(f"Mostbet list error: {r.status_code}")
+                    logger.error(f"Mostbet list error: {r.status_code} | {r.text[:100]}")
                     break
                 matches = r.json().get("lineMatches", [])
                 if not matches:
                     break
                 all_matches.extend(matches)
+                logger.info(f"Mostbet loaded page {page}: {len(matches)} matches (total: {len(all_matches)})")
                 if len(matches) < 100:
                     break
                 last_id = matches[-1]["id"]
-                await asyncio.sleep(0.3)  # gentle rate limit
     except Exception as e:
         logger.error(f"_mostbet_load_matches: {e}")
+        if cache_key in mostbet_cache:
+            _, stale = mostbet_cache[cache_key]
+            return stale
 
     if all_matches:
         mostbet_cache[cache_key] = (now, all_matches)
+        logger.info(f"Mostbet cache updated: {len(all_matches)} total matches")
     return all_matches
 
 
@@ -790,6 +1291,11 @@ def format_mostbet_odds(odds: dict, lang: str) -> str:
     if not any([odds["w1"], odds["over25"], odds["btts_yes"]]):
         return ""
     lines = []
+    # Map new langs to existing formats
+    if lang in ("kz", "uz", "tr"):
+        lang = "ru"
+    elif lang == "ar":
+        lang = "en"
     if lang == "ru":
         lines.append("РЕАЛЬНЫЕ КОЭФФИЦИЕНТЫ MOSTBET:")
         if odds["w1"] and odds["x"] and odds["w2"]:
@@ -926,7 +1432,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tr(uid, "already_reg", name=u["display_name"] or user.first_name),
             reply_markup=main_menu(uid)); return
     reg_step[uid] = "awaiting_lang"
-    await update.message.reply_text(tr(uid, "choose_lang"), reply_markup=lang_kb())
+    await update.message.reply_text(UNIVERSAL_WELCOME, reply_markup=lang_kb())
 
 
 async def lang_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1207,17 +1713,20 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Admin ────────────────────────────────────────────────────────────────────
 def is_adm(update): return (update.effective_user.id if update.effective_user else 0) == ADMIN_ID
 
+def admin_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Статистика",             callback_data="adm_stats")],
+        [InlineKeyboardButton("Рассылка — Все",         callback_data="adm_broadcast_all")],
+        [InlineKeyboardButton("Рассылка по языку/гео",  callback_data="adm_broadcast_geo")],
+        [InlineKeyboardButton("Заблокированные",        callback_data="adm_blocklist")],
+        [InlineKeyboardButton("Поиск пользователя",     callback_data="adm_search")],
+        [InlineKeyboardButton("Изменить язык",           callback_data="adm_setlang")],
+        [InlineKeyboardButton("Live подписки",           callback_data="adm_live")],
+    ])
+
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_adm(update): return
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Статистика",         callback_data="adm_stats")],
-        [InlineKeyboardButton("Рассылка",           callback_data="adm_broadcast")],
-        [InlineKeyboardButton("Заблокированные",    callback_data="adm_blocklist")],
-        [InlineKeyboardButton("Поиск пользователя", callback_data="adm_search")],
-        [InlineKeyboardButton("Изменить язык",       callback_data="adm_setlang")],
-        [InlineKeyboardButton("Live подписки",       callback_data="adm_live")],
-    ])
-    await update.message.reply_text("АДМИН ПАНЕЛЬ", reply_markup=kb)
+    await update.message.reply_text("АДМИН ПАНЕЛЬ", reply_markup=admin_kb())
 
 async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -1262,9 +1771,43 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = int(data.split("_")[2]); db_set(uid, "is_blocked", 1)
         await q.edit_message_text(f"Пользователь {uid} заблокирован.", reply_markup=back)
 
-    elif data == "adm_broadcast":
-        context.user_data["adm_act"] = "broadcast"
-        await q.edit_message_text("Отправьте текст рассылки.\n/cancel — отмена.")
+    elif data == "adm_broadcast_all":
+        context.user_data["adm_act"] = "broadcast_all"
+        with con() as c:
+            cnt = c.execute("SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0").fetchone()[0]
+        await q.edit_message_text(
+            f"РАССЫЛКА ВСЕМ\n\nПолучателей: {cnt}\n\nОтправьте текст. /cancel — отмена.")
+
+    elif data == "adm_broadcast_geo":
+        # Show geo selection
+        geo_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Azərbaycan (az)", callback_data="adm_bcast_az")],
+            [InlineKeyboardButton("Русский (ru)",    callback_data="adm_bcast_ru")],
+            [InlineKeyboardButton("English (en)",    callback_data="adm_bcast_en")],
+            [InlineKeyboardButton("Türkçe (tr)",     callback_data="adm_bcast_tr")],
+            [InlineKeyboardButton("Қазақша (kz)",    callback_data="adm_bcast_kz")],
+            [InlineKeyboardButton("O'zbek (uz)",     callback_data="adm_bcast_uz")],
+            [InlineKeyboardButton("العربية (ar)",    callback_data="adm_bcast_ar")],
+            [InlineKeyboardButton("Назад",           callback_data="adm_back")],
+        ])
+        # Show counts per lang
+        with con() as c:
+            langs = c.execute("SELECT lang, COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 GROUP BY lang").fetchall()
+        lang_counts = {l: n for l, n in langs}
+        lines = ["РАССЫЛКА ПО ГЕО\n\nВыберите аудиторию:\n"]
+        for code, name in [("az","Azərbaycan"),("ru","Русский"),("en","English"),
+                           ("tr","Türkçe"),("kz","Қазақша"),("uz","O'zbek"),("ar","العربية")]:
+            lines.append(f"{name}: {lang_counts.get(code, 0)} чел.")
+        await q.edit_message_text("\n".join(lines), reply_markup=geo_kb)
+
+    elif data.startswith("adm_bcast_"):
+        lang_code = data.split("_")[2]
+        with con() as c:
+            cnt = c.execute("SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 AND lang=?", (lang_code,)).fetchone()[0]
+        lang_names = {"az":"Azərbaycan","ru":"Русский","en":"English","tr":"Türkçe","kz":"Қазақша","uz":"O'zbek","ar":"العربية"}
+        context.user_data["adm_act"] = f"broadcast_geo_{lang_code}"
+        await q.edit_message_text(
+            f"РАССЫЛКА: {lang_names.get(lang_code, lang_code)}\n\nПолучателей: {cnt}\n\nОтправьте текст. /cancel — отмена.")
 
     elif data == "adm_search":
         context.user_data["adm_act"] = "search"
@@ -1282,15 +1825,7 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("\n".join(lines) if len(lines) > 1 else "Нет активных.", reply_markup=back)
 
     elif data == "adm_back":
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Статистика",         callback_data="adm_stats")],
-            [InlineKeyboardButton("Рассылка",           callback_data="adm_broadcast")],
-            [InlineKeyboardButton("Заблокированные",    callback_data="adm_blocklist")],
-            [InlineKeyboardButton("Поиск пользователя", callback_data="adm_search")],
-            [InlineKeyboardButton("Изменить язык",       callback_data="adm_setlang")],
-            [InlineKeyboardButton("Live подписки",       callback_data="adm_live")],
-        ])
-        await q.edit_message_text("АДМИН ПАНЕЛЬ", reply_markup=kb)
+        await q.edit_message_text("АДМИН ПАНЕЛЬ", reply_markup=admin_kb())
 
 async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_adm(update): return
@@ -1299,7 +1834,7 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("adm_act")
     text = update.message.text or ""
 
-    if act == "broadcast":
+    if act == "broadcast_all":
         uids = db_all_uids()
         status = await update.message.reply_text(f"Рассылка для {len(uids)} пользователей...")
         ok = fail = 0
@@ -1308,6 +1843,22 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception: fail += 1
             await asyncio.sleep(0.05)
         await status.edit_text(f"Готово! Доставлено: {ok} | Не доставлено: {fail}")
+
+    elif act.startswith("broadcast_geo_"):
+        lang_code = act.split("_")[2]
+        with con() as c:
+            uids = [r[0] for r in c.execute(
+                "SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0 AND lang=?",
+                (lang_code,)).fetchall()]
+        lang_names = {"az":"Azərbaycan","ru":"Русский","en":"English","tr":"Türkçe","kz":"Қазақша","uz":"O'zbek","ar":"العربية"}
+        status = await update.message.reply_text(
+            f"Рассылка [{lang_names.get(lang_code, lang_code)}]: {len(uids)} пользователей...")
+        ok = fail = 0
+        for uid in uids:
+            try: await context.bot.send_message(chat_id=uid, text=text); ok += 1
+            except Exception: fail += 1
+            await asyncio.sleep(0.05)
+        await status.edit_text(f"Готово! [{lang_names.get(lang_code, lang_code)}]\nДоставлено: {ok} | Не доставлено: {fail}")
 
     elif act == "search":
         results = db_search(text.strip())
@@ -1364,6 +1915,14 @@ def main():
     async def post_init(application):
         asyncio.create_task(poller(application))
         asyncio.create_task(daily_push(application))
+        asyncio.create_task(_preload_mostbet())
+
+    async def _preload_mostbet():
+        """Preload Mostbet matches at startup with delay."""
+        await asyncio.sleep(5)  # wait for bot to fully start
+        logger.info("Preloading Mostbet matches...")
+        matches = await _mostbet_load_matches()
+        logger.info(f"Mostbet preload done: {len(matches)} matches")
 
     app.post_init = post_init
     logger.info("ProqnozAI v5 started")
