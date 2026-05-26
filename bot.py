@@ -2140,6 +2140,7 @@ def admin_kb():
         [InlineKeyboardButton("Поиск пользователя",     callback_data="adm_search")],
         [InlineKeyboardButton("Изменить язык",           callback_data="adm_setlang")],
         [InlineKeyboardButton("Live подписки",           callback_data="adm_live")],
+        [InlineKeyboardButton("Тест Mostbet API",        callback_data="adm_test_mostbet")],
     ])
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2241,6 +2242,32 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for mid, uids in live_subs.items():
             if uids: lines.append(f"Матч {mid}: {len(uids)} подписчиков")
         await q.edit_message_text("\n".join(lines) if len(lines) > 1 else "Нет активных.", reply_markup=back)
+
+    elif data == "adm_test_mostbet":
+        await q.edit_message_text("Тестирую Mostbet API...")
+        try:
+            matches = await _mostbet_load_matches()
+            if not matches:
+                await q.edit_message_text(
+                    "MOSTBET API\n\nСтатус: НЕТ ДАННЫХ\n\nВозможные причины:\n- 429 Rate limit\n- IP не в whitelist\n- Проблемы с сетью",
+                    reply_markup=back)
+            else:
+                # Show first 5 matches
+                sample = matches[:5]
+                lines = [f"MOSTBET API\n\nСтатус: РАБОТАЕТ\nВсего матчей: {len(matches)}\n\nПримеры:"]
+                for m in sample:
+                    t1 = m.get("team1Title", "?")
+                    t2 = m.get("team2Title", "?")
+                    league = m.get("lineSubCategory", "")
+                    live = "LIVE" if m.get("isLive") else "Pre"
+                    lines.append(f"[{live}] {t1} vs {t2} ({league})")
+                cache_ts = mostbet_cache.get("all_matches", (0, []))[0]
+                if cache_ts:
+                    age = int(time.time() - cache_ts)
+                    lines.append(f"\nКэш: {age} сек назад")
+                await q.edit_message_text("\n".join(lines), reply_markup=back)
+        except Exception as e:
+            await q.edit_message_text(f"MOSTBET API\n\nОшибка: {e}", reply_markup=back)
 
     elif data == "adm_back":
         await q.edit_message_text("АДМИН ПАНЕЛЬ", reply_markup=admin_kb())
