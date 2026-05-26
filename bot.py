@@ -32,6 +32,8 @@ violations:    dict[int, int]   = defaultdict(int)
 blocked_until: dict[int, float] = {}
 reg_step:      dict[int, str]   = {}
 live_subs:     dict[str, set]   = defaultdict(set)
+mostbet_cache: dict              = {}   # cache: key -> (timestamp, data)
+MOSTBET_CACHE_TTL = 300           # 5 minutes cache
 last_events:   dict[str, list]  = {}
 ht_sent:       set              = set()
 
@@ -659,10 +661,18 @@ async def live_tip(uid, match, minute, score, event):
 
 # ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
 
-async def mostbet_find_match(team1: str, team2: str) -> dict | None:
-    """Search match in Mostbet by team names, return match with lineId."""
+async def _mostbet_load_matches() -> list:
+    """Load all matches from Mostbet with caching (5 min TTL)."""
+    cache_key = "all_matches"
+    now = time.time()
+    if cache_key in mostbet_cache:
+        ts, data = mostbet_cache[cache_key]
+        if now - ts < MOSTBET_CACHE_TTL:
+            return data
+
+    all_matches = []
     try:
-        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as h:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as h:
             last_id = 0
             while True:
                 r = await h.get(
@@ -670,33 +680,54 @@ async def mostbet_find_match(team1: str, team2: str) -> dict | None:
                     headers={"Accept": "application/json"},
                     params={"lastId": last_id, "locale": "en", "limit": 100}
                 )
+                if r.status_code == 429:
+                    logger.warning("Mostbet 429 - using cached data")
+                    break
                 if r.status_code != 200:
                     logger.error(f"Mostbet list error: {r.status_code}")
-                    return None
-                data = r.json()
-                matches = data.get("lineMatches", [])
+                    break
+                matches = r.json().get("lineMatches", [])
                 if not matches:
                     break
-                t1 = team1.lower(); t2 = team2.lower()
-                for m in matches:
-                    t1m = m.get("team1Title", "").lower()
-                    t2m = m.get("team2Title", "").lower()
-                    mt  = m.get("matchTitle", "").lower()
-                    if (t1 in t1m or t1 in mt) and (t2 in t2m or t2 in mt):
-                        return m
-                    if (t2 in t1m or t2 in mt) and (t1 in t2m or t1 in mt):
-                        return m
-                # Pagination
-                last_id = matches[-1]["id"]
+                all_matches.extend(matches)
                 if len(matches) < 100:
                     break
+                last_id = matches[-1]["id"]
+                await asyncio.sleep(0.3)  # gentle rate limit
+    except Exception as e:
+        logger.error(f"_mostbet_load_matches: {e}")
+
+    if all_matches:
+        mostbet_cache[cache_key] = (now, all_matches)
+    return all_matches
+
+
+async def mostbet_find_match(team1: str, team2: str) -> dict | None:
+    """Search match in Mostbet by team names using cached list."""
+    try:
+        matches = await _mostbet_load_matches()
+        t1 = team1.lower(); t2 = team2.lower()
+        for m in matches:
+            t1m = m.get("team1Title", "").lower()
+            t2m = m.get("team2Title", "").lower()
+            mt  = m.get("matchTitle", "").lower()
+            if (t1 in t1m or t1 in mt) and (t2 in t2m or t2 in mt):
+                return m
+            if (t2 in t1m or t2 in mt) and (t1 in t2m or t1 in mt):
+                return m
     except Exception as e:
         logger.error(f"mostbet_find_match: {e}")
     return None
 
 
 async def mostbet_get_odds(line_id: int) -> dict:
-    """Get odds for a match from Mostbet. Returns dict with key bet types."""
+    """Get odds for a match from Mostbet with caching."""
+    cache_key = f"odds_{line_id}"
+    now = time.time()
+    if cache_key in mostbet_cache:
+        ts, data = mostbet_cache[cache_key]
+        if now - ts < MOSTBET_CACHE_TTL:
+            return data
     result = {
         "w1": None, "x": None, "w2": None,
         "over25": None, "under25": None,
@@ -744,6 +775,7 @@ async def mostbet_get_odds(line_id: int) -> dict:
                         result["btts_no"] = odd_f
     except Exception as e:
         logger.error(f"mostbet_get_odds: {e}")
+    mostbet_cache[f"odds_{line_id}"] = (time.time(), result)
     return result
 
 
@@ -1002,7 +1034,7 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Claude request ────────────────────────────────────────────────────────
     try:
         resp = client.messages.create(
-            model="claude-sonnet-4-5-20251001",
+            model="claude-haiku-4-5-20251001",
             max_tokens=max_tok,
             system=sys_prompt,
             messages=[{"role": "user", "content": content}]
