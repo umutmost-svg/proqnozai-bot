@@ -21,6 +21,7 @@ ANTHROPIC_KEY   = os.environ["ANTHROPIC_API_KEY"]
 ADMIN_ID        = int(os.environ.get("ADMIN_ID", "0"))
 FOOTBALL_KEY    = os.environ.get("FOOTBALL_API_KEY", "")
 APIFOOTBALL_KEY = os.environ.get("APIFOOTBALL_KEY", "")
+MOSTBET_BASE    = "https://mostbet2.com"   # Odds Checker API (IP whitelisted)
 
 RATE_WINDOW = 60; RATE_MAX = 5; SPAM_AFTER = 3; SPAM_DUR = 600
 client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
@@ -651,6 +652,134 @@ async def live_tip(uid, match, minute, score, event):
             messages=[{"role": "user", "content": p}])
         return r.content[0].text
     except Exception: return ""
+
+
+# ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
+
+async def mostbet_find_match(team1: str, team2: str) -> dict | None:
+    """Search match in Mostbet by team names, return match with lineId."""
+    try:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as h:
+            last_id = 0
+            while True:
+                r = await h.get(
+                    f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/list",
+                    headers={"Accept": "application/json"},
+                    params={"lastId": last_id, "locale": "en", "limit": 100}
+                )
+                if r.status_code != 200:
+                    logger.error(f"Mostbet list error: {r.status_code}")
+                    return None
+                data = r.json()
+                matches = data.get("lineMatches", [])
+                if not matches:
+                    break
+                t1 = team1.lower(); t2 = team2.lower()
+                for m in matches:
+                    t1m = m.get("team1Title", "").lower()
+                    t2m = m.get("team2Title", "").lower()
+                    mt  = m.get("matchTitle", "").lower()
+                    if (t1 in t1m or t1 in mt) and (t2 in t2m or t2 in mt):
+                        return m
+                    if (t2 in t1m or t2 in mt) and (t1 in t2m or t1 in mt):
+                        return m
+                # Pagination
+                last_id = matches[-1]["id"]
+                if len(matches) < 100:
+                    break
+    except Exception as e:
+        logger.error(f"mostbet_find_match: {e}")
+    return None
+
+
+async def mostbet_get_odds(line_id: int) -> dict:
+    """Get odds for a match from Mostbet. Returns dict with key bet types."""
+    result = {
+        "w1": None, "x": None, "w2": None,
+        "over25": None, "under25": None,
+        "btts_yes": None, "btts_no": None,
+        "url": f"{MOSTBET_BASE}/line/{line_id}"
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as h:
+            r = await h.get(
+                f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/{line_id}/outcomes/list",
+                headers={"Accept": "application/json"},
+                params={"locale": "en", "limit": 100}
+            )
+            if r.status_code != 200:
+                logger.error(f"Mostbet odds error: {r.status_code}")
+                return result
+            outcomes = r.json().get("lineMatchOutcomes", [])
+            for o in outcomes:
+                title = o.get("outcomeTitle", "").lower()
+                group = o.get("groupTitle", "").lower()
+                odd   = o.get("odd", "")
+                try:
+                    odd_f = float(odd)
+                except Exception:
+                    continue
+                # 1X2
+                if group in ("winner", "match result", "1x2", "result"):
+                    if "1" == title or "w1" in title or "(1)" in title:
+                        result["w1"] = odd_f
+                    elif "x" == title or "draw" in title or "x" in title:
+                        result["x"] = odd_f
+                    elif "2" == title or "w2" in title or "(2)" in title:
+                        result["w2"] = odd_f
+                # Total over/under 2.5
+                if "2.5" in title or "2.5" in group:
+                    if "over" in title or "more" in title or "больше" in title or "(+)" in title:
+                        result["over25"] = odd_f
+                    elif "under" in title or "less" in title or "меньше" in title or "(-)" in title:
+                        result["under25"] = odd_f
+                # BTTS
+                if "both" in group or "btts" in group or "gg" in group or "обе" in group:
+                    if "yes" in title or "да" in title:
+                        result["btts_yes"] = odd_f
+                    elif "no" in title or "нет" in title:
+                        result["btts_no"] = odd_f
+    except Exception as e:
+        logger.error(f"mostbet_get_odds: {e}")
+    return result
+
+
+def format_mostbet_odds(odds: dict, lang: str) -> str:
+    """Format Mostbet odds as a clean string to inject into Claude prompt."""
+    if not any([odds["w1"], odds["over25"], odds["btts_yes"]]):
+        return ""
+    lines = []
+    if lang == "ru":
+        lines.append("РЕАЛЬНЫЕ КОЭФФИЦИЕНТЫ MOSTBET:")
+        if odds["w1"] and odds["x"] and odds["w2"]:
+            lines.append(f"1X2: П1={odds['w1']} | X={odds['x']} | П2={odds['w2']}")
+        if odds["over25"] and odds["under25"]:
+            lines.append(f"Тотал 2.5: Больше={odds['over25']} | Меньше={odds['under25']}")
+        if odds["btts_yes"] and odds["btts_no"]:
+            lines.append(f"Обе забьют: Да={odds['btts_yes']} | Нет={odds['btts_no']}")
+        lines.append(f"Ссылка: {odds['url']}")
+        lines.append("ВАЖНО: используй ИМЕННО эти коэффициенты в прогнозе, не выдумывай свои.")
+    elif lang == "az":
+        lines.append("MOSTBET REAL KEFLƏRİ:")
+        if odds["w1"] and odds["x"] and odds["w2"]:
+            lines.append(f"1X2: Q1={odds['w1']} | X={odds['x']} | Q2={odds['w2']}")
+        if odds["over25"] and odds["under25"]:
+            lines.append(f"Total 2.5: Üstündə={odds['over25']} | Altında={odds['under25']}")
+        if odds["btts_yes"] and odds["btts_no"]:
+            lines.append(f"Hər ikisi qol: Bəli={odds['btts_yes']} | Xeyr={odds['btts_no']}")
+        lines.append(f"Link: {odds['url']}")
+        lines.append("VACIB: proqnozda MƏHZbu kefləri istifadə et.")
+    else:
+        lines.append("REAL MOSTBET ODDS:")
+        if odds["w1"] and odds["x"] and odds["w2"]:
+            lines.append(f"1X2: W1={odds['w1']} | X={odds['x']} | W2={odds['w2']}")
+        if odds["over25"] and odds["under25"]:
+            lines.append(f"Total 2.5: Over={odds['over25']} | Under={odds['under25']}")
+        if odds["btts_yes"] and odds["btts_no"]:
+            lines.append(f"BTTS: Yes={odds['btts_yes']} | No={odds['btts_no']}")
+        lines.append(f"Link: {odds['url']}")
+        lines.append("IMPORTANT: use THESE exact odds in the forecast, do not invent your own.")
+    return "\n".join(lines)
 
 # ─── Live Poller ──────────────────────────────────────────────────────────────
 async def poller(app):
