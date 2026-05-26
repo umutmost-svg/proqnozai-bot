@@ -706,14 +706,20 @@ async def mostbet_find_match(team1: str, team2: str) -> dict | None:
     """Search match in Mostbet by team names using cached list."""
     try:
         matches = await _mostbet_load_matches()
-        t1 = team1.lower(); t2 = team2.lower()
+        t1 = team1.lower().strip(); t2 = team2.lower().strip()
+        if not t1 or not t2 or t1 == t2:
+            return None
         for m in matches:
             t1m = m.get("team1Title", "").lower()
             t2m = m.get("team2Title", "").lower()
             mt  = m.get("matchTitle", "").lower()
+            # Direct match
             if (t1 in t1m or t1 in mt) and (t2 in t2m or t2 in mt):
                 return m
             if (t2 in t1m or t2 in mt) and (t1 in t2m or t1 in mt):
+                return m
+            # Reverse check in matchTitle
+            if t1 in mt and t2 in mt:
                 return m
     except Exception as e:
         logger.error(f"mostbet_find_match: {e}")
@@ -1003,19 +1009,28 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Fetch real Mostbet odds ───────────────────────────────────────────────
     if text:
-        words = text.split()
-        # Try different word combinations to find the match
+        words = [w.strip(".,!?-") for w in text.split() if len(w) > 2]
+        # Try ALL combinations of words as team1 and team2
         pairs_to_try = []
-        if len(words) >= 2:
-            pairs_to_try.append((words[0], words[-1]))
-        if len(words) >= 3:
-            pairs_to_try.append((words[0], words[1]))
-            pairs_to_try.append((" ".join(words[:2]), words[-1]))
-        if len(words) >= 4:
-            pairs_to_try.append((" ".join(words[:2]), " ".join(words[2:])))
+        # Single words
+        for i, w1 in enumerate(words):
+            for j, w2 in enumerate(words):
+                if i != j:
+                    pairs_to_try.append((w1, w2))
+        # Two-word combos
+        for i in range(len(words)-1):
+            tw = " ".join(words[i:i+2])
+            for j, w in enumerate(words):
+                if j != i and j != i+1:
+                    pairs_to_try.append((tw, w))
+                    pairs_to_try.append((w, tw))
 
         mb_match = None
+        seen = set()
         for t1, t2 in pairs_to_try:
+            key = (t1.lower(), t2.lower())
+            if key in seen: continue
+            seen.add(key)
             mb_match = await mostbet_find_match(t1, t2)
             if mb_match:
                 break
@@ -1029,7 +1044,12 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 logger.info(f"Mostbet match found but no odds | uid={uid}")
         else:
-            logger.info(f"Mostbet match not found for: {text[:50]} | uid={uid}")
+            try:
+                sample = await _mostbet_load_matches()
+                sample_names = [f"{m.get('team1Title','?')} vs {m.get('team2Title','?')}" for m in sample[:5]]
+                logger.info(f"Mostbet no match for '{text[:40]}' | Sample: {sample_names}")
+            except Exception:
+                logger.info(f"Mostbet match not found for: {text[:50]} | uid={uid}")
 
     # ── Claude request ────────────────────────────────────────────────────────
     try:
