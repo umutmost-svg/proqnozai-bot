@@ -79,11 +79,37 @@ def db_init():
             created_at TEXT DEFAULT (datetime('now')),
             PRIMARY KEY (user_id, match_id)
         );
+        CREATE TABLE IF NOT EXISTS favorites (
+            user_id INTEGER, team TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (user_id, team)
+        );
+        CREATE TABLE IF NOT EXISTS forecast_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER, query TEXT, forecast TEXT,
+            match_name TEXT DEFAULT '',
+            feedback INTEGER DEFAULT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
         """)
 db_init()
 
-def db_ensure(uid, uname):
-    with con() as c: c.execute("INSERT OR IGNORE INTO users (user_id,username) VALUES (?,?)", (uid, uname))
+def detect_lang(tg_lang: str | None) -> str:
+    """Map Telegram language_code to bot language."""
+    if not tg_lang: return "ru"
+    code = tg_lang.lower()[:2]
+    mapping = {
+        "az": "az", "ru": "ru", "uk": "ru", "be": "ru",
+        "tr": "tr", "kk": "kz", "uz": "uz",
+        "ar": "ar", "fa": "ar",
+        "en": "en",
+    }
+    return mapping.get(code, "ru")
+
+def db_ensure(uid, uname, tg_lang=None):
+    lang = detect_lang(tg_lang)
+    with con() as c:
+        c.execute("INSERT OR IGNORE INTO users (user_id,username,lang) VALUES (?,?,?)", (uid, uname, lang))
 
 def db_set(uid, field, val):
     with con() as c: c.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (val, uid))
@@ -145,6 +171,49 @@ def db_user_lsubs(uid) -> list[dict]:
     with con() as c:
         rows = c.execute("SELECT match_id,match_name FROM live_subscriptions WHERE user_id=?", (uid,)).fetchall()
     return [dict(match_id=r[0], match_name=r[1]) for r in rows]
+
+# ─── Favorites ────────────────────────────────────────────────────────────────
+def db_add_fav(uid, team):
+    with con() as c: c.execute("INSERT OR IGNORE INTO favorites (user_id,team) VALUES (?,?)", (uid, team))
+
+def db_del_fav(uid, team):
+    with con() as c: c.execute("DELETE FROM favorites WHERE user_id=? AND team=?", (uid, team))
+
+def db_get_favs(uid) -> list[str]:
+    with con() as c:
+        return [r[0] for r in c.execute("SELECT team FROM favorites WHERE user_id=?", (uid,)).fetchall()]
+
+def db_is_fav(uid, team) -> bool:
+    with con() as c:
+        return bool(c.execute("SELECT 1 FROM favorites WHERE user_id=? AND team=?", (uid, team)).fetchone())
+
+# ─── History ──────────────────────────────────────────────────────────────────
+def db_save_history(uid, query, forecast, match_name=""):
+    with con() as c:
+        c.execute("INSERT INTO forecast_history (user_id,query,forecast,match_name) VALUES (?,?,?,?)",
+                  (uid, query[:200], forecast[:2000], match_name))
+        # Keep only last 10 per user
+        c.execute("DELETE FROM forecast_history WHERE user_id=? AND id NOT IN "
+                  "(SELECT id FROM forecast_history WHERE user_id=? ORDER BY id DESC LIMIT 10)",
+                  (uid, uid))
+
+def db_get_history(uid) -> list[dict]:
+    with con() as c:
+        rows = c.execute(
+            "SELECT id,query,forecast,match_name,feedback,created_at FROM forecast_history "
+            "WHERE user_id=? ORDER BY id DESC LIMIT 5", (uid,)).fetchall()
+    return [dict(id=r[0], query=r[1], forecast=r[2], match_name=r[3],
+                 feedback=r[4], created_at=r[5]) for r in rows]
+
+def db_set_feedback(history_id, feedback):
+    with con() as c:
+        c.execute("UPDATE forecast_history SET feedback=? WHERE id=?", (feedback, history_id))
+
+def db_feedback_stats(uid) -> dict:
+    with con() as c:
+        total = c.execute("SELECT COUNT(*) FROM forecast_history WHERE user_id=? AND feedback IS NOT NULL", (uid,)).fetchone()[0]
+        wins  = c.execute("SELECT COUNT(*) FROM forecast_history WHERE user_id=? AND feedback=1", (uid,)).fetchone()[0]
+    return dict(total=total, wins=wins, pct=round(wins/total*100) if total > 0 else 0)
 
 # ─── Human-readable label maps ────────────────────────────────────────────────
 SPORTS_LABELS = {
@@ -300,6 +369,27 @@ FORMAT:
 [1 cümlə — niyə]
 ⚠️ Analitik proqnozdur.""",
 "live_tip_prompt": "Canlı mərc analitikisən. Oyun: {match}, {minute}. dəq, hesab {score}. Hadisə: {event}. Ən yaxşı canlı mərci tövsiyə et. Qısa, maks 2 cümlə.",
+"fav_added":    "Sevimlilərə əlavə edildi: {team}",
+"fav_removed":  "Sevimlilərdən silindi: {team}",
+"fav_list":     "Sevimli komandalarınız:",
+"fav_empty":    "Sevimli komandanız yoxdur. /fav yazın.",
+"fav_btn_add":  "Sevimlilərə əlavə et",
+"fav_btn_del":  "Sevimlilərdən sil",
+"history_title":"Son proqnozlarınız:",
+"history_empty":"Hələ proqnoz almamısınız.",
+"history_item": "{n}. {query} — {date}",
+"feedback_ask": "Bu proqnoz oynadımı?",
+"feedback_yes": "Bəli, oynadı!",
+"feedback_no":  "Xeyr, oynamadı",
+"feedback_done":"Təşəkkürlər! Statistika yeniləndi.",
+"winrate":      "Proqnoz dəqiqliyi: {pct}% ({wins}/{total})",
+"express_ask":  "Neçə matç? (2-5)",
+"express_title":"Günün ekspresi:",
+"compare_ask":  "İki komanda adını yazın. Məsələn: Barcelona Real Madrid",
+"menu_history": "Tarix",
+"menu_favs":    "Sevimlilər",
+"menu_express": "Ekspress",
+
 },
 
 "ru": {
@@ -425,6 +515,27 @@ FORMAT:
 [1 предложение — почему]
 ⚠️ Аналитический прогноз.""",
 "live_tip_prompt": "Ты лайв-аналитик. Матч {match}, {minute} мин, счёт {score}. Событие: {event}. Дай лучшую лайв-ставку. Коротко, макс 2 предложения.",
+"fav_added": "Добавлено в избранное: {team}",
+"fav_removed": "Удалено из избранного: {team}",
+"fav_list": "Ваши избранные команды:",
+"fav_empty": "Нет избранных команд. Напишите /fav.",
+"fav_btn_add": "В избранное",
+"fav_btn_del": "Убрать из избранного",
+"history_title": "Ваши последние прогнозы:",
+"history_empty": "У вас ещё нет прогнозов.",
+"history_item": "{n}. {query} — {date}",
+"feedback_ask": "Этот прогноз сыграл?",
+"feedback_yes": "Да, сыграло!",
+"feedback_no": "Нет, не сыграло",
+"feedback_done": "Спасибо! Статистика обновлена.",
+"winrate": "Точность прогнозов: {pct}% ({wins}/{total})",
+"express_ask": "Сколько матчей? (2-5)",
+"express_title": "Экспресс дня:",
+"compare_ask": "Напишите две команды. Например: Barcelona Real Madrid",
+"menu_history": "История",
+"menu_favs": "Избранное",
+"menu_express": "Экспресс",
+
 },
 
 "en": {
@@ -547,6 +658,27 @@ FORMAT:
 [1 sentence — why]
 ⚠️ Analytical forecast.""",
 "live_tip_prompt": "You are a live betting analyst. Match {match}, {minute} min, score {score}. Event: {event}. Best live bet now. Max 2 sentences.",
+"fav_added": "Added to favourites: {team}",
+"fav_removed": "Removed from favourites: {team}",
+"fav_list": "Your favourite teams:",
+"fav_empty": "No favourite teams yet. Type /fav.",
+"fav_btn_add": "Add to favourites",
+"fav_btn_del": "Remove from favourites",
+"history_title": "Your recent forecasts:",
+"history_empty": "No forecasts yet.",
+"history_item": "{n}. {query} — {date}",
+"feedback_ask": "Did this forecast hit?",
+"feedback_yes": "Yes, it hit!",
+"feedback_no": "No, it missed",
+"feedback_done": "Thanks! Stats updated.",
+"winrate": "Forecast accuracy: {pct}% ({wins}/{total})",
+"express_ask": "How many matches? (2-5)",
+"express_title": "Express of the day:",
+"compare_ask": "Type two teams. Example: Barcelona Real Madrid",
+"menu_history": "History",
+"menu_favs": "Favourites",
+"menu_express": "Express",
+
 },
 "tr": {
 "choose_lang":   "Dil seçin / Выберите язык / Choose language:",
@@ -656,6 +788,27 @@ FORMAT:
 [1 cümle]
 ⚠️ Analitik tahmin.""",
 "live_tip_prompt": "Canlı bahis analistisin. Maç {match}, {minute}. dk, skor {score}. Olay: {event}. En iyi canlı bahsi öner. Kısa, max 2 cümle.",
+"fav_added": "Favorilere eklendi: {team}",
+"fav_removed": "Favorilerden kaldırıldı: {team}",
+"fav_list": "Favori takımlarınız:",
+"fav_empty": "Favori takımınız yok. /fav yazın.",
+"fav_btn_add": "Favorilere ekle",
+"fav_btn_del": "Favorilerden kaldır",
+"history_title": "Son tahminleriniz:",
+"history_empty": "Henüz tahmin yok.",
+"history_item": "{n}. {query} — {date}",
+"feedback_ask": "Bu tahmin tuttu mu?",
+"feedback_yes": "Evet, tuttu!",
+"feedback_no": "Hayır, tutmadı",
+"feedback_done": "Teşekkürler! İstatistik güncellendi.",
+"winrate": "Tahmin doğruluğu: {pct}% ({wins}/{total})",
+"express_ask": "Kaç maç? (2-5)",
+"express_title": "Günün ekspresi:",
+"compare_ask": "İki takım adı yazın. Örnek: Barcelona Real Madrid",
+"menu_history": "Geçmiş",
+"menu_favs": "Favoriler",
+"menu_express": "Ekspres",
+
 },
 
 "kz": {
@@ -762,6 +915,27 @@ FORMAT:
 [1 сөйлем]
 ⚠️ Аналитикалық болжам.""",
 "live_tip_prompt": "Тікелей ставка аналитигісің. Матч {match}, {minute} мин, есеп {score}. Оқиға: {event}. Үздік тікелей ставканы ұсын. Қысқа, максимум 2 сөйлем.",
+"fav_added": "Таңдаулыларға қосылды: {team}",
+"fav_removed": "Таңдаулылардан жойылды: {team}",
+"fav_list": "Таңдаулы командаларыңыз:",
+"fav_empty": "Таңдаулы командалар жоқ. /fav жазыңыз.",
+"fav_btn_add": "Таңдаулыларға қос",
+"fav_btn_del": "Таңдаулылардан алып тастау",
+"history_title": "Соңғы болжамдарыңыз:",
+"history_empty": "Болжамдар жоқ.",
+"history_item": "{n}. {query} — {date}",
+"feedback_ask": "Бұл болжам ойнады ма?",
+"feedback_yes": "Иә, ойнады!",
+"feedback_no": "Жоқ, ойнамады",
+"feedback_done": "Рахмет! Статистика жаңартылды.",
+"winrate": "Болжам дәлдігі: {pct}% ({wins}/{total})",
+"express_ask": "Неше матч? (2-5)",
+"express_title": "Күннің экспресі:",
+"compare_ask": "Екі команда атын жазыңыз. Мысалы: Barcelona Real Madrid",
+"menu_history": "Тарих",
+"menu_favs": "Таңдаулылар",
+"menu_express": "Экспресс",
+
 },
 
 "uz": {
@@ -868,6 +1042,27 @@ FORMAT:
 [1 jumla]
 ⚠️ Tahliliy bashorat.""",
 "live_tip_prompt": "Sen jonli stavkalar analitikisisan. O'yin {match}, {minute} daq, hisob {score}. Voqea: {event}. Eng yaxshi jonli stavkani tavsiya et. Qisqa, max 2 jumla.",
+"fav_added": "Sevimlilariga qo'shildi: {team}",
+"fav_removed": "Sevimlilardan o'chirildi: {team}",
+"fav_list": "Sevimli jamoalaringiz:",
+"fav_empty": "Sevimli jamoalar yo'q. /fav yozing.",
+"fav_btn_add": "Sevimlilarga qo'shish",
+"fav_btn_del": "Sevimlilardan o'chirish",
+"history_title": "Oxirgi bashoratlaringiz:",
+"history_empty": "Bashoratlar yo'q.",
+"history_item": "{n}. {query} — {date}",
+"feedback_ask": "Bu bashorat o'yndimi?",
+"feedback_yes": "Ha, o'ynadi!",
+"feedback_no": "Yo'q, o'ynamadi",
+"feedback_done": "Rahmat! Statistika yangilandi.",
+"winrate": "Bashorat aniqligi: {pct}% ({wins}/{total})",
+"express_ask": "Nechta o'yin? (2-5)",
+"express_title": "Kunning ekspressi:",
+"compare_ask": "Ikki jamoa nomini yozing. Masalan: Barcelona Real Madrid",
+"menu_history": "Tarix",
+"menu_favs": "Sevimlilar",
+"menu_express": "Ekspress",
+
 },
 
 "ar": {
@@ -974,6 +1169,27 @@ FORMAT:
 [جملة واحدة]
 ⚠️ توقع تحليلي.""",
 "live_tip_prompt": "أنت محلل رهانات مباشرة. المباراة {match}، الدقيقة {minute}، النتيجة {score}. الحدث: {event}. اقترح أفضل رهان مباشر. مختصر، جملتان كحد أقصى.",
+"fav_added": "أضيف إلى المفضلة: {team}",
+"fav_removed": "حُذف من المفضلة: {team}",
+"fav_list": "فرقك المفضلة:",
+"fav_empty": "لا توجد فرق مفضلة. اكتب /fav.",
+"fav_btn_add": "إضافة للمفضلة",
+"fav_btn_del": "حذف من المفضلة",
+"history_title": "توقعاتك الأخيرة:",
+"history_empty": "لا توجد توقعات بعد.",
+"history_item": "{n}. {query} — {date}",
+"feedback_ask": "هل نجح هذا التوقع؟",
+"feedback_yes": "نعم، نجح!",
+"feedback_no": "لا، لم ينجح",
+"feedback_done": "شكراً! تم تحديث الإحصاء.",
+"winrate": "دقة التوقعات: {pct}% ({wins}/{total})",
+"express_ask": "كم مباراة؟ (2-5)",
+"express_title": "إكسبريس اليوم:",
+"compare_ask": "اكتب اسمي الفريقين. مثال: Barcelona Real Madrid",
+"menu_history": "السجل",
+"menu_favs": "المفضلة",
+"menu_express": "إكسبريس",
+
 },
 
 }
@@ -1025,8 +1241,10 @@ def main_menu(uid):
     lang = db_lang(uid)
     tl = T[lang]
     return ReplyKeyboardMarkup([
-        [tl["menu_forecast"], tl["menu_matches"]],
-        [tl["menu_profile"],  tl["menu_lang"]],
+        [tl["menu_forecast"],  tl["menu_express"]],
+        [tl["menu_history"],   tl["menu_favs"]],
+        [tl["menu_matches"],   tl["menu_profile"]],
+        [tl["menu_lang"]],
     ], resize_keyboard=True)
 
 def lang_kb():
@@ -1426,7 +1644,7 @@ async def daily_push(app):
 # ─── Handlers ─────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user; uid = user.id
-    db_ensure(uid, user.username or "")
+    db_ensure(uid, user.username or "", user.language_code)
     if db_is_reg(uid):
         u = db_get(uid)
         await update.message.reply_text(tr(uid, "already_reg", name=u["display_name"] or user.first_name),
@@ -1438,7 +1656,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def lang_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid = q.from_user.id; lang = q.data.split("_")[1]
-    db_ensure(uid, q.from_user.username or ""); db_set(uid, "lang", lang)
+    db_ensure(uid, q.from_user.username or "", q.from_user.language_code); db_set(uid, "lang", lang)
 
     if db_is_reg(uid):
         # Update menu with new language
@@ -1582,7 +1800,27 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             watch_kb = InlineKeyboardMarkup([[InlineKeyboardButton(
                 tr(uid, "watch_btn") + f": {m['name'][:35]}", callback_data=f"watch_{m['id']}")]])
 
-    await context.bot.send_message(chat_id=uid, text=reply, reply_markup=watch_kb)
+    # Save to history
+    db_save_history(uid, text, reply)
+
+    # Build buttons: watch + fav
+    final_kb_rows = []
+    if watch_kb:
+        final_kb_rows.extend(watch_kb.inline_keyboard)
+
+    # Extract team names for fav button
+    words = text.split()
+    if len(words) >= 2 and not db_is_fav(uid, words[0]):
+        final_kb_rows.append([
+            InlineKeyboardButton(tr(uid, "fav_btn_add") + f" {words[0]}", callback_data=f"addfav_{words[0][:30]}"),
+        ])
+        if len(words) >= 2 and words[-1] != words[0] and not db_is_fav(uid, words[-1]):
+            final_kb_rows[-1].append(
+                InlineKeyboardButton(tr(uid, "fav_btn_add") + f" {words[-1]}", callback_data=f"addfav_{words[-1][:30]}")
+            )
+
+    final_kb = InlineKeyboardMarkup(final_kb_rows) if final_kb_rows else None
+    await context.bot.send_message(chat_id=uid, text=reply, reply_markup=final_kb)
 
 
 async def watch_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1625,7 +1863,7 @@ async def matches_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Main message handler ─────────────────────────────────────────────────────
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user; uid = user.id; info = uinfo(update)
-    db_ensure(uid, user.username or "")
+    db_ensure(uid, user.username or "", user.language_code)
     text = update.message.text or update.message.caption or ""
 
     step = reg_step.get(uid)
@@ -1639,12 +1877,18 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Menu routing
     lang = db_lang(uid); tl = T[lang]
-    if text == tl["menu_matches"]: await matches_cmd(update, context); return
-    if text == tl["menu_profile"]: await profile_cmd(update, context); return
+    if text == tl["menu_matches"]:  await matches_cmd(update, context); return
+    if text == tl["menu_profile"]:  await profile_cmd(update, context); return
+    if text == tl["menu_history"]:  await history_cmd(update, context); return
+    if text == tl["menu_favs"]:     await favs_cmd(update, context); return
+    if text == tl["menu_express"]:  await express_cmd(update, context); return
     if text == tl["menu_lang"]:
         await update.message.reply_text(tr(uid, "choose_lang"), reply_markup=lang_kb()); return
     if text == tl["menu_forecast"]:
         await update.message.reply_text(tr(uid, "no_input")); return
+    # Compare handler
+    if context.user_data.get("awaiting_compare"):
+        if await handle_compare(uid, text, context): return
 
     # Security
     blk, secs = sec_blocked(uid)
@@ -1709,6 +1953,180 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton(tl["btn_short"],    callback_data="forecast_short"),
     ]])
     await update.message.reply_text(tl["choose_forecast"], reply_markup=choose_kb)
+
+
+# ─── Favourites ────────────────────────────────────────────────────────────────
+
+async def favs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
+    favs = db_get_favs(uid)
+    if not favs:
+        await update.message.reply_text(tr(uid, "fav_empty")); return
+    lines = [tr(uid, "fav_list")]
+    btns = []
+    for team in favs:
+        lines.append(f"- {team}")
+        btns.append([InlineKeyboardButton(f"X {team}", callback_data=f"delfav_{team[:30]}")])
+    await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(btns))
+
+
+async def fav_toggle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id
+    if q.data.startswith("addfav_"):
+        team = q.data[7:]
+        db_add_fav(uid, team)
+        await q.edit_message_text(q.message.text + "\n\n" + tr(uid, "fav_added", team=team))
+    elif q.data.startswith("delfav_"):
+        team = q.data[7:]
+        db_del_fav(uid, team)
+        await q.edit_message_text(tr(uid, "fav_removed", team=team))
+
+
+# ─── History ──────────────────────────────────────────────────────────────────
+
+async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
+    history = db_get_history(uid)
+    if not history:
+        await update.message.reply_text(tr(uid, "history_empty")); return
+
+    stats = db_feedback_stats(uid)
+    lines = [tr(uid, "history_title")]
+    if stats["total"] > 0:
+        lines.append(tr(uid, "winrate", pct=stats["pct"], wins=stats["wins"], total=stats["total"]))
+    lines.append("")
+    btns = []
+    for i, h in enumerate(history, 1):
+        d = h["created_at"][:10]
+        q_short = h["query"][:40]
+        fb = " ✅" if h["feedback"] == 1 else (" ❌" if h["feedback"] == 0 else "")
+        lines.append(f"{i}. {q_short} ({d}){fb}")
+        if h["feedback"] is None:
+            btns.append([
+                InlineKeyboardButton(f"✅ #{i}", callback_data=f"fb_1_{h['id']}"),
+                InlineKeyboardButton(f"❌ #{i}", callback_data=f"fb_0_{h['id']}"),
+                InlineKeyboardButton(f"🔄 #{i}", callback_data=f"repeat_{h['id']}"),
+            ])
+        else:
+            btns.append([InlineKeyboardButton(f"🔄 Повторить #{i}", callback_data=f"repeat_{h['id']}")])
+    await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(btns))
+
+
+async def history_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id; data = q.data
+
+    if data.startswith("fb_"):
+        parts = data.split("_")
+        feedback = int(parts[1]); hist_id = int(parts[2])
+        db_set_feedback(hist_id, feedback)
+        await q.edit_message_text(tr(uid, "feedback_done"))
+
+    elif data.startswith("repeat_"):
+        hist_id = int(data.split("_")[1])
+        history = db_get_history(uid)
+        item = next((h for h in history if h["id"] == hist_id), None)
+        if not item:
+            await q.edit_message_text(tr(uid, "api_error")); return
+        await q.edit_message_text(item["forecast"][:4000])
+
+
+# ─── Express ──────────────────────────────────────────────────────────────────
+
+async def express_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
+    lang = db_lang(uid)
+    btns = InlineKeyboardMarkup([
+        [InlineKeyboardButton("2", callback_data="expr_2"),
+         InlineKeyboardButton("3", callback_data="expr_3"),
+         InlineKeyboardButton("4", callback_data="expr_4"),
+         InlineKeyboardButton("5", callback_data="expr_5")],
+    ])
+    await update.message.reply_text(T[lang]["express_ask"], reply_markup=btns)
+
+
+async def express_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id; n = int(q.data.split("_")[1])
+    lang = db_lang(uid)
+    await q.edit_message_text("⏳")
+    await context.bot.send_chat_action(chat_id=uid, action="typing")
+
+    u = db_get(uid) or {}
+    sports = SPORTS_LABELS.get(lang, SPORTS_LABELS["ru"]).get(u.get("sports", "football"), "Football")
+    exp = EXP_LABELS.get(lang, EXP_LABELS["ru"]).get(u.get("experience", "beginner"), "Beginner")
+
+    express_prompts = {
+        "az": f"Bu gün keçirilən {n} idman matçı üçün ekspress ставka yarat. Hər matç üçün: komandalar, ən yaxşı mərc növü, kef. Sonunda ümumi kef hesabla. Emoji istifadə et, markdown ** yox. Profil: {sports}.",
+        "ru": f"Составь экспресс на {n} матчей сегодня. Для каждого: команды, лучший тип ставки, коэффициент. В конце посчитай итоговый коэффициент экспресса. Используй emoji, markdown ** не используй. Профиль: {sports}.",
+        "en": f"Build an express bet with {n} matches today. For each: teams, best bet type, odds. At the end calculate total express odds. Use emoji, no markdown **. Profile: {sports}.",
+        "tr": f"Bugün {n} maç için ekspres bahis oluştur. Her biri için: takımlar, en iyi bahis türü, oran. Sonunda toplam ekspres oranını hesapla. Emoji kullan, markdown ** kullanma. Profil: {sports}.",
+        "kz": f"Бүгін {n} матч үшін экспресс жаса. Әрқайсысы үшін: командалар, ең жақсы ставка түрі, коэффициент. Соңында жалпы коэффициентті есепте. Emoji қолдан, markdown ** жоқ. Профиль: {sports}.",
+        "uz": f"Bugun {n} ta o'yin uchun ekspress tuzish. Har biri uchun: jamoalar, eng yaxshi stavka turi, koeffitsient. Oxirida umumiy koeffitsientni hisoblash. Emoji ishlatish, markdown ** yo'q. Profil: {sports}.",
+        "ar": f"أنشئ رهاناً مركباً من {n} مباريات اليوم. لكل مباراة: الفريقان، أفضل نوع رهان، الربح. في النهاية احسب إجمالي الربح. استخدم emoji، بدون markdown **. الملف: {sports}.",
+    }
+    prompt = express_prompts.get(lang, express_prompts["ru"])
+
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=800,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        reply = resp.content[0].text
+    except Exception:
+        reply = tr(uid, "api_error")
+
+    header = T[lang]["express_title"]
+    await context.bot.send_message(chat_id=uid, text=header + "\n\n" + reply)
+
+
+# ─── Compare ──────────────────────────────────────────────────────────────────
+
+async def compare_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not db_is_reg(uid): await update.message.reply_text(tr(uid, "need_reg")); return
+    lang = db_lang(uid)
+    await update.message.reply_text(T[lang]["compare_ask"])
+    context.user_data["awaiting_compare"] = True
+
+
+async def handle_compare(uid: int, text: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if not context.user_data.get("awaiting_compare"): return False
+    context.user_data.pop("awaiting_compare")
+    words = text.strip().split()
+    if len(words) < 2:
+        await context.bot.send_message(chat_id=uid, text=tr(uid, "compare_ask"))
+        return True
+
+    lang = db_lang(uid)
+    await context.bot.send_chat_action(chat_id=uid, action="typing")
+
+    compare_prompts = {
+        "az": f"İki komandanı müqayisə et: {text}. Forma (son 5 matç), baş-başa görüşlər (son 5), güclü/zəif tərəflər, xG statistikası, hücum/müdafiə. Emoji istifadə et, markdown ** yox. Qısa və konkret.",
+        "ru": f"Сравни две команды: {text}. Форма (последние 5 матчей), очные встречи (последние 5), сильные/слабые стороны, xG статистика, атака/защита. Используй emoji, markdown ** не используй. Кратко и по делу.",
+        "en": f"Compare two teams: {text}. Form (last 5 matches), head-to-head (last 5), strengths/weaknesses, xG stats, attack/defense. Use emoji, no markdown **. Brief and factual.",
+        "tr": f"İki takımı karşılaştır: {text}. Form (son 5 maç), karşılıklı maçlar (son 5), güçlü/zayıf yönler, xG istatistikleri. Emoji kullan, markdown ** kullanma. Kısa ve öz.",
+        "kz": f"Екі команданы салыстыр: {text}. Форма (соңғы 5 матч), бетпе-бет кездесулер (соңғы 5), күшті/әлсіз жақтар, xG статистикасы. Emoji қолдан, markdown ** жоқ. Қысқа.",
+        "uz": f"Ikkita jamoani solishtirish: {text}. Shakl (oxirgi 5 o'yin), to'g'ridan-to'g'ri uchrashuvlar (oxirgi 5), kuchli/zaif tomonlar, xG statistikasi. Emoji ishlatish, markdown ** yo'q. Qisqa.",
+        "ar": f"قارن بين فريقين: {text}. الشكل (آخر 5 مباريات)، المواجهات المباشرة (آخر 5)، نقاط القوة والضعف، إحصاءات xG. استخدم emoji، بدون markdown **. موجز.",
+    }
+    prompt = compare_prompts.get(lang, compare_prompts["ru"])
+
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=800,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        reply = resp.content[0].text
+    except Exception:
+        reply = tr(uid, "api_error")
+
+    await context.bot.send_message(chat_id=uid, text=reply)
+    return True
 
 # ─── Admin ────────────────────────────────────────────────────────────────────
 def is_adm(update): return (update.effective_user.id if update.effective_user else 0) == ADMIN_ID
@@ -1903,11 +2321,14 @@ def main():
     app.add_handler(CommandHandler("admin",   admin_cmd))
     app.add_handler(CommandHandler("cancel",  cancel_cmd))
 
-    app.add_handler(CallbackQueryHandler(lang_cb,     pattern=r"^lang_"))
-    app.add_handler(CallbackQueryHandler(ob_cb,       pattern=r"^ob_"))
-    app.add_handler(CallbackQueryHandler(forecast_cb, pattern=r"^forecast_"))
-    app.add_handler(CallbackQueryHandler(watch_cb,    pattern=r"^(watch|unwatch)_"))
-    app.add_handler(CallbackQueryHandler(adm_cb,      pattern=r"^adm_"))
+    app.add_handler(CallbackQueryHandler(lang_cb,       pattern=r"^lang_"))
+    app.add_handler(CallbackQueryHandler(ob_cb,         pattern=r"^ob_"))
+    app.add_handler(CallbackQueryHandler(forecast_cb,   pattern=r"^forecast_"))
+    app.add_handler(CallbackQueryHandler(watch_cb,      pattern=r"^(watch|unwatch)_"))
+    app.add_handler(CallbackQueryHandler(fav_toggle_cb, pattern=r"^(addfav|delfav)_"))
+    app.add_handler(CallbackQueryHandler(history_cb,    pattern=r"^(fb_|repeat_)"))
+    app.add_handler(CallbackQueryHandler(express_cb,    pattern=r"^expr_"))
+    app.add_handler(CallbackQueryHandler(adm_cb,        pattern=r"^adm_"))
 
     app.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_ID), handle_adm_msg), group=0)
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_msg), group=1)
