@@ -219,6 +219,7 @@ Və ya oyun cədvəlinin şəklini göndərin.""",
 PROFİL: İdman: {sports} | Təcrübə: {exp}
 
 VACIB QAYDALAR:
+0. Əgər sorğuda "MOSTBET REAL KEFLƏRİ" varsa — YALNIZ bu kefləri istifadə et, öz keflerini UYDURMA
 1. Komandanı tərk etmiş oyunçuları HEÇ VAXT qeyd etmə
 2. Cari heyəti bilmirsənsə "heyət məlumatı yoxlanılır" yaz — UYDURMА
 3. Keflər REAL olmalıdır: fаvorit 1.20-1.60, bərabər 2.20-3.00, tоtal 2.5 1.70-2.10
@@ -337,6 +338,7 @@ FORMAT:
 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ: Спорт: {sports} | Опыт: {exp}
 
 КРИТИЧЕСКИ ВАЖНЫЕ ПРАВИЛА:
+0. Если в запросе есть "РЕАЛЬНЫЕ КОЭФФИЦИЕНТЫ MOSTBET" — используй ТОЛЬКО эти коэффициенты, не придумывай свои
 1. НИКОГДА не упоминай игроков которые покинули клуб (Мбаппе ушёл из ПСЖ в 2024, Неймар давно не в ПСЖ и т.д.)
 2. Если не знаешь актуальный состав — пиши "состав уточняется" — НЕ ПРИДУМЫВАЙ
 3. Коэффициенты должны быть РЕАЛИСТИЧНЫМИ для букмекеров:
@@ -461,6 +463,7 @@ Or send a photo of the match schedule.""",
 USER PROFILE: Sports: {sports} | Experience: {exp}
 
 CRITICAL RULES:
+0. If the request contains "REAL MOSTBET ODDS" — use ONLY those odds, never invent your own
 1. NEVER mention players who left the club (Mbappe left PSG in 2024, etc.)
 2. If you don't know the current squad — write "squad data pending" — DO NOT invent
 3. Odds must be REALISTIC for bookmakers:
@@ -951,27 +954,68 @@ async def ob_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    uid = q.from_user.id; ftype = q.data
-    content = context.user_data.get("pending_content")
+    uid   = q.from_user.id; ftype = q.data
+    content = list(context.user_data.get("pending_content") or [])
     text    = context.user_data.get("pending_text", "")
     if not content:
         await q.edit_message_text(tr(uid, "no_input")); return
 
-    await q.edit_message_text("...")
+    lang = db_lang(uid)
+    await q.edit_message_text("⏳ Анализирую..." if lang == "ru" else "⏳ Analiz edilir..." if lang == "az" else "⏳ Analysing...")
     await context.bot.send_chat_action(chat_id=uid, action="typing")
 
     if ftype == "forecast_short":
-        sys_prompt = tr(uid, "short_prompt"); max_tok = 350
+        sys_prompt = tr(uid, "short_prompt"); max_tok = 500
     else:
-        sys_prompt = tr(uid, "system_prompt"); max_tok = 1200
+        sys_prompt = tr(uid, "system_prompt"); max_tok = 1500
 
+    # ── Fetch real Mostbet odds ───────────────────────────────────────────────
+    if text:
+        words = text.split()
+        # Try different word combinations to find the match
+        pairs_to_try = []
+        if len(words) >= 2:
+            pairs_to_try.append((words[0], words[-1]))
+        if len(words) >= 3:
+            pairs_to_try.append((words[0], words[1]))
+            pairs_to_try.append((" ".join(words[:2]), words[-1]))
+        if len(words) >= 4:
+            pairs_to_try.append((" ".join(words[:2]), " ".join(words[2:])))
+
+        mb_match = None
+        for t1, t2 in pairs_to_try:
+            mb_match = await mostbet_find_match(t1, t2)
+            if mb_match:
+                break
+
+        if mb_match:
+            mb_odds = await mostbet_get_odds(mb_match["id"])
+            odds_str = format_mostbet_odds(mb_odds, lang)
+            if odds_str:
+                content.append({"type": "text", "text": odds_str})
+                logger.info(f"Mostbet odds OK | uid={uid} match={mb_match.get('matchTitle','?')}")
+            else:
+                logger.info(f"Mostbet match found but no odds | uid={uid}")
+        else:
+            logger.info(f"Mostbet match not found for: {text[:50]} | uid={uid}")
+
+    # ── Claude request ────────────────────────────────────────────────────────
     try:
-        resp = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=max_tok,
-            system=sys_prompt, messages=[{"role": "user", "content": content}])
+        resp = client.messages.create(
+            model="claude-sonnet-4-5-20251001",
+            max_tokens=max_tok,
+            system=sys_prompt,
+            messages=[{"role": "user", "content": content}]
+        )
         reply = resp.content[0].text
-    except anthropic.RateLimitError: reply = tr(uid, "api_overload")
-    except anthropic.APIError as e: logger.error(f"API_ERR {e}"); reply = tr(uid, "api_error")
+        logger.info(f"FORECAST [{ftype}] OK | uid={uid}")
+    except anthropic.RateLimitError:
+        reply = tr(uid, "api_overload")
+    except anthropic.APIError as e:
+        logger.error(f"API_ERR {e} | uid={uid}")
+        reply = tr(uid, "api_error")
 
+    # ── Watch button ──────────────────────────────────────────────────────────
     watch_kb = None
     if text and APIFOOTBALL_KEY:
         ms = await search_match(" ".join(text.split()[:3]))
