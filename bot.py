@@ -186,6 +186,14 @@ def db_user_lsubs(uid) -> list[dict]:
         rows = c.execute("SELECT match_id,match_name FROM live_subscriptions WHERE user_id=?", (uid,)).fetchall()
     return [dict(match_id=r[0], match_name=r[1]) for r in rows]
 
+def db_restore_live_subs():
+    with con() as c:
+        rows = c.execute("SELECT user_id, match_id FROM live_subscriptions").fetchall()
+    for uid, mid in rows:
+        live_subs[mid].add(uid)
+    if rows:
+        logger.info(f"Restored {len(rows)} live subscriptions from DB")
+
 # ─── Favorites ────────────────────────────────────────────────────────────────
 def db_add_fav(uid, team):
     with con() as c: c.execute("INSERT OR IGNORE INTO favorites (user_id,team) VALUES (?,?)", (uid, team))
@@ -1392,7 +1400,8 @@ async def live_tip(uid, match, minute, score, event):
     try:
         lang = db_lang(uid)
         p = T[lang]["live_tip_prompt"].format(match=match, minute=minute, score=score, event=event)
-        r = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=150,
+        r = await asyncio.to_thread(
+            client.messages.create, model="claude-haiku-4-5-20251001", max_tokens=150,
             messages=[{"role": "user", "content": p}])
         return r.content[0].text
     except Exception: return ""
@@ -1705,7 +1714,8 @@ async def parse_match_query(text: str, lang: str) -> dict:
 Return JSON only, no explanation:
 {{"team1": "...", "team2": "...", "date": "DD.MM.YYYY or null", "sport": "football/basketball/ufc/tennis/other"}}
 If you cannot find two teams, return {{"team1": null, "team2": null, "date": null, "sport": "football"}}"""
-        r = client.messages.create(
+        r = await asyncio.to_thread(
+            client.messages.create,
             model="claude-haiku-4-5-20251001", max_tokens=100,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -1921,7 +1931,7 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mb_odds = await mostbet_get_odds(mb_match["id"])
             odds_str = format_mostbet_odds(mb_odds, lang)
             if odds_str:
-                content.append({"type": "text", "text": odds_str})
+                msg_content.append({"type": "text", "text": odds_str})
                 logger.info(f"Mostbet odds OK | uid={uid} match={mb_match.get('matchTitle','?')}")
             else:
                 logger.info(f"Mostbet match found but no odds | uid={uid}")
@@ -1963,12 +1973,14 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Claude request ────────────────────────────────────────────────────────
     try:
-        resp = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=max_tok,
-            system=sys_prompt,
-            messages=[{"role": "user", "content": content}]
-        )
+        async with request_semaphore:
+            resp = await asyncio.to_thread(
+                client.messages.create,
+                model="claude-sonnet-4-6",
+                max_tokens=max_tok,
+                system=sys_prompt,
+                messages=[{"role": "user", "content": msg_content}]
+            )
         reply = resp.content[0].text
         logger.info(f"FORECAST [{ftype}] OK | uid={uid}")
     except anthropic.RateLimitError:
@@ -2381,10 +2393,12 @@ Stavka: [turi] | Koef: X.XX
     prompt = express_prompts.get(lang, express_prompts["ru"])
 
     try:
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=800,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        async with request_semaphore:
+            resp = await asyncio.to_thread(
+                client.messages.create,
+                model="claude-haiku-4-5-20251001", max_tokens=800,
+                messages=[{"role": "user", "content": prompt}]
+            )
         reply = resp.content[0].text
     except Exception:
         reply = tr(uid, "api_error")
@@ -2426,10 +2440,12 @@ async def handle_compare(uid: int, text: str, context: ContextTypes.DEFAULT_TYPE
     prompt = compare_prompts.get(lang, compare_prompts["ru"])
 
     try:
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=800,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        async with request_semaphore:
+            resp = await asyncio.to_thread(
+                client.messages.create,
+                model="claude-haiku-4-5-20251001", max_tokens=800,
+                messages=[{"role": "user", "content": prompt}]
+            )
         reply = resp.content[0].text
     except Exception:
         reply = tr(uid, "api_error")
@@ -2705,6 +2721,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_msg), group=1)
 
     async def post_init(application):
+        db_restore_live_subs()
         asyncio.create_task(poller(application))
         asyncio.create_task(daily_push(application))
         asyncio.create_task(_preload_mostbet())
