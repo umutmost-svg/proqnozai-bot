@@ -91,6 +91,20 @@ def db_init():
             feedback INTEGER DEFAULT NULL,
             created_at TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS conversation (
+            user_id INTEGER PRIMARY KEY,
+            messages TEXT DEFAULT '[]',
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS odds_alerts (
+            user_id INTEGER, match_id TEXT, market TEXT,
+            last_odd REAL, created_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (user_id, match_id, market)
+        );
+        CREATE TABLE IF NOT EXISTS request_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER, created_at TEXT DEFAULT (datetime('now'))
+        );
         """)
 db_init()
 
@@ -215,6 +229,32 @@ def db_feedback_stats(uid) -> dict:
         wins  = c.execute("SELECT COUNT(*) FROM forecast_history WHERE user_id=? AND feedback=1", (uid,)).fetchone()[0]
     return dict(total=total, wins=wins, pct=round(wins/total*100) if total > 0 else 0)
 
+# ─── Conversation memory ─────────────────────────────────────────────────────
+
+import json
+
+def db_get_conv(uid) -> list:
+    """Get last 3 conversation turns for context."""
+    with con() as c:
+        row = c.execute("SELECT messages FROM conversation WHERE user_id=?", (uid,)).fetchone()
+    if not row: return []
+    try: return json.loads(row[0])[-6:]  # last 3 turns (6 messages)
+    except: return []
+
+def db_save_conv(uid, messages: list):
+    """Save conversation history (keep last 6 messages)."""
+    trimmed = messages[-6:]
+    with con() as c:
+        c.execute("INSERT OR REPLACE INTO conversation (user_id, messages, updated_at) VALUES (?,?,datetime('now'))",
+                  (uid, json.dumps(trimmed, ensure_ascii=False)))
+
+def db_clear_conv(uid):
+    with con() as c: c.execute("DELETE FROM conversation WHERE user_id=?", (uid,))
+
+# ─── Request queue (concurrency limiter) ─────────────────────────────────────
+
+request_semaphore = asyncio.Semaphore(5)  # max 5 concurrent Claude requests
+
 # ─── Human-readable label maps ────────────────────────────────────────────────
 SPORTS_LABELS = {
     "az": {"football": "Futbol", "ufc": "UFC/MMA", "nba": "Basketbol",
@@ -305,6 +345,7 @@ Və ya oyun cədvəlinin şəklini göndərin.""",
 "ob_sports":     "Hansı idman növünü sevirsiniz?",
 "ob_exp":        "Mərcdə təcrübəniz nə qədərdir?",
 "ob_done":       "Profil hazırdır! Fərdiləşdirilmiş proqnozlar alacaqsınız.\n\nİdman: {sports}\nTəcrübə: {exp}",
+"match_too_far": "Bu matç 1 həftədən uzaqdadır. Yalnız növbəti 7 gün ərzindəki matçlar üçün proqnoz verirəm.",
 "choose_forecast": "Proqnoz növünü seçin:",
 "btn_extended":    "Geniş proqnoz",
 "btn_short":       "Qısa proqnoz",
@@ -445,6 +486,7 @@ FORMAT:
 "ob_sports":     "Какой вид спорта вас интересует больше всего?",
 "ob_exp":        "Каков ваш опыт в ставках?",
 "ob_done":       "Профиль готов! Будете получать персонализированные прогнозы.\n\nСпорт: {sports}\nОпыт: {exp}",
+"match_too_far": "Этот матч слишком далеко. Я даю прогнозы только на матчи в ближайшие 7 дней.",
 "choose_forecast": "Выберите формат прогноза:",
 "btn_extended":    "Расширенный",
 "btn_short":       "Краткий",
@@ -591,6 +633,7 @@ Or send a photo of the match schedule.""",
 "ob_sports":     "Which sport interests you the most?",
 "ob_exp":        "What is your betting experience?",
 "ob_done":       "Profile ready! You'll get personalized forecasts.\n\nSports: {sports}\nExp: {exp}",
+"match_too_far": "This match is too far ahead. I only give forecasts for matches within the next 7 days.",
 "choose_forecast": "Choose forecast format:",
 "btn_extended":    "Extended",
 "btn_short":       "Short",
@@ -727,6 +770,7 @@ Ben bir AI spor bahis analistiyim. Yapabileceklerim:
 
 2 hızlı soruyu yanıtlayın — tahminleri kişiselleştireyim.""",
 "post_onboarding": "Hazır! Şimdi bir maç adı yazın — örneğin:\n\nBarcelona Alavés\nReal Madrid Arsenal\nPSG Manchester City\n\nYa da maç programının fotoğrafını gönderin.",
+"match_too_far": "Bu maç çok uzakta. Yalnızca önümüzdeki 7 gün içindeki maçlar için tahmin yapıyorum.",
 "choose_forecast": "Tahmin formatını seçin:",
 "btn_extended":    "Genişletilmiş",
 "btn_short":       "Kısa",
@@ -858,6 +902,7 @@ FORMAT:
 
 2 сұраққа жауап беріңіз — болжамдарды жекелендіремін.""",
 "post_onboarding": "Дайын! Матч атын жазыңыз — мысалы:\n\nБарселона Алавес\nРеал Мадрид Арсенал\nПСЖ Манчестер Сити\n\nНемесе матч кестесінің фотосын жіберіңіз.",
+"match_too_far": "Бұл матч тым алыс. Мен тек келесі 7 күн ішіндегі матчтарға болжам беремін.",
 "choose_forecast": "Болжам форматын таңдаңыз:",
 "btn_extended":    "Толық",
 "btn_short":       "Қысқаша",
@@ -985,6 +1030,7 @@ Men AI sport stavkalari analitikiman. Nima qila olaman:
 
 2 ta tezkor savolga javob bering — bashoratlarni shaxsiylashtiraman.""",
 "post_onboarding": "Tayyor! O'yin nomini yozing — masalan:\n\nBarcelona Alavés\nReal Madrid Arsenal\nPSG Manchester City\n\nYoki o'yin jadvalining rasmini yuboring.",
+"match_too_far": "Bu o'yin juda uzoqda. Men faqat keyingi 7 kun ichidagi o'yinlar uchun bashorat beraman.",
 "choose_forecast": "Bashorat formatini tanlang:",
 "btn_extended":    "Kengaytirilgan",
 "btn_short":       "Qisqa",
@@ -1112,6 +1158,7 @@ FORMAT:
 
 أجب على سؤالين سريعين لأخصص التوقعات لك.""",
 "post_onboarding": "جاهز! اكتب الآن اسم المباراة — مثلاً:\n\nبرشلونة ألافيس\nريال مدريد آرسنال\nPSG مانشستر سيتي\n\nأو أرسل صورة جدول المباريات.",
+"match_too_far": "هذه المباراة بعيدة جداً. أقدم التوقعات فقط للمباريات خلال الأيام السبعة القادمة.",
 "choose_forecast": "اختر تنسيق التوقع:",
 "btn_extended":    "موسع",
 "btn_short":       "مختصر",
@@ -1421,10 +1468,37 @@ async def _mostbet_load_matches() -> list:
     return all_matches
 
 
-async def mostbet_find_match(team1: str, team2: str) -> dict | None:
-    """Search match in Mostbet by team names using cached list."""
+def _is_within_week(match_date_str: str) -> bool:
+    """Check if match is within next 7 days or live."""
+    if not match_date_str:
+        return True  # unknown date - include
     try:
-        matches = await _mostbet_load_matches()
+        from datetime import timezone
+        # Format: "01.06.2025 19:00:00" or "2025-06-01T19:00:00"
+        ds = match_date_str.strip()
+        if "T" in ds:
+            dt = datetime.fromisoformat(ds.replace("Z", "+00:00"))
+        elif "." in ds:
+            dt = datetime.strptime(ds[:16], "%d.%m.%Y %H:%M")
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            return True
+        now_utc = datetime.now(timezone.utc)
+        delta = (dt - now_utc).total_seconds()
+        return -3600 <= delta <= 7 * 24 * 3600  # from 1hr ago to 7 days ahead
+    except Exception:
+        return True  # parse error - include
+
+
+async def mostbet_find_match(team1: str, team2: str) -> dict | None:
+    """Search match in Mostbet by team names, only within next 7 days."""
+    try:
+        all_matches = await _mostbet_load_matches()
+        # Filter to next 7 days + live matches
+        matches = [m for m in all_matches
+                   if m.get("isLive") or _is_within_week(m.get("matchBeginAt", ""))]
+        logger.info(f"Mostbet filtered: {len(matches)}/{len(all_matches)} within 7 days")
+
         t1 = team1.lower().strip(); t2 = team2.lower().strip()
         if not t1 or not t2 or t1 == t2:
             return None
@@ -1432,12 +1506,10 @@ async def mostbet_find_match(team1: str, team2: str) -> dict | None:
             t1m = m.get("team1Title", "").lower()
             t2m = m.get("team2Title", "").lower()
             mt  = m.get("matchTitle", "").lower()
-            # Direct match
             if (t1 in t1m or t1 in mt) and (t2 in t2m or t2 in mt):
                 return m
             if (t2 in t1m or t2 in mt) and (t1 in t2m or t1 in mt):
                 return m
-            # Reverse check in matchTitle
             if t1 in mt and t2 in mt:
                 return m
     except Exception as e:
@@ -1624,6 +1696,65 @@ async def poller(app):
                     live_subs[mid].clear()
             except Exception as e: logger.error(f"poller mid={mid}: {e}")
 
+# ─── Smart query parser ───────────────────────────────────────────────────────
+
+async def parse_match_query(text: str, lang: str) -> dict:
+    """Use Claude to extract team names and date from user query."""
+    try:
+        prompt = f"""Extract match info from this text: "{text}"
+Return JSON only, no explanation:
+{{"team1": "...", "team2": "...", "date": "DD.MM.YYYY or null", "sport": "football/basketball/ufc/tennis/other"}}
+If you cannot find two teams, return {{"team1": null, "team2": null, "date": null, "sport": "football"}}"""
+        r = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=100,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = r.content[0].text.strip()
+        # Clean JSON
+        import re
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if m:
+            return json.loads(m.group(0))
+    except Exception as e:
+        logger.error(f"parse_match_query: {e}")
+    return {"team1": None, "team2": None, "date": None, "sport": "football"}
+
+
+# ─── Odds change alerts ────────────────────────────────────────────────────────
+
+async def check_odds_changes(app):
+    """Background: check if odds changed significantly for subscribed matches."""
+    while True:
+        await asyncio.sleep(300)  # every 5 min
+        try:
+            with con() as c:
+                alerts = c.execute("SELECT user_id, match_id, market, last_odd FROM odds_alerts").fetchall()
+            for uid, mid, market, last_odd in alerts:
+                try:
+                    odds = await mostbet_get_odds(int(mid))
+                    market_map = {"w1": odds["w1"], "x": odds["x"], "w2": odds["w2"],
+                                  "over25": odds["over25"], "under25": odds["under25"]}
+                    new_odd = market_map.get(market)
+                    if new_odd and last_odd and abs(new_odd - last_odd) >= 0.3:
+                        lang = db_lang(uid)
+                        direction = "↑" if new_odd > last_odd else "↓"
+                        msgs = {
+                            "ru": f"ИЗМЕНЕНИЕ КОЭФФИЦИЕНТА {direction}\nМатч: {mid}\nРынок: {market}\nБыло: {last_odd} → Стало: {new_odd}\nРазница: {abs(new_odd-last_odd):.2f}",
+                            "en": f"ODDS CHANGE {direction}\nMatch: {mid}\n{market}: {last_odd} → {new_odd}",
+                            "az": f"KEF DƏYİŞDİ {direction}\nMatç: {mid}\n{market}: {last_odd} → {new_odd}",
+                        }
+                        msg = msgs.get(lang, msgs["ru"])
+                        await app.bot.send_message(chat_id=uid, text=msg)
+                        # Update stored odd
+                        with con() as c:
+                            c.execute("UPDATE odds_alerts SET last_odd=? WHERE user_id=? AND match_id=? AND market=?",
+                                      (new_odd, uid, mid, market))
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"check_odds_changes: {e}")
+
+
 # ─── Daily push ───────────────────────────────────────────────────────────────
 async def daily_push(app):
     while True:
@@ -1717,19 +1848,46 @@ async def ob_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid   = q.from_user.id; ftype = q.data
-    content = list(context.user_data.get("pending_content") or [])
-    text    = context.user_data.get("pending_text", "")
-    if not content:
+    msg_content = list(context.user_data.get("pending_content") or [])
+    text        = context.user_data.get("pending_text", "")
+    if not msg_content:
         await q.edit_message_text(tr(uid, "no_input")); return
 
     lang = db_lang(uid)
-    await q.edit_message_text("⏳ Анализирую..." if lang == "ru" else "⏳ Analiz edilir..." if lang == "az" else "⏳ Analysing...")
+    thinking = {"ru": "⏳ Анализирую...", "az": "⏳ Analiz edilir...",
+                "en": "⏳ Analysing...", "tr": "⏳ Analiz ediliyor...",
+                "kz": "⏳ Талдау жасалуда...", "uz": "⏳ Tahlil qilinmoqda...", "ar": "⏳ جارٍ التحليل..."}
+    await q.edit_message_text(thinking.get(lang, "⏳"))
     await context.bot.send_chat_action(chat_id=uid, action="typing")
 
+    # Build personalized system prompt
+    u = db_get(uid) or {}
+    exp = u.get("experience", "beginner")
+
+    # Extra personalization based on experience
+    extra_hints = {
+        "ru": {
+            "expert":   " Profil: ekspert — dobavlyay xG, aziatskie linii.",
+            "mid":      " Profil: sredniy — kratko.",
+            "beginner": " Profil: novichok — ob'yasnyay prosto.",
+        },
+        "en": {
+            "expert":   " Profile: expert — include xG, Asian lines.",
+            "mid":      " Profile: intermediate — brief.",
+            "beginner": " Profile: beginner — explain simply.",
+        },
+        "az": {
+            "expert":   " Profil: tecrubell — xG, Asiya xetleri.",
+            "mid":      " Profil: orta — qisa.",
+            "beginner": " Profil: yeni — sade izah et.",
+        },
+    }
+    hint = extra_hints.get(lang, extra_hints["ru"]).get(exp, "")
+
     if ftype == "forecast_short":
-        sys_prompt = tr(uid, "short_prompt"); max_tok = 500
+        sys_prompt = tr(uid, "short_prompt") + hint; max_tok = 500
     else:
-        sys_prompt = tr(uid, "system_prompt"); max_tok = 1500
+        sys_prompt = tr(uid, "system_prompt") + hint; max_tok = 1500
 
     # ── Fetch real Mostbet odds ───────────────────────────────────────────────
     if text:
@@ -1769,11 +1927,39 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"Mostbet match found but no odds | uid={uid}")
         else:
             try:
-                sample = await _mostbet_load_matches()
-                sample_names = [f"{m.get('team1Title','?')} vs {m.get('team2Title','?')}" for m in sample[:5]]
-                logger.info(f"Mostbet no match for '{text[:40]}' | Sample: {sample_names}")
+                all_m = await _mostbet_load_matches()
+                week_m = [m for m in all_m if m.get("isLive") or _is_within_week(m.get("matchBeginAt",""))]
+                all_m_count = len(all_m); week_m_count = len(week_m)
+                sample = [f"{m.get('team1Title','?')} vs {m.get('team2Title','?')}" for m in week_m[:5]]
+                logger.info(f"Mostbet no match for '{text[:40]}' | Week: {week_m_count}/{all_m_count} | Sample: {sample}")
+
+                # Check if match exists but is outside 7 days
+                if all_m_count > 0 and week_m_count < all_m_count:
+                    # Search in ALL matches (no date filter)
+                    words_all = [w.strip(".,!?") for w in text.split() if len(w) > 2]
+                    found_far = None
+                    for i, w1 in enumerate(words_all):
+                        for w2 in words_all:
+                            if w1 != w2:
+                                for m in all_m:
+                                    t1m = m.get("team1Title","").lower()
+                                    t2m = m.get("team2Title","").lower()
+                                    mt  = m.get("matchTitle","").lower()
+                                    if (w1.lower() in t1m or w1.lower() in mt) and (w2.lower() in t2m or w2.lower() in mt):
+                                        found_far = m
+                                        break
+                                if found_far: break
+                            if found_far: break
+                        if found_far: break
+
+                    if found_far and not _is_within_week(found_far.get("matchBeginAt","")):
+                        lang = db_lang(uid)
+                        msg = T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"])
+                        await context.bot.edit_message_text(
+                            chat_id=uid, message_id=q.message.message_id, text=msg)
+                        return
             except Exception:
-                logger.info(f"Mostbet match not found for: {text[:50]} | uid={uid}")
+                logger.info(f"Mostbet match not found: {text[:50]} | uid={uid}")
 
     # ── Claude request ────────────────────────────────────────────────────────
     try:
@@ -1828,6 +2014,16 @@ async def watch_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data.startswith("watch_"):
         mid = q.data[6:]; mname = context.user_data.get(f"mn_{mid}", mid)
         live_subs[mid].add(uid); db_add_lsub(uid, mid, mname)
+        # Register odds alerts for key markets
+        try:
+            odds = await mostbet_get_odds(int(mid))
+            with con() as c:
+                for market, odd in [("w1", odds["w1"]), ("over25", odds["over25"])]:
+                    if odd:
+                        c.execute("INSERT OR REPLACE INTO odds_alerts VALUES (?,?,?,?,datetime('now'))",
+                                  (uid, mid, market, odd))
+        except Exception:
+            pass
         await q.edit_message_text(q.message.text + "\n\n" + tr(uid, "watch_started", match=mname))
     elif q.data.startswith("unwatch_"):
         mid = q.data[8:]
@@ -1944,6 +2140,45 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     fetched.append(teams[0]["name"] + ":\n" + "\n".join(res))
             except Exception: pass
         if fetched: content.append({"type": "text", "text": "REAL DATA:\n" + "\n\n".join(fetched)})
+
+    # Smart date check
+    import re as _re
+    date_patterns = [r'\b(\d{1,2})[./](\d{1,2})\b', r'\b(\d{4})-(\d{2})-(\d{2})\b']
+    for pat in date_patterns:
+        dm = _re.search(pat, text)
+        if dm:
+            try:
+                g = dm.groups()
+                if len(g) == 2:
+                    fd = date(date.today().year, int(g[1]), int(g[0]))
+                elif len(g) == 3:
+                    fd = date(int(g[0]), int(g[1]), int(g[2]))
+                else:
+                    fd = None
+                if fd and (fd - date.today()).days > 7:
+                    await update.message.reply_text(
+                        T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"]))
+                    return
+            except Exception:
+                pass
+            break
+
+    # Smart query parsing - extract teams from natural language
+    if text and not photo:
+        parsed = await parse_match_query(text, lang)
+        if parsed.get("team1") and parsed.get("team2"):
+            t1, t2 = parsed["team1"], parsed["team2"]
+            # Enrich content with structured team info
+            structured = f"Команды: {t1} vs {t2}"
+            if parsed.get("date"):
+                structured += f" | Дата: {parsed['date']}"
+            if parsed.get("sport"):
+                structured += f" | Спорт: {parsed['sport']}"
+            content.append({"type": "text", "text": structured})
+            logger.info(f"Parsed query: {t1} vs {t2} | uid={uid}")
+
+    # Clear old conversation if new match topic
+    # (detect if asking about same match or new one)
 
     # Store and show format chooser
     context.user_data["pending_content"] = content
@@ -2064,12 +2299,15 @@ async def express_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mb_matches = await _mostbet_load_matches()
     real_matches_str = ""
     if mb_matches:
-        # Pick first N live or upcoming football matches
-        football = [m for m in mb_matches if "football" in m.get("lineCategory","").lower() or
+        # Filter to next 7 days only
+        week_matches = [m for m in mb_matches
+                        if m.get("isLive") or _is_within_week(m.get("matchBeginAt", ""))]
+        # Pick football first, fallback to any sport
+        football = [m for m in week_matches if "football" in m.get("lineCategory","").lower() or
                     "soccer" in m.get("lineCategory","").lower() or
                     "футбол" in m.get("lineCategory","").lower()][:n]
         if not football:
-            football = mb_matches[:n]
+            football = week_matches[:n]
         if football:
             lines_mb = ["Реальные матчи из Mostbet:"]
             for m in football:
@@ -2080,11 +2318,7 @@ async def express_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             real_matches_str = "\n".join(lines_mb) + "\n\nИспользуй ИМЕННО эти матчи для экспресса.\n"
 
     express_prompts = {
-        "ru": f"""{real_matches_str}Составь экспресс на {n} матчей. Правила:
-- Используй только матчи из списка выше (если есть)
-- Для каждого: команды, лучший тип ставки, реалистичный коэффициент
-- Коэффициенты: фаворит 1.20-1.60, равные 2.00-2.80, тотал 1.70-2.10
-- НЕ используй markdown ## ** — только чистый текст и emoji
+        "ru": f"""{real_matches_str}Составь экспресс на {n} матчей. Правила:\n- Используй только матчи из списка выше (если есть)\n- Для каждого: команды, лучший тип ставки, реалистичный коэффициент\n- Коэффициенты: фаворит 1.20-1.60, равные 2.00-2.80, тотал 1.70-2.10\n- НЕ используй markdown ## ** — только чистый текст и emoji
 - В конце посчитай итоговый коэффициент
 
 Формат:
@@ -2097,11 +2331,7 @@ async def express_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💰 Итог: X.XX × X.XX × X.XX = X.XX
 
 ⚠️ Аналитический прогноз.""",
-        "az": f"""{real_matches_str}Bu matçlar üçün {n} oyunluq ekspress yarat. Qaydalar:
-- Yuxarıdakı matçları istifadə et (əgər varsa)
-- Hər matç üçün: komandalar, ən yaxşı mərc növü, real kef
-- Keflər: favorit 1.20-1.60, bərabər 2.00-2.80
-- markdown ## ** işlətmə — yalnız mətn və emoji
+        "az": f"""{real_matches_str}Bu matçlar üçün {n} oyunluq ekspress yarat. Qaydalar:\n- Yuxarıdakı matçları istifadə et (əgər varsa)\n- Hər matç üçün: komandalar, ən yaxşı mərc növü, real kef\n- Keflər: favorit 1.20-1.60, bərabər 2.00-2.80\n- markdown ## ** işlətmə — yalnız mətn və emoji
 - Sonunda ümumi kef hesabla
 
 Format:
@@ -2112,11 +2342,7 @@ Səbəb: [1 cümlə]
 💰 Nəticə: X.XX × X.XX = X.XX
 
 ⚠️ Analitik proqnozdur.""",
-        "en": f"""{real_matches_str}Build an express bet with {n} matches. Rules:
-- Use only matches from the list above (if available)
-- For each: teams, best bet type, realistic odds
-- Odds: favorite 1.20-1.60, even 2.00-2.80, total 1.70-2.10
-- NO markdown ## ** — plain text and emoji only
+        "en": f"""{real_matches_str}Build an express bet with {n} matches. Rules:\n- Use only matches from the list above (if available)\n- For each: teams, best bet type, realistic odds\n- Odds: favorite 1.20-1.60, even 2.00-2.80, total 1.70-2.10\n- NO markdown ## ** — plain text and emoji only
 - Calculate total express odds at the end
 
 Format:
@@ -2127,11 +2353,7 @@ Reason: [1 sentence]
 💰 Total: X.XX × X.XX = X.XX
 
 ⚠️ Analytical forecast.""",
-        "tr": f"""{real_matches_str}{n} maçlık ekspres oluştur. Kurallar:
-- Yukarıdaki maçları kullan (varsa)
-- Her biri: takımlar, en iyi bahis türü, gerçekçi oran
-- markdown ## ** kullanma — sadece metin ve emoji
-- Sonunda toplam oranı hesapla
+        "tr": f"""{real_matches_str}{n} maçlık ekspres oluştur. Kurallar:\n- Yukarıdaki maçları kullan (varsa)\n- Her biri: takımlar, en iyi bahis türü, gerçekçi oran\n- markdown ## ** kullanma — sadece metin ve emoji\n- Sonunda toplam oranı hesapla
 
 Format:
 ⚽ Maç 1: [Takım A] — [Takım B]
@@ -2140,29 +2362,17 @@ Bahis: [tür] | Oran: X.XX
 💰 Toplam: X.XX × X.XX = X.XX
 
 ⚠️ Analitik tahmin.""",
-        "kz": f"""{real_matches_str}{n} матчтық экспресс жаса. Ережелер:
-- Жоғарыдағы матчтарды қолдан (болса)
-- markdown ## ** жоқ — тек мәтін және emoji
-
-Format:
+        "kz": f"""{real_matches_str}{n} матчтық экспресс жаса. Ережелер:\n- Жоғарыдағы матчтарды қолдан (болса)\n- markdown ## ** жоқ — тек мәтін және emoji\n\nFormat:
 ⚽ Матч 1: [А] — [Б]
 Ставка: [түрі] | Коэф: X.XX
 
 💰 Жалпы: X.XX × X.XX = X.XX""",
-        "uz": f"""{real_matches_str}{n} ta o'yin uchun ekspress tuzing. Qoidalar:
-- Yuqoridagi o'yinlarni ishlating (agar bor bo'lsa)
-- markdown ## ** yo'q — faqat matn va emoji
-
-Format:
+        "uz": f"""{real_matches_str}{n} ta o'yin uchun ekspress tuzing. Qoidalar:\n- Yuqoridagi o'yinlarni ishlating (agar bor bo'lsa)\n- markdown ## ** yo'q — faqat matn va emoji\n\nFormat:
 ⚽ O'yin 1: [A] — [B]
 Stavka: [turi] | Koef: X.XX
 
 💰 Jami: X.XX × X.XX = X.XX""",
-        "ar": f"""{real_matches_str}أنشئ رهاناً مركباً من {n} مباريات. القواعد:
-- استخدم المباريات من القائمة أعلاه (إن وُجدت)
-- بدون markdown ## ** — نص وإيموجي فقط
-
-الصيغة:
+        "ar": f"""{real_matches_str}أنشئ رهاناً مركباً من {n} مباريات. القواعد:\n- استخدم المباريات من القائمة أعلاه (إن وُجدت)\n- بدون markdown ## ** — نص وإيموجي فقط\n\nالصيغة:
 ⚽ مباراة 1: [أ] — [ب]
 الرهان: [النوع] | الربح: X.XX
 
@@ -2498,6 +2708,7 @@ def main():
         asyncio.create_task(poller(application))
         asyncio.create_task(daily_push(application))
         asyncio.create_task(_preload_mostbet())
+        asyncio.create_task(check_odds_changes(application))
 
     async def _preload_mostbet():
         """Preload Mostbet matches at startup, then refresh every 15 min."""
@@ -2509,8 +2720,21 @@ def main():
             await asyncio.sleep(MOSTBET_CACHE_TTL)
 
     app.post_init = post_init
-    logger.info("ProqnozAI v5 started")
-    app.run_polling()
+    WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+    PORT = int(os.environ.get("PORT", "8080"))
+
+    if WEBHOOK_URL:
+        # Webhook mode - faster, no polling overhead
+        logger.info(f"ProqnozAI v5 started (webhook: {WEBHOOK_URL})")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=WEBHOOK_URL,
+        )
+    else:
+        # Polling mode - fallback
+        logger.info("ProqnozAI v5 started (polling)")
+        app.run_polling()
 
 if __name__ == "__main__":
     main()
