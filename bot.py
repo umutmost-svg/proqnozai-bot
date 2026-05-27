@@ -1730,6 +1730,99 @@ If you cannot find two teams, return {{"team1": null, "team2": null, "date": nul
     return {"team1": None, "team2": None, "date": None, "sport": "football"}
 
 
+# ─── Real match data fetcher ──────────────────────────────────────────────────
+
+async def fetch_real_data(team1: str, team2: str) -> str:
+    """Fetch last 5 results + H2H for both teams. Uses API-Sports first, fd.org as fallback."""
+    if not team1 or not team2:
+        return ""
+    parts = []
+    t1_id = t2_id = None
+
+    if APIFOOTBALL_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=10) as h:
+                for name, slot in [(team1, 1), (team2, 2)]:
+                    r = await h.get("https://v3.football.api-sports.io/teams",
+                        headers={"x-apisports-key": APIFOOTBALL_KEY}, params={"name": name})
+                    if r.status_code != 200:
+                        continue
+                    teams = r.json().get("response", [])
+                    if not teams:
+                        continue
+                    tid   = teams[0]["team"]["id"]
+                    tname = teams[0]["team"]["name"]
+                    if slot == 1: t1_id = tid
+                    else:         t2_id = tid
+
+                    r2 = await h.get("https://v3.football.api-sports.io/fixtures",
+                        headers={"x-apisports-key": APIFOOTBALL_KEY},
+                        params={"team": tid, "last": 5, "status": "FT"})
+                    if r2.status_code == 200:
+                        fixtures = r2.json().get("response", [])
+                        if fixtures:
+                            lines = []
+                            for f in fixtures:
+                                d    = f["fixture"]["date"][:10]
+                                home = f["teams"]["home"]["name"]
+                                away = f["teams"]["away"]["name"]
+                                hg   = f["goals"]["home"]
+                                ag   = f["goals"]["away"]
+                                lines.append(f"{d}: {home} {hg}-{ag} {away}")
+                            parts.append(f"{tname} last 5:\n" + "\n".join(lines))
+
+                if t1_id and t2_id:
+                    r3 = await h.get("https://v3.football.api-sports.io/fixtures/headtohead",
+                        headers={"x-apisports-key": APIFOOTBALL_KEY},
+                        params={"h2h": f"{t1_id}-{t2_id}", "last": 5})
+                    if r3.status_code == 200:
+                        h2h = r3.json().get("response", [])
+                        if h2h:
+                            lines = []
+                            for f in h2h:
+                                d    = f["fixture"]["date"][:10]
+                                home = f["teams"]["home"]["name"]
+                                away = f["teams"]["away"]["name"]
+                                hg   = f["goals"]["home"]
+                                ag   = f["goals"]["away"]
+                                lines.append(f"{d}: {home} {hg}-{ag} {away}")
+                            parts.append("H2H last 5:\n" + "\n".join(lines))
+        except Exception as e:
+            logger.error(f"fetch_real_data api-sports: {e}")
+
+    if not parts and FOOTBALL_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=8) as h:
+                for name in [team1, team2]:
+                    r = await h.get("https://api.football-data.org/v4/teams",
+                        headers={"X-Auth-Token": FOOTBALL_KEY}, params={"name": name, "limit": 1})
+                    if r.status_code != 200:
+                        continue
+                    teams = r.json().get("teams", [])
+                    if not teams:
+                        continue
+                    tid = teams[0]["id"]
+                    r2 = await h.get(f"https://api.football-data.org/v4/teams/{tid}/matches",
+                        headers={"X-Auth-Token": FOOTBALL_KEY},
+                        params={"status": "FINISHED", "limit": 5})
+                    if r2.status_code == 200:
+                        ms = r2.json().get("matches", [])
+                        if ms:
+                            lines = [
+                                f"{m['utcDate'][:10]}: {m['homeTeam']['name']} "
+                                f"{m['score']['fullTime'].get('home','?')}-{m['score']['fullTime'].get('away','?')} "
+                                f"{m['awayTeam']['name']}"
+                                for m in ms
+                            ]
+                            parts.append(f"{teams[0]['name']} last 5:\n" + "\n".join(lines))
+        except Exception as e:
+            logger.error(f"fetch_real_data fd.org: {e}")
+
+    if not parts:
+        return ""
+    return "REAL MATCH DATA (use this for form analysis — do not invent results):\n\n" + "\n\n".join(parts)
+
+
 # ─── Odds change alerts ────────────────────────────────────────────────────────
 
 async def check_odds_changes(app):
@@ -1898,6 +1991,18 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sys_prompt = tr(uid, "short_prompt") + hint; max_tok = 500
     else:
         sys_prompt = tr(uid, "system_prompt") + hint; max_tok = 1500
+
+    if context.user_data.get("has_real_data"):
+        data_note = {
+            "ru": "\n\nВАЖНО: В запросе есть РЕАЛЬНЫЕ ДАННЫЕ матчей. Используй ТОЛЬКО их для анализа формы и H2H. Не придумывай результаты.",
+            "az": "\n\nVACİB: Sorğuda REAL MATÇ VERİLƏRİ var. Formanı YALNIZ bu verilerə əsasən analiz et. Olmayan nəticələri UYDURMA.",
+            "en": "\n\nIMPORTANT: REAL MATCH DATA is provided. Use ONLY it for form and H2H. Do not invent results.",
+            "tr": "\n\nÖNEMLİ: Gerçek maç verileri sağlandı. Form ve H2H için YALNIZCA bunları kullan. Sonuçları uydurma.",
+            "kz": "\n\nМАНЫЗДЫ: Нақты матч деректері бар. Форма мен H2H үшін тек осыларды қолдан. Нәтижелерді ойдан шығарма.",
+            "uz": "\n\nMUHIM: Haqiqiy o'yin ma'lumotlari mavjud. Faqat shular asosida forma va H2H tahlili. Natijalarni o'ylab topma.",
+            "ar": "\n\nمهم: بيانات المباريات الحقيقية متوفرة. استخدمها فقط لتحليل الشكل والمواجهات. لا تخترع نتائج.",
+        }
+        sys_prompt += data_note.get(lang, data_note["ru"])
 
     # ── Fetch real Mostbet odds ───────────────────────────────────────────────
     if text:
@@ -2131,28 +2236,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif not photo: await update.message.reply_text(tr(uid, "no_input")); return
     else: content.append({"type": "text", "text": tr(uid, "img_prompt")})
 
-    # Real data
-    if text and FOOTBALL_KEY:
-        words = [w.strip(".,!?") for w in text.split() if len(w) > 3 and w[0].isupper()]
-        fetched = []
-        for word in words[:2]:
-            try:
-                async with httpx.AsyncClient(timeout=5) as h:
-                    r = await h.get("https://api.football-data.org/v4/teams",
-                        headers={"X-Auth-Token": FOOTBALL_KEY}, params={"name": word, "limit": 1})
-                    if r.status_code == 200:
-                        teams = r.json().get("teams", [])
-                        if teams:
-                            r2 = await h.get(f"https://api.football-data.org/v4/teams/{teams[0]['id']}/matches",
-                                headers={"X-Auth-Token": FOOTBALL_KEY}, params={"status": "FINISHED", "limit": 5})
-                            if r2.status_code == 200:
-                                ms = r2.json().get("matches", [])
-                                if ms:
-                                    res = [f"{m['utcDate'][:10]} {m['homeTeam']['name']} {m['score']['fullTime'].get('home',0)}-{m['score']['fullTime'].get('away',0)} {m['awayTeam']['name']}" for m in ms]
-                                    fetched.append(teams[0]["name"] + ":\n" + "\n".join(res))
-            except Exception: pass
-        if fetched: content.append({"type": "text", "text": "REAL DATA:\n" + "\n\n".join(fetched)})
-
     # Smart date check
     import re as _re
     date_patterns = [r'\b(\d{1,2})[./](\d{1,2})\b', r'\b(\d{4})-(\d{2})-(\d{2})\b']
@@ -2175,22 +2258,25 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             break
 
-    # Smart query parsing - extract teams from natural language
+    # Parse teams, then fetch real form + H2H data
     if text and not photo:
         parsed = await parse_match_query(text, lang)
         if parsed.get("team1") and parsed.get("team2"):
             t1, t2 = parsed["team1"], parsed["team2"]
-            # Enrich content with structured team info
-            structured = f"Команды: {t1} vs {t2}"
-            if parsed.get("date"):
-                structured += f" | Дата: {parsed['date']}"
-            if parsed.get("sport"):
-                structured += f" | Спорт: {parsed['sport']}"
+            structured = f"Teams: {t1} vs {t2}"
+            if parsed.get("date"):   structured += f" | Date: {parsed['date']}"
+            if parsed.get("sport"):  structured += f" | Sport: {parsed['sport']}"
             content.append({"type": "text", "text": structured})
             logger.info(f"Parsed query: {t1} vs {t2} | uid={uid}")
-
-    # Clear old conversation if new match topic
-    # (detect if asking about same match or new one)
+            real_data = await fetch_real_data(t1, t2)
+            if real_data:
+                content.append({"type": "text", "text": real_data})
+                context.user_data["has_real_data"] = True
+                logger.info(f"Real data fetched: {t1} vs {t2} | uid={uid}")
+            else:
+                context.user_data["has_real_data"] = False
+        else:
+            context.user_data["has_real_data"] = False
 
     # Store and show format chooser
     context.user_data["pending_content"] = content
