@@ -261,7 +261,8 @@ def db_clear_conv(uid):
 
 # ─── Request queue (concurrency limiter) ─────────────────────────────────────
 
-request_semaphore = asyncio.Semaphore(5)  # max 5 concurrent Claude requests
+request_semaphore  = asyncio.Semaphore(5)   # max 5 concurrent Claude requests
+_mostbet_lock      = asyncio.Lock()          # only 1 concurrent Mostbet API call
 
 # ─── Human-readable label maps ────────────────────────────────────────────────
 SPORTS_LABELS = {
@@ -1410,41 +1411,46 @@ async def live_tip(uid, match, minute, score, event):
 # ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
 
 async def _mostbet_load_matches() -> list:
-    """Load all matches from Mostbet with caching (10 min TTL).
-    Returns cached data if available, even if stale, on 429."""
+    """Load all matches from Mostbet with caching (15 min TTL).
+    Uses lock so only one concurrent request goes to Mostbet API."""
     cache_key = "all_matches"
     now = time.time()
 
-    # Return fresh cache
+    # Return fresh cache without acquiring lock
     if cache_key in mostbet_cache:
         ts, data = mostbet_cache[cache_key]
         if now - ts < MOSTBET_CACHE_TTL:
             return data
 
-    all_matches = []
-    try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as h:
-            last_id = 0
-            page = 0
-            while True:
-                # Rate limit: wait between pages
-                if page > 0:
-                    await asyncio.sleep(1.0)
-                page += 1
-                r = await h.get(
-                    f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/list",
-                    headers={"Accept": "application/json", "User-Agent": "ProqnozAI/1.0"},
-                    params={"lastId": last_id, "locale": "en", "limit": 100}
-                )
-                if r.status_code == 429:
-                    logger.warning(f"Mostbet 429 on page {page}")
-                    # Return stale cache if exists
-                    if cache_key in mostbet_cache:
-                        _, stale = mostbet_cache[cache_key]
-                        logger.info(f"Returning stale cache: {len(stale)} matches")
-                        return stale
-                    # Wait and retry once
-                    await asyncio.sleep(3)
+    # Only one coroutine fetches at a time; others wait and reuse result
+    async with _mostbet_lock:
+        # Re-check cache after acquiring lock (another coroutine may have filled it)
+        if cache_key in mostbet_cache:
+            ts, data = mostbet_cache[cache_key]
+            if now - ts < MOSTBET_CACHE_TTL:
+                return data
+
+        all_matches = []
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as h:
+                last_id = 0
+                page = 0
+                while True:
+                    if page > 0:
+                        await asyncio.sleep(2.0)   # 2s between pages
+                    page += 1
+                    r = await h.get(
+                        f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/list",
+                        headers={"Accept": "application/json", "User-Agent": "ProqnozAI/1.0"},
+                        params={"lastId": last_id, "locale": "en", "limit": 100}
+                    )
+                    if r.status_code == 429:
+                        logger.warning(f"Mostbet 429 on page {page}")
+                        if cache_key in mostbet_cache:
+                            _, stale = mostbet_cache[cache_key]
+                            logger.info(f"Returning stale cache: {len(stale)} matches")
+                            return stale
+                        await asyncio.sleep(10)   # longer wait on 429
                     r2 = await h.get(
                         f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/list",
                         headers={"Accept": "application/json", "User-Agent": "ProqnozAI/1.0"},
@@ -1465,16 +1471,16 @@ async def _mostbet_load_matches() -> list:
                 if len(matches) < 100:
                     break
                 last_id = matches[-1]["id"]
-    except Exception as e:
-        logger.error(f"_mostbet_load_matches: {e}")
-        if cache_key in mostbet_cache:
-            _, stale = mostbet_cache[cache_key]
-            return stale
+        except Exception as e:
+            logger.error(f"_mostbet_load_matches: {e}")
+            if cache_key in mostbet_cache:
+                _, stale = mostbet_cache[cache_key]
+                return stale
 
-    if all_matches:
-        mostbet_cache[cache_key] = (now, all_matches)
-        logger.info(f"Mostbet cache updated: {len(all_matches)} total matches")
-    return all_matches
+        if all_matches:
+            mostbet_cache[cache_key] = (time.time(), all_matches)
+            logger.info(f"Mostbet cache updated: {len(all_matches)} total matches")
+        return all_matches
 
 
 def _is_within_week(match_date_str: str) -> bool:
@@ -2223,9 +2229,12 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
     week_m = [m for m in all_m if m.get("isLive") or _is_within_week(m.get("matchBeginAt", ""))]
 
     if not week_m:
-        no_m = {"ru": "Матчей на ближайшие 7 дней не найдено. Попробуйте позже.",
-                "az": "Növbəti 7 gün üçün matç tapılmadı.", "en": "No matches found for next 7 days.",
-                "tr": "Önümüzdeki 7 gün için maç bulunamadı."}
+        no_m = {
+            "ru": "Загрузка матчей из Mostbet временно недоступна.\n\nНапишите название матча вручную, например:\nАрсенал ПСЖ",
+            "az": "Mostbet matçları müvəqqəti yüklənmir.\n\nMatç adını əl ilə yazın, məsələn:\nArsenal PSJ",
+            "en": "Mostbet match loading temporarily unavailable.\n\nType the match manually, e.g.:\nArsenal PSG",
+            "tr": "Mostbet maç yüklemesi geçici olarak kullanılamıyor.\n\nMaç adını manuel yazın, örn:\nArsenal PSG",
+        }
         await msg.edit_text(no_m.get(lang, no_m["ru"])); return
 
     sports_map = {}
