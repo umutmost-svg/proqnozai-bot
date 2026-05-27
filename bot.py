@@ -33,7 +33,7 @@ blocked_until: dict[int, float] = {}
 reg_step:      dict[int, str]   = {}
 live_subs:     dict[str, set]   = defaultdict(set)
 mostbet_cache: dict              = {}   # cache: key -> (timestamp, data)
-MOSTBET_CACHE_TTL = 600           # 10 minutes cache
+MOSTBET_CACHE_TTL = 900           # 15 minutes cache
 last_events:   dict[str, list]  = {}
 ht_sent:       set              = set()
 
@@ -2060,14 +2060,113 @@ async def express_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sports = SPORTS_LABELS.get(lang, SPORTS_LABELS["ru"]).get(u.get("sports", "football"), "Football")
     exp = EXP_LABELS.get(lang, EXP_LABELS["ru"]).get(u.get("experience", "beginner"), "Beginner")
 
+    # Try to get real matches from Mostbet cache
+    mb_matches = await _mostbet_load_matches()
+    real_matches_str = ""
+    if mb_matches:
+        # Pick first N live or upcoming football matches
+        football = [m for m in mb_matches if "football" in m.get("lineCategory","").lower() or
+                    "soccer" in m.get("lineCategory","").lower() or
+                    "футбол" in m.get("lineCategory","").lower()][:n]
+        if not football:
+            football = mb_matches[:n]
+        if football:
+            lines_mb = ["Реальные матчи из Mostbet:"]
+            for m in football:
+                t1 = m.get("team1Title","?"); t2 = m.get("team2Title","?")
+                league = m.get("lineSubCategory","")
+                dt = m.get("matchBeginAt","")[:16]
+                lines_mb.append(f"- {t1} vs {t2} | {league} | {dt}")
+            real_matches_str = "\n".join(lines_mb) + "\n\nИспользуй ИМЕННО эти матчи для экспресса.\n"
+
     express_prompts = {
-        "az": f"Bu gün keçirilən {n} idman matçı üçün ekspress ставka yarat. Hər matç üçün: komandalar, ən yaxşı mərc növü, kef. Sonunda ümumi kef hesabla. Emoji istifadə et, markdown ** yox. Profil: {sports}.",
-        "ru": f"Составь экспресс на {n} матчей сегодня. Для каждого: команды, лучший тип ставки, коэффициент. В конце посчитай итоговый коэффициент экспресса. Используй emoji, markdown ** не используй. Профиль: {sports}.",
-        "en": f"Build an express bet with {n} matches today. For each: teams, best bet type, odds. At the end calculate total express odds. Use emoji, no markdown **. Profile: {sports}.",
-        "tr": f"Bugün {n} maç için ekspres bahis oluştur. Her biri için: takımlar, en iyi bahis türü, oran. Sonunda toplam ekspres oranını hesapla. Emoji kullan, markdown ** kullanma. Profil: {sports}.",
-        "kz": f"Бүгін {n} матч үшін экспресс жаса. Әрқайсысы үшін: командалар, ең жақсы ставка түрі, коэффициент. Соңында жалпы коэффициентті есепте. Emoji қолдан, markdown ** жоқ. Профиль: {sports}.",
-        "uz": f"Bugun {n} ta o'yin uchun ekspress tuzish. Har biri uchun: jamoalar, eng yaxshi stavka turi, koeffitsient. Oxirida umumiy koeffitsientni hisoblash. Emoji ishlatish, markdown ** yo'q. Profil: {sports}.",
-        "ar": f"أنشئ رهاناً مركباً من {n} مباريات اليوم. لكل مباراة: الفريقان، أفضل نوع رهان، الربح. في النهاية احسب إجمالي الربح. استخدم emoji، بدون markdown **. الملف: {sports}.",
+        "ru": f"""{real_matches_str}Составь экспресс на {n} матчей. Правила:
+- Используй только матчи из списка выше (если есть)
+- Для каждого: команды, лучший тип ставки, реалистичный коэффициент
+- Коэффициенты: фаворит 1.20-1.60, равные 2.00-2.80, тотал 1.70-2.10
+- НЕ используй markdown ## ** — только чистый текст и emoji
+- В конце посчитай итоговый коэффициент
+
+Формат:
+⚽ Матч 1: [Команда А] — [Команда Б]
+Ставка: [тип] | Кэф: X.XX
+Обоснование: [1 предложение]
+
+⚽ Матч 2: ...
+
+💰 Итог: X.XX × X.XX × X.XX = X.XX
+
+⚠️ Аналитический прогноз.""",
+        "az": f"""{real_matches_str}Bu matçlar üçün {n} oyunluq ekspress yarat. Qaydalar:
+- Yuxarıdakı matçları istifadə et (əgər varsa)
+- Hər matç üçün: komandalar, ən yaxşı mərc növü, real kef
+- Keflər: favorit 1.20-1.60, bərabər 2.00-2.80
+- markdown ## ** işlətmə — yalnız mətn və emoji
+- Sonunda ümumi kef hesabla
+
+Format:
+⚽ Matç 1: [Komanda A] — [Komanda B]
+Mərc: [növ] | Kef: X.XX
+Səbəb: [1 cümlə]
+
+💰 Nəticə: X.XX × X.XX = X.XX
+
+⚠️ Analitik proqnozdur.""",
+        "en": f"""{real_matches_str}Build an express bet with {n} matches. Rules:
+- Use only matches from the list above (if available)
+- For each: teams, best bet type, realistic odds
+- Odds: favorite 1.20-1.60, even 2.00-2.80, total 1.70-2.10
+- NO markdown ## ** — plain text and emoji only
+- Calculate total express odds at the end
+
+Format:
+⚽ Match 1: [Team A] — [Team B]
+Bet: [type] | Odds: X.XX
+Reason: [1 sentence]
+
+💰 Total: X.XX × X.XX = X.XX
+
+⚠️ Analytical forecast.""",
+        "tr": f"""{real_matches_str}{n} maçlık ekspres oluştur. Kurallar:
+- Yukarıdaki maçları kullan (varsa)
+- Her biri: takımlar, en iyi bahis türü, gerçekçi oran
+- markdown ## ** kullanma — sadece metin ve emoji
+- Sonunda toplam oranı hesapla
+
+Format:
+⚽ Maç 1: [Takım A] — [Takım B]
+Bahis: [tür] | Oran: X.XX
+
+💰 Toplam: X.XX × X.XX = X.XX
+
+⚠️ Analitik tahmin.""",
+        "kz": f"""{real_matches_str}{n} матчтық экспресс жаса. Ережелер:
+- Жоғарыдағы матчтарды қолдан (болса)
+- markdown ## ** жоқ — тек мәтін және emoji
+
+Format:
+⚽ Матч 1: [А] — [Б]
+Ставка: [түрі] | Коэф: X.XX
+
+💰 Жалпы: X.XX × X.XX = X.XX""",
+        "uz": f"""{real_matches_str}{n} ta o'yin uchun ekspress tuzing. Qoidalar:
+- Yuqoridagi o'yinlarni ishlating (agar bor bo'lsa)
+- markdown ## ** yo'q — faqat matn va emoji
+
+Format:
+⚽ O'yin 1: [A] — [B]
+Stavka: [turi] | Koef: X.XX
+
+💰 Jami: X.XX × X.XX = X.XX""",
+        "ar": f"""{real_matches_str}أنشئ رهاناً مركباً من {n} مباريات. القواعد:
+- استخدم المباريات من القائمة أعلاه (إن وُجدت)
+- بدون markdown ## ** — نص وإيموجي فقط
+
+الصيغة:
+⚽ مباراة 1: [أ] — [ب]
+الرهان: [النوع] | الربح: X.XX
+
+💰 الإجمالي: X.XX × X.XX = X.XX""",
     }
     prompt = express_prompts.get(lang, express_prompts["ru"])
 
@@ -2337,6 +2436,40 @@ async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("adm_act", None)
     await update.message.reply_text("Отменено.")
 
+
+async def testapi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test Mostbet API directly - admin only."""
+    if not is_adm(update): return
+    await update.message.reply_text("Тестирую Mostbet API напрямую...")
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as h:
+            r = await h.get(
+                f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/list",
+                headers={"Accept": "application/json", "User-Agent": "ProqnozAI/1.0"},
+                params={"lastId": 0, "locale": "ru", "limit": 3}
+            )
+            status = r.status_code
+            body = r.text[:800]
+
+            if status == 200:
+                data = r.json()
+                matches = data.get("lineMatches", [])
+                lines = [f"Mostbet API: OK ({status})\nМатчей в ответе: {len(matches)}\n"]
+                for m in matches[:3]:
+                    t1 = m.get("team1Title","?")
+                    t2 = m.get("team2Title","?")
+                    league = m.get("lineSubCategory","")
+                    live = "LIVE" if m.get("isLive") else "Pre-match"
+                    lines.append(f"[{live}] {t1} vs {t2} ({league})")
+                await update.message.reply_text("\n".join(lines))
+            else:
+                deny = r.headers.get("x-deny-reason", "")
+                await update.message.reply_text(
+                    f"Mostbet API: ОШИБКА\nСтатус: {status}\nПричина: {deny}\nОтвет: {body[:200]}"
+                )
+    except Exception as e:
+        await update.message.reply_text(f"Mostbet API: ИСКЛЮЧЕНИЕ\n{e}")
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -2347,6 +2480,7 @@ def main():
     app.add_handler(CommandHandler("matches", matches_cmd))
     app.add_handler(CommandHandler("admin",   admin_cmd))
     app.add_handler(CommandHandler("cancel",  cancel_cmd))
+    app.add_handler(CommandHandler("testapi", testapi_cmd))
 
     app.add_handler(CallbackQueryHandler(lang_cb,       pattern=r"^lang_"))
     app.add_handler(CallbackQueryHandler(ob_cb,         pattern=r"^ob_"))
@@ -2366,11 +2500,13 @@ def main():
         asyncio.create_task(_preload_mostbet())
 
     async def _preload_mostbet():
-        """Preload Mostbet matches at startup with delay."""
-        await asyncio.sleep(5)  # wait for bot to fully start
-        logger.info("Preloading Mostbet matches...")
-        matches = await _mostbet_load_matches()
-        logger.info(f"Mostbet preload done: {len(matches)} matches")
+        """Preload Mostbet matches at startup, then refresh every 15 min."""
+        await asyncio.sleep(10)
+        while True:
+            logger.info("Loading Mostbet matches...")
+            matches = await _mostbet_load_matches()
+            logger.info(f"Mostbet loaded: {len(matches)} matches")
+            await asyncio.sleep(MOSTBET_CACHE_TTL)
 
     app.post_init = post_init
     logger.info("ProqnozAI v5 started")
@@ -2378,4 +2514,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
