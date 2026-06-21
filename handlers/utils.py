@@ -60,7 +60,11 @@ def _sport_emoji(cat: str) -> str:
 
 
 def _fmt_dt(dt_raw: str, tz_offset: int = 0) -> str:
-    """Format match datetime string applying UTC offset."""
+    """Format match datetime string applying UTC offset.
+
+    Mostbet DD.MM.YYYY format is assumed to be UTC (same as _is_within_week).
+    If times appear shifted, check MOSTBET_TZ_OFFSET in config.
+    """
     if not dt_raw or len(dt_raw) < 16:
         return ""
     try:
@@ -69,16 +73,26 @@ def _fmt_dt(dt_raw: str, tz_offset: int = 0) -> str:
             dt = datetime.fromisoformat(ds.replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                # normalize explicit timezone to UTC before applying user offset
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
         elif "." in ds:
+            # Mostbet format: "DD.MM.YYYY HH:MM:SS" — treated as UTC
             dt = datetime.strptime(ds[:16], "%d.%m.%Y %H:%M")
             dt = dt.replace(tzinfo=timezone.utc)
         else:
-            return dt_raw[8:10] + "." + dt_raw[5:7] + " " + dt_raw[11:16]
+            # "YYYY-MM-DD HH:MM:SS" without T — treated as UTC
+            dt = datetime.strptime(ds[:16], "%Y-%m-%d %H:%M")
+            dt = dt.replace(tzinfo=timezone.utc)
         dt_local = dt + timedelta(hours=tz_offset)
         sign = "+" if tz_offset >= 0 else ""
-        return dt_local.strftime(f"%d.%m %H:%M") + f" (UTC{sign}{tz_offset})"
+        return dt_local.strftime("%d.%m %H:%M") + f" (UTC{sign}{tz_offset})"
     except Exception:
-        return dt_raw[8:10] + "." + dt_raw[5:7] + " " + dt_raw[11:16]
+        # last resort: raw slice for YYYY-MM-DD HH:MM
+        try:
+            return dt_raw[8:10] + "." + dt_raw[5:7] + " " + dt_raw[11:16]
+        except Exception:
+            return ""
 
 
 def fmt_dt_for_user(dt_raw: str, uid: int) -> str:
