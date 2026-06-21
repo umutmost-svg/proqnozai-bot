@@ -227,7 +227,6 @@ def format_mostbet_odds(odds: dict, lang: str) -> str:
             lines.append(f"Тотал 2.5: Больше={odds['over25']} | Меньше={odds['under25']}")
         if odds["btts_yes"] and odds["btts_no"]:
             lines.append(f"Обе забьют: Да={odds['btts_yes']} | Нет={odds['btts_no']}")
-        lines.append(f"Ссылка: {odds['url']}")
         lines.append("ВАЖНО: используй ИМЕННО эти коэффициенты в прогнозе, не выдумывай свои.")
     elif lang == "az":
         lines.append("MOSTBET REAL KEFLƏRİ:")
@@ -237,7 +236,6 @@ def format_mostbet_odds(odds: dict, lang: str) -> str:
             lines.append(f"Total 2.5: Üstündə={odds['over25']} | Altında={odds['under25']}")
         if odds["btts_yes"] and odds["btts_no"]:
             lines.append(f"Hər ikisi qol: Bəli={odds['btts_yes']} | Xeyr={odds['btts_no']}")
-        lines.append(f"Link: {odds['url']}")
         lines.append("VACIB: proqnozda MƏHZbu kefləri istifadə et.")
     else:
         lines.append("REAL MOSTBET ODDS:")
@@ -247,6 +245,5 @@ def format_mostbet_odds(odds: dict, lang: str) -> str:
             lines.append(f"Total 2.5: Over={odds['over25']} | Under={odds['under25']}")
         if odds["btts_yes"] and odds["btts_no"]:
             lines.append(f"BTTS: Yes={odds['btts_yes']} | No={odds['btts_no']}")
-        lines.append(f"Link: {odds['url']}")
         lines.append("IMPORTANT: use THESE exact odds in the forecast, do not invent your own.")
     return "\n".join(lines)
