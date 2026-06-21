@@ -9,10 +9,9 @@ def main_menu(uid):
     tl = T[lang]
     return ReplyKeyboardMarkup([
         [tl["menu_forecast"],  tl["menu_express"]],
-        [tl["menu_history"],   tl["menu_favs"]],
-        [tl["menu_matches"],   tl["menu_profile"]],
-        [tl["menu_lang"]],
-    ], resize_keyboard=True)
+        [tl["menu_matches"],   tl["menu_history"]],
+        [tl["menu_favs"],      tl["menu_profile"]],
+    ], resize_keyboard=True, is_persistent=True)
 
 
 def lang_kb():
@@ -34,9 +33,13 @@ def lang_kb():
 
 
 def ob_kb(items):
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(label, callback_data=f"ob_{val}")] for label, val in items]
-    )
+    rows = []
+    for i in range(0, len(items), 2):
+        row = [InlineKeyboardButton(items[i][0], callback_data=f"ob_{items[i][1]}")]
+        if i + 1 < len(items):
+            row.append(InlineKeyboardButton(items[i+1][0], callback_data=f"ob_{items[i+1][1]}"))
+        rows.append(row)
+    return InlineKeyboardMarkup(rows)
 
 
 SPORT_EMOJI = {

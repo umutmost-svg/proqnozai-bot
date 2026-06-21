@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 
 from config import reg_step, UNIVERSAL_WELCOME
 from db import db_ensure, db_get, db_set, db_lang, db_is_reg, con
-from translations import T, tr, LANG_NAMES, OB_SPORTS, OB_EXP, sport_label, exp_label
+from translations import T, tr, LANG_NAMES, OB_SPORTS, sport_label, exp_label
 from handlers.utils import main_menu, lang_kb, ob_kb
 
 logger = logging.getLogger(__name__)
@@ -84,22 +84,14 @@ async def ob_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step == "ob_sports":
         db_set(uid, "sports", val)
-        reg_step[uid] = "ob_exp"
-        await q.edit_message_text(T[lang]["ob_exp"], reply_markup=ob_kb(OB_EXP[lang]))
-
-    elif step == "ob_exp":
-        db_set(uid, "experience", val)
         db_set(uid, "onboarding_done", 1)
         reg_step[uid] = "done"
         u = db_get(uid)
-        done_msg = T[lang]["ob_done"].format(
-            sports=sport_label(uid, u["sports"]),
-            exp=exp_label(uid, u["experience"]))
+        done_msg = T[lang]["ob_done"].format(sports=sport_label(uid, u["sports"]))
         await q.edit_message_text(done_msg)
         await asyncio.sleep(0.3)
-        lang2 = db_lang(uid)
         await context.bot.send_message(
-            chat_id=uid, text=T[lang2]["post_onboarding"], reply_markup=main_menu(uid))
+            chat_id=uid, text=T[lang]["post_onboarding"], reply_markup=main_menu(uid))
 
 
 async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

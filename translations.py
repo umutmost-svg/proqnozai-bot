@@ -13,7 +13,7 @@ Mən AI-əsaslı idman mərc analitikiyəm. Nə edə bilərəm:
 • Qısa proqnoz — 5 saniyədə əsas mərc
 • Canlı bildirişlər — matçı izləyirəm, hadisələri real vaxtda göndərirəm
 
-2 sual cavablayın — sizə uyğun proqnozlar seçim.""",
+İdman növünü seçin — sizə uyğun proqnozlar hazırlayım.""",
 "post_onboarding": """Hazırdır! İndi matç adı yazın — məsələn:
 
 Barselona Alavés
@@ -45,14 +45,14 @@ Və ya oyun cədvəlinin şəklini göndərin.""",
 "live_alert_goal":     "SİQNAL! {match} - Qol gözlənilir [{minute}. dəq]",
 "live_alert_value":    "LIVE VALUE! {match} - {team} üzərində dəyər var [{minute}. dəq]",
 "live_alert_pressure": "TƏZYİQ! {match} - {team} hücum təzyiqi [{minute}. dəq] {stat}",
-"menu_forecast": "Proqnoz al",
-"menu_matches":  "Matçlarım",
-"menu_profile":  "Profil",
+"menu_forecast": "⚽ Proqnoz",
+"menu_matches":  "🔴 Matçlarım",
+"menu_profile":  "👤 Profil",
 "menu_lang":     "Dil dəyiş",
 "profile_text":  "PROFİL\n\nAd: {name}\nDil: {lang}\nCəmi sorğular: {total_req}\n\nİdman: {sports}\nTəcrübə: {exp}",
 "ob_sports":     "Hansı idman növünü sevirsiniz?",
 "ob_exp":        "Mərcdə təcrübəniz nə qədərdir?",
-"ob_done":       "Profil hazırdır! Fərdiləşdirilmiş proqnozlar alacaqsınız.\n\nİdman: {sports}\nTəcrübə: {exp}",
+"ob_done":       "Hazırdır! Seçdiyiniz idman: {sports}. Artıq proqnoz ala bilərsiniz.",
 "match_too_far": "Bu matç 1 həftədən uzaqdadır. Yalnız növbəti 7 gün ərzindəki matçlar üçün proqnoz verirəm.",
 "choose_forecast": "Proqnoz növünü seçin:",
 "btn_extended":    "Geniş proqnoz",
@@ -135,9 +135,9 @@ FORMAT:
 "express_ask":  "Neçə matç? (2-5)",
 "express_title":"Günün ekspresi:",
 "compare_ask":  "İki komanda adını yazın. Məsələn: Barcelona Real Madrid",
-"menu_history": "Tarix",
-"menu_favs":    "Sevimlilər",
-"menu_express": "Ekspress",
+"menu_history": "📋 Tarix",
+"menu_favs":    "⭐ Sevimlilər",
+"menu_express": "⚡ Ekspress",
 
 },
 
@@ -154,7 +154,7 @@ FORMAT:
 • Краткий прогноз — только главная ставка за 5 секунд
 • Live уведомления — слежу за матчем и присылаю события в реальном времени
 
-Ответьте на 2 быстрых вопроса — подберу прогнозы под вас.""",
+Выберите вид спорта — подберу прогнозы под вас.""",
 "post_onboarding": """Готово! Теперь напишите название матча — например:
 
 Барселона Алавес
@@ -186,14 +186,14 @@ FORMAT:
 "live_alert_goal":     "СИГНАЛ! {match} - ожидается гол [{minute} мин]",
 "live_alert_value":    "LIVE VALUE! {match} - есть ценность на {team} [{minute} мин]",
 "live_alert_pressure": "ДАВЛЕНИЕ! {match} - {team} создаёт давление [{minute} мин] {stat}",
-"menu_forecast": "Получить прогноз",
-"menu_matches":  "Мои матчи",
-"menu_profile":  "Профиль",
+"menu_forecast": "⚽ Прогноз",
+"menu_matches":  "🔴 Матчи",
+"menu_profile":  "👤 Профиль",
 "menu_lang":     "Сменить язык",
 "profile_text":  "ПРОФИЛЬ\n\nИмя: {name}\nЯзык: {lang}\nВсего запросов: {total_req}\n\nСпорт: {sports}\nОпыт: {exp}",
 "ob_sports":     "Какой вид спорта вас интересует больше всего?",
 "ob_exp":        "Каков ваш опыт в ставках?",
-"ob_done":       "Профиль готов! Будете получать персонализированные прогнозы.\n\nСпорт: {sports}\nОпыт: {exp}",
+"ob_done":       "Готово! Выбранный спорт: {sports}. Можете запрашивать прогнозы.",
 "match_too_far": "Этот матч слишком далеко. Я даю прогнозы только на матчи в ближайшие 7 дней.",
 "choose_forecast": "Выберите формат прогноза:",
 "btn_extended":    "Расширенный",
@@ -282,9 +282,9 @@ FORMAT:
 "express_ask": "Сколько матчей? (2-5)",
 "express_title": "Экспресс дня:",
 "compare_ask": "Напишите две команды. Например: Barcelona Real Madrid",
-"menu_history": "История",
-"menu_favs": "Избранное",
-"menu_express": "Экспресс",
+"menu_history": "📋 История",
+"menu_favs": "⭐ Избранное",
+"menu_express": "⚡ Экспресс",
 
 },
 
@@ -333,14 +333,14 @@ Or send a photo of the match schedule.""",
 "live_alert_goal":     "SIGNAL! {match} - goal expected [{minute} min]",
 "live_alert_value":    "LIVE VALUE! {match} - value on {team} [{minute} min]",
 "live_alert_pressure": "PRESSURE! {match} - {team} attacking hard [{minute} min] {stat}",
-"menu_forecast": "Get forecast",
-"menu_matches":  "My matches",
-"menu_profile":  "Profile",
+"menu_forecast": "⚽ Forecast",
+"menu_matches":  "🔴 My matches",
+"menu_profile":  "👤 Profile",
 "menu_lang":     "Change language",
 "profile_text":  "PROFILE\n\nName: {name}\nLanguage: {lang}\nTotal requests: {total_req}\n\nSports: {sports}\nExp: {exp}",
 "ob_sports":     "Which sport interests you the most?",
 "ob_exp":        "What is your betting experience?",
-"ob_done":       "Profile ready! You'll get personalized forecasts.\n\nSports: {sports}\nExp: {exp}",
+"ob_done":       "Done! Your sport: {sports}. You can now request forecasts.",
 "match_too_far": "This match is too far ahead. I only give forecasts for matches within the next 7 days.",
 "choose_forecast": "Choose forecast format:",
 "btn_extended":    "Extended",
@@ -426,9 +426,9 @@ FORMAT:
 "express_ask": "How many matches? (2-5)",
 "express_title": "Express of the day:",
 "compare_ask": "Type two teams. Example: Barcelona Real Madrid",
-"menu_history": "History",
-"menu_favs": "Favourites",
-"menu_express": "Express",
+"menu_history": "📋 History",
+"menu_favs": "⭐ Favourites",
+"menu_express": "⚡ Express",
 
 },
 "tr": {
@@ -459,14 +459,14 @@ FORMAT:
 "live_alert_goal":     "SİNYAL! {match} - Gol bekleniyor [{minute}. dk]",
 "live_alert_value":    "CANLI DEĞER! {match} - {team} üzerinde değer var [{minute}. dk]",
 "live_alert_pressure": "BASKI! {match} - {team} güçlü baskı yapıyor [{minute}. dk] {stat}",
-"menu_forecast": "Tahmin al",
-"menu_matches":  "Maçlarım",
-"menu_profile":  "Profil",
+"menu_forecast": "⚽ Tahmin",
+"menu_matches":  "🔴 Maçlarım",
+"menu_profile":  "👤 Profil",
 "menu_lang":     "Dil değiştir",
 "profile_text":  "PROFİL\n\nAd: {name}\nDil: {lang}\nToplam istek: {total_req}\n\nSpor: {sports}\nDeneyim: {exp}",
 "ob_sports":     "En çok hangi sporu seviyorsunuz?",
 "ob_exp":        "Bahis deneyiminiz nedir?",
-"ob_done":       "Profil hazır! Kişiselleştirilmiş tahminler alacaksınız.\n\nSpor: {sports}\nDeneyim: {exp}",
+"ob_done":       "Hazır! Seçilen spor: {sports}. Artık tahmin alabilirsiniz.",
 "welcome_intro": """ProqnozAI'ye hoş geldiniz!
 
 Ben bir AI spor bahis analistiyim. Yapabileceklerim:
@@ -557,9 +557,9 @@ FORMAT:
 "express_ask": "Kaç maç? (2-5)",
 "express_title": "Günün ekspresi:",
 "compare_ask": "İki takım adı yazın. Örnek: Barcelona Real Madrid",
-"menu_history": "Geçmiş",
-"menu_favs": "Favoriler",
-"menu_express": "Ekspres",
+"menu_history": "📋 Geçmiş",
+"menu_favs": "⭐ Favoriler",
+"menu_express": "⚡ Ekspres",
 
 },
 
@@ -591,14 +591,14 @@ FORMAT:
 "live_alert_goal":     "СИГНАЛ! {match} - гол күтілуде [{minute} мин]",
 "live_alert_value":    "ТІКЕЛЕЙ ЭФИР! {match} - {team} бойынша мән бар [{minute} мин]",
 "live_alert_pressure": "ҚЫСЫМ! {match} - {team} күшті шабуыл [{minute} мин] {stat}",
-"menu_forecast": "Болжам алу",
-"menu_matches":  "Матчтарым",
-"menu_profile":  "Профиль",
+"menu_forecast": "⚽ Болжам",
+"menu_matches":  "🔴 Матчтарым",
+"menu_profile":  "👤 Профиль",
 "menu_lang":     "Тілді өзгерту",
 "profile_text":  "ПРОФИЛЬ\n\nАты: {name}\nТіл: {lang}\nЖалпы сұраныстар: {total_req}\n\nСпорт: {sports}\nТәжірибе: {exp}",
 "ob_sports":     "Қандай спортты ұнатасыз?",
 "ob_exp":        "Ставкалардағы тәжірибеңіз қандай?",
-"ob_done":       "Профиль дайын! Жекелендірілген болжамдар аласыз.\n\nСпорт: {sports}\nТәжірибе: {exp}",
+"ob_done":       "Дайын! Спорт: {sports}. Болжам сұрай аласыз.",
 "welcome_intro": """ProqnozAI-ге қош келдіңіз!
 
 Мен AI спорт ставкалар аналитигімін. Не істей аламын:
@@ -685,9 +685,9 @@ FORMAT:
 "express_ask": "Неше матч? (2-5)",
 "express_title": "Күннің экспресі:",
 "compare_ask": "Екі команда атын жазыңыз. Мысалы: Barcelona Real Madrid",
-"menu_history": "Тарих",
-"menu_favs": "Таңдаулылар",
-"menu_express": "Экспресс",
+"menu_history": "📋 Тарих",
+"menu_favs": "⭐ Таңдаулылар",
+"menu_express": "⚡ Экспресс",
 
 },
 
@@ -719,14 +719,14 @@ FORMAT:
 "live_alert_goal":     "SIGNAL! {match} - gol kutilmoqda [{minute} daq]",
 "live_alert_value":    "LIVE VALUE! {match} - {team} bo'yicha qiymat bor [{minute} daq]",
 "live_alert_pressure": "BOSIM! {match} - {team} kuchli hujum [{minute} daq] {stat}",
-"menu_forecast": "Bashorat olish",
-"menu_matches":  "Mening o'yinlarim",
-"menu_profile":  "Profil",
+"menu_forecast": "⚽ Bashorat",
+"menu_matches":  "🔴 O'yinlarim",
+"menu_profile":  "👤 Profil",
 "menu_lang":     "Tilni o'zgartirish",
 "profile_text":  "PROFIL\n\nIsm: {name}\nTil: {lang}\nJami so'rovlar: {total_req}\n\nSport: {sports}\nTajriba: {exp}",
 "ob_sports":     "Qaysi sportni yaxshi ko'rasiz?",
 "ob_exp":        "Stavkalardagi tajribangiz qanday?",
-"ob_done":       "Profil tayyor! Shaxsiylashtirilgan bashoratlar olasiz.\n\nSport: {sports}\nTajriba: {exp}",
+"ob_done":       "Tayyor! Sport: {sports}. Bashorat so'rasangiz bo'ladi.",
 "welcome_intro": """ProqnozAI-ga xush kelibsiz!
 
 Men AI sport stavkalari analitikiman. Nima qila olaman:
@@ -813,9 +813,9 @@ FORMAT:
 "express_ask": "Nechta o'yin? (2-5)",
 "express_title": "Kunning ekspressi:",
 "compare_ask": "Ikki jamoa nomini yozing. Masalan: Barcelona Real Madrid",
-"menu_history": "Tarix",
-"menu_favs": "Sevimlilar",
-"menu_express": "Ekspress",
+"menu_history": "📋 Tarix",
+"menu_favs": "⭐ Sevimlilar",
+"menu_express": "⚡ Ekspress",
 
 },
 
@@ -847,14 +847,14 @@ FORMAT:
 "live_alert_goal":     "إشارة! {match} - هدف متوقع [{minute} د]",
 "live_alert_value":    "قيمة مباشرة! {match} - قيمة على {team} [{minute} د]",
 "live_alert_pressure": "ضغط! {match} - {team} يضغط بقوة [{minute} د] {stat}",
-"menu_forecast": "احصل على توقع",
-"menu_matches":  "مبارياتي",
-"menu_profile":  "الملف الشخصي",
+"menu_forecast": "⚽ توقع",
+"menu_matches":  "🔴 مبارياتي",
+"menu_profile":  "👤 الملف",
 "menu_lang":     "تغيير اللغة",
 "profile_text":  "الملف الشخصي\n\nالاسم: {name}\nاللغة: {lang}\nإجمالي الطلبات: {total_req}\n\nالرياضة: {sports}\nالخبرة: {exp}",
 "ob_sports":     "ما هي الرياضة المفضلة لديك؟",
 "ob_exp":        "ما هي خبرتك في الرهانات؟",
-"ob_done":       "الملف جاهز! ستحصل على توقعات مخصصة.\n\nالرياضة: {sports}\nالخبرة: {exp}",
+"ob_done":       "جاهز! الرياضة: {sports}. يمكنك طلب التوقعات.",
 "welcome_intro": """مرحباً بك في ProqnozAI!
 
 أنا محلل رهانات رياضية بالذكاء الاصطناعي. ما أستطيع فعله:
@@ -941,9 +941,9 @@ FORMAT:
 "express_ask": "كم مباراة؟ (2-5)",
 "express_title": "إكسبريس اليوم:",
 "compare_ask": "اكتب اسمي الفريقين. مثال: Barcelona Real Madrid",
-"menu_history": "السجل",
-"menu_favs": "المفضلة",
-"menu_express": "إكسبريس",
+"menu_history": "📋 السجل",
+"menu_favs": "⭐ المفضلة",
+"menu_express": "⚡ إكسبريس",
 
 },
 
@@ -980,29 +980,20 @@ EXP_LABELS = {
 
 # ─── Onboarding data ──────────────────────────────────────────────────────────
 OB_SPORTS = {
-    "az": [("Futbol", "football"), ("UFC/MMA", "ufc"), ("Basketbol", "nba"),
-           ("Tennis", "tennis"), ("Hokey", "hockey"), ("Hamısı", "all")],
-    "ru": [("Футбол", "football"), ("UFC/MMA", "ufc"), ("Баскетбол", "nba"),
-           ("Теннис", "tennis"), ("Хоккей", "hockey"), ("Все виды", "all")],
-    "en": [("Football", "football"), ("UFC/MMA", "ufc"), ("Basketball", "nba"),
-           ("Tennis", "tennis"), ("Hockey", "hockey"), ("All sports", "all")],
-    "tr": [("Futbol", "football"), ("UFC/MMA", "ufc"), ("Basketbol", "nba"),
-           ("Tenis", "tennis"), ("Hokey", "hockey"), ("Tümü", "all")],
-    "kz": [("Футбол", "football"), ("UFC/MMA", "ufc"), ("Баскетбол", "nba"),
-           ("Теннис", "tennis"), ("Хоккей", "hockey"), ("Барлығы", "all")],
-    "uz": [("Futbol", "football"), ("UFC/MMA", "ufc"), ("Basketbol", "nba"),
-           ("Tennis", "tennis"), ("Xokkey", "hockey"), ("Barchasi", "all")],
-    "ar": [("كرة القدم", "football"), ("UFC/MMA", "ufc"), ("كرة السلة", "nba"),
-           ("تنس", "tennis"), ("هوكي", "hockey"), ("جميع الرياضات", "all")],
-}
-OB_EXP = {
-    "az": [("Yeni başlayanam", "beginner"), ("Orta səviyyə", "mid"), ("Təcrübəliyəm", "expert")],
-    "ru": [("Новичок", "beginner"), ("Средний уровень", "mid"), ("Опытный", "expert")],
-    "en": [("Beginner", "beginner"), ("Intermediate", "mid"), ("Expert", "expert")],
-    "tr": [("Yeni başlayan", "beginner"), ("Orta seviye", "mid"), ("Deneyimli", "expert")],
-    "kz": [("Жаңадан бастаған", "beginner"), ("Орта деңгей", "mid"), ("Тәжірибелі", "expert")],
-    "uz": [("Yangi boshlagan", "beginner"), ("O'rta daraja", "mid"), ("Tajribali", "expert")],
-    "ar": [("مبتدئ", "beginner"), ("متوسط", "mid"), ("خبير", "expert")],
+    "az": [("⚽ Futbol", "football"), ("🥊 UFC/MMA", "ufc"), ("🏀 Basketbol", "nba"),
+           ("🎾 Tennis", "tennis"), ("🏒 Hokey", "hockey"), ("🏆 Hamısı", "all")],
+    "ru": [("⚽ Футбол", "football"), ("🥊 UFC/MMA", "ufc"), ("🏀 Баскетбол", "nba"),
+           ("🎾 Теннис", "tennis"), ("🏒 Хоккей", "hockey"), ("🏆 Все виды", "all")],
+    "en": [("⚽ Football", "football"), ("🥊 UFC/MMA", "ufc"), ("🏀 Basketball", "nba"),
+           ("🎾 Tennis", "tennis"), ("🏒 Hockey", "hockey"), ("🏆 All sports", "all")],
+    "tr": [("⚽ Futbol", "football"), ("🥊 UFC/MMA", "ufc"), ("🏀 Basketbol", "nba"),
+           ("🎾 Tenis", "tennis"), ("🏒 Hokey", "hockey"), ("🏆 Tümü", "all")],
+    "kz": [("⚽ Футбол", "football"), ("🥊 UFC/MMA", "ufc"), ("🏀 Баскетбол", "nba"),
+           ("🎾 Теннис", "tennis"), ("🏒 Хоккей", "hockey"), ("🏆 Барлығы", "all")],
+    "uz": [("⚽ Futbol", "football"), ("🥊 UFC/MMA", "ufc"), ("🏀 Basketbol", "nba"),
+           ("🎾 Tennis", "tennis"), ("🏒 Xokkey", "hockey"), ("🏆 Barchasi", "all")],
+    "ar": [("⚽ كرة القدم", "football"), ("🥊 UFC/MMA", "ufc"), ("🏀 كرة السلة", "nba"),
+           ("🎾 تنس", "tennis"), ("🏒 هوكي", "hockey"), ("🏆 جميع الرياضات", "all")],
 }
 
 
