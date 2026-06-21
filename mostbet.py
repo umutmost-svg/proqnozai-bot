@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re as _re
 import time
 from datetime import datetime
 
@@ -8,6 +9,21 @@ import httpx
 from config import MOSTBET_BASE, MOSTBET_CACHE_TTL, mostbet_cache, _mostbet_lock
 
 logger = logging.getLogger(__name__)
+
+_NOISE = {"fc", "cf", "ac", "sc", "afc", "fk", "sk", "bk", "rsc", "rc", "ud", "cd", "sd",
+          "fútbol", "club", "sporting", "atletico", "atletik", "united", "city", "the"}
+
+def _norm_tokens(name: str) -> set:
+    name = name.lower()
+    name = _re.sub(r"[^\w\s]", " ", name)
+    return {t for t in name.split() if len(t) > 1 and t not in _NOISE}
+
+def _fuzzy_score(q_tokens: set, cand: str) -> float:
+    c_tokens = _norm_tokens(cand)
+    if not q_tokens or not c_tokens:
+        return 0.0
+    common = q_tokens & c_tokens
+    return len(common) / max(len(q_tokens), len(c_tokens))
 
 
 # ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
@@ -100,27 +116,35 @@ def _is_within_week(match_date_str: str) -> bool:
 
 
 async def mostbet_find_match(team1: str, team2: str) -> dict | None:
-    """Search match in Mostbet by team names, only within next 7 days."""
+    """Search match in Mostbet by team names using fuzzy token matching."""
     try:
         all_matches = await _mostbet_load_matches()
-        # Filter to next 7 days + live matches
         matches = [m for m in all_matches
                    if m.get("isLive") or _is_within_week(m.get("matchBeginAt", ""))]
         logger.info(f"Mostbet filtered: {len(matches)}/{len(all_matches)} within 7 days")
 
-        t1 = team1.lower().strip(); t2 = team2.lower().strip()
-        if not t1 or not t2 or t1 == t2:
+        t1 = team1.strip(); t2 = team2.strip()
+        if not t1 or not t2 or t1.lower() == t2.lower():
             return None
+
+        t1_tok = _norm_tokens(t1); t2_tok = _norm_tokens(t2)
+        best_score = 0.0; best_match = None
+
         for m in matches:
-            t1m = m.get("team1Title", "").lower()
-            t2m = m.get("team2Title", "").lower()
-            mt  = m.get("matchTitle", "").lower()
-            if (t1 in t1m or t1 in mt) and (t2 in t2m or t2 in mt):
-                return m
-            if (t2 in t1m or t2 in mt) and (t1 in t2m or t1 in mt):
-                return m
-            if t1 in mt and t2 in mt:
-                return m
+            m1 = m.get("team1Title", ""); m2 = m.get("team2Title", "")
+            # Normal order
+            s = min(_fuzzy_score(t1_tok, m1), _fuzzy_score(t2_tok, m2))
+            # Reversed order
+            sr = min(_fuzzy_score(t1_tok, m2), _fuzzy_score(t2_tok, m1))
+            score = max(s, sr)
+            if score > best_score:
+                best_score = score; best_match = m
+
+        if best_score >= 0.5:
+            logger.info(f"Mostbet fuzzy match (score={best_score:.2f}): "
+                        f"{best_match.get('team1Title')} vs {best_match.get('team2Title')}")
+            return best_match
+        logger.info(f"Mostbet no match for '{t1}' vs '{t2}' (best={best_score:.2f})")
     except Exception as e:
         logger.error(f"mostbet_find_match: {e}")
     return None

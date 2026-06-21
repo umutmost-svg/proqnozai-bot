@@ -91,70 +91,22 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         sys_prompt += no_data_note.get(lang, no_data_note["ru"])
 
-    # ── Fetch real Mostbet odds ───────────────────────────────────────────────
-    if text:
-        words = [w.strip(".,!?-") for w in text.split() if len(w) > 2]
-        pairs_to_try = []
-        for i, w1 in enumerate(words):
-            for j, w2 in enumerate(words):
-                if i != j:
-                    pairs_to_try.append((w1, w2))
-        for i in range(len(words) - 1):
-            tw = " ".join(words[i:i+2])
-            for j, w in enumerate(words):
-                if j != i and j != i + 1:
-                    pairs_to_try.append((tw, w))
-                    pairs_to_try.append((w, tw))
-
-        mb_match = None
-        seen = set()
-        for t1, t2 in pairs_to_try:
-            key = (t1.lower(), t2.lower())
-            if key in seen: continue
-            seen.add(key)
-            mb_match = await mostbet_find_match(t1, t2)
-            if mb_match:
-                break
-
+    # ── Fetch real Mostbet odds using pre-parsed team names ───────────────────
+    parsed_teams = context.user_data.get("parsed_teams")
+    if parsed_teams:
+        t1, t2 = parsed_teams
+        mb_match = await mostbet_find_match(t1, t2)
         if mb_match:
             mb_odds = await mostbet_get_odds(mb_match["id"])
             odds_str = format_mostbet_odds(mb_odds, lang)
             if odds_str:
                 msg_content.append({"type": "text", "text": odds_str})
                 logger.info(f"Mostbet odds OK | uid={uid} match={mb_match.get('matchTitle','?')}")
-            else:
-                logger.info(f"Mostbet match found but no odds | uid={uid}")
-        else:
-            try:
-                all_m = await _mostbet_load_matches()
-                week_m = [m for m in all_m if m.get("isLive") or _is_within_week(m.get("matchBeginAt", ""))]
-                all_m_count = len(all_m); week_m_count = len(week_m)
-                sample = [f"{m.get('team1Title','?')} vs {m.get('team2Title','?')}" for m in week_m[:5]]
-                logger.info(f"Mostbet no match for '{text[:40]}' | Week: {week_m_count}/{all_m_count} | Sample: {sample}")
-
-                if all_m_count > 0 and week_m_count < all_m_count:
-                    words_all = [w.strip(".,!?") for w in text.split() if len(w) > 2]
-                    found_far = None
-                    for i, w1 in enumerate(words_all):
-                        for w2 in words_all:
-                            if w1 != w2:
-                                for m in all_m:
-                                    t1m = m.get("team1Title", "").lower()
-                                    t2m = m.get("team2Title", "").lower()
-                                    mt  = m.get("matchTitle", "").lower()
-                                    if (w1.lower() in t1m or w1.lower() in mt) and (w2.lower() in t2m or w2.lower() in mt):
-                                        found_far = m; break
-                                if found_far: break
-                            if found_far: break
-                        if found_far: break
-
-                    if found_far and not _is_within_week(found_far.get("matchBeginAt", "")):
-                        msg = T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"])
-                        await context.bot.edit_message_text(
-                            chat_id=uid, message_id=q.message.message_id, text=msg)
-                        return
-            except Exception:
-                logger.info(f"Mostbet match not found: {text[:50]} | uid={uid}")
+            elif not _is_within_week(mb_match.get("matchBeginAt", "")):
+                msg = T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"])
+                await context.bot.edit_message_text(
+                    chat_id=uid, message_id=q.message.message_id, text=msg)
+                return
 
     # ── Claude request (with conversation history) ────────────────────────────
     reply = await claude_forecast(uid, msg_content, sys_prompt, max_tok)
@@ -328,13 +280,18 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     content = [{"type": "text", "text": f"Match: {t1} vs {t2} | Tournament: {league} | Date: {dt_str}"}]
 
-    if mid:
-        mb_odds = await mostbet_get_odds(mid)
+    odds_task = asyncio.create_task(mostbet_get_odds(mid)) if mid else None
+    real_data_task = asyncio.create_task(fetch_real_data(t1, t2))
+
+    mb_odds = await odds_task if odds_task else {}
+    real_data = await real_data_task
+
+    if mb_odds:
         odds_str = format_mostbet_odds(mb_odds, lang)
         if odds_str:
             content.append({"type": "text", "text": odds_str})
 
-    real_data = await fetch_real_data(t1, t2)
+    context.user_data["parsed_teams"] = (t1, t2)
     if real_data:
         content.append({"type": "text", "text": real_data})
         context.user_data["has_real_data"] = True
@@ -513,6 +470,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if parsed.get("sport"): structured += f" | Sport: {parsed['sport']}"
             content.append({"type": "text", "text": structured})
             logger.info(f"Parsed query: {t1} vs {t2} | uid={uid}")
+            context.user_data["parsed_teams"] = (t1, t2)
             real_data = await fetch_real_data(t1, t2)
             if real_data:
                 content.append({"type": "text", "text": real_data})
@@ -521,6 +479,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 context.user_data["has_real_data"] = False
         else:
+            context.user_data["parsed_teams"] = None
             context.user_data["has_real_data"] = False
 
     context.user_data["pending_content"] = content

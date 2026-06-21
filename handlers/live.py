@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import random
 from collections import defaultdict
 from datetime import datetime
 
@@ -108,28 +107,6 @@ async def poller(app):
                             await app.bot.send_message(chat_id=uid, text=msg)
                         except Exception as e:
                             logger.error(f"notify uid={uid}: {e}")
-
-                alert_cnt[mid] += 1
-                if alert_cnt[mid] % 15 == 0 and minute > 20:
-                    atype = random.choice(["goal", "value", "pressure"])
-                    pt = random.choice([st["home"], st["away"]])
-                    stats = ["12 shots on target", "73% possession", "6 corners", "xG: 1.8"]
-                    for uid in list(uids):
-                        lang = db_lang(uid)
-                        try:
-                            if atype == "goal":
-                                msg = T[lang]["live_alert_goal"].format(
-                                    match=match_name, minute=minute)
-                            elif atype == "value":
-                                msg = T[lang]["live_alert_value"].format(
-                                    match=match_name, minute=minute, team=pt)
-                            else:
-                                msg = T[lang]["live_alert_pressure"].format(
-                                    match=match_name, minute=minute, team=pt,
-                                    stat=random.choice(stats))
-                            await app.bot.send_message(chat_id=uid, text=msg)
-                        except Exception:
-                            pass
 
                 if status == "HT" and mid not in ht_sent:
                     ht_sent.add(mid)
