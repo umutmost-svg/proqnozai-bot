@@ -1,3 +1,4 @@
+import asyncio
 import os
 import logging
 from collections import defaultdict, deque
@@ -31,6 +32,7 @@ live_subs:     dict[str, set]   = defaultdict(set)
 mostbet_cache: dict              = {}   # cache: key -> (timestamp, data)
 last_events:   dict[str, list]  = {}
 ht_sent:       set              = set()
+_mostbet_lock: asyncio.Lock     = asyncio.Lock()
 
 UNIVERSAL_WELCOME = """ProqnozAI
 
