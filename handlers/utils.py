@@ -60,35 +60,38 @@ def _sport_emoji(cat: str) -> str:
 
 
 def _fmt_dt(dt_raw: str, tz_offset: int = 0) -> str:
-    """Format match datetime string applying UTC offset.
+    """Format match datetime string.
 
-    Mostbet DD.MM.YYYY format is assumed to be UTC (same as _is_within_week).
-    If times appear shifted, check MOSTBET_TZ_OFFSET in config.
+    ISO format (T or Z) → assumed UTC → apply tz_offset (football-data.org, api-sports).
+    DD.MM.YYYY format (Mostbet) → shown as-is, no conversion (Mostbet returns local time).
+    YYYY-MM-DD HH:MM format → assumed UTC → apply tz_offset.
     """
     if not dt_raw or len(dt_raw) < 16:
         return ""
     try:
         ds = dt_raw.strip()
         if "T" in ds:
+            # ISO format from football APIs — always UTC
             dt = datetime.fromisoformat(ds.replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             else:
-                # normalize explicit timezone to UTC before applying user offset
                 dt = dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
+            dt_local = dt + timedelta(hours=tz_offset)
+            sign = "+" if tz_offset >= 0 else ""
+            return dt_local.strftime("%d.%m %H:%M") + f" (UTC{sign}{tz_offset})"
         elif "." in ds:
-            # Mostbet format: "DD.MM.YYYY HH:MM:SS" — treated as UTC
+            # Mostbet format: "DD.MM.YYYY HH:MM:SS" — already in local time, show as-is
             dt = datetime.strptime(ds[:16], "%d.%m.%Y %H:%M")
-            dt = dt.replace(tzinfo=timezone.utc)
+            return dt.strftime("%d.%m %H:%M")
         else:
-            # "YYYY-MM-DD HH:MM:SS" without T — treated as UTC
+            # "YYYY-MM-DD HH:MM:SS" — assumed UTC, apply user offset
             dt = datetime.strptime(ds[:16], "%Y-%m-%d %H:%M")
             dt = dt.replace(tzinfo=timezone.utc)
-        dt_local = dt + timedelta(hours=tz_offset)
-        sign = "+" if tz_offset >= 0 else ""
-        return dt_local.strftime("%d.%m %H:%M") + f" (UTC{sign}{tz_offset})"
+            dt_local = dt + timedelta(hours=tz_offset)
+            sign = "+" if tz_offset >= 0 else ""
+            return dt_local.strftime("%d.%m %H:%M") + f" (UTC{sign}{tz_offset})"
     except Exception:
-        # last resort: raw slice for YYYY-MM-DD HH:MM
         try:
             return dt_raw[8:10] + "." + dt_raw[5:7] + " " + dt_raw[11:16]
         except Exception:
