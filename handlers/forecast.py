@@ -1,0 +1,532 @@
+import asyncio
+import base64
+import logging
+import re as _re
+from datetime import date
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+
+from config import reg_step
+from db import db_ensure, db_get, db_lang, db_is_reg, db_is_blocked, db_log_req, db_save_history
+from translations import T, tr, SPORTS_LABELS, EXP_LABELS
+from security import uinfo, sec_blocked, rate_check, record_viol
+from claude_client import claude_forecast, parse_match_query
+from football_api import search_match, fetch_real_data
+from mostbet import (
+    _mostbet_load_matches, _is_within_week,
+    mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
+)
+from handlers.utils import main_menu, _sport_emoji, _fmt_dt
+from handlers.registration import handle_name
+
+logger = logging.getLogger(__name__)
+
+
+async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid   = q.from_user.id; ftype = q.data
+    msg_content = list(context.user_data.get("pending_content") or [])
+    text        = context.user_data.get("pending_text", "")
+    if not msg_content:
+        await q.edit_message_text(tr(uid, "no_input")); return
+
+    lang = db_lang(uid)
+    thinking = {
+        "ru": "⏳ Анализирую...", "az": "⏳ Analiz edilir...",
+        "en": "⏳ Analysing...", "tr": "⏳ Analiz ediliyor...",
+        "kz": "⏳ Талдау жасалуда...", "uz": "⏳ Tahlil qilinmoqda...",
+        "ar": "⏳ جارٍ التحليل...",
+    }
+    await q.edit_message_text(thinking.get(lang, "⏳"))
+    await context.bot.send_chat_action(chat_id=uid, action="typing")
+
+    u = db_get(uid) or {}
+    exp = u.get("experience", "beginner")
+
+    extra_hints = {
+        "ru": {
+            "expert":   " Profil: ekspert — dobavlyay xG, aziatskie linii.",
+            "mid":      " Profil: sredniy — kratko.",
+            "beginner": " Profil: novichok — ob'yasnyay prosto.",
+        },
+        "en": {
+            "expert":   " Profile: expert — include xG, Asian lines.",
+            "mid":      " Profile: intermediate — brief.",
+            "beginner": " Profile: beginner — explain simply.",
+        },
+        "az": {
+            "expert":   " Profil: tecrubell — xG, Asiya xetleri.",
+            "mid":      " Profil: orta — qisa.",
+            "beginner": " Profil: yeni — sade izah et.",
+        },
+    }
+    hint = extra_hints.get(lang, extra_hints["ru"]).get(exp, "")
+
+    if ftype == "forecast_short":
+        sys_prompt = tr(uid, "short_prompt") + hint; max_tok = 500
+    else:
+        sys_prompt = tr(uid, "system_prompt") + hint; max_tok = 1500
+
+    if context.user_data.get("has_real_data"):
+        data_note = {
+            "ru": "\n\nВАЖНО: В запросе есть РЕАЛЬНЫЕ ДАННЫЕ матчей. Используй ТОЛЬКО их для анализа формы и H2H. Не придумывай результаты.",
+            "az": "\n\nVACİB: Sorğuda REAL MATÇ VERİLƏRİ var. Formanı YALNIZ bu verilerə əsasən analiz et. Olmayan nəticələri UYDURMA.",
+            "en": "\n\nIMPORTANT: REAL MATCH DATA is provided. Use ONLY it for form and H2H. Do not invent results.",
+            "tr": "\n\nÖNEMLİ: Gerçek maç verileri sağlandı. Form ve H2H için YALNIZCA bunları kullan. Sonuçları uydurma.",
+            "kz": "\n\nМАНЫЗДЫ: Нақты матч деректері бар. Форма мен H2H үшін тек осыларды қолдан. Нәтижелерді ойдан шығарма.",
+            "uz": "\n\nMUHIM: Haqiqiy o'yin ma'lumotlari mavjud. Faqat shular asosida forma va H2H tahlili. Natijalarni o'ylab topma.",
+            "ar": "\n\nمهم: بيانات المباريات الحقيقية متوفرة. استخدمها فقط لتحليل الشكل والمواجهات. لا تخترع نتائج.",
+        }
+        sys_prompt += data_note.get(lang, data_note["ru"])
+    else:
+        no_data_note = {
+            "ru": "\n\nФОРМА: Реальные данные о последних матчах НЕ предоставлены. Напиши 'данные о форме недоступны' вместо вымышленных результатов. Анализируй только общеизвестные факты о клубах.",
+            "az": "\n\nFORMA: Real matç məlumatları verilməyib. Nəticələri UYDURMA — 'forma məlumatı əlçatan deyil' yaz.",
+            "en": "\n\nFORM: Real match data NOT provided. Write 'form data unavailable' — do NOT invent match results.",
+            "tr": "\n\nFORM: Gerçek maç verisi sağlanmadı. Sonuçları UYDURMA — 'form verisi mevcut değil' yaz.",
+            "kz": "\n\nФОРМА: Нақты деректер берілмеді. 'Форма деректері жоқ' деп жаз — нәтижелерді ОЙДАН ШЫҒАРМА.",
+            "uz": "\n\nSHAKL: Haqiqiy ma'lumotlar yo'q. Natijalarni O'YLAB TOPMA — 'shakl ma'lumoti mavjud emas' deb yoz.",
+            "ar": "\n\nالشكل: لم يتم توفير بيانات حقيقية. لا تخترع نتائج — اكتب 'بيانات الشكل غير متوفرة'.",
+        }
+        sys_prompt += no_data_note.get(lang, no_data_note["ru"])
+
+    # ── Fetch real Mostbet odds ───────────────────────────────────────────────
+    if text:
+        words = [w.strip(".,!?-") for w in text.split() if len(w) > 2]
+        pairs_to_try = []
+        for i, w1 in enumerate(words):
+            for j, w2 in enumerate(words):
+                if i != j:
+                    pairs_to_try.append((w1, w2))
+        for i in range(len(words) - 1):
+            tw = " ".join(words[i:i+2])
+            for j, w in enumerate(words):
+                if j != i and j != i + 1:
+                    pairs_to_try.append((tw, w))
+                    pairs_to_try.append((w, tw))
+
+        mb_match = None
+        seen = set()
+        for t1, t2 in pairs_to_try:
+            key = (t1.lower(), t2.lower())
+            if key in seen: continue
+            seen.add(key)
+            mb_match = await mostbet_find_match(t1, t2)
+            if mb_match:
+                break
+
+        if mb_match:
+            mb_odds = await mostbet_get_odds(mb_match["id"])
+            odds_str = format_mostbet_odds(mb_odds, lang)
+            if odds_str:
+                msg_content.append({"type": "text", "text": odds_str})
+                logger.info(f"Mostbet odds OK | uid={uid} match={mb_match.get('matchTitle','?')}")
+            else:
+                logger.info(f"Mostbet match found but no odds | uid={uid}")
+        else:
+            try:
+                all_m = await _mostbet_load_matches()
+                week_m = [m for m in all_m if m.get("isLive") or _is_within_week(m.get("matchBeginAt", ""))]
+                all_m_count = len(all_m); week_m_count = len(week_m)
+                sample = [f"{m.get('team1Title','?')} vs {m.get('team2Title','?')}" for m in week_m[:5]]
+                logger.info(f"Mostbet no match for '{text[:40]}' | Week: {week_m_count}/{all_m_count} | Sample: {sample}")
+
+                if all_m_count > 0 and week_m_count < all_m_count:
+                    words_all = [w.strip(".,!?") for w in text.split() if len(w) > 2]
+                    found_far = None
+                    for i, w1 in enumerate(words_all):
+                        for w2 in words_all:
+                            if w1 != w2:
+                                for m in all_m:
+                                    t1m = m.get("team1Title", "").lower()
+                                    t2m = m.get("team2Title", "").lower()
+                                    mt  = m.get("matchTitle", "").lower()
+                                    if (w1.lower() in t1m or w1.lower() in mt) and (w2.lower() in t2m or w2.lower() in mt):
+                                        found_far = m; break
+                                if found_far: break
+                            if found_far: break
+                        if found_far: break
+
+                    if found_far and not _is_within_week(found_far.get("matchBeginAt", "")):
+                        msg = T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"])
+                        await context.bot.edit_message_text(
+                            chat_id=uid, message_id=q.message.message_id, text=msg)
+                        return
+            except Exception:
+                logger.info(f"Mostbet match not found: {text[:50]} | uid={uid}")
+
+    # ── Claude request (with conversation history) ────────────────────────────
+    reply = await claude_forecast(uid, msg_content, sys_prompt, max_tok)
+    logger.info(f"FORECAST [{ftype}] OK | uid={uid}")
+
+    # ── Watch button ──────────────────────────────────────────────────────────
+    watch_kb = None
+    if text:
+        from config import APIFOOTBALL_KEY
+        if APIFOOTBALL_KEY:
+            ms = await search_match(" ".join(text.split()[:3]))
+            if ms:
+                m = ms[0]; context.user_data[f"mn_{m['id']}"] = m["name"]
+                watch_kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+                    tr(uid, "watch_btn") + f": {m['name'][:35]}",
+                    callback_data=f"watch_{m['id']}")]])
+
+    db_save_history(uid, text, reply)
+
+    final_kb_rows = []
+    if watch_kb:
+        final_kb_rows.extend(watch_kb.inline_keyboard)
+
+    words = text.split()
+    if len(words) >= 2:
+        from db import db_is_fav
+        if not db_is_fav(uid, words[0]):
+            final_kb_rows.append([
+                InlineKeyboardButton(tr(uid, "fav_btn_add") + f" {words[0]}",
+                                     callback_data=f"addfav_{words[0][:30]}"),
+            ])
+            if words[-1] != words[0] and not db_is_fav(uid, words[-1]):
+                final_kb_rows[-1].append(
+                    InlineKeyboardButton(tr(uid, "fav_btn_add") + f" {words[-1]}",
+                                         callback_data=f"addfav_{words[-1][:30]}")
+                )
+
+    final_kb = InlineKeyboardMarkup(final_kb_rows) if final_kb_rows else None
+    await context.bot.send_message(chat_id=uid, text=reply, reply_markup=final_kb)
+
+
+async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    lang = db_lang(uid)
+    loading = {
+        "ru": "⏳ Загружаю матчи...", "az": "⏳ Matçlar yüklənir...",
+        "en": "⏳ Loading matches...", "tr": "⏳ Maçlar yükleniyor...",
+        "kz": "⏳ Матчтар жүктелуде...", "uz": "⏳ O'yinlar yuklanmoqda...",
+        "ar": "⏳ جارٍ تحميل المباريات...",
+    }
+    msg = await update.message.reply_text(loading.get(lang, "⏳"))
+
+    all_m = await _mostbet_load_matches()
+    week_m = [m for m in all_m if m.get("isLive") or _is_within_week(m.get("matchBeginAt", ""))]
+
+    if not week_m:
+        no_m = {
+            "ru": "Загрузка матчей из Mostbet временно недоступна.\n\nНапишите название матча вручную, например:\nАрсенал ПСЖ",
+            "az": "Mostbet matçları müvəqqəti yüklənmir.\n\nMatç adını əl ilə yazın, məsələn:\nArsenal PSJ",
+            "en": "Mostbet match loading temporarily unavailable.\n\nType the match manually, e.g.:\nArsenal PSG",
+            "tr": "Mostbet maç yüklemesi geçici olarak kullanılamıyor.\n\nMaç adını manuel yazın, örn:\nArsenal PSG",
+        }
+        await msg.edit_text(no_m.get(lang, no_m["ru"])); return
+
+    sports_map = {}
+    for m in week_m:
+        cat = (m.get("lineCategory") or "Other").strip()
+        sports_map.setdefault(cat, []).append(m)
+
+    context.user_data["fm_sports"] = sports_map
+    sport_keys = sorted(sports_map, key=lambda c: -len(sports_map[c]))
+
+    btns = []
+    for i, cat in enumerate(sport_keys[:8]):
+        emoji = _sport_emoji(cat)
+        btns.append([InlineKeyboardButton(f"{emoji} {cat} ({len(sports_map[cat])})",
+                                          callback_data=f"fm_sp_{i}")])
+    title = {
+        "ru": "🏟 Выберите вид спорта:", "az": "🏟 İdman növünü seçin:",
+        "en": "🏟 Choose sport:", "tr": "🏟 Spor seçin:",
+        "kz": "🏟 Спорт түрін таңдаңыз:", "uz": "🏟 Sport turini tanlang:",
+        "ar": "🏟 اختر الرياضة:",
+    }
+    await msg.edit_text(title.get(lang, title["ru"]), reply_markup=InlineKeyboardMarkup(btns))
+
+
+async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id; lang = db_lang(uid)
+    idx = int(q.data.split("_")[2])
+    sports_map = context.user_data.get("fm_sports", {})
+    sport_keys = sorted(sports_map, key=lambda c: -len(sports_map[c]))
+    if idx >= len(sport_keys):
+        await q.edit_message_text("Ошибка."); return
+
+    sport_name = sport_keys[idx]
+    context.user_data["fm_sport_idx"] = idx
+    leagues_map = {}
+    for m in sports_map[sport_name]:
+        league = (m.get("lineSubCategory") or "Other").strip()
+        leagues_map.setdefault(league, []).append(m)
+
+    league_keys = sorted(leagues_map, key=lambda l: -len(leagues_map[l]))
+    context.user_data["fm_leagues"] = leagues_map
+
+    btns = []
+    for i, lg in enumerate(league_keys[:10]):
+        btns.append([InlineKeyboardButton(f"🏆 {lg} ({len(leagues_map[lg])})",
+                                          callback_data=f"fm_lg_{i}")])
+    btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
+
+    title = {
+        "ru": f"Турниры — {sport_name}:", "az": f"Turnirler — {sport_name}:",
+        "en": f"Tournaments — {sport_name}:", "tr": f"Turnuvalar — {sport_name}:",
+    }
+    await q.edit_message_text(title.get(lang, title["ru"]), reply_markup=InlineKeyboardMarkup(btns))
+
+
+async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id; lang = db_lang(uid)
+    idx = int(q.data.split("_")[2])
+    leagues_map = context.user_data.get("fm_leagues", {})
+    league_keys = sorted(leagues_map, key=lambda l: -len(leagues_map[l]))
+    if idx >= len(league_keys):
+        await q.edit_message_text("Ошибка."); return
+
+    league_name = league_keys[idx]
+    context.user_data["fm_league_idx"] = idx
+    matches = sorted(leagues_map[league_name],
+                     key=lambda m: (0 if m.get("isLive") else 1, m.get("matchBeginAt", "")))
+    context.user_data["fm_matches"] = matches
+
+    btns = []
+    for i, m in enumerate(matches[:10]):
+        t1 = m.get("team1Title", "?")[:18]
+        t2 = m.get("team2Title", "?")[:18]
+        prefix = "🔴 LIVE" if m.get("isLive") else _fmt_dt(m.get("matchBeginAt", ""))
+        btns.append([InlineKeyboardButton(f"{prefix}  {t1} — {t2}", callback_data=f"fm_mt_{i}")])
+    btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_league")])
+
+    title = {
+        "ru": f"Матчи — {league_name}:", "az": f"Matçlar — {league_name}:",
+        "en": f"Matches — {league_name}:", "tr": f"Maçlar — {league_name}:",
+    }
+    await q.edit_message_text(title.get(lang, title["ru"]), reply_markup=InlineKeyboardMarkup(btns))
+
+
+async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id; lang = db_lang(uid)
+    idx = int(q.data.split("_")[2])
+    matches = context.user_data.get("fm_matches", [])
+    if idx >= len(matches):
+        await q.edit_message_text("Ошибка."); return
+
+    m = matches[idx]
+    t1     = m.get("team1Title", "?")
+    t2     = m.get("team2Title", "?")
+    mid    = m.get("id")
+    league = m.get("lineSubCategory", "")
+    dt_str = _fmt_dt(m.get("matchBeginAt", ""))
+
+    loading = {
+        "ru": "⏳ Загружаю коэффициенты...", "az": "⏳ Keflər yüklənir...",
+        "en": "⏳ Loading odds...", "tr": "⏳ Oranlar yükleniyor...",
+        "kz": "⏳ Коэффициенттер жүктелуде...", "uz": "⏳ Koeffitsientlar yuklanmoqda...",
+        "ar": "⏳ جارٍ تحميل الأرباح...",
+    }
+    await q.edit_message_text(loading.get(lang, "⏳"))
+
+    content = [{"type": "text", "text": f"Match: {t1} vs {t2} | Tournament: {league} | Date: {dt_str}"}]
+
+    if mid:
+        mb_odds = await mostbet_get_odds(mid)
+        odds_str = format_mostbet_odds(mb_odds, lang)
+        if odds_str:
+            content.append({"type": "text", "text": odds_str})
+
+    real_data = await fetch_real_data(t1, t2)
+    if real_data:
+        content.append({"type": "text", "text": real_data})
+        context.user_data["has_real_data"] = True
+    else:
+        context.user_data["has_real_data"] = False
+
+    context.user_data["pending_content"] = content
+    context.user_data["pending_text"] = f"{t1} {t2}"
+
+    tl = T.get(lang, T["ru"])
+    header = f"🏆 {t1} — {t2}\n📍 {league}"
+    if dt_str: header += f"\n🕐 {dt_str}"
+    header += f"\n\n{tl['choose_forecast']}"
+    choose_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(tl["btn_extended"], callback_data="forecast_extended"),
+        InlineKeyboardButton(tl["btn_short"],    callback_data="forecast_short"),
+    ]])
+    await context.bot.send_message(chat_id=uid, text=header, reply_markup=choose_kb)
+
+
+async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id; lang = db_lang(uid)
+
+    if q.data == "fm_back_sport":
+        sports_map = context.user_data.get("fm_sports", {})
+        sport_keys = sorted(sports_map, key=lambda c: -len(sports_map[c]))
+        btns = []
+        for i, cat in enumerate(sport_keys[:8]):
+            emoji = _sport_emoji(cat)
+            btns.append([InlineKeyboardButton(f"{emoji} {cat} ({len(sports_map[cat])})",
+                                              callback_data=f"fm_sp_{i}")])
+        title = {
+            "ru": "🏟 Выберите вид спорта:", "az": "🏟 İdman növünü seçin:",
+            "en": "🏟 Choose sport:", "tr": "🏟 Spor seçin:",
+        }
+        await q.edit_message_text(title.get(lang, title["ru"]), reply_markup=InlineKeyboardMarkup(btns))
+
+    elif q.data == "fm_back_league":
+        idx = context.user_data.get("fm_sport_idx", 0)
+        sports_map = context.user_data.get("fm_sports", {})
+        sport_keys = sorted(sports_map, key=lambda c: -len(sports_map[c]))
+        if idx >= len(sport_keys):
+            await q.edit_message_text("Ошибка."); return
+        sport_name = sport_keys[idx]
+        leagues_map = context.user_data.get("fm_leagues", {})
+        league_keys = sorted(leagues_map, key=lambda l: -len(leagues_map[l]))
+        btns = []
+        for i, lg in enumerate(league_keys[:10]):
+            btns.append([InlineKeyboardButton(f"🏆 {lg} ({len(leagues_map[lg])})",
+                                              callback_data=f"fm_lg_{i}")])
+        btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
+        title = {
+            "ru": f"Турниры — {sport_name}:", "az": f"Turnirler — {sport_name}:",
+            "en": f"Tournaments — {sport_name}:", "tr": f"Turnuvalar — {sport_name}:",
+        }
+        await q.edit_message_text(title.get(lang, title["ru"]), reply_markup=InlineKeyboardMarkup(btns))
+
+
+async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user; uid = user.id; info = uinfo(update)
+    db_ensure(uid, user.username or "", user.language_code)
+    text = update.message.text or update.message.caption or ""
+
+    step = reg_step.get(uid)
+    if step == "awaiting_name" and update.message.text:
+        await handle_name(update, context); return
+    if step in ("awaiting_lang", "awaiting_name", "ob_sports", "ob_exp"):
+        return
+
+    if not db_is_reg(uid):
+        await update.message.reply_text(tr(uid, "need_reg")); return
+    if db_is_blocked(uid):
+        await update.message.reply_text(tr(uid, "db_blocked")); return
+
+    # Menu routing
+    lang = db_lang(uid); tl = T[lang]
+    if text == tl["menu_matches"]:
+        from handlers.live import matches_cmd
+        await matches_cmd(update, context); return
+    if text == tl["menu_profile"]:
+        from handlers.registration import profile_cmd
+        await profile_cmd(update, context); return
+    if text == tl["menu_history"]:
+        from handlers.history import history_cmd
+        await history_cmd(update, context); return
+    if text == tl["menu_favs"]:
+        from handlers.favorites import favs_cmd
+        await favs_cmd(update, context); return
+    if text == tl["menu_express"]:
+        from handlers.express import express_cmd
+        await express_cmd(update, context); return
+    if text == tl["menu_lang"]:
+        await update.message.reply_text(tr(uid, "choose_lang"),
+            reply_markup=__import__('handlers.utils', fromlist=['lang_kb']).lang_kb()); return
+    if text == tl["menu_forecast"]:
+        await forecast_menu_start(update, context); return
+
+    # Compare handler
+    if context.user_data.get("awaiting_compare"):
+        from handlers.express import handle_compare
+        if await handle_compare(uid, text, context): return
+
+    # Security
+    blk, secs = sec_blocked(uid)
+    if blk:
+        __import__('logging').getLogger("suspicious").warning(f"BLK | {info}")
+        await update.message.reply_text(tr(uid, "blocked", m=secs//60, s=secs%60)); return
+    exceeded, wait = rate_check(uid)
+    if exceeded:
+        from config import violations
+        if record_viol(uid, info):
+            await update.message.reply_text(tr(uid, "auto_blocked", min=__import__('config').SPAM_DUR//60))
+        else:
+            await update.message.reply_text(
+                tr(uid, "rate_limit", w=wait, v=violations[uid], max=__import__('config').SPAM_AFTER))
+        return
+    from config import violations
+    violations[uid] = 0
+
+    mtype = "PHOTO" if update.message.photo else "TEXT"
+    logger.info(f"MSG [{mtype}] | {info}")
+    db_log_req(uid, mtype)
+    await update.message.chat.send_action("typing")
+
+    photo = update.message.photo
+    if len(text) > 1000:
+        __import__('logging').getLogger("suspicious").warning(f"LONG | {info}")
+        await update.message.reply_text(tr(uid, "long_text")); return
+    inj = ["ignore previous", "system prompt", "forget instructions", "act as", "jailbreak"]
+    if any(k.lower() in text.lower() for k in inj):
+        __import__('logging').getLogger("suspicious").warning(f"INJ | {info}")
+        await update.message.reply_text(tr(uid, "injection")); return
+
+    content = []
+    if photo:
+        f = await context.bot.get_file(photo[-1].file_id)
+        fb = await f.download_as_bytearray()
+        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                         "data": base64.standard_b64encode(fb).decode("utf-8")}})
+    if text:
+        content.append({"type": "text", "text": text})
+    elif not photo:
+        await update.message.reply_text(tr(uid, "no_input")); return
+    else:
+        content.append({"type": "text", "text": tr(uid, "img_prompt")})
+
+    # Smart date check
+    date_patterns = [r'\b(\d{1,2})[./](\d{1,2})\b', r'\b(\d{4})-(\d{2})-(\d{2})\b']
+    for pat in date_patterns:
+        dm = _re.search(pat, text)
+        if dm:
+            try:
+                g = dm.groups()
+                if len(g) == 2:
+                    fd = date(date.today().year, int(g[1]), int(g[0]))
+                elif len(g) == 3:
+                    fd = date(int(g[0]), int(g[1]), int(g[2]))
+                else:
+                    fd = None
+                if fd and (fd - date.today()).days > 7:
+                    await update.message.reply_text(
+                        T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"]))
+                    return
+            except Exception:
+                pass
+            break
+
+    # Parse teams, fetch real form + H2H
+    if text and not photo:
+        parsed = await parse_match_query(text, lang)
+        if parsed.get("team1") and parsed.get("team2"):
+            t1, t2 = parsed["team1"], parsed["team2"]
+            structured = f"Teams: {t1} vs {t2}"
+            if parsed.get("date"):  structured += f" | Date: {parsed['date']}"
+            if parsed.get("sport"): structured += f" | Sport: {parsed['sport']}"
+            content.append({"type": "text", "text": structured})
+            logger.info(f"Parsed query: {t1} vs {t2} | uid={uid}")
+            real_data = await fetch_real_data(t1, t2)
+            if real_data:
+                content.append({"type": "text", "text": real_data})
+                context.user_data["has_real_data"] = True
+                logger.info(f"Real data fetched: {t1} vs {t2} | uid={uid}")
+            else:
+                context.user_data["has_real_data"] = False
+        else:
+            context.user_data["has_real_data"] = False
+
+    context.user_data["pending_content"] = content
+    context.user_data["pending_text"] = text
+    choose_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(tl["btn_extended"], callback_data="forecast_extended"),
+        InlineKeyboardButton(tl["btn_short"],    callback_data="forecast_short"),
+    ]])
+    await update.message.reply_text(tl["choose_forecast"], reply_markup=choose_kb)
