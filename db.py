@@ -26,8 +26,11 @@ def db_init():
             onboarding_done INTEGER DEFAULT 0,
             total_requests  INTEGER DEFAULT 0,
             last_active     TEXT DEFAULT '',
-            joined_at       TEXT DEFAULT (datetime('now'))
+            joined_at       TEXT DEFAULT (datetime('now')),
+            tz_offset       INTEGER DEFAULT 0
         );
+        -- migrate: add tz_offset if missing
+        CREATE TABLE IF NOT EXISTS _migrations (key TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER, msg_type TEXT,
@@ -65,6 +68,13 @@ def db_init():
             user_id INTEGER, created_at TEXT DEFAULT (datetime('now'))
         );
         """)
+        # Migration: add tz_offset column to existing DBs
+        try:
+            c.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER DEFAULT 0")
+        except Exception:
+            pass  # column already exists
+
+_LANG_TZ = {"az": 4, "ru": 3, "tr": 3, "kz": 5, "uz": 5, "ar": 3, "en": 0}
 
 def detect_lang(tg_lang: str | None) -> str:
     """Map Telegram language_code to bot language."""
@@ -80,8 +90,16 @@ def detect_lang(tg_lang: str | None) -> str:
 
 def db_ensure(uid, uname, tg_lang=None):
     lang = detect_lang(tg_lang)
+    tz = _LANG_TZ.get(lang, 0)
     with con() as c:
-        c.execute("INSERT OR IGNORE INTO users (user_id,username,lang) VALUES (?,?,?)", (uid, uname, lang))
+        c.execute(
+            "INSERT OR IGNORE INTO users (user_id,username,lang,tz_offset) VALUES (?,?,?,?)",
+            (uid, uname, lang, tz))
+
+def db_get_tz(uid) -> int:
+    with con() as c:
+        row = c.execute("SELECT tz_offset FROM users WHERE user_id=?", (uid,)).fetchone()
+    return row[0] if row else 0
 
 def db_set(uid, field, val):
     with con() as c: c.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (val, uid))

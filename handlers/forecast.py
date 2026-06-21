@@ -17,7 +17,7 @@ from mostbet import (
     _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
 )
-from handlers.utils import main_menu, _sport_emoji, _fmt_dt
+from handlers.utils import main_menu, _sport_emoji, _fmt_dt, fmt_dt_for_user
 from handlers.registration import handle_name
 
 logger = logging.getLogger(__name__)
@@ -244,7 +244,7 @@ async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, m in enumerate(matches[:10]):
         t1 = m.get("team1Title", "?")[:18]
         t2 = m.get("team2Title", "?")[:18]
-        prefix = "🔴 LIVE" if m.get("isLive") else _fmt_dt(m.get("matchBeginAt", ""))
+        prefix = "🔴 LIVE" if m.get("isLive") else fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
         btns.append([InlineKeyboardButton(f"{prefix}  {t1} — {t2}", callback_data=f"fm_mt_{i}")])
     btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_league")])
 
@@ -268,7 +268,7 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t2     = m.get("team2Title", "?")
     mid    = m.get("id")
     league = m.get("lineSubCategory", "")
-    dt_str = _fmt_dt(m.get("matchBeginAt", ""))
+    dt_str = fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
 
     loading = {
         "ru": "⏳ Загружаю коэффициенты...", "az": "⏳ Keflər yüklənir...",
@@ -366,6 +366,10 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tr(uid, "need_reg")); return
     if db_is_blocked(uid):
         await update.message.reply_text(tr(uid, "db_blocked")); return
+
+    # Timezone input
+    from handlers.registration import handle_tz_input
+    if await handle_tz_input(update, context): return
 
     # Menu routing
     lang = db_lang(uid); tl = T[lang]

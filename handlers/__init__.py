@@ -1,7 +1,7 @@
 from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
 from config import ADMIN_ID
-from handlers.registration import start, lang_cb, lang_cmd, ob_cb, profile_cmd
+from handlers.registration import start, lang_cb, lang_cmd, ob_cb, profile_cmd, tz_cmd, handle_tz_input
 from handlers.forecast import (
     forecast_cb, forecast_menu_start,
     fm_sport_cb, fm_league_cb, fm_match_cb, fm_back_cb,
@@ -18,6 +18,7 @@ def register_handlers(app):
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("lang",    lang_cmd))
     app.add_handler(CommandHandler("profile", profile_cmd))
+    app.add_handler(CommandHandler("tz",      tz_cmd))
     app.add_handler(CommandHandler("matches", matches_cmd))
     app.add_handler(CommandHandler("admin",   admin_cmd))
     app.add_handler(CommandHandler("cancel",  cancel_cmd))

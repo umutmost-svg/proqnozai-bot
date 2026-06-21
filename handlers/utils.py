@@ -1,6 +1,8 @@
+from datetime import datetime, timezone, timedelta
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from db import db_lang
+from db import db_lang, db_get_tz
 from translations import T
 
 
@@ -57,7 +59,27 @@ def _sport_emoji(cat: str) -> str:
     return next((v for k, v in SPORT_EMOJI.items() if k in cl), "🏆")
 
 
-def _fmt_dt(dt_raw: str) -> str:
-    if len(dt_raw) < 16:
+def _fmt_dt(dt_raw: str, tz_offset: int = 0) -> str:
+    """Format match datetime string applying UTC offset."""
+    if not dt_raw or len(dt_raw) < 16:
         return ""
-    return dt_raw[8:10] + "." + dt_raw[5:7] + " " + dt_raw[11:16]
+    try:
+        ds = dt_raw.strip()
+        if "T" in ds:
+            dt = datetime.fromisoformat(ds.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        elif "." in ds:
+            dt = datetime.strptime(ds[:16], "%d.%m.%Y %H:%M")
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            return dt_raw[8:10] + "." + dt_raw[5:7] + " " + dt_raw[11:16]
+        dt_local = dt + timedelta(hours=tz_offset)
+        sign = "+" if tz_offset >= 0 else ""
+        return dt_local.strftime(f"%d.%m %H:%M") + f" (UTC{sign}{tz_offset})"
+    except Exception:
+        return dt_raw[8:10] + "." + dt_raw[5:7] + " " + dt_raw[11:16]
+
+
+def fmt_dt_for_user(dt_raw: str, uid: int) -> str:
+    return _fmt_dt(dt_raw, db_get_tz(uid))
