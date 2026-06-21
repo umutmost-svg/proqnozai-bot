@@ -23,50 +23,23 @@ from handlers.registration import handle_name
 logger = logging.getLogger(__name__)
 
 
-async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    uid   = q.from_user.id; ftype = q.data
-    msg_content = list(context.user_data.get("pending_content") or [])
-    text        = context.user_data.get("pending_text", "")
-    if not msg_content:
-        await q.edit_message_text(tr(uid, "no_input")); return
-
+async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, status_msg):
+    """Build prompt, call Claude, send reply. status_msg is the '⏳' message to edit."""
     lang = db_lang(uid)
-    thinking = {
-        "ru": "⏳ Анализирую...", "az": "⏳ Analiz edilir...",
-        "en": "⏳ Analysing...", "tr": "⏳ Analiz ediliyor...",
-        "kz": "⏳ Талдау жасалуда...", "uz": "⏳ Tahlil qilinmoqda...",
-        "ar": "⏳ جارٍ التحليل...",
-    }
-    await q.edit_message_text(thinking.get(lang, "⏳"))
-    await context.bot.send_chat_action(chat_id=uid, action="typing")
+    msg_content = list(context.user_data.get("pending_content") or [])
+    text = context.user_data.get("pending_text", "")
+    if not msg_content:
+        await status_msg.edit_text(tr(uid, "no_input")); return
 
     u = db_get(uid) or {}
     exp = u.get("experience", "beginner")
-
     extra_hints = {
-        "ru": {
-            "expert":   " Profil: ekspert — dobavlyay xG, aziatskie linii.",
-            "mid":      " Profil: sredniy — kratko.",
-            "beginner": " Profil: novichok — ob'yasnyay prosto.",
-        },
-        "en": {
-            "expert":   " Profile: expert — include xG, Asian lines.",
-            "mid":      " Profile: intermediate — brief.",
-            "beginner": " Profile: beginner — explain simply.",
-        },
-        "az": {
-            "expert":   " Profil: tecrubell — xG, Asiya xetleri.",
-            "mid":      " Profil: orta — qisa.",
-            "beginner": " Profil: yeni — sade izah et.",
-        },
+        "ru": {"expert": " Profil: ekspert — xG, aziatskie linii.", "mid": " Profil: sredniy — kratko.", "beginner": " Profil: novichok — prosto."},
+        "en": {"expert": " Profile: expert — xG, Asian lines.", "mid": " Profile: intermediate — brief.", "beginner": " Profile: beginner — simple."},
+        "az": {"expert": " Profil: tecrubell — xG, Asiya xetleri.", "mid": " Profil: orta — qisa.", "beginner": " Profil: yeni — sade."},
     }
     hint = extra_hints.get(lang, extra_hints["ru"]).get(exp, "")
-
-    if ftype == "forecast_short":
-        sys_prompt = tr(uid, "short_prompt") + hint; max_tok = 500
-    else:
-        sys_prompt = tr(uid, "system_prompt") + hint; max_tok = 1500
+    sys_prompt = tr(uid, "system_prompt") + hint
 
     if context.user_data.get("has_real_data"):
         data_note = {
@@ -81,17 +54,17 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sys_prompt += data_note.get(lang, data_note["ru"])
     else:
         no_data_note = {
-            "ru": "\n\nФОРМА: Реальные данные о последних матчах НЕ предоставлены. Напиши 'данные о форме недоступны' вместо вымышленных результатов. Анализируй только общеизвестные факты о клубах.",
-            "az": "\n\nFORMA: Real matç məlumatları verilməyib. Nəticələri UYDURMA — 'forma məlumatı əlçatan deyil' yaz.",
-            "en": "\n\nFORM: Real match data NOT provided. Write 'form data unavailable' — do NOT invent match results.",
-            "tr": "\n\nFORM: Gerçek maç verisi sağlanmadı. Sonuçları UYDURMA — 'form verisi mevcut değil' yaz.",
-            "kz": "\n\nФОРМА: Нақты деректер берілмеді. 'Форма деректері жоқ' деп жаз — нәтижелерді ОЙДАН ШЫҒАРМА.",
-            "uz": "\n\nSHAKL: Haqiqiy ma'lumotlar yo'q. Natijalarni O'YLAB TOPMA — 'shakl ma'lumoti mavjud emas' deb yoz.",
-            "ar": "\n\nالشكل: لم يتم توفير بيانات حقيقية. لا تخترع نتائج — اكتب 'بيانات الشكل غير متوفرة'.",
+            "ru": "\n\nФОРМА: Реальные данные НЕ предоставлены. Напиши 'данные о форме недоступны' вместо вымышленных результатов.",
+            "az": "\n\nFORMA: Real məlumatlar verilməyib. 'Forma məlumatı əlçatan deyil' yaz — UYDURMА.",
+            "en": "\n\nFORM: Real match data NOT provided. Write 'form data unavailable' — do NOT invent results.",
+            "tr": "\n\nFORM: Gerçek veri sağlanmadı. 'Form verisi mevcut değil' yaz — UYDURMA.",
+            "kz": "\n\nФОРМА: Деректер берілмеді. 'Форма деректері жоқ' деп жаз.",
+            "uz": "\n\nSHAKL: Ma'lumotlar yo'q. 'Shakl ma'lumoti mavjud emas' deb yoz.",
+            "ar": "\n\nالشكل: لا بيانات. اكتب 'بيانات الشكل غير متوفرة'.",
         }
         sys_prompt += no_data_note.get(lang, no_data_note["ru"])
 
-    # ── Fetch real Mostbet odds using pre-parsed team names ───────────────────
+    # Fetch Mostbet odds for text-based queries
     parsed_teams = context.user_data.get("parsed_teams")
     if parsed_teams:
         t1, t2 = parsed_teams
@@ -104,15 +77,11 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"Mostbet odds OK | uid={uid} match={mb_match.get('matchTitle','?')}")
             elif not _is_within_week(mb_match.get("matchBeginAt", "")):
                 msg = T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"])
-                await context.bot.edit_message_text(
-                    chat_id=uid, message_id=q.message.message_id, text=msg)
-                return
+                await status_msg.edit_text(msg); return
 
-    # ── Claude request (with conversation history) ────────────────────────────
-    reply = await claude_forecast(uid, msg_content, sys_prompt, max_tok)
-    logger.info(f"FORECAST [{ftype}] OK | uid={uid}")
+    reply = await claude_forecast(uid, msg_content, sys_prompt, 1500)
+    logger.info(f"FORECAST OK | uid={uid}")
 
-    # ── Watch button ──────────────────────────────────────────────────────────
     watch_kb = None
     if text:
         from config import APIFOOTBALL_KEY
@@ -145,7 +114,13 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
     final_kb = InlineKeyboardMarkup(final_kb_rows) if final_kb_rows else None
-    await context.bot.send_message(chat_id=uid, text=reply, reply_markup=final_kb)
+    await status_msg.edit_text(reply, reply_markup=final_kb)
+
+
+async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stub kept for any old inline buttons still in user chats."""
+    q = update.callback_query; await q.answer()
+    await _generate_forecast(q.from_user.id, context, q.message)
 
 
 async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
@@ -301,15 +276,18 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["pending_content"] = content
     context.user_data["pending_text"] = f"{t1} {t2}"
 
-    tl = T.get(lang, T["ru"])
+    thinking = {
+        "ru": "⏳ Анализирую...", "az": "⏳ Analiz edilir...",
+        "en": "⏳ Analysing...", "tr": "⏳ Analiz ediliyor...",
+        "kz": "⏳ Талдау жасалуда...", "uz": "⏳ Tahlil qilinmoqda...",
+        "ar": "⏳ جارٍ التحليل...",
+    }
     header = f"🏆 {t1} — {t2}\n📍 {league}"
     if dt_str: header += f"\n🕐 {dt_str}"
-    header += f"\n\n{tl['choose_forecast']}"
-    choose_kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton(tl["btn_extended"], callback_data="forecast_extended"),
-        InlineKeyboardButton(tl["btn_short"],    callback_data="forecast_short"),
-    ]])
-    await context.bot.send_message(chat_id=uid, text=header, reply_markup=choose_kb)
+    status_msg = await context.bot.send_message(
+        chat_id=uid, text=header + f"\n\n{thinking.get(lang, '⏳')}")
+    await context.bot.send_chat_action(chat_id=uid, action="typing")
+    await _generate_forecast(uid, context, status_msg)
 
 
 async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -488,8 +466,12 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["pending_content"] = content
     context.user_data["pending_text"] = text
-    choose_kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton(tl["btn_extended"], callback_data="forecast_extended"),
-        InlineKeyboardButton(tl["btn_short"],    callback_data="forecast_short"),
-    ]])
-    await update.message.reply_text(tl["choose_forecast"], reply_markup=choose_kb)
+
+    thinking = {
+        "ru": "⏳ Анализирую...", "az": "⏳ Analiz edilir...",
+        "en": "⏳ Analysing...", "tr": "⏳ Analiz ediliyor...",
+        "kz": "⏳ Талдау жасалуда...", "uz": "⏳ Tahlil qilinmoqda...",
+        "ar": "⏳ جارٍ التحليل...",
+    }
+    status_msg = await update.message.reply_text(thinking.get(lang, "⏳"))
+    await _generate_forecast(uid, context, status_msg)

@@ -54,9 +54,6 @@ Və ya oyun cədvəlinin şəklini göndərin.""",
 "ob_exp":        "Mərcdə təcrübəniz nə qədərdir?",
 "ob_done":       "Hazırdır! Seçdiyiniz idman: {sports}. Artıq proqnoz ala bilərsiniz.",
 "match_too_far": "Bu matç 1 həftədən uzaqdadır. Yalnız növbəti 7 gün ərzindəki matçlar üçün proqnoz verirəm.",
-"choose_forecast": "Proqnoz növünü seçin:",
-"btn_extended":    "Geniş proqnoz",
-"btn_short":       "Qısa proqnoz",
 "system_prompt": """Sən peşəkar idman analitikisən. Dürüst və real proqnozlar ver.
 
 PROFİL: İdman: {sports} | Təcrübə: {exp}
@@ -105,18 +102,6 @@ Xeyr — XX% | Kef: X.XX-X.XX
 [Niyə məhz bu mərc — 1-2 cümlə real əsaslandırma]
 
 ⚠️ Analitik proqnozdur, nəticə zəmanəti deyil.""",
-"short_prompt": """Qısa proqnoz. Profil: {sports} | {exp}
-
-QАYDALAR: real keflər, getmiş oyunçuları qeyd etmə, yalnız mətn və emoji.
-
-FORMAT:
-🏆 [Komanda A] — [Komanda B] | [Turnir]
-🎯 Favorit: [Komanda] XX% | Kef X.XX-X.XX
-⚽ Total 2.5 üstündə: XX% | Kef X.XX-X.XX
-🔥 Hər ikisi qol Bəli: XX% | Kef X.XX-X.XX
-⚡ MƏRCİ: [növü] | Kef X.XX-X.XX
-[1 cümlə — niyə]
-⚠️ Analitik proqnozdur.""",
 "live_tip_prompt": "Canlı mərc analitikisən. Oyun: {match}, {minute}. dəq, hesab {score}. Hadisə: {event}. Ən yaxşı canlı mərci tövsiyə et. Qısa, maks 2 cümlə.",
 "fav_added":    "Sevimlilərə əlavə edildi: {team}",
 "fav_removed":  "Sevimlilərdən silindi: {team}",
@@ -195,9 +180,6 @@ FORMAT:
 "ob_exp":        "Каков ваш опыт в ставках?",
 "ob_done":       "Готово! Выбранный спорт: {sports}. Можете запрашивать прогнозы.",
 "match_too_far": "Этот матч слишком далеко. Я даю прогнозы только на матчи в ближайшие 7 дней.",
-"choose_forecast": "Выберите формат прогноза:",
-"btn_extended":    "Расширенный",
-"btn_short":       "Краткий",
 "system_prompt": """Ты — профессиональный спортивный аналитик. Твоя задача — давать честные, реалистичные прогнозы.
 
 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ: Спорт: {sports} | Опыт: {exp}
@@ -252,18 +234,6 @@ FORMAT:
 [Почему именно эта ставка — 1-2 предложения с реальным обоснованием]
 
 ⚠️ Это аналитический прогноз, не гарантия результата.""",
-"short_prompt": """Краткий прогноз. Профиль: {sports} | {exp}
-
-ПРАВИЛА: реалистичные коэффициенты, не упоминай ушедших игроков, только чистый текст и emoji.
-
-ФОРМАТ:
-🏆 [Команда А] — [Команда Б] | [Турнир]
-🎯 Фаворит: [Команда] XX% | Кэф X.XX-X.XX
-⚽ Тотал 2.5 больше: XX% | Кэф X.XX-X.XX
-🔥 Обе забьют Да: XX% | Кэф X.XX-X.XX
-⚡ СТАВКА: [тип ставки] | Кэф X.XX-X.XX
-[1 предложение — почему]
-⚠️ Аналитический прогноз.""",
 "live_tip_prompt": "Ты лайв-аналитик. Матч {match}, {minute} мин, счёт {score}. Событие: {event}. Дай лучшую лайв-ставку. Коротко, макс 2 предложения.",
 "fav_added": "Добавлено в избранное: {team}",
 "fav_removed": "Удалено из избранного: {team}",
@@ -342,9 +312,6 @@ Or send a photo of the match schedule.""",
 "ob_exp":        "What is your betting experience?",
 "ob_done":       "Done! Your sport: {sports}. You can now request forecasts.",
 "match_too_far": "This match is too far ahead. I only give forecasts for matches within the next 7 days.",
-"choose_forecast": "Choose forecast format:",
-"btn_extended":    "Extended",
-"btn_short":       "Short",
 "system_prompt": """You are a professional sports analyst. Your job is to give honest, realistic forecasts.
 
 USER PROFILE: Sports: {sports} | Experience: {exp}
@@ -396,18 +363,6 @@ No — XX% | Odds: X.XX-X.XX
 [Why this bet — 1-2 sentences with real reasoning]
 
 ⚠️ Analytical forecast, not a guaranteed result.""",
-"short_prompt": """Short forecast. Profile: {sports} | {exp}
-
-RULES: realistic odds, never mention departed players, plain text and emoji only.
-
-FORMAT:
-🏆 [Team A] — [Team B] | [Tournament]
-🎯 Favourite: [Team] XX% | Odds X.XX-X.XX
-⚽ Over 2.5: XX% | Odds X.XX-X.XX
-🔥 BTTS Yes: XX% | Odds X.XX-X.XX
-⚡ BET: [type] | Odds X.XX-X.XX
-[1 sentence — why]
-⚠️ Analytical forecast.""",
 "live_tip_prompt": "You are a live betting analyst. Match {match}, {minute} min, score {score}. Event: {event}. Best live bet now. Max 2 sentences.",
 "fav_added": "Added to favourites: {team}",
 "fav_removed": "Removed from favourites: {team}",
@@ -479,9 +434,6 @@ Ben bir AI spor bahis analistiyim. Yapabileceklerim:
 2 hızlı soruyu yanıtlayın — tahminleri kişiselleştireyim.""",
 "post_onboarding": "Hazır! Şimdi bir maç adı yazın — örneğin:\n\nBarcelona Alavés\nReal Madrid Arsenal\nPSG Manchester City\n\nYa da maç programının fotoğrafını gönderin.",
 "match_too_far": "Bu maç çok uzakta. Yalnızca önümüzdeki 7 gün içindeki maçlar için tahmin yapıyorum.",
-"choose_forecast": "Tahmin formatını seçin:",
-"btn_extended":    "Genişletilmiş",
-"btn_short":       "Kısa",
 "system_prompt": """Sen profesyonel bir spor analistisin. Dürüst ve gerçekçi tahminler ver.
 
 PROFİL: Spor: {sports} | Deneyim: {exp}
@@ -529,16 +481,6 @@ Hayır — XX% | Oran: X.XX-X.XX
 [Neden bu bahis — 1-2 cümle]
 
 ⚠️ Analitik tahmin, sonuç garantisi değildir.""",
-"short_prompt": """Kısa tahmin. Profil: {sports} | {exp}
-KURALLAR: gerçekçi oranlar, ayrılan oyuncuları belirtme, yalnızca metin ve emoji.
-FORMAT:
-🏆 [Takım A] — [Takım B] | [Turnuva]
-🎯 Favori: [Takım] XX% | Oran X.XX-X.XX
-⚽ 2.5 Üstü: XX% | Oran X.XX-X.XX
-🔥 İTGO Evet: XX% | Oran X.XX-X.XX
-⚡ BAHİS: [tür] | Oran X.XX-X.XX
-[1 cümle]
-⚠️ Analitik tahmin.""",
 "live_tip_prompt": "Canlı bahis analistisin. Maç {match}, {minute}. dk, skor {score}. Olay: {event}. En iyi canlı bahsi öner. Kısa, max 2 cümle.",
 "fav_added": "Favorilere eklendi: {team}",
 "fav_removed": "Favorilerden kaldırıldı: {team}",
@@ -611,9 +553,6 @@ FORMAT:
 2 сұраққа жауап беріңіз — болжамдарды жекелендіремін.""",
 "post_onboarding": "Дайын! Матч атын жазыңыз — мысалы:\n\nБарселона Алавес\nРеал Мадрид Арсенал\nПСЖ Манчестер Сити\n\nНемесе матч кестесінің фотосын жіберіңіз.",
 "match_too_far": "Бұл матч тым алыс. Мен тек келесі 7 күн ішіндегі матчтарға болжам беремін.",
-"choose_forecast": "Болжам форматын таңдаңыз:",
-"btn_extended":    "Толық",
-"btn_short":       "Қысқаша",
 "system_prompt": """Сен кәсіби спорт аналитикісің. Адал және нақты болжамдар бер.
 
 ПРОФИЛЬ: Спорт: {sports} | Тәжірибе: {exp}
@@ -657,16 +596,6 @@ FORMAT:
 [Неге дәл осы ставка — 1-2 сөйлем]
 
 ⚠️ Аналитикалық болжам, нәтиже кепілі емес.""",
-"short_prompt": """Қысқа болжам. Профиль: {sports} | {exp}
-ЕРЕЖЕЛЕР: нақты коэффициенттер, кеткен ойыншыларды атама, тек мәтін және emoji.
-FORMAT:
-🏆 [А] — [Б] | [Турнир]
-🎯 Фаворит: [Команда] XX% | Коэф X.XX-X.XX
-⚽ 2.5 жоғары: XX% | Коэф X.XX-X.XX
-🔥 Екеуі де: Иә XX% | Коэф X.XX-X.XX
-⚡ СТАВКА: [түрі] | Коэф X.XX-X.XX
-[1 сөйлем]
-⚠️ Аналитикалық болжам.""",
 "live_tip_prompt": "Тікелей ставка аналитигісің. Матч {match}, {minute} мин, есеп {score}. Оқиға: {event}. Үздік тікелей ставканы ұсын. Қысқа, максимум 2 сөйлем.",
 "fav_added": "Таңдаулыларға қосылды: {team}",
 "fav_removed": "Таңдаулылардан жойылды: {team}",
@@ -739,9 +668,6 @@ Men AI sport stavkalari analitikiman. Nima qila olaman:
 2 ta tezkor savolga javob bering — bashoratlarni shaxsiylashtiraman.""",
 "post_onboarding": "Tayyor! O'yin nomini yozing — masalan:\n\nBarcelona Alavés\nReal Madrid Arsenal\nPSG Manchester City\n\nYoki o'yin jadvalining rasmini yuboring.",
 "match_too_far": "Bu o'yin juda uzoqda. Men faqat keyingi 7 kun ichidagi o'yinlar uchun bashorat beraman.",
-"choose_forecast": "Bashorat formatini tanlang:",
-"btn_extended":    "Kengaytirilgan",
-"btn_short":       "Qisqa",
 "system_prompt": """Sen professional sport analitikisisan. Halol va real bashoratlar ber.
 
 PROFIL: Sport: {sports} | Tajriba: {exp}
@@ -785,16 +711,6 @@ Yo'q — XX% | Koef: X.XX-X.XX
 [Nima uchun — 1-2 jumla]
 
 ⚠️ Tahliliy bashorat, natija kafolati emas.""",
-"short_prompt": """Qisqa bashorat. Profil: {sports} | {exp}
-QOIDALAR: real koeffitsientlar, ketgan o'yinchilarni eslatma, faqat matn va emoji.
-FORMAT:
-🏆 [A] — [B] | [Turnir]
-🎯 Favorit: [Jamoa] XX% | Koef X.XX-X.XX
-⚽ 2.5 yuqori: XX% | Koef X.XX-X.XX
-🔥 Ikkala ham: Ha XX% | Koef X.XX-X.XX
-⚡ STAVKA: [turi] | Koef X.XX-X.XX
-[1 jumla]
-⚠️ Tahliliy bashorat.""",
 "live_tip_prompt": "Sen jonli stavkalar analitikisisan. O'yin {match}, {minute} daq, hisob {score}. Voqea: {event}. Eng yaxshi jonli stavkani tavsiya et. Qisqa, max 2 jumla.",
 "fav_added": "Sevimlilariga qo'shildi: {team}",
 "fav_removed": "Sevimlilardan o'chirildi: {team}",
@@ -867,9 +783,6 @@ FORMAT:
 أجب على سؤالين سريعين لأخصص التوقعات لك.""",
 "post_onboarding": "جاهز! اكتب الآن اسم المباراة — مثلاً:\n\nبرشلونة ألافيس\nريال مدريد آرسنال\nPSG مانشستر سيتي\n\nأو أرسل صورة جدول المباريات.",
 "match_too_far": "هذه المباراة بعيدة جداً. أقدم التوقعات فقط للمباريات خلال الأيام السبعة القادمة.",
-"choose_forecast": "اختر تنسيق التوقع:",
-"btn_extended":    "موسع",
-"btn_short":       "مختصر",
 "system_prompt": """أنت محلل رياضي محترف. قدم توقعات صادقة وواقعية.
 
 الملف: الرياضة: {sports} | الخبرة: {exp}
@@ -913,16 +826,6 @@ FORMAT:
 [السبب — جملة أو جملتان]
 
 ⚠️ توقع تحليلي، ليس ضماناً للنتيجة.""",
-"short_prompt": """توقع قصير. الملف: {sports} | {exp}
-القواعد: أرباح واقعية، لا تذكر لاعبين مغادرين، نص وإيموجي فقط.
-الصيغة:
-🏆 [أ] — [ب] | [البطولة]
-🎯 المفضل: [الفريق] XX% | ربح X.XX-X.XX
-⚽ أكثر 2.5: XX% | ربح X.XX-X.XX
-🔥 كلاهما يسجل: نعم XX% | ربح X.XX-X.XX
-⚡ الرهان: [النوع] | ربح X.XX-X.XX
-[جملة واحدة]
-⚠️ توقع تحليلي.""",
 "live_tip_prompt": "أنت محلل رهانات مباشرة. المباراة {match}، الدقيقة {minute}، النتيجة {score}. الحدث: {event}. اقترح أفضل رهان مباشر. مختصر، جملتان كحد أقصى.",
 "fav_added": "أضيف إلى المفضلة: {team}",
 "fav_removed": "حُذف من المفضلة: {team}",
@@ -1012,7 +915,7 @@ def tr(uid, key, **kw):
     lang = db_lang(uid)
     # Fallback chain: current lang -> ru -> en -> empty string
     txt = T.get(lang, {}).get(key) or T.get("ru", {}).get(key) or T.get("en", {}).get(key, "")
-    if key in ("system_prompt", "short_prompt"):
+    if key == "system_prompt":
         u = db_get(uid) or {}
         kw.setdefault("sports", sport_label(uid, u.get("sports", "-")))
         kw.setdefault("exp",    exp_label(uid, u.get("experience", "-")))
