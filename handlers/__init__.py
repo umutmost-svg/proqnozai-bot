@@ -8,7 +8,6 @@ from handlers.forecast import (
     handle_msg,
 )
 from handlers.live import watch_cb, matches_cmd
-from handlers.favorites import favs_cmd, fav_toggle_cb
 from handlers.history import history_cmd, history_cb
 from handlers.express import express_cb, express_cmd, compare_cmd
 from handlers.admin import admin_cmd, adm_cb, handle_adm_msg, cancel_cmd, testapi_cmd
@@ -32,7 +31,6 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(fm_match_cb,   pattern=r"^fm_mt_"))
     app.add_handler(CallbackQueryHandler(fm_back_cb,    pattern=r"^fm_back_"))
     app.add_handler(CallbackQueryHandler(watch_cb,      pattern=r"^(watch|unwatch)_"))
-    app.add_handler(CallbackQueryHandler(fav_toggle_cb, pattern=r"^(addfav|delfav)_"))
     app.add_handler(CallbackQueryHandler(history_cb,    pattern=r"^(fb_|repeat_)"))
     app.add_handler(CallbackQueryHandler(express_cb,    pattern=r"^expr_"))
     app.add_handler(CallbackQueryHandler(adm_cb,        pattern=r"^adm_"))

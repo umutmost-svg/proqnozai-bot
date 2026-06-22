@@ -1,17 +1,15 @@
 import asyncio
 import base64
 import logging
-import re as _re
-from datetime import date
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import reg_step
 from db import db_ensure, db_get, db_lang, db_is_reg, db_is_blocked, db_log_req, db_save_history
-from translations import T, tr, SPORTS_LABELS, EXP_LABELS
+from translations import T, tr
 from security import uinfo, sec_blocked, rate_check, record_viol
-from claude_client import claude_forecast, parse_match_query
+from claude_client import claude_forecast
 from football_api import search_match, fetch_real_data
 from mostbet import (
     _mostbet_load_matches, _is_within_week,
@@ -95,25 +93,7 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
 
     db_save_history(uid, text, reply)
 
-    final_kb_rows = []
-    if watch_kb:
-        final_kb_rows.extend(watch_kb.inline_keyboard)
-
-    words = text.split()
-    if len(words) >= 2:
-        from db import db_is_fav
-        if not db_is_fav(uid, words[0]):
-            final_kb_rows.append([
-                InlineKeyboardButton(tr(uid, "fav_btn_add") + f" {words[0]}",
-                                     callback_data=f"addfav_{words[0][:30]}"),
-            ])
-            if words[-1] != words[0] and not db_is_fav(uid, words[-1]):
-                final_kb_rows[-1].append(
-                    InlineKeyboardButton(tr(uid, "fav_btn_add") + f" {words[-1]}",
-                                         callback_data=f"addfav_{words[-1][:30]}")
-                )
-
-    final_kb = InlineKeyboardMarkup(final_kb_rows) if final_kb_rows else None
+    final_kb = watch_kb
     await status_msg.edit_text(reply, reply_markup=final_kb)
 
 
@@ -360,9 +340,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == tl["menu_history"]:
         from handlers.history import history_cmd
         await history_cmd(update, context); return
-    if text == tl["menu_favs"]:
-        from handlers.favorites import favs_cmd
-        await favs_cmd(update, context); return
     if text == tl["menu_express"]:
         from handlers.express import express_cmd
         await express_cmd(update, context); return
@@ -405,70 +382,38 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         __import__('logging').getLogger("suspicious").warning(f"INJ | {info}")
         await update.message.reply_text(tr(uid, "injection")); return
 
-    content = []
     if photo:
+        # Photo analysis - send directly to Claude
         f = await context.bot.get_file(photo[-1].file_id)
         fb = await f.download_as_bytearray()
-        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
-                         "data": base64.standard_b64encode(fb).decode("utf-8")}})
-    if text:
-        content.append({"type": "text", "text": text})
-    elif not photo:
-        await update.message.reply_text(tr(uid, "no_input")); return
-    else:
-        content.append({"type": "text", "text": tr(uid, "img_prompt")})
+        content = [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+             "data": base64.standard_b64encode(fb).decode("utf-8")}},
+            {"type": "text", "text": tr(uid, "img_prompt")},
+        ]
+        context.user_data["pending_content"] = content
+        context.user_data["pending_text"] = ""
+        context.user_data["parsed_teams"] = None
+        context.user_data["has_real_data"] = False
+        thinking = {
+            "ru": "⏳ Анализирую...", "az": "⏳ Analiz edilir...",
+            "en": "⏳ Analysing...", "tr": "⏳ Analiz ediliyor...",
+            "kz": "⏳ Талдау жасалуда...", "uz": "⏳ Tahlil qilinmoqda...",
+            "ar": "⏳ جارٍ التحليل...",
+        }
+        status_msg = await update.message.reply_text(thinking.get(lang, "⏳"))
+        await _generate_forecast(uid, context, status_msg)
+        return
 
-    # Smart date check
-    date_patterns = [r'\b(\d{1,2})[./](\d{1,2})\b', r'\b(\d{4})-(\d{2})-(\d{2})\b']
-    for pat in date_patterns:
-        dm = _re.search(pat, text)
-        if dm:
-            try:
-                g = dm.groups()
-                if len(g) == 2:
-                    fd = date(date.today().year, int(g[1]), int(g[0]))
-                elif len(g) == 3:
-                    fd = date(int(g[0]), int(g[1]), int(g[2]))
-                else:
-                    fd = None
-                if fd and (fd - date.today()).days > 7:
-                    await update.message.reply_text(
-                        T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"]))
-                    return
-            except Exception:
-                pass
-            break
-
-    # Parse teams, fetch real form + H2H
-    if text and not photo:
-        parsed = await parse_match_query(text, lang)
-        if parsed.get("team1") and parsed.get("team2"):
-            t1, t2 = parsed["team1"], parsed["team2"]
-            structured = f"Teams: {t1} vs {t2}"
-            if parsed.get("date"):  structured += f" | Date: {parsed['date']}"
-            if parsed.get("sport"): structured += f" | Sport: {parsed['sport']}"
-            content.append({"type": "text", "text": structured})
-            logger.info(f"Parsed query: {t1} vs {t2} | uid={uid}")
-            context.user_data["parsed_teams"] = (t1, t2)
-            real_data = await fetch_real_data(t1, t2)
-            if real_data:
-                content.append({"type": "text", "text": real_data})
-                context.user_data["has_real_data"] = True
-                logger.info(f"Real data fetched: {t1} vs {t2} | uid={uid}")
-            else:
-                context.user_data["has_real_data"] = False
-        else:
-            context.user_data["parsed_teams"] = None
-            context.user_data["has_real_data"] = False
-
-    context.user_data["pending_content"] = content
-    context.user_data["pending_text"] = text
-
-    thinking = {
-        "ru": "⏳ Анализирую...", "az": "⏳ Analiz edilir...",
-        "en": "⏳ Analysing...", "tr": "⏳ Analiz ediliyor...",
-        "kz": "⏳ Талдау жасалуда...", "uz": "⏳ Tahlil qilinmoqda...",
-        "ar": "⏳ جارٍ التحليل...",
+    # Text input - redirect to Mostbet match menu
+    use_menu = {
+        "ru": "📋 Выберите матч из списка Mostbet для получения точного прогноза:",
+        "az": "📋 Dəqiq proqnoz üçün Mostbet siyahısından matç seçin:",
+        "en": "📋 Select a match from the Mostbet list for an accurate forecast:",
+        "tr": "📋 Doğru tahmin için Mostbet listesinden maç seçin:",
+        "kz": "📋 Нақты болжам алу үшін Mostbet тізімінен матч таңдаңыз:",
+        "uz": "📋 Aniq bashorat olish uchun Mostbet ro'yxatidan o'yin tanlang:",
+        "ar": "📋 اختر مباراة من قائمة Mostbet للحصول على توقع دقيق:",
     }
-    status_msg = await update.message.reply_text(thinking.get(lang, "⏳"))
-    await _generate_forecast(uid, context, status_msg)
+    await update.message.reply_text(use_menu.get(lang, use_menu["ru"]))
+    await forecast_menu_start(update, context)
