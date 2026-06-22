@@ -119,10 +119,13 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
 
     if not week_m:
         no_m = {
-            "ru": "Загрузка матчей из Mostbet временно недоступна.\n\nНапишите название матча вручную, например:\nАрсенал ПСЖ",
-            "az": "Mostbet matçları müvəqqəti yüklənmir.\n\nMatç adını əl ilə yazın, məsələn:\nArsenal PSJ",
-            "en": "Mostbet match loading temporarily unavailable.\n\nType the match manually, e.g.:\nArsenal PSG",
-            "tr": "Mostbet maç yüklemesi geçici olarak kullanılamıyor.\n\nMaç adını manuel yazın, örn:\nArsenal PSG",
+            "ru": "⚠️ Загрузка матчей временно недоступна. Попробуйте позже.",
+            "az": "⚠️ Matçlar müvəqqəti yüklənmir. Bir az sonra yenidən cəhd edin.",
+            "en": "⚠️ Match loading temporarily unavailable. Please try again later.",
+            "tr": "⚠️ Maç yüklemesi geçici olarak kullanılamıyor. Lütfen daha sonra tekrar deneyin.",
+            "kz": "⚠️ Матчтар уақытша жүктелмейді. Кейінірек қайталаңыз.",
+            "uz": "⚠️ O'yinlar vaqtincha yuklanmayapti. Keyinroq urinib ko'ring.",
+            "ar": "⚠️ تحميل المباريات غير متاح مؤقتاً. يرجى المحاولة لاحقاً.",
         }
         await msg.edit_text(no_m.get(lang, no_m["ru"])); return
 
@@ -405,15 +408,15 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _generate_forecast(uid, context, status_msg)
         return
 
-    # Text input - redirect to Mostbet match menu
+    # Text input - redirect to match menu
     use_menu = {
-        "ru": "📋 Выберите матч из списка Mostbet для получения точного прогноза:",
-        "az": "📋 Dəqiq proqnoz üçün Mostbet siyahısından matç seçin:",
-        "en": "📋 Select a match from the Mostbet list for an accurate forecast:",
-        "tr": "📋 Doğru tahmin için Mostbet listesinden maç seçin:",
-        "kz": "📋 Нақты болжам алу үшін Mostbet тізімінен матч таңдаңыз:",
-        "uz": "📋 Aniq bashorat olish uchun Mostbet ro'yxatidan o'yin tanlang:",
-        "ar": "📋 اختر مباراة من قائمة Mostbet للحصول على توقع دقيق:",
+        "ru": "📋 Выберите матч из списка для получения точного прогноза:",
+        "az": "📋 Dəqiq proqnoz üçün siyahıdan matç seçin:",
+        "en": "📋 Select a match from the list for an accurate forecast:",
+        "tr": "📋 Doğru tahmin için listeden maç seçin:",
+        "kz": "📋 Нақты болжам алу үшін тізімнен матч таңдаңыз:",
+        "uz": "📋 Aniq bashorat olish uchun ro'yxatdan o'yin tanlang:",
+        "ar": "📋 اختر مباراة من القائمة للحصول على توقع دقيق:",
     }
     await update.message.reply_text(use_menu.get(lang, use_menu["ru"]))
     await forecast_menu_start(update, context)

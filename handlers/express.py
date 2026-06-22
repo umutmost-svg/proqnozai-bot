@@ -45,9 +45,9 @@ async def express_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         selected = week_matches[:n]
         if selected:
             _hdr = {
-                "ru": "Реальные матчи из Mostbet:", "az": "Mostbet matçları:",
-                "en": "Real matches from Mostbet:", "tr": "Mostbet maçları:",
-                "kz": "Mostbet матчтары:", "uz": "Mostbet o'yinlari:", "ar": "مباريات Mostbet:",
+                "ru": "Актуальные матчи:", "az": "Aktual matçlar:",
+                "en": "Current matches:", "tr": "Güncel maçlar:",
+                "kz": "Өзекті матчтар:", "uz": "Joriy o'yinlar:", "ar": "المباريات الحالية:",
             }
             _use = {
                 "ru": "Используй ИМЕННО эти матчи для экспресса.",
