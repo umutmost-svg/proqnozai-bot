@@ -174,9 +174,14 @@ async def check_odds_changes(app):
 
 
 async def daily_push(app):
+    _last_sent_date = None
     while True:
-        await asyncio.sleep(3600)
-        if datetime.now().hour != 10: continue
+        await asyncio.sleep(60)
+        now = datetime.now()
+        today = now.date()
+        if now.hour != 10 or _last_sent_date == today:
+            continue
+        _last_sent_date = today
         msgs = {
             "az": "Bugun maraqli oyunlar var! Proqnoz ucun yazin.",
             "ru": "Сегодня интересные матчи! Напишите для прогноза.",

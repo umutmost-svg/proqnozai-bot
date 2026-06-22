@@ -42,20 +42,29 @@ async def express_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if mb_matches:
         week_matches = [m for m in mb_matches
                         if m.get("isLive") or _is_within_week(m.get("matchBeginAt", ""))]
-        football = [m for m in week_matches
-                    if "football" in m.get("lineCategory", "").lower()
-                    or "soccer"   in m.get("lineCategory", "").lower()
-                    or "футбол"   in m.get("lineCategory", "").lower()][:n]
-        if not football:
-            football = week_matches[:n]
-        if football:
-            lines_mb = ["Реальные матчи из Mostbet:"]
-            for m in football:
+        selected = week_matches[:n]
+        if selected:
+            _hdr = {
+                "ru": "Реальные матчи из Mostbet:", "az": "Mostbet matçları:",
+                "en": "Real matches from Mostbet:", "tr": "Mostbet maçları:",
+                "kz": "Mostbet матчтары:", "uz": "Mostbet o'yinlari:", "ar": "مباريات Mostbet:",
+            }
+            _use = {
+                "ru": "Используй ИМЕННО эти матчи для экспресса.",
+                "az": "Ekspresdə MƏHZbu matçları istifadə et.",
+                "en": "Use ONLY these matches for the express.",
+                "tr": "Ekspres için YALNIZCA bu maçları kullan.",
+                "kz": "Экспресс үшін ТЕК осы матчтарды қолдан.",
+                "uz": "Ekspress uchun FAQAT shu o'yinlarni ishlat.",
+                "ar": "استخدم هذه المباريات فقط للرهان المركب.",
+            }
+            lines_mb = [_hdr.get(lang, _hdr["ru"])]
+            for m in selected:
                 t1 = m.get("team1Title", "?"); t2 = m.get("team2Title", "?")
                 league = m.get("lineSubCategory", "")
                 dt = m.get("matchBeginAt", "")[:16]
                 lines_mb.append(f"- {t1} vs {t2} | {league} | {dt}")
-            real_matches_str = "\n".join(lines_mb) + "\n\nИспользуй ИМЕННО эти матчи для экспресса.\n"
+            real_matches_str = "\n".join(lines_mb) + "\n\n" + _use.get(lang, _use["ru"]) + "\n"
 
     express_prompts = {
         "ru": f"""{real_matches_str}Составь экспресс на {n} матчей. Правила:\n- Используй только матчи из списка выше (если есть)\n- Для каждого: команды, лучший тип ставки, реалистичный коэффициент\n- Коэффициенты: фаворит 1.20-1.60, равные 2.00-2.80, тотал 1.70-2.10\n- НЕ используй markdown ## ** — только чистый текст и emoji

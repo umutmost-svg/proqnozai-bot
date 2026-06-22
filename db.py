@@ -101,7 +101,14 @@ def db_get_tz(uid) -> int:
         row = c.execute("SELECT tz_offset FROM users WHERE user_id=?", (uid,)).fetchone()
     return row[0] if row else 0
 
+_ALLOWED_FIELDS = {
+    "lang", "display_name", "is_registered", "is_blocked",
+    "sports", "experience", "onboarding_done", "tz_offset",
+}
+
 def db_set(uid, field, val):
+    if field not in _ALLOWED_FIELDS:
+        raise ValueError(f"db_set: disallowed field '{field}'")
     with con() as c: c.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (val, uid))
 
 def db_get(uid) -> dict | None:
@@ -220,7 +227,8 @@ def db_get_conv(uid) -> list:
         row = c.execute("SELECT messages FROM conversation WHERE user_id=?", (uid,)).fetchone()
     if not row: return []
     try: return json.loads(row[0])[-6:]  # last 3 turns (6 messages)
-    except: return []
+    except Exception as e:
+        logger.warning(f"db_get_conv parse error uid={uid}: {e}"); return []
 
 def db_save_conv(uid, messages: list):
     """Save conversation history (keep last 6 messages)."""

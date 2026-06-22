@@ -197,7 +197,7 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "AND (last_active='' OR date(last_active) < date('now', '-30 days'))"
             ).fetchone()[0]
             inactive7_30 = c.execute(
-                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0"
+                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
                 "AND last_active != '' AND date(last_active) < date('now', '-7 days') "
                 "AND date(last_active) >= date('now', '-30 days')"
             ).fetchone()[0]

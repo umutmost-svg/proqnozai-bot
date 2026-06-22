@@ -162,7 +162,6 @@ async def mostbet_get_odds(line_id: int) -> dict:
         "w1": None, "x": None, "w2": None,
         "over25": None, "under25": None,
         "btts_yes": None, "btts_no": None,
-        "url": f"{MOSTBET_BASE}/line/{line_id}"
     }
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as h:

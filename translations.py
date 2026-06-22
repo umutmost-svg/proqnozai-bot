@@ -743,12 +743,8 @@ def exp_label(uid, val):
     return EXP_LABELS.get(lang, EXP_LABELS["ru"]).get(val, val)
 
 def tr(uid, key, **kw):
-    from db import db_lang, db_get
+    from db import db_lang
     lang = db_lang(uid)
     # Fallback chain: current lang -> ru -> en -> empty string
     txt = T.get(lang, {}).get(key) or T.get("ru", {}).get(key) or T.get("en", {}).get(key, "")
-    if key == "system_prompt":
-        u = db_get(uid) or {}
-        kw.setdefault("sports", sport_label(uid, u.get("sports", "-")))
-        kw.setdefault("exp",    exp_label(uid, u.get("experience", "-")))
     return txt.format(**kw) if kw else txt

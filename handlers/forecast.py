@@ -366,9 +366,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == tl["menu_express"]:
         from handlers.express import express_cmd
         await express_cmd(update, context); return
-    if text == tl["menu_lang"]:
-        await update.message.reply_text(tr(uid, "choose_lang"),
-            reply_markup=__import__('handlers.utils', fromlist=['lang_kb']).lang_kb()); return
     if text == tl["menu_forecast"]:
         await forecast_menu_start(update, context); return
 
