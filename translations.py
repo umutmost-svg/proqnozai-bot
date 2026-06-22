@@ -95,6 +95,7 @@ Bərabərlik — XX% | Kef: X.XX  (tətbiq olunarsa)
 "menu_history": "📋 Tarix",
 "menu_favs":    "⭐ Sevimlilər",
 "menu_express": "⚡ Ekspress",
+"bot_updated":  "Bot yeniləndi! Yeni menyu aktiv oldu.",
 
 },
 
@@ -193,6 +194,7 @@ Bərabərlik — XX% | Kef: X.XX  (tətbiq olunarsa)
 "menu_history": "📋 История",
 "menu_favs": "⭐ Избранное",
 "menu_express": "⚡ Экспресс",
+"bot_updated":  "Бот обновлён! Активировано новое меню.",
 
 },
 
@@ -291,6 +293,7 @@ Draw — XX% | Odds: X.XX  (if applicable)
 "menu_history": "📋 History",
 "menu_favs": "⭐ Favourites",
 "menu_express": "⚡ Express",
+"bot_updated":  "Bot updated! New menu is now active.",
 
 },
 "tr": {
@@ -384,6 +387,7 @@ Beraberlik — XX% | Oran: X.XX  (geçerliyse)
 "menu_history": "📋 Geçmiş",
 "menu_favs": "⭐ Favoriler",
 "menu_express": "⚡ Ekspres",
+"bot_updated":  "Bot güncellendi! Yeni menü aktif oldu.",
 
 },
 
@@ -478,6 +482,7 @@ Beraberlik — XX% | Oran: X.XX  (geçerliyse)
 "menu_history": "📋 Тарих",
 "menu_favs": "⭐ Таңдаулылар",
 "menu_express": "⚡ Экспресс",
+"bot_updated":  "Бот жаңартылды! Жаңа мәзір белсенді болды.",
 
 },
 
@@ -572,6 +577,7 @@ Durrang — XX% | Koef: X.XX  (agar taalluqli bo'lsa)
 "menu_history": "📋 Tarix",
 "menu_favs": "⭐ Sevimlilar",
 "menu_express": "⚡ Ekspress",
+"bot_updated":  "Bot yangilandi! Yangi menyu faollashtirildi.",
 
 },
 
@@ -666,6 +672,7 @@ Durrang — XX% | Koef: X.XX  (agar taalluqli bo'lsa)
 "menu_history": "📋 السجل",
 "menu_favs": "⭐ المفضلة",
 "menu_express": "⚡ إكسبريس",
+"bot_updated":  "تم تحديث البوت! القائمة الجديدة نشطة الآن.",
 
 },
 
