@@ -19,8 +19,6 @@ Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
 ⚽ Matç proqnozu üçün "Matç proqnozları" düyməsini basın
 ⚡ Ekspress üçün "Ekspress" düyməsini basın
 📸 Cədvəl şəklini göndərə bilərsiniz""",
-
-Və ya oyun cədvəlinin şəklini göndərin.""",
 "already_reg":   "Siz artıq qeydiyyatdan keçmisiniz, {name}!",
 "need_reg":      "Əvvəlcə qeydiyyatdan keçin. /start yazın.",
 "db_blocked":    "Hesabınız bloklanıb. İnzibatçıya müraciət edin.",
