@@ -127,7 +127,7 @@ async def _fetch_footballdata(t1_en: str, t2_en: str) -> list[str]:
     return parts
 
 
-async def _haiku_form_estimate(t1: str, t2: str, t1_en: str, t2_en: str) -> str:
+async def _sonnet_form_estimate(t1: str, t2: str, t1_en: str, t2_en: str) -> str:
     """
     Ask Claude Haiku to recall team form from training knowledge.
     Used only when real APIs return no data.
@@ -148,7 +148,7 @@ async def _haiku_form_estimate(t1: str, t2: str, t1_en: str, t2_en: str) -> str:
         )
         r = await asyncio.to_thread(
             client.messages.create,
-            model="claude-haiku-4-5-20251001", max_tokens=400,
+            model="claude-sonnet-4-6", max_tokens=500,
             messages=[{"role": "user", "content": prompt}]
         )
         text = r.content[0].text.strip()
@@ -156,7 +156,7 @@ async def _haiku_form_estimate(t1: str, t2: str, t1_en: str, t2_en: str) -> str:
             return ""
         return f"FORM ANALYSIS (AI knowledge, may not reflect latest matches):\n\n{text}"
     except Exception as e:
-        logger.warning(f"_haiku_form_estimate: {e}")
+        logger.warning(f"_sonnet_form_estimate: {e}")
         return ""
 
 
@@ -185,7 +185,7 @@ async def fetch_real_data(team1: str, team2: str) -> str:
         return "REAL MATCH DATA (use for form analysis — do not invent results):\n\n" + "\n\n".join(parts)
 
     # No real data — use Haiku knowledge
-    estimated = await _haiku_form_estimate(team1, team2, t1_en, t2_en)
+    estimated = await _sonnet_form_estimate(team1, team2, t1_en, t2_en)
     return estimated
 
 

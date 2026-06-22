@@ -54,7 +54,7 @@ import db
 import security
 import translations
 from translations import T, tr
-from football_api import fetch_real_data, _normalize_names
+from football_api import fetch_real_data, _normalize_names, _sonnet_form_estimate
 import httpx
 
 _raw_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -240,16 +240,16 @@ class TestMostbetAPI(unittest.IsolatedAsyncioTestCase):
 class TestHaikuFormEstimate(unittest.IsolatedAsyncioTestCase):
 
     async def test_known_teams_return_text(self):
-        from football_api import _haiku_form_estimate
-        result = await _haiku_form_estimate("Арсенал", "Челси", "Arsenal", "Chelsea")
+        from football_api import _sonnet_form_estimate
+        result = await _sonnet_form_estimate("Арсенал", "Челси", "Arsenal", "Chelsea")
         print(f"\n  [Haiku form] Arsenal vs Chelsea: {len(result)} chars")
         self.assertIsInstance(result, str)
         self.assertGreater(len(result), 50)
         self.assertIn("FORM ANALYSIS", result)
 
     async def test_unknown_teams_graceful(self):
-        from football_api import _haiku_form_estimate
-        result = await _haiku_form_estimate("ZZZUNKNOWN", "ZZZUNKNOWN2", "ZZZUNKNOWN", "ZZZUNKNOWN2")
+        from football_api import _sonnet_form_estimate
+        result = await _sonnet_form_estimate("ZZZUNKNOWN", "ZZZUNKNOWN2", "ZZZUNKNOWN", "ZZZUNKNOWN2")
         self.assertIsInstance(result, str)
 
 
