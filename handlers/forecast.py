@@ -52,13 +52,13 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
         sys_prompt += data_note.get(lang, data_note["ru"])
     else:
         no_data_note = {
-            "ru": "\n\nФОРМА: Реальные данные НЕ предоставлены. Напиши 'данные о форме недоступны' вместо вымышленных результатов.",
-            "az": "\n\nFORMA: Real məlumatlar verilməyib. 'Forma məlumatı əlçatan deyil' yaz — UYDURMА.",
-            "en": "\n\nFORM: Real match data NOT provided. Write 'form data unavailable' — do NOT invent results.",
-            "tr": "\n\nFORM: Gerçek veri sağlanmadı. 'Form verisi mevcut değil' yaz — UYDURMA.",
-            "kz": "\n\nФОРМА: Деректер берілмеді. 'Форма деректері жоқ' деп жаз.",
-            "uz": "\n\nSHAKL: Ma'lumotlar yo'q. 'Shakl ma'lumoti mavjud emas' deb yoz.",
-            "ar": "\n\nالشكل: لا بيانات. اكتب 'بيانات الشكل غير متوفرة'.",
+            "ru": "\n\nФОРМА: Актуальные данные недоступны. Используй знания из обучения чтобы описать форму команд, но явно пометь каждый факт как '(оценочно)'. Не придумывай конкретные счета — пиши обобщённо: 'в последних матчах команда демонстрирует стабильную игру (оценочно)'.",
+            "az": "\n\nFORMA: Cari məlumatlar əlçatan deyil. Komandaların formasını öz biliklərinə əsasən təsvir et, lakin hər faktu '(təxmini)' kimi işarələ. Konkret hesab uydurmа.",
+            "en": "\n\nFORM: Live data unavailable. Use your training knowledge to describe team form, but mark each fact as '(estimated)'. Do not invent specific scores — write generally: 'team has shown consistent form recently (estimated)'.",
+            "tr": "\n\nFORM: Güncel veri mevcut değil. Takım formunu bilgine dayanarak açıkla ama her bilgiyi '(tahmini)' olarak işaretle. Belirli skorlar uydurma.",
+            "kz": "\n\nФОРМА: Ағымдағы деректер жоқ. Командалардың форамсын білімің негізінде сипатта, бірақ '(бағалау)' деп белгіле.",
+            "uz": "\n\nSHAKL: Joriy ma'lumotlar yo'q. Jamoalar formasini bilimingga asoslanib tasvirla, lekin har bir faktni '(taxminiy)' deb belgi.",
+            "ar": "\n\nالشكل: البيانات الحية غير متاحة. استخدم معرفتك لوصف شكل الفريق، لكن اذكر كل حقيقة بـ '(تقديري)'. لا تخترع نتائج محددة.",
         }
         sys_prompt += no_data_note.get(lang, no_data_note["ru"])
 

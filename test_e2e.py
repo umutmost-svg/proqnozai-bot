@@ -54,7 +54,7 @@ import db
 import security
 import translations
 from translations import T, tr
-from football_api import fetch_real_data, _normalize_names, _sportsdb_last5, SPORTSDB_BASE
+from football_api import fetch_real_data, _normalize_names
 import httpx
 
 _raw_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -234,34 +234,23 @@ class TestMostbetAPI(unittest.IsolatedAsyncioTestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. TheSportsDB
+# 5. Haiku form estimate (requires Anthropic key)
 # ─────────────────────────────────────────────────────────────────────────────
-class TestSportsDB(unittest.IsolatedAsyncioTestCase):
+@unittest.skipUnless(HAVE_ANTHROPIC, "ANTHROPIC_API_KEY not set")
+class TestHaikuFormEstimate(unittest.IsolatedAsyncioTestCase):
 
-    async def _check_sportsdb_accessible(self):
-        async with httpx.AsyncClient(timeout=10) as h:
-            r = await h.get(f"{SPORTSDB_BASE}/searchteams.php", params={"t": "Arsenal"})
-            if r.status_code in (403, 429, 503):
-                self.skipTest(f"TheSportsDB not reachable from this environment (HTTP {r.status_code})")
+    async def test_known_teams_return_text(self):
+        from football_api import _haiku_form_estimate
+        result = await _haiku_form_estimate("Арсенал", "Челси", "Arsenal", "Chelsea")
+        print(f"\n  [Haiku form] Arsenal vs Chelsea: {len(result)} chars")
+        self.assertIsInstance(result, str)
+        self.assertGreater(len(result), 50)
+        self.assertIn("FORM ANALYSIS", result)
 
-    async def test_team_search_barcelona(self):
-        try:
-            await self._check_sportsdb_accessible()
-            async with httpx.AsyncClient(timeout=10) as h:
-                result = await _sportsdb_last5("Barcelona", h)
-            print(f"\n  [SportsDB] Barcelona: {result[:80] if result else 'no data'}...")
-            self.assertIsInstance(result, str)
-        except Exception as e:
-            self.skipTest(f"TheSportsDB not reachable: {e}")
-
-    async def test_team_search_unknown(self):
-        try:
-            await self._check_sportsdb_accessible()
-            async with httpx.AsyncClient(timeout=10) as h:
-                result = await _sportsdb_last5("ZZZZUNKNOWNTEAMZZZ", h)
-            self.assertEqual(result, "")
-        except Exception as e:
-            self.skipTest(f"TheSportsDB not reachable: {e}")
+    async def test_unknown_teams_graceful(self):
+        from football_api import _haiku_form_estimate
+        result = await _haiku_form_estimate("ZZZUNKNOWN", "ZZZUNKNOWN2", "ZZZUNKNOWN", "ZZZUNKNOWN2")
+        self.assertIsInstance(result, str)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
