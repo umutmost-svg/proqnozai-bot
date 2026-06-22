@@ -6,19 +6,19 @@ T = {
 "reg_done":      "Qeydiyyat tamamlandı! Salam, {name}!",
 "welcome_intro": """ProqnozAI-yə xoş gəldiniz!
 
-Mən AI-əsaslı idman mərc analitikiyəm. Nə edə bilərəm:
+Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
 
-• İstənilən matç üzrə proqnoz — komanda adını yazın və ya cədvəl şəkli göndərin
-• Geniş analiz — forma, amillər, bütün mərc növləri keflər ilə
-• Qısa proqnoz — 5 saniyədə əsas mərc
-• Canlı bildirişlər — matçı izləyirəm, hadisələri real vaxtda göndərirəm
+⚽ Matç proqnozları — idman növünü seçin, matçı tapın, dərhal analiz alın
+⚡ Ekspress — 2-5 matçdan ibarət ekspress kupon
+📸 Foto — cədvəl və ya afişanın şəklini göndərin
+📋 Tarixçə — əvvəlki proqnozlarınıza baxın
 
-İdman növünü seçin — sizə uyğun proqnozlar hazırlayım.""",
-"post_onboarding": """Hazırdır! İndi matç adı yazın — məsələn:
+İdman növünü seçin — başlayaq!""",
+"post_onboarding": """Hazırdır! İndi nə etmək istəyirsiniz?
 
-Barselona Alavés
-Real Madrid Arsenal
-PSJ Manchester City
+⚽ Matç proqnozu üçün "Matç proqnozları" düyməsini basın
+⚡ Ekspress üçün "Ekspress" düyməsini basın
+📸 Cədvəl şəklini göndərə bilərsiniz""",
 
 Və ya oyun cədvəlinin şəklini göndərin.""",
 "already_reg":   "Siz artıq qeydiyyatdan keçmisiniz, {name}!",
@@ -106,21 +106,19 @@ Bərabərlik — XX% | Kef: X.XX  (tətbiq olunarsa)
 "reg_done":      "Регистрация завершена! Привет, {name}!",
 "welcome_intro": """Добро пожаловать в ProqnozAI!
 
-Я — AI-аналитик спортивных ставок. Вот что я умею:
+Я — AI-аналитик спортивных событий. Что умею:
 
-• Прогноз на любой матч — напишите команды или отправьте фото расписания
-• Расширенный анализ — форма, факторы, все виды ставок с коэффициентами
-• Краткий прогноз — только главная ставка за 5 секунд
-• Live уведомления — слежу за матчем и присылаю события в реальном времени
+⚽ Прогнозы матчей — выберите вид спорта, найдите матч, получите анализ
+⚡ Экспресс — купон из 2-5 матчей с расчётом коэффициента
+📸 Фото — отправьте фото расписания или афиши
+📋 История — ваши предыдущие прогнозы
 
-Выберите вид спорта — подберу прогнозы под вас.""",
-"post_onboarding": """Готово! Теперь напишите название матча — например:
+Выберите вид спорта и начнём!""",
+"post_onboarding": """Готово! Что хотите сделать?
 
-Барселона Алавес
-Реал Мадрид Арсенал
-ПСЖ Манчестер Сити
-
-Или отправьте фото расписания матчей.""",
+⚽ Для прогноза нажмите «Прогнозы матчей»
+⚡ Для купона нажмите «Экспресс»
+📸 Или отправьте фото расписания""",
 "already_reg":   "Вы уже зарегистрированы, {name}!",
 "need_reg":      "Сначала пройдите регистрацию. Напишите /start.",
 "db_blocked":    "Ваш аккаунт заблокирован. Обратитесь к администратору.",
@@ -206,21 +204,19 @@ Bərabərlik — XX% | Kef: X.XX  (tətbiq olunarsa)
 "reg_done":      "Registration complete! Hi, {name}!",
 "welcome_intro": """Welcome to ProqnozAI!
 
-I'm an AI sports betting analyst. Here's what I do:
+I'm an AI sports analyst. Here's what I do:
 
-• Forecast for any match — type the teams or send a schedule photo
-• Extended analysis — form, key factors, all bet types with odds
-• Short forecast — just the main bet in 5 seconds
-• Live alerts — I follow the match and send events in real time
+⚽ Match forecasts — pick a sport, find a match, get instant analysis
+⚡ Express — build a 2–5 match coupon with combined odds
+📸 Photo — send a schedule or fixture photo
+📋 History — view your previous forecasts
 
-Answer 2 quick questions — I'll personalize your forecasts.""",
-"post_onboarding": """All set! Now type a match name — for example:
+Choose your sport and let's go!""",
+"post_onboarding": """All set! What would you like to do?
 
-Barcelona Alavés
-Real Madrid Arsenal
-PSG Manchester City
-
-Or send a photo of the match schedule.""",
+⚽ Tap «Match forecasts» for a prediction
+⚡ Tap «Express» for a coupon
+📸 Or send a photo of a fixture""",
 "already_reg":   "You are already registered, {name}!",
 "need_reg":      "Please register first. Type /start.",
 "db_blocked":    "Your account is blocked. Contact the administrator.",
@@ -336,15 +332,15 @@ Draw — XX% | Odds: X.XX  (if applicable)
 "ob_done":       "Hazır! Seçilen spor: {sports}. Artık tahmin alabilirsiniz.",
 "welcome_intro": """ProqnozAI'ye hoş geldiniz!
 
-Ben bir AI spor bahis analistiyim. Yapabileceklerim:
+Ben bir AI spor analistiyim. Yapabileceklerim:
 
-• Herhangi bir maç için tahmin — takım adlarını yazın veya program fotoğrafı gönderin
-• Genişletilmiş analiz — form, faktörler, tüm bahis türleri oranlarla
-• Kısa tahmin — 5 saniyede sadece ana bahis
-• Canlı bildirimler — maçı takip eder, olayları gerçek zamanlı gönderirim
+⚽ Maç tahminleri — sporu seçin, maçı bulun, anında analiz alın
+⚡ Ekspress — 2–5 maçlık kupon oluşturun
+📸 Fotoğraf — fikstür veya program fotoğrafı gönderin
+📋 Geçmiş — önceki tahminlerinizi görüntüleyin
 
-2 hızlı soruyu yanıtlayın — tahminleri kişiselleştireyim.""",
-"post_onboarding": "Hazır! Şimdi bir maç adı yazın — örneğin:\n\nBarcelona Alavés\nReal Madrid Arsenal\nPSG Manchester City\n\nYa da maç programının fotoğrafını gönderin.",
+Spor seçin ve başlayalım!""",
+"post_onboarding": "Hazır! Ne yapmak istersiniz?\n\n⚽ Tahmin için «Maç tahminleri» tuşuna basın\n⚡ Kupon için «Ekspress» tuşuna basın\n📸 Ya da fikstür fotoğrafı gönderin",
 "match_too_far": "Bu maç çok uzakta. Yalnızca önümüzdeki 7 gün içindeki maçlar için tahmin yapıyorum.",
 "system_prompt": """Sen spor analistisin. Her sporu analiz et: futbol, tenis, basketbol, UFC, hokey, voleybol vb.
 
@@ -430,15 +426,15 @@ Beraberlik — XX% | Oran: X.XX  (geçerliyse)
 "ob_done":       "Дайын! Спорт: {sports}. Болжам сұрай аласыз.",
 "welcome_intro": """ProqnozAI-ге қош келдіңіз!
 
-Мен AI спорт ставкалар аналитигімін. Не істей аламын:
+Мен AI спорт аналитигімін. Не істей аламын:
 
-• Кез келген матч болжамы — командалар атын жазыңыз немесе кесте фотосын жіберіңіз
-• Толық талдау — форма, факторлар, барлық ставка түрлері коэффициенттермен
-• Қысқа болжам — 5 секундта негізгі ставка
-• Тікелей хабарламалар — матчты бақылаймын, оқиғаларды нақты уақытта жіберемін
+⚽ Матч болжамдары — спорт түрін таңдаңыз, матч тауып, талдау алыңыз
+⚡ Экспресс — 2–5 матчтан купон жасаңыз
+📸 Фото — кесте немесе афиша фотосын жіберіңіз
+📋 Тарих — алдыңғы болжамдарыңызды қараңыз
 
-2 сұраққа жауап беріңіз — болжамдарды жекелендіремін.""",
-"post_onboarding": "Дайын! Матч атын жазыңыз — мысалы:\n\nБарселона Алавес\nРеал Мадрид Арсенал\nПСЖ Манчестер Сити\n\nНемесе матч кестесінің фотосын жіберіңіз.",
+Спорт түрін таңдап, бастайық!""",
+"post_onboarding": "Дайын! Не істегіңіз келеді?\n\n⚽ Болжам үшін «Матч болжамдары» батырмасын басыңыз\n⚡ Купон үшін «Экспресс» батырмасын басыңыз\n📸 Немесе кесте фотосын жіберіңіз",
 "match_too_far": "Бұл матч тым алыс. Мен тек келесі 7 күн ішіндегі матчтарға болжам беремін.",
 "system_prompt": """Сен спорт аналитикісің. Кез келген спортты талда: футбол, теннис, баскетбол, UFC, хоккей, волейбол және басқалар.
 
@@ -524,15 +520,15 @@ Beraberlik — XX% | Oran: X.XX  (geçerliyse)
 "ob_done":       "Tayyor! Sport: {sports}. Bashorat so'rasangiz bo'ladi.",
 "welcome_intro": """ProqnozAI-ga xush kelibsiz!
 
-Men AI sport stavkalari analitikiman. Nima qila olaman:
+Men AI sport analitikiman. Nima qila olaman:
 
-• Istalgan o'yin uchun bashorat — jamoa nomini yozing yoki jadval rasmini yuboring
-• Kengaytirilgan tahlil — shakl, omillar, barcha stavka turlari koeffitsientlar bilan
-• Qisqa bashorat — 5 soniyada asosiy stavka
-• Jonli bildirishnomalar — o'yinni kuzataman, voqealarni real vaqtda yuboraman
+⚽ O'yin bashoratlari — sport turini tanlang, o'yin toping, tahlil oling
+⚡ Ekspress — 2–5 ta o'yindan kupon tuzing
+📸 Rasm — jadval yoki afisha rasmini yuboring
+📋 Tarix — oldingi bashoratlaringizni ko'ring
 
-2 ta tezkor savolga javob bering — bashoratlarni shaxsiylashtiraman.""",
-"post_onboarding": "Tayyor! O'yin nomini yozing — masalan:\n\nBarcelona Alavés\nReal Madrid Arsenal\nPSG Manchester City\n\nYoki o'yin jadvalining rasmini yuboring.",
+Sport turini tanlang va boshlaymiz!""",
+"post_onboarding": "Tayyor! Nima qilishni xohlaysiz?\n\n⚽ Bashorat uchun «O'yin bashoratlari» tugmasini bosing\n⚡ Kupon uchun «Ekspress» tugmasini bosing\n📸 Yoki jadval rasmini yuboring",
 "match_too_far": "Bu o'yin juda uzoqda. Men faqat keyingi 7 kun ichidagi o'yinlar uchun bashorat beraman.",
 "system_prompt": """Sen sport analitikisisan. Har qanday sportni tahlil qil: futbol, tennis, basketbol, UFC, xokkey, voleybol va boshqalar.
 
@@ -618,15 +614,15 @@ Durrang — XX% | Koef: X.XX  (agar taalluqli bo'lsa)
 "ob_done":       "جاهز! الرياضة: {sports}. يمكنك طلب التوقعات.",
 "welcome_intro": """مرحباً بك في ProqnozAI!
 
-أنا محلل رهانات رياضية بالذكاء الاصطناعي. ما أستطيع فعله:
+أنا محلل رياضي بالذكاء الاصطناعي. ما أستطيع فعله:
 
-• توقع لأي مباراة — اكتب أسماء الفرق أو أرسل صورة الجدول
-• تحليل موسع — الشكل، العوامل، جميع أنواع الرهانات مع الأرباح
-• توقع قصير — الرهان الرئيسي في 5 ثوانٍ
-• تنبيهات مباشرة — أتابع المباراة وأرسل الأحداث فورياً
+⚽ توقعات المباريات — اختر رياضة، ابحث عن مباراة، احصل على تحليل فوري
+⚡ رهان مركب — بناء كوبون من 2–5 مباريات
+📸 صورة — أرسل صورة الجدول أو الملصق
+📋 السجل — عرض توقعاتك السابقة
 
-أجب على سؤالين سريعين لأخصص التوقعات لك.""",
-"post_onboarding": "جاهز! اكتب الآن اسم المباراة — مثلاً:\n\nبرشلونة ألافيس\nريال مدريد آرسنال\nPSG مانشستر سيتي\n\nأو أرسل صورة جدول المباريات.",
+اختر رياضتك ولنبدأ!""",
+"post_onboarding": "جاهز! ماذا تريد أن تفعل؟\n\n⚽ للتوقع اضغط «توقعات المباريات»\n⚡ للكوبون اضغط «رهان مركب»\n📸 أو أرسل صورة الجدول",
 "match_too_far": "هذه المباراة بعيدة جداً. أقدم التوقعات فقط للمباريات خلال الأيام السبعة القادمة.",
 "system_prompt": """أنت محلل رياضي. حلّل أي رياضة: كرة قدم، تنس، كرة سلة، UFC، هوكي، كرة طائرة وغيرها.
 
