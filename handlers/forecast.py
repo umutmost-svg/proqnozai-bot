@@ -334,9 +334,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Menu routing
     lang = db_lang(uid); tl = T[lang]
-    if text == tl["menu_matches"]:
-        from handlers.live import matches_cmd
-        await matches_cmd(update, context); return
     if text == tl["menu_profile"]:
         from handlers.registration import profile_cmd
         await profile_cmd(update, context); return

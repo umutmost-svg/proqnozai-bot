@@ -11,8 +11,7 @@ def main_menu(uid):
     tl = T[lang]
     return ReplyKeyboardMarkup([
         [tl["menu_forecast"],  tl["menu_express"]],
-        [tl["menu_matches"],   tl["menu_history"]],
-        [tl["menu_profile"]],
+        [tl["menu_history"],   tl["menu_profile"]],
     ], resize_keyboard=True, is_persistent=True)
 
 
