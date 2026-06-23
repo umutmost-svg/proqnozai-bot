@@ -55,15 +55,16 @@ Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
 
 QAYDALAR:
 - Keflər varsa — yalnız onları istifadə et
-- Yalnız mətn və emoji, ** markdown yox
-- FORMA: hər iştirakçı üçün 1 qısa cümlə. Məlumat yoxdursa (təxmini) qeydi ilə yaz
+- Yalnız mətn və emoji, ** markdown yox (mərc sətri istisna)
+- FORMA: hər iştirakçı üçün 1 qısa cümlə — həmişə yaz, (təxmini) etiketi ilə olsa belə
 - Real matç verileri varsa — ortalama qol sayını göstər
+- MƏLUMAT YOXDUR demək YASAQDIR — həmişə analiz ver
 - Bütün proqnoz — maksimum 12 sətir
 
-FORMAT:
+FORMAT (bütün sətirler MƏCBURI):
 
 🏆 [A] — [B]
-📍 [Turnir] | [Tarix]
+📍 [Turnir - matç verilerindən al] | [Tarix]
 
 📊 [A]: [forma, 1 cümlə] | ⚽ ort. X.X/oyun (real data varsa)
 📊 [B]: [forma, 1 cümlə] | ⚽ ort. X.X/oyun (real data varsa)
@@ -147,14 +148,15 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 ПРАВИЛА:
 - Если есть коэффициенты — используй только их
 - Только текст и emoji, без ** markdown (кроме строки ставки)
-- ФОРМА: 1 короткое предложение на каждого участника. Если нет данных — пиши оценку с (оценочно)
+- ФОРМА: 1 короткое предложение на каждого — всегда пиши, даже с (оценочно)
 - Если есть реальные данные матчей — укажи среднее количество голов
+- ЗАПРЕЩЕНО писать "данных нет", "статистика недоступна" или аналогичное
 - Весь прогноз — максимум 12 строк
 
-ФОРМАТ:
+ФОРМАТ (все строки ОБЯЗАТЕЛЬНЫ):
 
 🏆 [А] — [Б]
-📍 [Турнир] | [Дата]
+📍 [Турнир — взять из данных матча] | [Дата]
 
 📊 [А]: [форма, 1 предложение] | ⚽ ср. X.X/игру (если есть данные)
 📊 [Б]: [форма, 1 предложение] | ⚽ ср. X.X/игру (если есть данные)
@@ -237,15 +239,16 @@ Choose your sport and let's go!""",
 
 RULES:
 - If odds are provided — use only those
-- Plain text and emoji only, no ** markdown
-- FORM: 1 short sentence per participant. If unknown, write estimate with (est.)
+- Plain text and emoji only, no ** markdown (except the bet line)
+- FORM: 1 short sentence per participant — always write it, use (est.) if uncertain
 - If real match data is provided — include avg goals per game
+- FORBIDDEN to write "no data", "stats unavailable" or similar
 - Entire forecast — 12 lines max
 
-FORMAT:
+FORMAT (all lines MANDATORY):
 
 🏆 [A] — [B]
-📍 [Tournament] | [Date]
+📍 [Tournament — take from match data] | [Date]
 
 📊 [A]: [form, 1 sentence] | ⚽ avg X.X/game (if data available)
 📊 [B]: [form, 1 sentence] | ⚽ avg X.X/game (if data available)
@@ -323,15 +326,16 @@ Spor seçin ve başlayalım!""",
 
 KURALLAR:
 - Oran varsa — sadece onları kullan
-- Sadece metin ve emoji, ** markdown yok
-- FORM: her katılımcı için 1 kısa cümle. Bilinmiyorsa (tahmini) etiketiyle yaz
+- Sadece metin ve emoji, ** markdown yok (bahis satırı hariç)
+- FORM: her katılımcı için 1 kısa cümle — her zaman yaz, (tahmini) etiketiyle olsa bile
 - Gerçek maç verisi varsa — ortalama gol sayısını göster
+- "Veri yok", "istatistik mevcut değil" yazmak YASAKTIR
 - Tüm tahmin — maksimum 12 satır
 
-FORMAT:
+FORMAT (tüm satırlar ZORUNLU):
 
 🏆 [A] — [B]
-📍 [Turnuva] | [Tarih]
+📍 [Turnuva — maç verisinden al] | [Tarih]
 
 📊 [A]: [form, 1 cümle] | ⚽ ort. X.X/maç (veri varsa)
 📊 [B]: [form, 1 cümle] | ⚽ ort. X.X/maç (veri varsa)
@@ -410,15 +414,16 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 
 ЕРЕЖЕЛЕР:
 - Коэффициенттер берілсе — тек соларды қолдан
-- Тек мәтін және emoji, ** markdown жоқ
-- ФОРМА: әр қатысушы үшін 1 қысқа сөйлем. Белгісіз болса (бағалау) белгісімен жаз
+- Тек мәтін және emoji, ** markdown жоқ (ставка жолы ерекше)
+- ФОРМА: әр қатысушы үшін 1 сөйлем — әрқашан жаз, (бағалау) белгісімен болса да
 - Нақты матч деректері болса — орташа гол санын көрсет
+- "Деректер жоқ", "статистика жоқ" ЖАЗУҒА ТЫЙЫМ САЛЫНҒАН
 - Бүкіл болжам — максимум 12 жол
 
-ФОРМАТ:
+ФОРМАТ (барлық жолдар МІНДЕТТІ):
 
 🏆 [А] — [Б]
-📍 [Турнир] | [Күні]
+📍 [Турнир — матч деректерінен ал] | [Күні]
 
 📊 [А]: [форма, 1 сөйлем] | ⚽ орт. X.X/ойын (деректер болса)
 📊 [Б]: [форма, 1 сөйлем] | ⚽ орт. X.X/ойын (деректер болса)
@@ -497,15 +502,16 @@ Sport turini tanlang va boshlaymiz!""",
 
 QOIDALAR:
 - Koeffitsientlar berilsa — faqat shularni ishlatish
-- Faqat matn va emoji, ** markdown yo'q
-- SHAKL: har bir ishtirokchi uchun 1 qisqa jumla. Noma'lum bo'lsa (taxminiy) belgisi bilan yoz
+- Faqat matn va emoji, ** markdown yo'q (garov satri bundan mustasno)
+- SHAKL: har bir ishtirokchi uchun 1 jumla — doim yoz, (taxminiy) bilan bo'lsa ham
 - Haqiqiy ma'lumotlar bo'lsa — o'rtacha gol sonini ko'rsat
+- "Ma'lumot yo'q", "statistika mavjud emas" yozish TAQIQLANGAN
 - Butun bashorat — maksimum 12 qator
 
-FORMAT:
+FORMAT (barcha satrlar MAJBURIY):
 
 🏆 [A] — [B]
-📍 [Turnir] | [Sana]
+📍 [Turnir — o'yin ma'lumotidan ol] | [Sana]
 
 📊 [A]: [shakl, 1 jumla] | ⚽ o'rt. X.X/o'yin (ma'lumot bo'lsa)
 📊 [B]: [shakl, 1 jumla] | ⚽ o'rt. X.X/o'yin (ma'lumot bo'lsa)
@@ -584,15 +590,16 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 
 القواعد:
 - إذا وُجدت أرباح — استخدمها فقط
-- نص عادي وإيموجي فقط، لا Markdown **
-- الشكل: جملة واحدة قصيرة لكل مشارك. إذا كانت غير مؤكدة اكتب (تقديري)
+- نص عادي وإيموجي فقط، لا Markdown ** (إلا سطر الرهان)
+- الشكل: جملة واحدة لكل مشارك — اكتبها دائماً، حتى بـ (تقديري)
 - إذا توفرت بيانات حقيقية — أضف متوسط الأهداف
+- محظور كتابة "لا توجد بيانات" أو "الإحصائيات غير متاحة"
 - التوقع كله — 12 سطراً كحد أقصى
 
-الصيغة:
+الصيغة (جميع الأسطر إلزامية):
 
 🏆 [أ] — [ب]
-📍 [البطولة] | [التاريخ]
+📍 [البطولة — من بيانات المباراة] | [التاريخ]
 
 📊 [أ]: [الشكل، جملة واحدة] | ⚽ متوسط X.X/مباراة (إن توفر)
 📊 [ب]: [الشكل، جملة واحدة] | ⚽ متوسط X.X/مباراة (إن توفر)
