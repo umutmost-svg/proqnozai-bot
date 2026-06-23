@@ -54,13 +54,45 @@ async def live_tip(uid: int, match: str, minute: int, score: str, event: str) ->
         return ""
 
 
+# Transient errors worth retrying with backoff
+_RETRYABLE = (
+    anthropic.RateLimitError,
+    anthropic.APITimeoutError,
+    anthropic.APIConnectionError,
+    anthropic.InternalServerError,
+)
+
+
+async def _create_with_retry(*, max_retries: int = 2, **kwargs):
+    """Call client.messages.create with exponential backoff on transient errors.
+    Raises the last exception if all retries fail."""
+    delay = 1.0
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            async with request_semaphore:
+                return await asyncio.to_thread(client.messages.create, **kwargs)
+        except _RETRYABLE as e:
+            last_exc = e
+            if attempt < max_retries:
+                logger.warning(f"Claude transient error (attempt {attempt+1}): {type(e).__name__}; retry in {delay}s")
+                await asyncio.sleep(delay)
+                delay *= 2
+            else:
+                raise
+    raise last_exc  # pragma: no cover
+
+
 async def claude_forecast(uid: int, msg_content: list, sys_prompt: str, max_tok: int) -> str:
     """
-    Call Claude Sonnet for a forecast, prepending per-user conversation history.
+    Call Claude for a forecast, prepending per-user conversation history.
     Saves the completed turn to conversation memory so future requests have context.
 
     msg_content may include image blocks; only text is persisted to history.
+    Transient API errors are retried; on permanent failure a localized message
+    is returned instead of raising.
     """
+    from translations import tr
     history = db_get_conv(uid)
 
     # Text-only summary of the current user turn (for storing in history)
@@ -70,14 +102,15 @@ async def claude_forecast(uid: int, msg_content: list, sys_prompt: str, max_tok:
     messages = list(history) + [{"role": "user", "content": msg_content}]
 
     try:
-        async with request_semaphore:
-            resp = await asyncio.to_thread(
-                client.messages.create,
-                model="claude-opus-4-8",
-                max_tokens=max_tok,
-                system=sys_prompt,
-                messages=messages,
-            )
+        resp = await _create_with_retry(
+            model="claude-opus-4-8",
+            max_tokens=max_tok,
+            system=sys_prompt,
+            messages=messages,
+        )
+        if not resp.content or not getattr(resp.content[0], "text", ""):
+            logger.error(f"claude_forecast empty response | uid={uid}")
+            return tr(uid, "api_error")
         reply = resp.content[0].text
         logger.info(f"claude_forecast OK | uid={uid} tok={max_tok}")
 
@@ -91,9 +124,10 @@ async def claude_forecast(uid: int, msg_content: list, sys_prompt: str, max_tok:
         return reply
 
     except anthropic.RateLimitError:
-        from translations import tr
         return tr(uid, "api_overload")
     except anthropic.APIError as e:
         logger.error(f"claude_forecast APIError: {e} | uid={uid}")
-        from translations import tr
+        return tr(uid, "api_error")
+    except Exception as e:
+        logger.error(f"claude_forecast unexpected error: {e} | uid={uid}", exc_info=True)
         return tr(uid, "api_error")
