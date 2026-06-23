@@ -41,11 +41,6 @@ def db_init():
             created_at TEXT DEFAULT (datetime('now')),
             PRIMARY KEY (user_id, match_id)
         );
-        CREATE TABLE IF NOT EXISTS favorites (
-            user_id INTEGER, team TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            PRIMARY KEY (user_id, team)
-        );
         CREATE TABLE IF NOT EXISTS forecast_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER, query TEXT, forecast TEXT,
@@ -176,21 +171,6 @@ def db_restore_live_subs():
         live_subs[mid].add(uid)
     if rows:
         logger.info(f"Restored {len(rows)} live subscriptions from DB")
-
-# ─── Favorites ────────────────────────────────────────────────────────────────
-def db_add_fav(uid, team):
-    with con() as c: c.execute("INSERT OR IGNORE INTO favorites (user_id,team) VALUES (?,?)", (uid, team))
-
-def db_del_fav(uid, team):
-    with con() as c: c.execute("DELETE FROM favorites WHERE user_id=? AND team=?", (uid, team))
-
-def db_get_favs(uid) -> list[str]:
-    with con() as c:
-        return [r[0] for r in c.execute("SELECT team FROM favorites WHERE user_id=?", (uid,)).fetchall()]
-
-def db_is_fav(uid, team) -> bool:
-    with con() as c:
-        return bool(c.execute("SELECT 1 FROM favorites WHERE user_id=? AND team=?", (uid, team)).fetchone())
 
 # ─── History ──────────────────────────────────────────────────────────────────
 def db_save_history(uid, query, forecast, match_name=""):
