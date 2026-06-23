@@ -5,7 +5,7 @@ from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
 
 from config import reg_step, UNIVERSAL_WELCOME
-from db import db_ensure, db_get, db_set, db_lang, db_is_reg, db_get_tz, db_user_stats, con
+from db import db_ensure, db_get, db_set, db_lang, db_is_reg, db_get_tz, con
 from translations import T, tr, LANG_NAMES, OB_SPORTS, sport_label, exp_label
 from handlers.utils import main_menu, lang_kb, ob_kb
 
@@ -101,27 +101,10 @@ async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = db_get(uid)
     tz = db_get_tz(uid)
     tz_str = f"UTC+{tz}" if tz >= 0 else f"UTC{tz}"
-    stats = db_user_stats(uid)
-    lang = db_lang(uid)
-
-    # Build winrate line
-    if stats["fb_pct"] is not None:
-        winrate_line = tr(uid, "stats_winrate",
-            pct=stats["fb_pct"], wins=stats["fb_wins"], total=stats["fb_total"])
-    else:
-        winrate_line = tr(uid, "stats_no_feedback")
-
-    streak_line = tr(uid, "stats_streak", n=stats["streak"]) if stats["streak"] >= 2 else ""
-
-    text = tr(uid, "profile_text",
+    await update.message.reply_text(tr(uid, "profile_text",
         name=u["display_name"] or "-",
         lang=LANG_NAMES.get(u["lang"], u["lang"]),
-        total_forecasts=stats["total_forecasts"],
-        winrate=winrate_line,
-        streak=("\n" + streak_line) if streak_line else "",
-        joined=stats["joined"],
-        tz=tz_str)
-    await update.message.reply_text(text)
+        tz=tz_str))
 
 
 async def tz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
