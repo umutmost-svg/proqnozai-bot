@@ -39,29 +39,30 @@ AI-прогнозы на спортивные матчи (футбол, UFC/MMA,
 Mostbet API не требует отдельного ключа — доступ даётся по IP whitelist
 (см. раздел "Mostbet Odds Checker API" ниже).
 
-## Структура файла `bot.py`
+## Структура проекта
 
-Файл монолитный (~2740 строк), разбит на секции комментариями `# ─── Название ───`.
-Порядок сверху вниз:
+Проект разбит на модули (раньше был монолит `bot.py` — теперь его нет,
+точка входа — `main.py`). Каждый файл отвечает за свою зону:
 
-1. **Logging** — два логгера: `bot.log` (всё) и `suspicious.log` (нарушения rate-limit, попытки prompt injection)
-2. **Config** — чтение переменных окружения
-3. **In-memory** — структуры в памяти процесса: rate-limit таймстемпы, live-подписки, Mostbet кэш
-4. **DB** — `db_init()` создаёт таблицы, дальше CRUD-функции с префиксом `db_`
-5. **Conversation memory** — последние 3 хода диалога на пользователя, передаются в Claude для контекста
-6. **Translations (`T` dict)** — все строки бота на 7 языках: `az, ru, en, tr, kz, uz, ar`. Структура: `T[lang][key]`
-7. **Onboarding data** — варианты ответов на вопросы анкеты (вид спорта, опыт)
-8. **Security** — rate-limit (5 запросов/60 сек), авто-блок после 3 нарушений на 10 минут, фильтр prompt injection
-9. **Football API** — обёртки над api-football.com (live-статус, события матча)
-10. **Mostbet Odds Checker API** — поиск матча по названиям команд + получение реальных коэффициентов (см. ниже)
-11. **Live Poller** — фоновая задача, опрашивает live-матчи раз в 60 сек, шлёт уведомления о голах/карточках + FOMO-алерты
-12. **Smart query parser** — Claude-haiku вычленяет команды/дату/вид спорта из произвольного текста пользователя
-13. **Odds change alerts** — фоновая задача, следит за изменением коэффициента на 0.3+ у матчей с активной подпиской
-14. **Daily push** — ежедневная рассылка в 10:00 неактивным 2+ дня пользователям
-15. **Handlers** — все обработчики команд/кнопок Telegram (`start`, `forecast_cb`, `watch_cb`, и т.д.)
-16. **Favourites / History / Express / Compare** — дополнительные фичи (см. ниже)
-17. **Admin** — админ-панель (`/admin`), полностью на кириллице
-18. **Main** — регистрация хендлеров, запуск (polling или webhook)
+| Файл | Назначение |
+|---|---|
+| `main.py` | Точка входа. `db_init()`, сборка `Application`, регистрация хендлеров, запуск фоновых задач (`poller`, `daily_push`, `_preload_mostbet`, `check_odds_changes`, `_broadcast_menu_update`), старт polling/webhook |
+| `config.py` | Настройка двух логгеров (`bot.log` — всё, `suspicious.log` — нарушения rate-limit / prompt injection), чтение переменных окружения, in-memory структуры (rate-limit таймстемпы, live-подписки, Mostbet кэш, локи) |
+| `db.py` | `db_init()` создаёт таблицы SQLite, дальше CRUD-функции с префиксом `db_` (юзеры, история, избранное, conversation memory, live-подписки, odds-алерты) |
+| `claude_client.py` | Обёртка над Anthropic API. `parse_match_query()` (Claude-haiku вычленяет команды/дату/спорт), генерация прогнозов, `asyncio.Semaphore(5)` на параллельные запросы |
+| `security.py` | Rate-limit (5 запросов/60 сек), авто-блок после 3 нарушений на 10 минут, фильтр prompt injection |
+| `football_api.py` | Обёртки над api-football.com (live-статус, события матча) |
+| `mostbet.py` | Mostbet Odds Checker API: загрузка/кэш списка матчей, поиск матча по названиям команд, получение реальных коэффициентов (см. ниже) |
+| `translations.py` | Словарь `T` — все строки бота на 7 языках: `az, ru, en, tr, kz, uz, ar`. Структура: `T[lang][key]`. Здесь же данные онбординга |
+| `handlers/__init__.py` | `register_handlers(app)` — регистрация всех command/callback/message хендлеров |
+| `handlers/registration.py` | `/start`, выбор языка, онбординг, `/profile`, `/tz` (таймзона) |
+| `handlers/forecast.py` | Основной флоу прогноза: парсинг запроса, меню выбора матча по спорту/лиге (`fm_*`), генерация прогноза, обработка текста/фото (`handle_msg`) |
+| `handlers/live.py` | Кнопка "Следить за матчем" (`watch_cb`), `/matches`, фоновые задачи `poller`, `check_odds_changes`, `daily_push` |
+| `handlers/history.py` | `/history`, фидбек ✅/❌ (`fb_`), повтор прогноза (`repeat_`) |
+| `handlers/express.py` | Экспресс (`/express`) и сравнение команд (`/compare`) |
+| `handlers/admin.py` | Админ-панель (`/admin`), `/testapi`, `/cancel` — полностью на кириллице |
+| `handlers/utils.py` | Общие хелперы (главное меню `main_menu` и т.п.) |
+| `test_e2e.py` | E2E-тесты |
 
 ## Ключевая бизнес-логика
 
@@ -122,9 +123,19 @@ Mostbet API не требует отдельного ключа — доступ
 ## Файлы в репозитории
 
 ```
-bot.py            — весь код бота (монолит)
-requirements.txt  — python-telegram-bot==21.5, anthropic>=0.40.0, httpx>=0.27.0
-Procfile           — worker: python bot.py
+main.py            — точка входа (запуск polling/webhook, фоновые задачи)
+config.py          — логгеры, переменные окружения, in-memory структуры
+db.py              — SQLite: db_init() + CRUD-функции (db_*)
+claude_client.py   — обёртка над Anthropic Claude API
+security.py        — rate-limit, авто-блок, фильтр prompt injection
+football_api.py    — обёртки над api-football.com (live-данные)
+mostbet.py         — Mostbet Odds Checker API (поиск матча, коэффициенты, кэш)
+translations.py    — словарь T: строки на 7 языках + данные онбординга
+handlers/          — обработчики Telegram (registration, forecast, live,
+                     history, express, admin, utils) + register_handlers()
+test_e2e.py        — e2e-тесты
+requirements.txt   — python-telegram-bot==21.5, anthropic>=0.40.0, httpx>=0.27.0
+Procfile           — worker: python main.py
 ```
 
 ## Что не реализовано / зоны роста
