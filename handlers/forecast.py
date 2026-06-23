@@ -14,7 +14,7 @@ from football_api import search_match, fetch_real_data
 from mostbet import (
     _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
-    normalize_tournament,
+    normalize_tournament, normalize_tournament_ai,
 )
 from handlers.utils import main_menu, _sport_emoji, _fmt_dt, fmt_dt_for_user
 from handlers.registration import handle_name
@@ -172,8 +172,8 @@ async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fm_leagues"] = leagues_map
 
     btns = []
-    for i, lg in enumerate(league_keys[:10]):
-        display_lg = normalize_tournament(lg)
+    display_names = await asyncio.gather(*[normalize_tournament_ai(lg) for lg in league_keys[:10]])
+    for i, (lg, display_lg) in enumerate(zip(league_keys[:10], display_names)):
         btns.append([InlineKeyboardButton(f"🏆 {display_lg} ({len(leagues_map[lg])})",
                                           callback_data=f"fm_lg_{i}")])
     btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
@@ -227,7 +227,7 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t1     = m.get("team1Title", "?")
     t2     = m.get("team2Title", "?")
     mid    = m.get("id")
-    league = normalize_tournament(m.get("lineSubCategory", ""))
+    league = await normalize_tournament_ai(m.get("lineSubCategory", ""))
     dt_str = fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
 
     loading = {
@@ -303,8 +303,8 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         leagues_map = context.user_data.get("fm_leagues", {})
         league_keys = sorted(leagues_map, key=lambda l: -len(leagues_map[l]))
         btns = []
-        for i, lg in enumerate(league_keys[:10]):
-            display_lg = normalize_tournament(lg)
+        display_names = await asyncio.gather(*[normalize_tournament_ai(lg) for lg in league_keys[:10]])
+        for i, (lg, display_lg) in enumerate(zip(league_keys[:10], display_names)):
             btns.append([InlineKeyboardButton(f"🏆 {display_lg} ({len(leagues_map[lg])})",
                                               callback_data=f"fm_lg_{i}")])
         btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])

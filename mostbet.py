@@ -78,6 +78,8 @@ _TOURNAMENT_MAP = {
     "valorant": "Valorant",
 }
 
+_tournament_norm_cache: dict[str, str] = {}
+
 def normalize_tournament(raw: str) -> str:
     """Return a clean, readable tournament name."""
     if not raw:
@@ -91,6 +93,40 @@ def normalize_tournament(raw: str) -> str:
             return v
     # Title-case cleanup
     return raw.strip().title()
+
+
+async def normalize_tournament_ai(raw: str) -> str:
+    """Normalize unknown tournament name via Claude Haiku (cached)."""
+    if not raw:
+        return raw
+    # Fast path: lookup table
+    quick = normalize_tournament(raw)
+    # If lookup table returned a real match (not just title-cased raw), use it
+    if quick != raw.strip().title() and quick != raw.strip():
+        return quick
+    # Cache check
+    key = raw.strip().lower()
+    if key in _tournament_norm_cache:
+        return _tournament_norm_cache[key]
+    # Ask Haiku
+    try:
+        from claude_client import client
+        import asyncio
+        r = await asyncio.to_thread(
+            client.messages.create,
+            model="claude-haiku-4-5-20251001", max_tokens=40,
+            messages=[{"role": "user", "content":
+                f'Convert this sports tournament/league name to its standard English name. '
+                f'Return ONLY the name, nothing else.\nInput: "{raw}"'}]
+        )
+        result = r.content[0].text.strip().strip('"')
+        if result:
+            _tournament_norm_cache[key] = result
+            return result
+    except Exception as e:
+        logger.warning(f"normalize_tournament_ai: {e}")
+    _tournament_norm_cache[key] = quick
+    return quick
 
 
 _NOISE = {"fc", "cf", "ac", "sc", "afc", "fk", "sk", "bk", "rsc", "rc", "ud", "cd", "sd",
