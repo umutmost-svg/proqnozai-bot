@@ -129,32 +129,34 @@ async def _fetch_footballdata(t1_en: str, t2_en: str) -> list[str]:
 
 async def _sonnet_form_estimate(t1: str, t2: str, t1_en: str, t2_en: str) -> str:
     """
-    Ask Claude Haiku to recall team form from training knowledge.
+    Ask Claude Sonnet to recall team/player form from training knowledge.
     Used only when real APIs return no data.
-    Result is marked as estimated so Claude Sonnet uses it as such.
+    Result is labelled as estimated so the forecast model treats it accordingly.
     """
     try:
         from claude_client import client
         prompt = (
-            f"Describe the recent form (last 5-10 matches) and playing style for these teams/players:\n"
-            f"Team 1: {t1_en} (also known as: {t1})\n"
-            f"Team 2: {t2_en} (also known as: {t2})\n\n"
-            f"For each team provide:\n"
-            f"- Recent form trend (winning/losing streak, draws)\n"
-            f"- Key strengths and weaknesses\n"
-            f"- Head-to-head tendency if known\n\n"
-            f"Be concise. If you have no reliable knowledge about a team, say so clearly.\n"
-            f"Format: plain text, one paragraph per team."
+            f"You are a sports analyst. Describe the recent form and playing style for these "
+            f"two sports participants using your training knowledge.\n\n"
+            f"Participant 1: {t1_en} (may also appear as: {t1})\n"
+            f"Participant 2: {t2_en} (may also appear as: {t2})\n\n"
+            f"For each participant write 2-4 sentences covering:\n"
+            f"- Recent results trend (winning/losing streak, consistency)\n"
+            f"- Strengths and style of play\n"
+            f"- Notable facts (key players, home/away record, head-to-head if known)\n\n"
+            f"IMPORTANT: Always give your best estimate even if not 100% certain — "
+            f"label uncertain facts with (estimated). Never leave a participant undescribed.\n"
+            f"Format: two clearly labelled paragraphs, one per participant."
         )
         r = await asyncio.to_thread(
             client.messages.create,
-            model="claude-sonnet-4-6", max_tokens=500,
+            model="claude-sonnet-4-6", max_tokens=600,
             messages=[{"role": "user", "content": prompt}]
         )
         text = r.content[0].text.strip()
-        if len(text) < 30:
+        if len(text) < 20:
             return ""
-        return f"FORM ANALYSIS (AI knowledge, may not reflect latest matches):\n\n{text}"
+        return f"ФОРМА (оценка ИИ, может не отражать последние матчи):\n\n{text}"
     except Exception as e:
         logger.warning(f"_sonnet_form_estimate: {e}")
         return ""

@@ -52,13 +52,13 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
         sys_prompt += data_note.get(lang, data_note["ru"])
     else:
         no_data_note = {
-            "ru": "\n\nФОРМА: Актуальные данные недоступны. Используй знания из обучения чтобы описать форму команд, но явно пометь каждый факт как '(оценочно)'. Не придумывай конкретные счета — пиши обобщённо: 'в последних матчах команда демонстрирует стабильную игру (оценочно)'.",
-            "az": "\n\nFORMA: Cari məlumatlar əlçatan deyil. Komandaların formasını öz biliklərinə əsasən təsvir et, lakin hər faktu '(təxmini)' kimi işarələ. Konkret hesab uydurmа.",
-            "en": "\n\nFORM: Live data unavailable. Use your training knowledge to describe team form, but mark each fact as '(estimated)'. Do not invent specific scores — write generally: 'team has shown consistent form recently (estimated)'.",
-            "tr": "\n\nFORM: Güncel veri mevcut değil. Takım formunu bilgine dayanarak açıkla ama her bilgiyi '(tahmini)' olarak işaretle. Belirli skorlar uydurma.",
-            "kz": "\n\nФОРМА: Ағымдағы деректер жоқ. Командалардың форамсын білімің негізінде сипатта, бірақ '(бағалау)' деп белгіле.",
-            "uz": "\n\nSHAKL: Joriy ma'lumotlar yo'q. Jamoalar formasini bilimingga asoslanib tasvirla, lekin har bir faktni '(taxminiy)' deb belgi.",
-            "ar": "\n\nالشكل: البيانات الحية غير متاحة. استخدم معرفتك لوصف شكل الفريق، لكن اذكر كل حقيقة بـ '(تقديري)'. لا تخترع نتائج محددة.",
+            "ru": "\n\nФОРМА: Реальные данные не предоставлены. На основе своих знаний ОБЯЗАТЕЛЬНО напиши форму и стиль каждой команды/участника. Помечай неточности как '(оценочно)'. Не пиши 'данные уточняются' — всегда давай содержательный анализ.",
+            "az": "\n\nFORMA: Real məlumatlar verilməyib. Biliklərinə əsasən hər iştirakçının formasını MÜTLƏQ təsvir et. Qeyri-dəqiq faktları '(təxmini)' kimi işarələ. 'Məlumat yoxlanılır' yazma.",
+            "en": "\n\nFORM: No live data provided. ALWAYS write form and style for each team/participant based on your knowledge. Mark uncertain facts as '(estimated)'. Never write 'data pending' — always give substantive analysis.",
+            "tr": "\n\nFORM: Gerçek veri sağlanmadı. Bilgine dayanarak her katılımcının formasını MUTLAKA yaz. Belirsiz bilgileri '(tahmini)' olarak işaretle. 'Veri kontrol ediliyor' yazma.",
+            "kz": "\n\nФОРМА: Нақты деректер берілмеді. Білімің негізінде әр қатысушының форамсын МІНДЕТТІ түрде жаз. Белгісіз фактілерді '(бағалау)' деп белгіле.",
+            "uz": "\n\nSHAKL: Haqiqiy ma'lumotlar berilmagan. Bilimingga asoslanib har bir ishtirokchining formasini ALBATTA yoz. Noaniq faktlarni '(taxminiy)' deb belgi.",
+            "ar": "\n\nالشكل: لا توجد بيانات حقيقية. استناداً لمعرفتك اكتب دائماً شكل وأسلوب كل مشارك. اذكر الحقائق غير المؤكدة بـ '(تقديري)'. لا تكتب 'البيانات قيد المراجعة'.",
         }
         sys_prompt += no_data_note.get(lang, no_data_note["ru"])
 

@@ -64,7 +64,7 @@ FORMAT:
 🏆 [İştirakçı A] — [İştirakçı B]
 📍 [Turnir] | [Tarix]
 
-📊 FORMA: [son nəticələr və ya "məlumat yoxlanılır"]
+📊 FORMA: [hər iştirakçının forma və üslubunu real və ya təxmini şəkildə təsvir et]
 
 🔍 ANALİZ: [2-3 əsas amil]
 
@@ -157,13 +157,14 @@ Bərabərlik — XX% | Kef: X.XX  (tətbiq olunarsa)
 - Не упоминай ушедших игроков; состав неизвестен — пиши "состав уточняется"
 - Коэффициенты реалистичные: фаворит 1.20-1.60, равные 2.20-3.00
 - Только текст и emoji, без ** markdown
+- В разделе ФОРМА ОБЯЗАТЕЛЬНО опиши стиль и форму каждой команды/участника. Если нет точных данных — пиши свою оценку с пометкой (оценочно). Никогда не пиши просто "данные уточняются".
 
 ФОРМАТ:
 
 🏆 [Участник А] — [Участник Б]
 📍 [Турнир] | [Дата]
 
-📊 ФОРМА: [последние результаты или "данные уточняются"]
+📊 ФОРМА: [опиши реальные или оценочные результаты каждого участника]
 
 🔍 АНАЛИЗ: [2-3 ключевых фактора]
 
@@ -262,7 +263,7 @@ FORMAT:
 🏆 [Participant A] — [Participant B]
 📍 [Tournament] | [Date]
 
-📊 FORM: [recent results or "data pending"]
+📊 FORM: [describe each participant's form and style — use real data or estimated with (est.) label]
 
 🔍 ANALYSIS: [2-3 key factors]
 
@@ -356,7 +357,7 @@ FORMAT:
 🏆 [Katılımcı A] — [Katılımcı B]
 📍 [Turnuva] | [Tarih]
 
-📊 FORM: [son sonuçlar veya "veri kontrol ediliyor"]
+📊 FORM: [her katılımcının forma ve stilini gerçek veya tahmini olarak açıkla]
 
 🔍 ANALİZ: [2-3 temel faktör]
 
@@ -451,7 +452,7 @@ Beraberlik — XX% | Oran: X.XX  (geçerliyse)
 🏆 [Қатысушы А] — [Қатысушы Б]
 📍 [Турнир] | [Күні]
 
-📊 ФОРМА: [соңғы нәтижелер немесе "деректер тексерілуде"]
+📊 ФОРМА: [әр қатысушының форма мен ойын стилін нақты немесе бағалау деректерімен сипатта]
 
 🔍 ТАЛДАУ: [2-3 негізгі фактор]
 
@@ -546,7 +547,7 @@ FORMAT:
 🏆 [Ishtirokchi A] — [Ishtirokchi B]
 📍 [Turnir] | [Sana]
 
-📊 SHAKL: [oxirgi natijalar yoki "ma'lumot tekshirilmoqda"]
+📊 SHAKL: [har bir ishtirokchining forma va o'yin uslubini haqiqiy yoki taxminiy ma'lumot bilan tavrifla]
 
 🔍 TAHLIL: [2-3 asosiy omil]
 
@@ -641,7 +642,7 @@ Durrang — XX% | Koef: X.XX  (agar taalluqli bo'lsa)
 🏆 [المشارك أ] — [المشارك ب]
 📍 [البطولة] | [التاريخ]
 
-📊 الشكل: [آخر النتائج أو "البيانات قيد المراجعة"]
+📊 الشكل: [صف شكل وأسلوب كل مشارك بالبيانات الحقيقية أو التقديرية]
 
 🔍 التحليل: [2-3 عوامل رئيسية]
 
