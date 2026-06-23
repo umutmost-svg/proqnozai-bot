@@ -81,34 +81,36 @@ _TOURNAMENT_MAP = {
 _tournament_norm_cache: dict[str, str] = {}
 
 def normalize_tournament(raw: str) -> str:
-    """Return a clean, readable tournament name."""
+    """Clean up a tournament name. Trusts Mostbet's name — only expands
+    exact short abbreviations, never rewrites a descriptive name."""
     if not raw:
         return raw
     key = raw.strip().lower()
+    # Only expand when the WHOLE name is a known abbreviation (exact match).
+    # Substring matching is unsafe: "World Cup. CONCACAF" must NOT become
+    # "FIFA World Cup" and lose the qualifier context.
     if key in _TOURNAMENT_MAP:
         return _TOURNAMENT_MAP[key]
-    # Partial match for common patterns
-    for k, v in _TOURNAMENT_MAP.items():
-        if k in key:
-            return v
-    # Title-case cleanup
-    return raw.strip().title()
+    # Otherwise keep Mostbet's name as-is (lightly cleaned).
+    return raw.strip()
 
 
 async def normalize_tournament_ai(raw: str) -> str:
-    """Normalize unknown tournament name via Claude Haiku (cached)."""
+    """Normalize a tournament name. Mostbet names are already accurate, so we
+    only translate to a clean English form, preserving qualifier/region context."""
     if not raw:
         return raw
-    # Fast path: lookup table
-    quick = normalize_tournament(raw)
-    # If lookup table returned a real match (not just title-cased raw), use it
-    if quick != raw.strip().title() and quick != raw.strip():
-        return quick
-    # Cache check
     key = raw.strip().lower()
+    # Exact-match abbreviations expand instantly
+    if key in _TOURNAMENT_MAP:
+        return _TOURNAMENT_MAP[key]
+    # Already plain ASCII English? Trust it as-is, no API call needed.
+    if raw.isascii():
+        return raw.strip()
+    # Cache check
     if key in _tournament_norm_cache:
         return _tournament_norm_cache[key]
-    # Ask Haiku
+    # Non-Latin name → translate to English, but KEEP all context (region, stage)
     try:
         from claude_client import client
         import asyncio
@@ -116,8 +118,10 @@ async def normalize_tournament_ai(raw: str) -> str:
             client.messages.create,
             model="claude-haiku-4-5-20251001", max_tokens=40,
             messages=[{"role": "user", "content":
-                f'Convert this sports tournament/league name to its standard English name. '
-                f'Return ONLY the name, nothing else.\nInput: "{raw}"'}]
+                f'Translate this sports tournament name to standard English. '
+                f'Keep ALL details (region, qualification stage, division). '
+                f'Do NOT replace it with a different competition. '
+                f'Return ONLY the name.\nInput: "{raw}"'}]
         )
         result = r.content[0].text.strip().strip('"')
         if result:
@@ -125,8 +129,8 @@ async def normalize_tournament_ai(raw: str) -> str:
             return result
     except Exception as e:
         logger.warning(f"normalize_tournament_ai: {e}")
-    _tournament_norm_cache[key] = quick
-    return quick
+    _tournament_norm_cache[key] = raw.strip()
+    return raw.strip()
 
 
 _NOISE = {"fc", "cf", "ac", "sc", "afc", "fk", "sk", "bk", "rsc", "rc", "ud", "cd", "sd",
