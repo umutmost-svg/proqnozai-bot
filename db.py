@@ -200,6 +200,36 @@ def db_feedback_stats(uid) -> dict:
         wins  = c.execute("SELECT COUNT(*) FROM forecast_history WHERE user_id=? AND feedback=1", (uid,)).fetchone()[0]
     return dict(total=total, wins=wins, pct=round(wins/total*100) if total > 0 else 0)
 
+def db_user_stats(uid) -> dict:
+    with con() as c:
+        total_forecasts = c.execute(
+            "SELECT COUNT(*) FROM forecast_history WHERE user_id=?", (uid,)).fetchone()[0]
+        fb_total = c.execute(
+            "SELECT COUNT(*) FROM forecast_history WHERE user_id=? AND feedback IS NOT NULL", (uid,)).fetchone()[0]
+        fb_wins = c.execute(
+            "SELECT COUNT(*) FROM forecast_history WHERE user_id=? AND feedback=1", (uid,)).fetchone()[0]
+        joined = c.execute(
+            "SELECT joined_at FROM users WHERE user_id=?", (uid,)).fetchone()
+        # Current win streak: count consecutive wins from latest feedback
+        feedbacks = c.execute(
+            "SELECT feedback FROM forecast_history WHERE user_id=? AND feedback IS NOT NULL "
+            "ORDER BY id DESC LIMIT 20", (uid,)).fetchall()
+    streak = 0
+    for (fb,) in feedbacks:
+        if fb == 1:
+            streak += 1
+        else:
+            break
+    joined_str = (joined[0] or "")[:10] if joined else ""
+    return dict(
+        total_forecasts=total_forecasts,
+        fb_total=fb_total,
+        fb_wins=fb_wins,
+        fb_pct=round(fb_wins / fb_total * 100) if fb_total > 0 else None,
+        streak=streak,
+        joined=joined_str,
+    )
+
 # ─── Conversation memory ──────────────────────────────────────────────────────
 def db_get_conv(uid) -> list:
     """Get last 3 conversation turns for context."""
