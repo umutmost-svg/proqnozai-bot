@@ -49,11 +49,25 @@ async def _preload_mostbet():
         await asyncio.sleep(MOSTBET_CACHE_TTL)
 
 
+async def _error_handler(update, context):
+    """Catch any unhandled exception so one bad update never crashes the bot
+    or leaks a traceback to the user."""
+    logger.error("Unhandled exception in handler", exc_info=context.error)
+    try:
+        if update and getattr(update, "effective_chat", None):
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⚠️ Произошла ошибка. Попробуйте ещё раз.")
+    except Exception:
+        pass
+
+
 def main():
     db_init()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     register_handlers(app)
+    app.add_error_handler(_error_handler)
 
     async def post_init(application):
         db_restore_live_subs()

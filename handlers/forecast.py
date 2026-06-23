@@ -8,7 +8,7 @@ from telegram.ext import ContextTypes
 from config import reg_step
 from db import db_ensure, db_get, db_lang, db_is_reg, db_is_blocked, db_log_req, db_save_history
 from translations import T, tr
-from security import uinfo, sec_blocked, rate_check, record_viol
+from security import uinfo, sec_blocked, rate_check, record_viol, detect_injection
 from claude_client import claude_forecast
 from football_api import search_match, fetch_real_data
 from mostbet import (
@@ -20,6 +20,8 @@ from handlers.utils import main_menu, _sport_emoji, _fmt_dt, fmt_dt_for_user
 from handlers.registration import handle_name
 
 logger = logging.getLogger(__name__)
+
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB cap on uploaded images
 
 
 async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, status_msg):
@@ -380,15 +382,24 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(text) > 1000:
         __import__('logging').getLogger("suspicious").warning(f"LONG | {info}")
         await update.message.reply_text(tr(uid, "long_text")); return
-    inj = ["ignore previous", "system prompt", "forget instructions", "act as", "jailbreak"]
-    if any(k.lower() in text.lower() for k in inj):
-        __import__('logging').getLogger("suspicious").warning(f"INJ | {info}")
-        await update.message.reply_text(tr(uid, "injection")); return
+    if detect_injection(text):
+        __import__('logging').getLogger("suspicious").warning(f"INJ | {info} | text={text[:120]!r}")
+        if record_viol(uid, info):
+            await update.message.reply_text(tr(uid, "auto_blocked", min=__import__('config').SPAM_DUR//60))
+        else:
+            await update.message.reply_text(tr(uid, "injection"))
+        return
 
     if photo:
         # Photo analysis - send directly to Claude
-        f = await context.bot.get_file(photo[-1].file_id)
+        largest = photo[-1]
+        if (largest.file_size or 0) > MAX_IMAGE_BYTES:
+            __import__('logging').getLogger("suspicious").warning(f"BIGIMG | {info} | {largest.file_size}b")
+            await update.message.reply_text(tr(uid, "img_too_big")); return
+        f = await context.bot.get_file(largest.file_id)
         fb = await f.download_as_bytearray()
+        if len(fb) > MAX_IMAGE_BYTES:
+            await update.message.reply_text(tr(uid, "img_too_big")); return
         content = [
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
              "data": base64.standard_b64encode(fb).decode("utf-8")}},
