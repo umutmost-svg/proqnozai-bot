@@ -14,6 +14,7 @@ from football_api import search_match, fetch_real_data
 from mostbet import (
     _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
+    normalize_tournament,
 )
 from handlers.utils import main_menu, _sport_emoji, _fmt_dt, fmt_dt_for_user
 from handlers.registration import handle_name
@@ -172,7 +173,8 @@ async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     btns = []
     for i, lg in enumerate(league_keys[:10]):
-        btns.append([InlineKeyboardButton(f"🏆 {lg} ({len(leagues_map[lg])})",
+        display_lg = normalize_tournament(lg)
+        btns.append([InlineKeyboardButton(f"🏆 {display_lg} ({len(leagues_map[lg])})",
                                           callback_data=f"fm_lg_{i}")])
     btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
 
@@ -225,7 +227,7 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t1     = m.get("team1Title", "?")
     t2     = m.get("team2Title", "?")
     mid    = m.get("id")
-    league = m.get("lineSubCategory", "")
+    league = normalize_tournament(m.get("lineSubCategory", ""))
     dt_str = fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
 
     loading = {
@@ -302,7 +304,8 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         league_keys = sorted(leagues_map, key=lambda l: -len(leagues_map[l]))
         btns = []
         for i, lg in enumerate(league_keys[:10]):
-            btns.append([InlineKeyboardButton(f"🏆 {lg} ({len(leagues_map[lg])})",
+            display_lg = normalize_tournament(lg)
+            btns.append([InlineKeyboardButton(f"🏆 {display_lg} ({len(leagues_map[lg])})",
                                               callback_data=f"fm_lg_{i}")])
         btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
         title = {

@@ -10,6 +10,89 @@ from config import MOSTBET_BASE, MOSTBET_CACHE_TTL, mostbet_cache, _mostbet_lock
 
 logger = logging.getLogger(__name__)
 
+# ─── Tournament name normalisation ───────────────────────────────────────────
+
+_TOURNAMENT_MAP = {
+    # Football — club
+    "epl": "Premier League (England)",
+    "english premier league": "Premier League (England)",
+    "premier league": "Premier League (England)",
+    "laliga": "La Liga (Spain)",
+    "la liga": "La Liga (Spain)",
+    "bundesliga": "Bundesliga (Germany)",
+    "serie a": "Serie A (Italy)",
+    "ligue 1": "Ligue 1 (France)",
+    "eredivisie": "Eredivisie (Netherlands)",
+    "primeira liga": "Primeira Liga (Portugal)",
+    "süper lig": "Süper Lig (Turkey)",
+    "super lig": "Süper Lig (Turkey)",
+    "championship": "Championship (England)",
+    "liga nos": "Primeira Liga (Portugal)",
+    "scottish premiership": "Scottish Premiership",
+    "mls": "MLS (USA)",
+    "brasileirao": "Brasileirão (Brazil)",
+    "serie b": "Serie B (Italy)",
+    "2. bundesliga": "2. Bundesliga (Germany)",
+    "ligue 2": "Ligue 2 (France)",
+    "liga 2": "Liga 2",
+    # Football — European
+    "ucl": "UEFA Champions League",
+    "champions league": "UEFA Champions League",
+    "uefa champions league": "UEFA Champions League",
+    "uel": "UEFA Europa League",
+    "europa league": "UEFA Europa League",
+    "uefa europa league": "UEFA Europa League",
+    "uecl": "UEFA Conference League",
+    "conference league": "UEFA Conference League",
+    # Football — national teams
+    "world cup": "FIFA World Cup",
+    "euro": "UEFA Euro",
+    "copa america": "Copa América",
+    "africa cup": "Africa Cup of Nations",
+    "afcon": "Africa Cup of Nations",
+    "nations league": "UEFA Nations League",
+    # Basketball
+    "nba": "NBA (USA)",
+    "euroleague": "EuroLeague",
+    "eurocup": "EuroCup",
+    "vtb united league": "VTB United League",
+    # Tennis
+    "atp": "ATP Tour",
+    "wta": "WTA Tour",
+    "wimbledon": "Wimbledon",
+    "us open": "US Open (Tennis)",
+    "french open": "Roland Garros",
+    "roland garros": "Roland Garros",
+    "australian open": "Australian Open",
+    # MMA / Boxing
+    "ufc": "UFC",
+    "bellator": "Bellator MMA",
+    # Hockey
+    "nhl": "NHL (USA/Canada)",
+    "khl": "KHL",
+    # Cybersport
+    "cs2": "CS2",
+    "csgo": "CS:GO",
+    "dota 2": "Dota 2",
+    "lol": "League of Legends",
+    "valorant": "Valorant",
+}
+
+def normalize_tournament(raw: str) -> str:
+    """Return a clean, readable tournament name."""
+    if not raw:
+        return raw
+    key = raw.strip().lower()
+    if key in _TOURNAMENT_MAP:
+        return _TOURNAMENT_MAP[key]
+    # Partial match for common patterns
+    for k, v in _TOURNAMENT_MAP.items():
+        if k in key:
+            return v
+    # Title-case cleanup
+    return raw.strip().title()
+
+
 _NOISE = {"fc", "cf", "ac", "sc", "afc", "fk", "sk", "bk", "rsc", "rc", "ud", "cd", "sd",
           "fútbol", "club", "sporting", "atletico", "atletik", "united", "city", "the"}
 
