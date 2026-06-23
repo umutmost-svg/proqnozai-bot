@@ -73,7 +73,7 @@ async def claude_forecast(uid: int, msg_content: list, sys_prompt: str, max_tok:
         async with request_semaphore:
             resp = await asyncio.to_thread(
                 client.messages.create,
-                model="claude-sonnet-4-6",
+                model="claude-opus-4-8",
                 max_tokens=max_tok,
                 system=sys_prompt,
                 messages=messages,
