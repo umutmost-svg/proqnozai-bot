@@ -77,7 +77,7 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
                 msg = T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"])
                 await status_msg.edit_text(msg); return
 
-    reply = await claude_forecast(uid, msg_content, sys_prompt, 1500)
+    reply = await claude_forecast(uid, msg_content, sys_prompt, 800)
     logger.info(f"FORECAST OK | uid={uid}")
 
     watch_kb = None

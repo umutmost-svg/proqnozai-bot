@@ -150,7 +150,7 @@ async def _sonnet_form_estimate(t1: str, t2: str, t1_en: str, t2_en: str) -> str
         )
         r = await asyncio.to_thread(
             client.messages.create,
-            model="claude-sonnet-4-6", max_tokens=600,
+            model="claude-sonnet-4-6", max_tokens=300,
             messages=[{"role": "user", "content": prompt}]
         )
         text = r.content[0].text.strip()
