@@ -113,7 +113,6 @@ async def normalize_tournament_ai(raw: str) -> str:
     # Non-Latin name → translate to English, but KEEP all context (region, stage)
     try:
         from claude_client import client
-        import asyncio
         r = await asyncio.to_thread(
             client.messages.create,
             model="claude-haiku-4-5-20251001", max_tokens=40,

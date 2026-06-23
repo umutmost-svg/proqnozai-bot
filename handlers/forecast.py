@@ -14,7 +14,7 @@ from football_api import search_match, fetch_real_data
 from mostbet import (
     _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
-    normalize_tournament, normalize_tournament_ai,
+    normalize_tournament_ai,
 )
 from handlers.utils import main_menu, _sport_emoji, _fmt_dt, fmt_dt_for_user
 from handlers.registration import handle_name
