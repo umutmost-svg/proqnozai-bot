@@ -71,7 +71,7 @@ FORMAT:
 Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 [B] — XX% | X.XX
 
-⚡ Mərc: [növ] @ X.XX — [1 cümlə, niyə]""",
+⚡ **Mərc: [növ] @ X.XX** — [1 cümlə, niyə]""",
 "live_tip_prompt": "Canlı mərc analitikisən. Oyun: {match}, {minute}. dəq, hesab {score}. Hadisə: {event}. Ən yaxşı canlı mərci tövsiyə et. Qısa, maks 2 cümlə.",
 "fav_added":    "Sevimlilərə əlavə edildi: {team}",
 "fav_removed":  "Sevimlilərdən silindi: {team}",
@@ -152,7 +152,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 
 ПРАВИЛА:
 - Если есть коэффициенты — используй только их
-- Только текст и emoji, без ** markdown
+- Только текст и emoji, без ** markdown (кроме строки ставки)
 - ФОРМА: 1 короткое предложение на каждого участника. Если нет данных — пиши оценку с (оценочно)
 - Весь прогноз — максимум 10 строк
 
@@ -168,7 +168,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 Ничья — XX% | X.XX  (если применимо)
 [Б] — XX% | X.XX
 
-⚡ Ставка: [тип] @ X.XX — [причина, 1 предложение]""",
+⚡ **Ставка: [тип] @ X.XX** — [причина, 1 предложение]""",
 "live_tip_prompt": "Ты лайв-аналитик. Матч {match}, {minute} мин, счёт {score}. Событие: {event}. Дай лучшую лайв-ставку. Коротко, макс 2 предложения.",
 "fav_added": "Добавлено в избранное: {team}",
 "fav_removed": "Удалено из избранного: {team}",
@@ -265,7 +265,7 @@ FORMAT:
 Draw — XX% | X.XX  (if applicable)
 [B] — XX% | X.XX
 
-⚡ Bet: [type] @ X.XX — [1 sentence why]""",
+⚡ **Bet: [type] @ X.XX** — [1 sentence why]""",
 "live_tip_prompt": "You are a live betting analyst. Match {match}, {minute} min, score {score}. Event: {event}. Best live bet now. Max 2 sentences.",
 "fav_added": "Added to favourites: {team}",
 "fav_removed": "Removed from favourites: {team}",
@@ -357,7 +357,7 @@ FORMAT:
 Beraberlik — XX% | X.XX  (geçerliyse)
 [B] — XX% | X.XX
 
-⚡ Bahis: [tür] @ X.XX — [1 cümle neden]""",
+⚡ **Bahis: [tür] @ X.XX** — [1 cümle neden]""",
 "live_tip_prompt": "Canlı bahis analistisin. Maç {match}, {minute}. dk, skor {score}. Olay: {event}. En iyi canlı bahsi öner. Kısa, max 2 cümle.",
 "fav_added": "Favorilere eklendi: {team}",
 "fav_removed": "Favorilerden kaldırıldı: {team}",
@@ -450,7 +450,7 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 Тең — XX% | X.XX  (қолданылса)
 [Б] — XX% | X.XX
 
-⚡ Ставка: [түрі] @ X.XX — [1 сөйлем, неге]""",
+⚡ **Ставка: [түрі] @ X.XX** — [1 сөйлем, неге]""",
 "live_tip_prompt": "Тікелей ставка аналитигісің. Матч {match}, {minute} мин, есеп {score}. Оқиға: {event}. Үздік тікелей ставканы ұсын. Қысқа, максимум 2 сөйлем.",
 "fav_added": "Таңдаулыларға қосылды: {team}",
 "fav_removed": "Таңдаулылардан жойылды: {team}",
@@ -543,7 +543,7 @@ FORMAT:
 Durrang — XX% | X.XX  (taalluqli bo'lsa)
 [B] — XX% | X.XX
 
-⚡ Stavka: [turi] @ X.XX — [1 jumla, nima uchun]""",
+⚡ **Stavka: [turi] @ X.XX** — [1 jumla, nima uchun]""",
 "live_tip_prompt": "Sen jonli stavkalar analitikisisan. O'yin {match}, {minute} daq, hisob {score}. Voqea: {event}. Eng yaxshi jonli stavkani tavsiya et. Qisqa, max 2 jumla.",
 "fav_added": "Sevimlilariga qo'shildi: {team}",
 "fav_removed": "Sevimlilardan o'chirildi: {team}",
@@ -636,7 +636,7 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 تعادل — XX% | X.XX  (إن انطبق)
 [ب] — XX% | X.XX
 
-⚡ الرهان: [النوع] @ X.XX — [جملة واحدة لماذا]""",
+⚡ **الرهان: [النوع] @ X.XX** — [جملة واحدة لماذا]""",
 "live_tip_prompt": "أنت محلل رهانات مباشرة. المباراة {match}، الدقيقة {minute}، النتيجة {score}. الحدث: {event}. اقترح أفضل رهان مباشر. مختصر، جملتان كحد أقصى.",
 "fav_added": "أضيف إلى المفضلة: {team}",
 "fav_removed": "حُذف من المفضلة: {team}",

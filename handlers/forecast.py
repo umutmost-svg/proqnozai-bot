@@ -94,7 +94,7 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     db_save_history(uid, text, reply)
 
     final_kb = watch_kb
-    await status_msg.edit_text(reply, reply_markup=final_kb)
+    await status_msg.edit_text(reply, reply_markup=final_kb, parse_mode="Markdown")
 
 
 async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
