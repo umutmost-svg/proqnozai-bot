@@ -57,15 +57,16 @@ QAYDALAR:
 - Keflər varsa — yalnız onları istifadə et
 - Yalnız mətn və emoji, ** markdown yox
 - FORMA: hər iştirakçı üçün 1 qısa cümlə. Məlumat yoxdursa (təxmini) qeydi ilə yaz
-- Bütün proqnoz — maksimum 10 sətir
+- Real matç verileri varsa — ortalama qol sayını göstər
+- Bütün proqnoz — maksimum 12 sətir
 
 FORMAT:
 
 🏆 [A] — [B]
 📍 [Turnir] | [Tarix]
 
-📊 [A]: [forma, 1 cümlə]
-📊 [B]: [forma, 1 cümlə]
+📊 [A]: [forma, 1 cümlə] | ⚽ ort. X.X/oyun (real data varsa)
+📊 [B]: [forma, 1 cümlə] | ⚽ ort. X.X/oyun (real data varsa)
 
 🎯 [A] — XX% | X.XX
 Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
@@ -147,15 +148,16 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 - Если есть коэффициенты — используй только их
 - Только текст и emoji, без ** markdown (кроме строки ставки)
 - ФОРМА: 1 короткое предложение на каждого участника. Если нет данных — пиши оценку с (оценочно)
-- Весь прогноз — максимум 10 строк
+- Если есть реальные данные матчей — укажи среднее количество голов
+- Весь прогноз — максимум 12 строк
 
 ФОРМАТ:
 
 🏆 [А] — [Б]
 📍 [Турнир] | [Дата]
 
-📊 [А]: [форма, 1 предложение]
-📊 [Б]: [форма, 1 предложение]
+📊 [А]: [форма, 1 предложение] | ⚽ ср. X.X/игру (если есть данные)
+📊 [Б]: [форма, 1 предложение] | ⚽ ср. X.X/игру (если есть данные)
 
 🎯 [А] — XX% | X.XX
 Ничья — XX% | X.XX  (если применимо)
@@ -237,15 +239,16 @@ RULES:
 - If odds are provided — use only those
 - Plain text and emoji only, no ** markdown
 - FORM: 1 short sentence per participant. If unknown, write estimate with (est.)
-- Entire forecast — 10 lines max
+- If real match data is provided — include avg goals per game
+- Entire forecast — 12 lines max
 
 FORMAT:
 
 🏆 [A] — [B]
 📍 [Tournament] | [Date]
 
-📊 [A]: [form, 1 sentence]
-📊 [B]: [form, 1 sentence]
+📊 [A]: [form, 1 sentence] | ⚽ avg X.X/game (if data available)
+📊 [B]: [form, 1 sentence] | ⚽ avg X.X/game (if data available)
 
 🎯 [A] — XX% | X.XX
 Draw — XX% | X.XX  (if applicable)
@@ -322,15 +325,16 @@ KURALLAR:
 - Oran varsa — sadece onları kullan
 - Sadece metin ve emoji, ** markdown yok
 - FORM: her katılımcı için 1 kısa cümle. Bilinmiyorsa (tahmini) etiketiyle yaz
-- Tüm tahmin — maksimum 10 satır
+- Gerçek maç verisi varsa — ortalama gol sayısını göster
+- Tüm tahmin — maksimum 12 satır
 
 FORMAT:
 
 🏆 [A] — [B]
 📍 [Turnuva] | [Tarih]
 
-📊 [A]: [form, 1 cümle]
-📊 [B]: [form, 1 cümle]
+📊 [A]: [form, 1 cümle] | ⚽ ort. X.X/maç (veri varsa)
+📊 [B]: [form, 1 cümle] | ⚽ ort. X.X/maç (veri varsa)
 
 🎯 [A] — XX% | X.XX
 Beraberlik — XX% | X.XX  (geçerliyse)
@@ -408,15 +412,16 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 - Коэффициенттер берілсе — тек соларды қолдан
 - Тек мәтін және emoji, ** markdown жоқ
 - ФОРМА: әр қатысушы үшін 1 қысқа сөйлем. Белгісіз болса (бағалау) белгісімен жаз
-- Бүкіл болжам — максимум 10 жол
+- Нақты матч деректері болса — орташа гол санын көрсет
+- Бүкіл болжам — максимум 12 жол
 
 ФОРМАТ:
 
 🏆 [А] — [Б]
 📍 [Турнир] | [Күні]
 
-📊 [А]: [форма, 1 сөйлем]
-📊 [Б]: [форма, 1 сөйлем]
+📊 [А]: [форма, 1 сөйлем] | ⚽ орт. X.X/ойын (деректер болса)
+📊 [Б]: [форма, 1 сөйлем] | ⚽ орт. X.X/ойын (деректер болса)
 
 🎯 [А] — XX% | X.XX
 Тең — XX% | X.XX  (қолданылса)
@@ -494,15 +499,16 @@ QOIDALAR:
 - Koeffitsientlar berilsa — faqat shularni ishlatish
 - Faqat matn va emoji, ** markdown yo'q
 - SHAKL: har bir ishtirokchi uchun 1 qisqa jumla. Noma'lum bo'lsa (taxminiy) belgisi bilan yoz
-- Butun bashorat — maksimum 10 qator
+- Haqiqiy ma'lumotlar bo'lsa — o'rtacha gol sonini ko'rsat
+- Butun bashorat — maksimum 12 qator
 
 FORMAT:
 
 🏆 [A] — [B]
 📍 [Turnir] | [Sana]
 
-📊 [A]: [shakl, 1 jumla]
-📊 [B]: [shakl, 1 jumla]
+📊 [A]: [shakl, 1 jumla] | ⚽ o'rt. X.X/o'yin (ma'lumot bo'lsa)
+📊 [B]: [shakl, 1 jumla] | ⚽ o'rt. X.X/o'yin (ma'lumot bo'lsa)
 
 🎯 [A] — XX% | X.XX
 Durrang — XX% | X.XX  (taalluqli bo'lsa)
@@ -580,15 +586,16 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 - إذا وُجدت أرباح — استخدمها فقط
 - نص عادي وإيموجي فقط، لا Markdown **
 - الشكل: جملة واحدة قصيرة لكل مشارك. إذا كانت غير مؤكدة اكتب (تقديري)
-- التوقع كله — 10 أسطر كحد أقصى
+- إذا توفرت بيانات حقيقية — أضف متوسط الأهداف
+- التوقع كله — 12 سطراً كحد أقصى
 
 الصيغة:
 
 🏆 [أ] — [ب]
 📍 [البطولة] | [التاريخ]
 
-📊 [أ]: [الشكل، جملة واحدة]
-📊 [ب]: [الشكل، جملة واحدة]
+📊 [أ]: [الشكل، جملة واحدة] | ⚽ متوسط X.X/مباراة (إن توفر)
+📊 [ب]: [الشكل، جملة واحدة] | ⚽ متوسط X.X/مباراة (إن توفر)
 
 🎯 [أ] — XX% | X.XX
 تعادل — XX% | X.XX  (إن انطبق)

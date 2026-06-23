@@ -36,6 +36,24 @@ async def _normalize_names(t1: str, t2: str) -> tuple[str, str]:
     return t1, t2
 
 
+def _avg_goals_str(fixtures: list, team_id: int, team_name: str) -> str:
+    """Calculate avg goals scored/conceded from last N fixtures for a team."""
+    scored = []
+    conceded = []
+    for f in fixtures:
+        is_home = f["teams"]["home"]["id"] == team_id
+        g_home = f["goals"]["home"] or 0
+        g_away = f["goals"]["away"] or 0
+        scored.append(g_home if is_home else g_away)
+        conceded.append(g_away if is_home else g_home)
+    if not scored:
+        return ""
+    n = len(scored)
+    avg_s = sum(scored) / n
+    avg_c = sum(conceded) / n
+    return f"Avg goals scored: {avg_s:.1f} | conceded: {avg_c:.1f} (last {n})"
+
+
 async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
     """Fetch last 5 results + H2H from api-sports.io (football only, 100 req/day free)."""
     parts = []
@@ -70,7 +88,11 @@ async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
                             f"{f['teams']['away']['name']}"
                             for f in fixtures
                         ]
-                        parts.append(f"{tname} last 5:\n" + "\n".join(lines))
+                        avg_str = _avg_goals_str(fixtures, tid, tname)
+                        block = f"{tname} last 5:\n" + "\n".join(lines)
+                        if avg_str:
+                            block += f"\n{avg_str}"
+                        parts.append(block)
 
             if t1_id and t2_id:
                 r3 = await h.get("https://v3.football.api-sports.io/fixtures/headtohead",
@@ -121,7 +143,21 @@ async def _fetch_footballdata(t1_en: str, t2_en: str) -> list[str]:
                             f"{m['awayTeam']['name']}"
                             for m in ms
                         ]
-                        parts.append(f"{teams[0]['name']} last 5:\n" + "\n".join(lines))
+                        # avg goals from football-data.org
+                        scored = []
+                        conceded = []
+                        tname = teams[0]["name"]
+                        for m in ms:
+                            is_home = m["homeTeam"]["name"] == tname
+                            gh = m["score"]["fullTime"].get("home") or 0
+                            ga = m["score"]["fullTime"].get("away") or 0
+                            scored.append(gh if is_home else ga)
+                            conceded.append(ga if is_home else gh)
+                        block = f"{tname} last 5:\n" + "\n".join(lines)
+                        if scored:
+                            n = len(scored)
+                            block += f"\nAvg goals scored: {sum(scored)/n:.1f} | conceded: {sum(conceded)/n:.1f} (last {n})"
+                        parts.append(block)
     except Exception as e:
         logger.error(f"_fetch_footballdata: {e}")
     return parts
