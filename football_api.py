@@ -14,18 +14,19 @@ logger = logging.getLogger(__name__)
 async def _normalize_names(t1: str, t2: str) -> tuple[str, str]:
     """Translate team/player names to English using Claude Haiku."""
     try:
-        from claude_client import client
+        from claude_client import _create_with_retry
         prompt = (
             f'Translate these sport team/player names to their standard English spelling.\n'
             f'Name 1: "{t1}"\nName 2: "{t2}"\n'
             f'Return JSON only: {{"name1": "...", "name2": "..."}}\n'
             f'If already English or unknown, return as-is.'
         )
-        r = await asyncio.to_thread(
-            client.messages.create,
+        r = await _create_with_retry(
             model="claude-haiku-4-5-20251001", max_tokens=80,
             messages=[{"role": "user", "content": prompt}]
         )
+        if not r.content:
+            return t1, t2
         raw = r.content[0].text.strip()
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         if m:
@@ -170,7 +171,7 @@ async def _sonnet_form_estimate(t1: str, t2: str, t1_en: str, t2_en: str) -> str
     Result is labelled as estimated so the forecast model treats it accordingly.
     """
     try:
-        from claude_client import client
+        from claude_client import _create_with_retry
         prompt = (
             f"You are a sports analyst. Describe the recent form and playing style for these "
             f"two sports participants using your training knowledge.\n\n"
@@ -184,11 +185,12 @@ async def _sonnet_form_estimate(t1: str, t2: str, t1_en: str, t2_en: str) -> str
             f"label uncertain facts with (estimated). Never leave a participant undescribed.\n"
             f"Format: two clearly labelled paragraphs, one per participant."
         )
-        r = await asyncio.to_thread(
-            client.messages.create,
+        r = await _create_with_retry(
             model="claude-opus-4-8", max_tokens=300,
             messages=[{"role": "user", "content": prompt}]
         )
+        if not r.content:
+            return ""
         text = r.content[0].text.strip()
         if len(text) < 20:
             return ""

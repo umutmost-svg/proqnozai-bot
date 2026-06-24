@@ -112,9 +112,8 @@ async def normalize_tournament_ai(raw: str) -> str:
         return _tournament_norm_cache[key]
     # Non-Latin name → translate to English, but KEEP all context (region, stage)
     try:
-        from claude_client import client
-        r = await asyncio.to_thread(
-            client.messages.create,
+        from claude_client import _create_with_retry
+        r = await _create_with_retry(
             model="claude-haiku-4-5-20251001", max_tokens=40,
             messages=[{"role": "user", "content":
                 f'Translate this sports tournament name to standard English. '
@@ -122,10 +121,11 @@ async def normalize_tournament_ai(raw: str) -> str:
                 f'Do NOT replace it with a different competition. '
                 f'Return ONLY the name.\nInput: "{raw}"'}]
         )
-        result = r.content[0].text.strip().strip('"')
-        if result:
-            _tournament_norm_cache[key] = result
-            return result
+        if r.content:
+            result = r.content[0].text.strip().strip('"')
+            if result:
+                _tournament_norm_cache[key] = result
+                return result
     except Exception as e:
         logger.warning(f"normalize_tournament_ai: {e}")
     _tournament_norm_cache[key] = raw.strip()

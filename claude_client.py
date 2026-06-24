@@ -16,6 +16,7 @@ request_semaphore = asyncio.Semaphore(5)
 
 async def parse_match_query(text: str, lang: str) -> dict:
     """Use Claude Haiku to extract team names and date from user query."""
+    _default = {"team1": None, "team2": None, "date": None, "sport": "football"}
     try:
         prompt = (
             f'Extract match info from this text: "{text}"\n'
@@ -25,18 +26,19 @@ async def parse_match_query(text: str, lang: str) -> dict:
             'If you cannot find two teams, return '
             '{"team1": null, "team2": null, "date": null, "sport": "football"}'
         )
-        r = await asyncio.to_thread(
-            client.messages.create,
+        r = await _create_with_retry(
             model="claude-haiku-4-5-20251001", max_tokens=100,
             messages=[{"role": "user", "content": prompt}]
         )
+        if not r.content:
+            return _default
         raw = r.content[0].text.strip()
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         if m:
             return json.loads(m.group(0))
     except Exception as e:
         logger.error(f"parse_match_query: {e}")
-    return {"team1": None, "team2": None, "date": None, "sport": "football"}
+    return _default
 
 
 async def live_tip(uid: int, match: str, minute: int, score: str, event: str) -> str:
@@ -45,12 +47,15 @@ async def live_tip(uid: int, match: str, minute: int, score: str, event: str) ->
         from translations import T
         lang = db_lang(uid)
         p = T[lang]["live_tip_prompt"].format(match=match, minute=minute, score=score, event=event)
-        r = await asyncio.to_thread(
-            client.messages.create, model="claude-haiku-4-5-20251001", max_tokens=150,
+        r = await _create_with_retry(
+            model="claude-haiku-4-5-20251001", max_tokens=150,
             messages=[{"role": "user", "content": p}]
         )
+        if not r.content:
+            return ""
         return r.content[0].text
-    except Exception:
+    except Exception as e:
+        logger.warning(f"live_tip: {e}")
         return ""
 
 
