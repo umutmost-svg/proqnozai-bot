@@ -55,6 +55,31 @@ def _avg_goals_str(fixtures: list, team_id: int, team_name: str) -> str:
     return f"Avg goals scored: {avg_s:.1f} | conceded: {avg_c:.1f} (last {n})"
 
 
+async def _api_get(h: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response | None:
+    """GET with up to 2 retries on 429/5xx and connection errors."""
+    delay = 2.0
+    for attempt in range(3):
+        try:
+            r = await h.get(url, **kwargs)
+            if r.status_code == 429:
+                wait = min(int(r.headers.get("Retry-After", delay)), 30)
+                logger.warning(f"football API 429 {url} — waiting {wait}s")
+                await asyncio.sleep(wait)
+                delay *= 2
+                continue
+            if r.status_code >= 500:
+                logger.warning(f"football API {r.status_code} {url} (attempt {attempt+1})")
+                await asyncio.sleep(delay)
+                delay *= 2
+                continue
+            return r
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            logger.warning(f"football API network error {url} (attempt {attempt+1}): {e}")
+            await asyncio.sleep(delay)
+            delay *= 2
+    return None
+
+
 async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
     """Fetch last 5 results + H2H from api-sports.io (football only, 100 req/day free)."""
     parts = []
@@ -62,11 +87,12 @@ async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
         return parts
     try:
         async with httpx.AsyncClient(timeout=10) as h:
+            hdrs = {"x-apisports-key": APIFOOTBALL_KEY}
             t1_id = t2_id = None
             for name, slot in [(t1_en, 1), (t2_en, 2)]:
-                r = await h.get("https://v3.football.api-sports.io/teams",
-                    headers={"x-apisports-key": APIFOOTBALL_KEY}, params={"name": name})
-                if r.status_code != 200:
+                r = await _api_get(h, "https://v3.football.api-sports.io/teams",
+                    headers=hdrs, params={"name": name})
+                if not r or r.status_code != 200:
                     continue
                 teams = r.json().get("response", [])
                 if not teams:
@@ -76,10 +102,9 @@ async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
                 if slot == 1: t1_id = tid
                 else:         t2_id = tid
 
-                r2 = await h.get("https://v3.football.api-sports.io/fixtures",
-                    headers={"x-apisports-key": APIFOOTBALL_KEY},
-                    params={"team": tid, "last": 5, "status": "FT"})
-                if r2.status_code == 200:
+                r2 = await _api_get(h, "https://v3.football.api-sports.io/fixtures",
+                    headers=hdrs, params={"team": tid, "last": 5, "status": "FT"})
+                if r2 and r2.status_code == 200:
                     fixtures = r2.json().get("response", [])
                     if fixtures:
                         lines = [
@@ -96,10 +121,9 @@ async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
                         parts.append(block)
 
             if t1_id and t2_id:
-                r3 = await h.get("https://v3.football.api-sports.io/fixtures/headtohead",
-                    headers={"x-apisports-key": APIFOOTBALL_KEY},
-                    params={"h2h": f"{t1_id}-{t2_id}", "last": 5})
-                if r3.status_code == 200:
+                r3 = await _api_get(h, "https://v3.football.api-sports.io/fixtures/headtohead",
+                    headers=hdrs, params={"h2h": f"{t1_id}-{t2_id}", "last": 5})
+                if r3 and r3.status_code == 200:
                     h2h = r3.json().get("response", [])
                     if h2h:
                         lines = [
@@ -122,19 +146,19 @@ async def _fetch_footballdata(t1_en: str, t2_en: str) -> list[str]:
         return parts
     try:
         async with httpx.AsyncClient(timeout=8) as h:
+            hdrs = {"X-Auth-Token": FOOTBALL_KEY}
             for name in [t1_en, t2_en]:
-                r = await h.get("https://api.football-data.org/v4/teams",
-                    headers={"X-Auth-Token": FOOTBALL_KEY}, params={"name": name, "limit": 1})
-                if r.status_code != 200:
+                r = await _api_get(h, "https://api.football-data.org/v4/teams",
+                    headers=hdrs, params={"name": name, "limit": 1})
+                if not r or r.status_code != 200:
                     continue
                 teams = r.json().get("teams", [])
                 if not teams:
                     continue
                 tid = teams[0]["id"]
-                r2 = await h.get(f"https://api.football-data.org/v4/teams/{tid}/matches",
-                    headers={"X-Auth-Token": FOOTBALL_KEY},
-                    params={"status": "FINISHED", "limit": 5})
-                if r2.status_code == 200:
+                r2 = await _api_get(h, f"https://api.football-data.org/v4/teams/{tid}/matches",
+                    headers=hdrs, params={"status": "FINISHED", "limit": 5})
+                if r2 and r2.status_code == 200:
                     ms = r2.json().get("matches", [])
                     if ms:
                         lines = [
@@ -144,7 +168,6 @@ async def _fetch_footballdata(t1_en: str, t2_en: str) -> list[str]:
                             f"{m['awayTeam']['name']}"
                             for m in ms
                         ]
-                        # avg goals from football-data.org
                         scored = []
                         conceded = []
                         tname = teams[0]["name"]
@@ -204,9 +227,8 @@ async def fetch_real_data(team1: str, team2: str) -> str:
     """
     Fetch form + H2H data for both teams.
     1. Normalize names to English via Haiku
-    2. Try api-sports.io (football, 100 req/day free)
-    3. Try football-data.org (football free tier)
-    4. Fall back to Haiku knowledge estimate (all sports, marked as estimated)
+    2. Try api-sports.io + football-data.org in parallel (30s total cap)
+    3. Fall back to Claude knowledge estimate (all sports, marked as estimated)
     """
     if not team1 or not team2:
         return ""
@@ -214,11 +236,18 @@ async def fetch_real_data(team1: str, team2: str) -> str:
     t1_en, t2_en = await _normalize_names(team1, team2)
     logger.info(f"fetch_real_data: '{team1}'→'{t1_en}', '{team2}'→'{t2_en}'")
 
-    # Try real APIs in parallel
-    api_parts, fd_parts = await asyncio.gather(
-        _fetch_apifootball(t1_en, t2_en),
-        _fetch_footballdata(t1_en, t2_en),
-    )
+    # Try real APIs in parallel with a hard cap so slow APIs never block the forecast
+    try:
+        api_parts, fd_parts = await asyncio.wait_for(
+            asyncio.gather(
+                _fetch_apifootball(t1_en, t2_en),
+                _fetch_footballdata(t1_en, t2_en),
+            ),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("fetch_real_data: football APIs timed out after 30s — falling back to AI estimate")
+        api_parts, fd_parts = [], []
 
     parts = api_parts or fd_parts
     if parts:
