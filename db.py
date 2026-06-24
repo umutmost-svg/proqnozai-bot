@@ -9,7 +9,14 @@ logger = logging.getLogger(__name__)
 
 # ─── DB ───────────────────────────────────────────────────────────────────────
 DB = "bot.db"
-def con(): return sqlite3.connect(DB)
+
+def con() -> sqlite3.Connection:
+    """Open a DB connection with WAL mode, busy timeout, and foreign keys."""
+    c = sqlite3.connect(DB, timeout=10)
+    c.execute("PRAGMA journal_mode=WAL")   # concurrent readers don't block writers
+    c.execute("PRAGMA busy_timeout=5000")  # wait up to 5s instead of raising immediately
+    c.execute("PRAGMA synchronous=NORMAL") # safe with WAL, faster than FULL
+    return c
 
 def db_init():
     with con() as c:
@@ -107,10 +114,13 @@ def db_set(uid, field, val):
     with con() as c: c.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (val, uid))
 
 def db_get(uid) -> dict | None:
-    with con() as c:
-        cur = c.execute("SELECT * FROM users WHERE user_id=?", (uid,))
-        cols = [d[0] for d in cur.description]; row = cur.fetchone()
-    return dict(zip(cols, row)) if row else None
+    try:
+        with con() as c:
+            cur = c.execute("SELECT * FROM users WHERE user_id=?", (uid,))
+            cols = [d[0] for d in cur.description]; row = cur.fetchone()
+        return dict(zip(cols, row)) if row else None
+    except Exception as e:
+        logger.error(f"db_get uid={uid}: {e}"); return None
 
 def db_lang(uid) -> str:
     u = db_get(uid); return u["lang"] if u else "az"
@@ -122,14 +132,20 @@ def db_is_blocked(uid) -> bool:
     u = db_get(uid); return bool(u and u["is_blocked"])
 
 def db_all_uids() -> list[int]:
-    with con() as c:
-        return [r[0] for r in c.execute("SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0").fetchall()]
+    try:
+        with con() as c:
+            return [r[0] for r in c.execute("SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0").fetchall()]
+    except Exception as e:
+        logger.error(f"db_all_uids: {e}"); return []
 
 def db_log_req(uid, mtype):
-    with con() as c:
-        c.execute("INSERT INTO requests (user_id,msg_type) VALUES (?,?)", (uid, mtype))
-        c.execute("UPDATE users SET total_requests=total_requests+1, last_active=? WHERE user_id=?",
-                  (datetime.now().isoformat(), uid))
+    try:
+        with con() as c:
+            c.execute("INSERT INTO requests (user_id,msg_type) VALUES (?,?)", (uid, mtype))
+            c.execute("UPDATE users SET total_requests=total_requests+1, last_active=? WHERE user_id=?",
+                      (datetime.now().isoformat(), uid))
+    except Exception as e:
+        logger.error(f"db_log_req uid={uid}: {e}")
 
 def db_stats() -> dict:
     with con() as c:
