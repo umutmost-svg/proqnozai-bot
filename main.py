@@ -1,5 +1,6 @@
 import asyncio
 import os
+import threading
 
 from telegram.ext import ApplicationBuilder
 from telegram.error import TelegramError
@@ -64,6 +65,9 @@ async def _error_handler(update, context):
 
 def main():
     db_init()
+
+    from stats_server import run_stats_server
+    threading.Thread(target=run_stats_server, daemon=True).start()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     register_handlers(app)
