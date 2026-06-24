@@ -1,9 +1,9 @@
 """
-Lightweight Flask dashboard for proqnozai-bot.
-Reads metrics from the bot's internal stats endpoint (stats_server.py).
-Run: python dashboard.py (separate Railway service)
-Access: https://your-domain.railway.app/?token=DASHBOARD_TOKEN
+Proqnozai Bot Dashboard — improved version.
+Auth: HTTP Basic Auth (login: admin, password: DASHBOARD_TOKEN)
+Stats source: bot's internal stats server (stats_server.py via Railway private network)
 """
+import base64
 import os
 from functools import wraps
 
@@ -12,169 +12,305 @@ from flask import Flask, Response, render_template_string, request
 
 app = Flask(__name__)
 
-# URL of the bot's internal stats endpoint (Railway private network)
 STATS_URL   = os.environ.get("STATS_URL", "http://worker.railway.internal:8888/stats")
 STATS_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
+DASH_USER   = os.environ.get("DASHBOARD_USER", "admin")
 
 
-# ─── Auth ─────────────────────────────────────────────────────────────────────
-def require_token(f):
+# ─── Basic Auth ───────────────────────────────────────────────────────────────
+def require_auth(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if STATS_TOKEN and request.args.get("token") != STATS_TOKEN:
-            return Response("Unauthorized", 401)
-        return f(*args, **kwargs)
+        if not STATS_TOKEN:
+            return f(*args, **kwargs)
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(auth[6:]).decode()
+                user, pwd = decoded.split(":", 1)
+                if user == DASH_USER and pwd == STATS_TOKEN:
+                    return f(*args, **kwargs)
+            except Exception:
+                pass
+        return Response(
+            "Требуется авторизация", 401,
+            {"WWW-Authenticate": 'Basic realm="Proqnozai Dashboard"'}
+        )
     return wrapper
 
 
 # ─── Template ─────────────────────────────────────────────────────────────────
-TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
+TEMPLATE = r"""<!DOCTYPE html>
+<html lang="ru">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="60">
-<title>Proqnozai Bot Dashboard</title>
+<title>Proqnozai — Дашборд</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
-  :root {
-    --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a;
-    --accent: #6c63ff; --green: #22c55e; --red: #ef4444;
-    --yellow: #f59e0b; --text: #e2e8f0; --muted: #94a3b8;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; }
-  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
-  header h1 { font-size: 18px; font-weight: 700; color: var(--accent); }
-  header span { color: var(--muted); font-size: 12px; }
-  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 24px 0 12px; }
-  .grid { display: grid; gap: 12px; }
-  .g2 { grid-template-columns: repeat(2, 1fr); }
-  .g4 { grid-template-columns: repeat(4, 1fr); }
-  @media(max-width:700px){ .g4,.g2{ grid-template-columns:1fr; } }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
-  .stat-label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
-  .stat-value { font-size: 28px; font-weight: 700; }
-  .stat-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
-  .green { color: var(--green); } .red { color: var(--red); }
-  .yellow { color: var(--yellow); } .accent { color: var(--accent); }
-  .muted { color: var(--muted); }
-  table { width: 100%; border-collapse: collapse; }
-  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
-  td { padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
-  tr:last-child td { border-bottom: none; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
-  .badge-win { background: #14532d; color: var(--green); }
-  .badge-lose { background: #450a0a; color: var(--red); }
-  .badge-none { background: var(--border); color: var(--muted); }
-  .bar-wrap { background: var(--border); border-radius: 4px; height: 6px; margin-top: 4px; }
-  .bar { background: var(--accent); border-radius: 4px; height: 6px; }
-  .chart { display: flex; align-items: flex-end; gap: 4px; height: 80px; padding-top: 8px; }
-  .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
-  .bar-col .b { background: var(--accent); border-radius: 3px 3px 0 0; width: 100%; min-height: 2px; }
-  .bar-col .l { color: var(--muted); font-size: 9px; writing-mode: vertical-rl; transform: rotate(180deg); }
+/* ── Themes ── */
+:root {
+  --bg:#0f1117; --bg2:#1a1d27; --border:#2a2d3a;
+  --accent:#6c63ff; --accent2:#a78bfa;
+  --green:#22c55e; --red:#ef4444; --yellow:#f59e0b; --blue:#38bdf8;
+  --text:#e2e8f0; --muted:#94a3b8;
+  --card-shadow: 0 2px 12px rgba(0,0,0,.35);
+}
+[data-theme="light"]{
+  --bg:#f1f5f9; --bg2:#ffffff; --border:#e2e8f0;
+  --accent:#6c63ff; --accent2:#7c3aed;
+  --text:#0f172a; --muted:#64748b;
+  --card-shadow: 0 2px 12px rgba(0,0,0,.08);
+}
+[data-theme="ocean"]{
+  --bg:#0c1929; --bg2:#112236; --border:#1e3a5f;
+  --accent:#38bdf8; --accent2:#0ea5e9;
+  --text:#e0f2fe; --muted:#7dd3fc;
+  --card-shadow: 0 2px 12px rgba(0,0,0,.4);
+}
+[data-theme="forest"]{
+  --bg:#0a1612; --bg2:#122218; --border:#1e3a28;
+  --accent:#22c55e; --accent2:#16a34a;
+  --text:#dcfce7; --muted:#86efac;
+  --card-shadow: 0 2px 12px rgba(0,0,0,.4);
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;transition:background .3s,color .3s;}
+
+/* ── Header ── */
+header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;backdrop-filter:blur(8px);}
+.logo{display:flex;align-items:center;gap:10px;}
+.logo-icon{font-size:22px;}
+.logo h1{font-size:17px;font-weight:700;color:var(--accent);}
+.logo small{color:var(--muted);font-size:11px;margin-left:8px;}
+.header-right{display:flex;align-items:center;gap:12px;}
+.refresh-badge{background:var(--border);color:var(--muted);font-size:11px;padding:4px 10px;border-radius:99px;}
+.theme-btn{background:none;border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s;}
+.theme-btn:hover{border-color:var(--accent);color:var(--accent);}
+.theme-btn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+
+/* ── Layout ── */
+.container{max-width:1280px;margin:0 auto;padding:24px 20px;}
+.section-title{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:28px 0 12px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.section-title::after{content:'';flex:1;height:1px;background:var(--border);}
+
+/* ── Grid ── */
+.grid{display:grid;gap:14px;}
+.g2{grid-template-columns:repeat(2,1fr);}
+.g3{grid-template-columns:repeat(3,1fr);}
+.g4{grid-template-columns:repeat(4,1fr);}
+.g5{grid-template-columns:repeat(5,1fr);}
+@media(max-width:900px){.g5,.g4{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:600px){.g5,.g4,.g3,.g2{grid-template-columns:1fr;}}
+
+/* ── Cards ── */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:18px;box-shadow:var(--card-shadow);transition:border-color .2s;}
+.card:hover{border-color:var(--accent);}
+
+/* ── Stat cards ── */
+.stat-card{position:relative;overflow:hidden;}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent2));}
+.stat-label{color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;}
+.stat-value{font-size:32px;font-weight:800;line-height:1;margin-bottom:4px;}
+.stat-sub{color:var(--muted);font-size:12px;}
+.stat-icon{position:absolute;right:16px;top:16px;font-size:28px;opacity:.15;}
+.green{color:var(--green);} .red{color:var(--red);}
+.yellow{color:var(--yellow);} .accent{color:var(--accent);} .blue{color:var(--blue);}
+.muted{color:var(--muted);}
+
+/* ── Progress bar ── */
+.bar-wrap{background:var(--border);border-radius:4px;height:6px;margin-top:8px;overflow:hidden;}
+.bar{border-radius:4px;height:6px;transition:width .6s ease;}
+.bar-accent{background:linear-gradient(90deg,var(--accent),var(--accent2));}
+.bar-green{background:var(--green);}
+
+/* ── Table ── */
+table{width:100%;border-collapse:collapse;}
+th{color:var(--muted);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.08em;padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);}
+td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;transition:background .15s;}
+tr:hover td{background:rgba(108,99,255,.05);}
+tr:last-child td{border-bottom:none;}
+
+/* ── Badges ── */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;}
+.badge-win{background:#14532d;color:var(--green);}
+.badge-lose{background:#450a0a;color:var(--red);}
+.badge-none{background:var(--border);color:var(--muted);}
+.badge-lang{background:rgba(108,99,255,.15);color:var(--accent);font-size:10px;padding:2px 7px;}
+
+/* ── KPI row ── */
+.kpi-delta{font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;margin-left:6px;}
+.kpi-up{background:#14532d;color:var(--green);}
+.kpi-zero{background:var(--border);color:var(--muted);}
+
+/* ── Chart containers ── */
+.chart-wrap{position:relative;height:200px;}
+.chart-wrap-sm{position:relative;height:160px;}
+
+/* ── Rank number ── */
+.rank{width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;}
+.rank-1{background:linear-gradient(135deg,#f59e0b,#fbbf24);color:#000;}
+.rank-2{background:linear-gradient(135deg,#94a3b8,#cbd5e1);color:#000;}
+.rank-3{background:linear-gradient(135deg,#b45309,#d97706);color:#fff;}
+.rank-n{background:var(--border);color:var(--muted);}
+
+/* ── Footer ── */
+footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-top:1px solid var(--border);margin-top:32px;}
+
+/* ── Pulse dot ── */
+.pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(34,197,94,.4);animation:pulse 2s infinite;}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.4);}70%{box-shadow:0 0 0 8px rgba(34,197,94,0);}100%{box-shadow:0 0 0 0 rgba(34,197,94,0);}}
 </style>
 </head>
-<body>
+<body data-theme="dark">
 <header>
-  <h1>⚽ Proqnozai Bot</h1>
-  <span>Auto-refresh every 60s</span>
+  <div class="logo">
+    <span class="logo-icon">⚽</span>
+    <div>
+      <h1>Proqnozai Bot</h1>
+      <small><span class="pulse"></span> &nbsp;Онлайн · Обновление каждые 60с</small>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="refresh-badge">{{ generated_at }}</span>
+    <button class="theme-btn active" onclick="setTheme('dark')">🌙 Тёмная</button>
+    <button class="theme-btn" onclick="setTheme('light')">☀️ Светлая</button>
+    <button class="theme-btn" onclick="setTheme('ocean')">🌊 Океан</button>
+    <button class="theme-btn" onclick="setTheme('forest')">🌿 Лес</button>
+  </div>
 </header>
+
 <div class="container">
 
-  <h2>Users</h2>
-  <div class="grid g4">
-    <div class="card">
-      <div class="stat-label">Total registered</div>
+  <!-- ── KPI ── -->
+  <div class="section-title">Ключевые показатели</div>
+  <div class="grid g5">
+    <div class="card stat-card">
+      <span class="stat-icon">👥</span>
+      <div class="stat-label">Всего пользователей</div>
       <div class="stat-value accent">{{ d.users_total }}</div>
-      <div class="stat-sub">{{ d.users_blocked }} blocked</div>
+      <div class="stat-sub">{{ d.users_blocked }} заблокировано</div>
     </div>
-    <div class="card">
-      <div class="stat-label">New today</div>
+    <div class="card stat-card">
+      <span class="stat-icon">✨</span>
+      <div class="stat-label">Новых сегодня</div>
       <div class="stat-value green">+{{ d.users_today }}</div>
-      <div class="stat-sub">+{{ d.users_week }} this week</div>
+      <div class="stat-sub">+{{ d.users_week }} за неделю</div>
     </div>
-    <div class="card">
-      <div class="stat-label">Active today (DAU)</div>
+    <div class="card stat-card">
+      <span class="stat-icon">🔥</span>
+      <div class="stat-label">Активны сегодня (DAU)</div>
       <div class="stat-value">{{ d.users_active_today }}</div>
-      <div class="stat-sub">{{ d.users_active_week }} this week (WAU)</div>
+      <div class="stat-sub">{{ d.users_active_week }} за неделю (WAU)</div>
     </div>
-    <div class="card">
-      <div class="stat-label">Languages</div>
+    <div class="card stat-card">
+      <span class="stat-icon">📊</span>
+      <div class="stat-label">Прогнозов всего</div>
+      <div class="stat-value accent">{{ d.forecasts_total }}</div>
+      <div class="stat-sub">{{ d.forecasts_today }} сегодня</div>
+    </div>
+    <div class="card stat-card">
+      <span class="stat-icon">🎯</span>
+      <div class="stat-label">Точность (feedback)</div>
+      <div class="stat-value {% if d.fb_pct >= 60 %}green{% elif d.fb_pct >= 40 %}yellow{% else %}red{% endif %}">{{ d.fb_pct }}%</div>
+      <div class="stat-sub">{{ d.fb_wins }} побед / {{ d.fb_total }} оценок</div>
+      <div class="bar-wrap"><div class="bar bar-{% if d.fb_pct >= 60 %}green{% else %}accent{% endif %}" style="width:{{ d.fb_pct }}%"></div></div>
+    </div>
+  </div>
+
+  <!-- ── Запросы и live ── -->
+  <div class="grid g3" style="margin-top:14px;">
+    <div class="card stat-card">
+      <span class="stat-icon">📨</span>
+      <div class="stat-label">Запросов всего</div>
+      <div class="stat-value">{{ d.reqs_total }}</div>
+      <div class="stat-sub">{{ d.reqs_today }} сегодня · {{ d.reqs_week }} за неделю</div>
+    </div>
+    <div class="card stat-card">
+      <span class="stat-icon">📡</span>
+      <div class="stat-label">Live-подписок</div>
+      <div class="stat-value yellow">{{ d.live_subs }}</div>
+      <div class="stat-sub">{{ d.live_matches }} уникальных матчей</div>
+    </div>
+    <div class="card stat-card">
+      <span class="stat-icon">🌍</span>
+      <div class="stat-label">Языков</div>
       <div class="stat-value">{{ d.langs|length }}</div>
       <div class="stat-sub">
-        {% for l in d.langs[:4] %}{{ l[0] }}: {{ l[1] }}{% if not loop.last %} &nbsp; {% endif %}{% endfor %}
+        {% for l in d.langs[:4] %}<span class="badge badge-lang">{{ l[0] }} {{ l[1] }}</span> {% endfor %}
       </div>
     </div>
   </div>
 
-  <h2>Requests &amp; Forecasts</h2>
-  <div class="grid g4">
-    <div class="card">
-      <div class="stat-label">Total requests</div>
-      <div class="stat-value">{{ d.reqs_total }}</div>
-      <div class="stat-sub">{{ d.reqs_today }} today · {{ d.reqs_week }} this week</div>
-    </div>
-    <div class="card">
-      <div class="stat-label">Forecasts generated</div>
-      <div class="stat-value accent">{{ d.forecasts_total }}</div>
-      <div class="stat-sub">{{ d.forecasts_today }} today</div>
-    </div>
-    <div class="card">
-      <div class="stat-label">Feedback accuracy</div>
-      <div class="stat-value">{{ d.fb_pct }}%</div>
-      <div class="stat-sub">{{ d.fb_wins }} wins / {{ d.fb_total }} rated</div>
-      <div class="bar-wrap"><div class="bar" style="width:{{ d.fb_pct }}%"></div></div>
-    </div>
-    <div class="card">
-      <div class="stat-label">Live subscriptions</div>
-      <div class="stat-value yellow">{{ d.live_subs }}</div>
-      <div class="stat-sub">{{ d.live_matches }} unique matches</div>
-    </div>
-  </div>
+  <!-- ── Графики ── -->
+  <div class="section-title">Аналитика</div>
+  <div class="grid g3">
 
-  {% if d.daily %}
-  <h2>Requests — last 14 days</h2>
-  <div class="card">
-    {% set max_cnt = namespace(v=1) %}
-    {% for row in d.daily %}{% if row[1] > max_cnt.v %}{% set max_cnt.v = row[1] %}{% endif %}{% endfor %}
-    <div class="chart">
-      {% for row in d.daily %}
-      <div class="bar-col">
-        <div class="b" style="height:{{ (row[1] / max_cnt.v * 70)|int }}px" title="{{ row[0] }}: {{ row[1] }}"></div>
-        <div class="l">{{ row[0][5:] }}</div>
+    <div class="card" style="grid-column: span 2;">
+      <div style="font-weight:600;margin-bottom:12px;">📈 Запросы за 14 дней</div>
+      <div class="chart-wrap">
+        <canvas id="lineChart"></canvas>
       </div>
-      {% endfor %}
     </div>
-  </div>
-  {% endif %}
 
-  <h2>Top 10 users by requests</h2>
+    <div class="card">
+      <div style="font-weight:600;margin-bottom:12px;">🌍 Языки пользователей</div>
+      <div class="chart-wrap">
+        <canvas id="langChart"></canvas>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: span 2;">
+      <div style="font-weight:600;margin-bottom:12px;">📊 Прогнозы по дням</div>
+      <div class="chart-wrap-sm">
+        <canvas id="barChart"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:600;margin-bottom:12px;">🎯 Результаты прогнозов</div>
+      <div class="chart-wrap-sm">
+        <canvas id="feedbackChart"></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Топ пользователей ── -->
+  <div class="section-title">Топ пользователей</div>
   <div class="card">
     <table>
-      <tr><th>#</th><th>User</th><th>ID</th><th>Requests</th><th>Last active</th></tr>
+      <tr><th></th><th>Пользователь</th><th>ID</th><th>Запросов</th><th>Последняя активность</th></tr>
       {% for u in d.top_users %}
       <tr>
-        <td class="muted">{{ loop.index }}</td>
-        <td>{{ u[1] or u[2] or '—' }}</td>
+        <td>
+          {% if loop.index == 1 %}<span class="rank rank-1">1</span>
+          {% elif loop.index == 2 %}<span class="rank rank-2">2</span>
+          {% elif loop.index == 3 %}<span class="rank rank-3">3</span>
+          {% else %}<span class="rank rank-n">{{ loop.index }}</span>{% endif %}
+        </td>
+        <td><strong>{{ u[1] or u[2] or '—' }}</strong></td>
         <td class="muted">{{ u[0] }}</td>
-        <td class="accent">{{ u[3] }}</td>
+        <td><span class="accent" style="font-weight:700;">{{ u[3] }}</span></td>
         <td class="muted">{{ (u[4] or '')[:16] }}</td>
       </tr>
       {% endfor %}
     </table>
   </div>
 
+  <!-- ── Последние события ── -->
   <div class="grid g2">
     <div>
-      <h2>Recent registrations</h2>
+      <div class="section-title">Новые пользователи</div>
       <div class="card">
         <table>
-          <tr><th>User</th><th>Lang</th><th>Joined</th></tr>
+          <tr><th>Пользователь</th><th>Язык</th><th>Дата</th></tr>
           {% for u in d.recent_users %}
           <tr>
-            <td>{{ u[1] or u[2] or u[0] }}</td>
-            <td>{{ u[3] }}</td>
+            <td><strong>{{ u[1] or u[2] or u[0] }}</strong></td>
+            <td><span class="badge badge-lang">{{ u[3] }}</span></td>
             <td class="muted">{{ (u[4] or '')[:16] }}</td>
           </tr>
           {% endfor %}
@@ -182,18 +318,18 @@ TEMPLATE = """<!DOCTYPE html>
       </div>
     </div>
     <div>
-      <h2>Recent forecasts</h2>
+      <div class="section-title">Последние прогнозы</div>
       <div class="card">
         <table>
-          <tr><th>User</th><th>Match</th><th>Result</th></tr>
+          <tr><th>Пользователь</th><th>Матч</th><th>Результат</th></tr>
           {% for f in d.recent_forecasts %}
           <tr>
-            <td>{{ f[1] or f[0] }}</td>
-            <td>{{ (f[2] or '?')[:25] }}</td>
+            <td><strong>{{ f[1] or f[0] }}</strong></td>
+            <td class="muted">{{ (f[2] or '?')[:22] }}</td>
             <td>
-              {% if f[3] == 1 %}<span class="badge badge-win">Win</span>
-              {% elif f[3] == 0 %}<span class="badge badge-lose">Lose</span>
-              {% else %}<span class="badge badge-none">—</span>{% endif %}
+              {% if f[3] == 1 %}<span class="badge badge-win">✓ Победа</span>
+              {% elif f[3] == 0 %}<span class="badge badge-lose">✗ Проигрыш</span>
+              {% else %}<span class="badge badge-none">— Нет</span>{% endif %}
             </td>
           </tr>
           {% endfor %}
@@ -202,22 +338,21 @@ TEMPLATE = """<!DOCTYPE html>
     </div>
   </div>
 
-  <h2>Language distribution</h2>
+  <!-- ── Языки детально ── -->
+  <div class="section-title">Распределение по языкам</div>
   <div class="card">
     {% set total_lang = namespace(v=0) %}
     {% for l in d.langs %}{% set total_lang.v = total_lang.v + l[1] %}{% endfor %}
     <table>
-      <tr><th>Language</th><th>Users</th><th>Share</th></tr>
+      <tr><th>Язык</th><th>Пользователей</th><th>Доля</th><th></th></tr>
       {% for l in d.langs %}
-      {% set pct = ((l[1] / total_lang.v * 100) | round(1)) if total_lang.v else 0 %}
+      {% set pct = ((l[1] / total_lang.v * 100)|round(1)) if total_lang.v else 0 %}
       <tr>
-        <td>{{ l[0] }}</td>
-        <td>{{ l[1] }}</td>
-        <td style="width:200px">
-          <div style="display:flex;align-items:center;gap:8px">
-            <div class="bar-wrap" style="flex:1"><div class="bar" style="width:{{ pct }}%"></div></div>
-            <span class="muted">{{ pct }}%</span>
-          </div>
+        <td><span class="badge badge-lang">{{ l[0] }}</span></td>
+        <td><strong>{{ l[1] }}</strong></td>
+        <td class="muted">{{ pct }}%</td>
+        <td style="width:220px">
+          <div class="bar-wrap"><div class="bar bar-accent" style="width:{{ pct }}%"></div></div>
         </td>
       </tr>
       {% endfor %}
@@ -225,13 +360,142 @@ TEMPLATE = """<!DOCTYPE html>
   </div>
 
 </div>
+
+<footer>Proqnozai Bot Dashboard · Обновляется автоматически каждые 60 секунд</footer>
+
+<script>
+// ── Theme switcher ──────────────────────────────────────────────────────────
+function setTheme(t) {
+  document.body.setAttribute('data-theme', t);
+  localStorage.setItem('theme', t);
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  updateCharts();
+}
+(function(){
+  const saved = localStorage.getItem('theme') || 'dark';
+  document.body.setAttribute('data-theme', saved);
+  document.querySelectorAll('.theme-btn').forEach(b => {
+    if(b.textContent.includes(saved === 'dark' ? '🌙' : saved === 'light' ? '☀️' : saved === 'ocean' ? '🌊' : '🌿'))
+      b.classList.add('active');
+    else b.classList.remove('active');
+  });
+})();
+
+function cssVar(name) {
+  return getComputedStyle(document.body).getPropertyValue(name).trim();
+}
+
+// ── Chart data ──────────────────────────────────────────────────────────────
+const dailyLabels = {{ daily_labels|tojson }};
+const dailyData   = {{ daily_values|tojson }};
+const langLabels  = {{ lang_labels|tojson }};
+const langData    = {{ lang_values|tojson }};
+const fbData      = {{ fb_data|tojson }};
+
+const COLORS = ['#6c63ff','#38bdf8','#22c55e','#f59e0b','#ef4444','#a78bfa','#fb923c'];
+
+let lineChart, langChart, barChart, feedbackChart;
+
+function makeCharts() {
+  const gridColor = () => cssVar('--border');
+  const textColor = () => cssVar('--muted');
+  const accent    = () => cssVar('--accent');
+
+  Chart.defaults.color = textColor();
+  Chart.defaults.borderColor = gridColor();
+
+  // Line chart — requests per day
+  lineChart = new Chart(document.getElementById('lineChart'), {
+    type: 'line',
+    data: {
+      labels: dailyLabels,
+      datasets: [{
+        label: 'Запросы',
+        data: dailyData,
+        borderColor: accent(),
+        backgroundColor: accent() + '22',
+        borderWidth: 2,
+        pointRadius: 3,
+        fill: true,
+        tension: 0.4,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: gridColor() }, ticks: { color: textColor(), maxTicksLimit: 7 } },
+        y: { grid: { color: gridColor() }, ticks: { color: textColor() }, beginAtZero: true }
+      }
+    }
+  });
+
+  // Donut — languages
+  langChart = new Chart(document.getElementById('langChart'), {
+    type: 'doughnut',
+    data: {
+      labels: langLabels,
+      datasets: [{ data: langData, backgroundColor: COLORS, borderWidth: 2, borderColor: cssVar('--bg2') }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { color: textColor(), padding: 10, font: { size: 11 } } } },
+      cutout: '65%'
+    }
+  });
+
+  // Bar — same daily data as second view
+  barChart = new Chart(document.getElementById('barChart'), {
+    type: 'bar',
+    data: {
+      labels: dailyLabels,
+      datasets: [{
+        label: 'Запросы',
+        data: dailyData,
+        backgroundColor: accent() + 'cc',
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: textColor(), maxTicksLimit: 7 } },
+        y: { grid: { color: gridColor() }, ticks: { color: textColor() }, beginAtZero: true }
+      }
+    }
+  });
+
+  // Donut — feedback
+  feedbackChart = new Chart(document.getElementById('feedbackChart'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Победы', 'Проигрыши', 'Без оценки'],
+      datasets: [{ data: fbData, backgroundColor: ['#22c55e','#ef4444','#374151'], borderWidth: 2, borderColor: cssVar('--bg2') }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { color: textColor(), padding: 10, font: { size: 11 } } } },
+      cutout: '65%'
+    }
+  });
+}
+
+function updateCharts() {
+  [lineChart, langChart, barChart, feedbackChart].forEach(c => { if(c) c.destroy(); });
+  setTimeout(makeCharts, 50);
+}
+
+makeCharts();
+</script>
 </body>
 </html>"""
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 @app.route("/")
-@require_token
+@require_auth
 def index():
     token_param = f"?token={STATS_TOKEN}" if STATS_TOKEN else ""
     try:
@@ -239,19 +503,39 @@ def index():
         resp.raise_for_status()
         raw = resp.json()
     except Exception as e:
-        return f"<pre>Stats fetch error: {e}\nURL: {STATS_URL}</pre>", 500
+        return f"<pre style='color:red;padding:20px'>Ошибка получения данных:\n{e}\n\nURL: {STATS_URL}</pre>", 500
 
-    # compute fb_pct
     fb_total = raw.get("fb_total", 0)
     fb_wins  = raw.get("fb_wins", 0)
+    fb_lose  = fb_total - fb_wins
     raw["fb_pct"] = round(fb_wins / fb_total * 100) if fb_total else 0
 
+    daily       = raw.get("daily", [])
+    daily_labels = [r[0][5:] for r in daily]
+    daily_values = [r[1] for r in daily]
+
+    langs       = raw.get("langs", [])
+    lang_labels = [r[0] for r in langs]
+    lang_values = [r[1] for r in langs]
+
+    forecasts_total = raw.get("forecasts_total", 0)
+    fb_unrated = max(0, forecasts_total - fb_total)
+
+    from datetime import datetime
+    generated_at = datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC")
+
     class D:
-        def __getattr__(self, k): return raw.get(k)
+        pass
     d = D()
     d.__dict__.update(raw)
 
-    return render_template_string(TEMPLATE, d=d)
+    return render_template_string(
+        TEMPLATE, d=d,
+        daily_labels=daily_labels, daily_values=daily_values,
+        lang_labels=lang_labels, lang_values=lang_values,
+        fb_data=[fb_wins, fb_lose, fb_unrated],
+        generated_at=generated_at,
+    )
 
 
 @app.route("/health")
