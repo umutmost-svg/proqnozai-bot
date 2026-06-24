@@ -8,7 +8,8 @@ from config import live_subs
 logger = logging.getLogger(__name__)
 
 # ─── DB ───────────────────────────────────────────────────────────────────────
-DB = "bot.db"
+import os as _os
+DB = _os.path.join(_os.environ.get("BOT_DB_DIR", "."), "bot.db")
 
 def con() -> sqlite3.Connection:
     """Open a DB connection with WAL mode, busy timeout, and foreign keys."""
