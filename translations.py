@@ -91,6 +91,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "menu_express": "⚡ Ekspress",
 "menu_support": "🆘 Dəstək",
 "support_text": "🆘 *Dəstək*\n\nSuallarınız və ya problemləriniz varsa — bizə yazın:",
+"support_btn":  "💬 Dəstəyə yazın",
 "bot_updated":  "Bot yeniləndi! Yeni menyu aktiv oldu.",
 
 },
@@ -186,6 +187,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "menu_express": "⚡ Экспресс",
 "menu_support": "🆘 Поддержка",
 "support_text": "🆘 *Поддержка*\n\nЕсли у вас вопросы или проблемы — напишите нам:",
+"support_btn":  "💬 Написать в поддержку",
 "bot_updated":  "Бот обновлён! Активировано новое меню.",
 
 },
@@ -281,6 +283,7 @@ Draw — XX% | X.XX  (if applicable)
 "menu_express": "⚡ Express",
 "menu_support": "🆘 Support",
 "support_text": "🆘 *Support*\n\nIf you have questions or issues — contact us:",
+"support_btn":  "💬 Contact support",
 "bot_updated":  "Bot updated! New menu is now active.",
 
 },
@@ -371,6 +374,7 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "menu_express": "⚡ Ekspres",
 "menu_support": "🆘 Destek",
 "support_text": "🆘 *Destek*\n\nSorularınız veya sorunlarınız varsa — bize yazın:",
+"support_btn":  "💬 Desteğe yaz",
 "bot_updated":  "Bot güncellendi! Yeni menü aktif oldu.",
 
 },
@@ -462,6 +466,7 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "menu_express": "⚡ Экспресс",
 "menu_support": "🆘 Қолдау",
 "support_text": "🆘 *Қолдау*\n\nСұрақтарыңыз немесе мәселелеріңіз болса — бізге жазыңыз:",
+"support_btn":  "💬 Қолдауға жазу",
 "bot_updated":  "Бот жаңартылды! Жаңа мәзір белсенді болды.",
 
 },
@@ -553,6 +558,7 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "menu_express": "⚡ Ekspress",
 "menu_support": "🆘 Yordam",
 "support_text": "🆘 *Yordam*\n\nSavollaringiz yoki muammolaringiz bo'lsa — bizga yozing:",
+"support_btn":  "💬 Yordamga yozish",
 "bot_updated":  "Bot yangilandi! Yangi menyu faollashtirildi.",
 
 },
@@ -644,6 +650,7 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "menu_express": "⚡ إكسبريس",
 "menu_support": "🆘 الدعم",
 "support_text": "🆘 *الدعم*\n\nإذا كان لديك أسئلة أو مشاكل — تواصل معنا:",
+"support_btn":  "💬 تواصل مع الدعم",
 "bot_updated":  "تم تحديث البوت! القائمة الجديدة نشطة الآن.",
 
 },

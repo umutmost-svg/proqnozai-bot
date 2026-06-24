@@ -23,9 +23,10 @@ async def support_handler(update, context):
         return
     lang = db_lang(uid)
     tl = T[lang]
-    text = tl.get("support_text", "🆘 Поддержка\n\nЕсли у вас вопросы или проблемы — напишите нам:")
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Написать в поддержку", url=SUPPORT_URL)]])
-    await update.message.reply_text(text, reply_markup=kb)
+    text = tl.get("support_text", "🆘 *Поддержка*\n\nЕсли у вас вопросы или проблемы — напишите нам:")
+    btn  = tl.get("support_btn", "💬 Написать в поддержку")
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(btn, url=SUPPORT_URL)]])
+    await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
 
 
 def register_handlers(app):
