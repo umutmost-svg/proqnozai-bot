@@ -1,3 +1,4 @@
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
 from config import ADMIN_ID
@@ -11,6 +12,20 @@ from handlers.live import watch_cb, matches_cmd
 from handlers.history import history_cmd, history_cb
 from handlers.express import express_cb, express_cmd, compare_cmd
 from handlers.admin import admin_cmd, adm_cb, handle_adm_msg, cancel_cmd, testapi_cmd
+from handlers.utils import SUPPORT_URL
+from translations import T
+from db import db_lang, db_is_reg
+
+
+async def support_handler(update, context):
+    uid = update.effective_user.id
+    if not db_is_reg(uid):
+        return
+    lang = db_lang(uid)
+    tl = T[lang]
+    text = tl.get("support_text", "🆘 Поддержка\n\nЕсли у вас вопросы или проблемы — напишите нам:")
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Написать в поддержку", url=SUPPORT_URL)]])
+    await update.message.reply_text(text, reply_markup=kb)
 
 
 def register_handlers(app):
@@ -34,6 +49,13 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(history_cb,    pattern=r"^(fb_|repeat_)"))
     app.add_handler(CallbackQueryHandler(express_cb,    pattern=r"^expr_"))
     app.add_handler(CallbackQueryHandler(adm_cb,        pattern=r"^adm_"))
+
+    # Support button — filter by all support menu texts across languages
+    support_texts = [tl["menu_support"] for tl in T.values() if "menu_support" in tl]
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex("^(" + "|".join(support_texts) + ")$"),
+        support_handler
+    ), group=0)
 
     app.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_ID), handle_adm_msg), group=0)
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_msg), group=1)

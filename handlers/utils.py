@@ -6,12 +6,15 @@ from db import db_lang, db_get_tz
 from translations import T
 
 
+SUPPORT_URL = "https://t.me/AIproqnoz_support"
+
 def main_menu(uid):
     lang = db_lang(uid)
     tl = T[lang]
     return ReplyKeyboardMarkup([
         [tl["menu_forecast"],  tl["menu_express"]],
         [tl["menu_history"],   tl["menu_profile"]],
+        [tl["menu_support"]],
     ], resize_keyboard=True, is_persistent=True)
 
 

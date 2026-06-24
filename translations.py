@@ -89,6 +89,8 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "compare_ask":  "İki komanda adını yazın. Məsələn: Barcelona Real Madrid",
 "menu_history": "📋 Tarix",
 "menu_express": "⚡ Ekspress",
+"menu_support": "🆘 Dəstək",
+"support_text": "🆘 *Dəstək*\n\nSuallarınız və ya problemləriniz varsa — bizə yazın:",
 "bot_updated":  "Bot yeniləndi! Yeni menyu aktiv oldu.",
 
 },
@@ -182,6 +184,8 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "compare_ask": "Напишите две команды. Например: Barcelona Real Madrid",
 "menu_history": "📋 История",
 "menu_express": "⚡ Экспресс",
+"menu_support": "🆘 Поддержка",
+"support_text": "🆘 *Поддержка*\n\nЕсли у вас вопросы или проблемы — напишите нам:",
 "bot_updated":  "Бот обновлён! Активировано новое меню.",
 
 },
@@ -275,6 +279,8 @@ Draw — XX% | X.XX  (if applicable)
 "compare_ask": "Type two teams. Example: Barcelona Real Madrid",
 "menu_history": "📋 History",
 "menu_express": "⚡ Express",
+"menu_support": "🆘 Support",
+"support_text": "🆘 *Support*\n\nIf you have questions or issues — contact us:",
 "bot_updated":  "Bot updated! New menu is now active.",
 
 },
@@ -363,6 +369,8 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "compare_ask": "İki takım adı yazın. Örnek: Barcelona Real Madrid",
 "menu_history": "📋 Geçmiş",
 "menu_express": "⚡ Ekspres",
+"menu_support": "🆘 Destek",
+"support_text": "🆘 *Destek*\n\nSorularınız veya sorunlarınız varsa — bize yazın:",
 "bot_updated":  "Bot güncellendi! Yeni menü aktif oldu.",
 
 },
@@ -452,6 +460,8 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "compare_ask": "Екі команда атын жазыңыз. Мысалы: Barcelona Real Madrid",
 "menu_history": "📋 Тарих",
 "menu_express": "⚡ Экспресс",
+"menu_support": "🆘 Қолдау",
+"support_text": "🆘 *Қолдау*\n\nСұрақтарыңыз немесе мәселелеріңіз болса — бізге жазыңыз:",
 "bot_updated":  "Бот жаңартылды! Жаңа мәзір белсенді болды.",
 
 },
@@ -541,6 +551,8 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "compare_ask": "Ikki jamoa nomini yozing. Masalan: Barcelona Real Madrid",
 "menu_history": "📋 Tarix",
 "menu_express": "⚡ Ekspress",
+"menu_support": "🆘 Yordam",
+"support_text": "🆘 *Yordam*\n\nSavollaringiz yoki muammolaringiz bo'lsa — bizga yozing:",
 "bot_updated":  "Bot yangilandi! Yangi menyu faollashtirildi.",
 
 },
@@ -630,6 +642,8 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "compare_ask": "اكتب اسمي الفريقين. مثال: Barcelona Real Madrid",
 "menu_history": "📋 السجل",
 "menu_express": "⚡ إكسبريس",
+"menu_support": "🆘 الدعم",
+"support_text": "🆘 *الدعم*\n\nإذا كان لديك أسئلة أو مشاكل — تواصل معنا:",
 "bot_updated":  "تم تحديث البوت! القائمة الجديدة نشطة الآن.",
 
 },
