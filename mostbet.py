@@ -171,13 +171,18 @@ async def _mostbet_load_matches() -> list:
                 return data
 
         all_matches = []
+        _LOAD_TIMEOUT = 120  # max seconds for the entire paginated fetch
         try:
+            deadline = asyncio.get_event_loop().time() + _LOAD_TIMEOUT
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as h:
                 last_id = 0
                 page = 0
                 while True:
+                    if asyncio.get_event_loop().time() > deadline:
+                        logger.warning("Mostbet load deadline reached — stopping pagination")
+                        break
                     if page > 0:
-                        await asyncio.sleep(2.0)   # 2s between pages
+                        await asyncio.sleep(2.0)
                     page += 1
                     r = await h.get(
                         f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/list",
@@ -185,17 +190,24 @@ async def _mostbet_load_matches() -> list:
                         params={"lastId": last_id, "locale": "en", "limit": 100}
                     )
                     if r.status_code == 429:
-                        logger.warning(f"Mostbet 429 on page {page}")
+                        # Honour Retry-After if present, otherwise fall back to 30s
+                        retry_after = int(r.headers.get("Retry-After", 30))
+                        retry_after = min(retry_after, 60)  # cap at 60s
+                        logger.warning(f"Mostbet 429 on page {page} — waiting {retry_after}s")
                         if cache_key in mostbet_cache:
                             _, stale = mostbet_cache[cache_key]
                             logger.info(f"Returning stale cache: {len(stale)} matches")
                             return stale
-                        await asyncio.sleep(10)   # longer wait on 429
+                        await asyncio.sleep(retry_after)
                         continue
                     if r.status_code != 200:
                         logger.error(f"Mostbet list error: {r.status_code} | {r.text[:100]}")
                         break
-                    matches = r.json().get("lineMatches", [])
+                    try:
+                        matches = r.json().get("lineMatches", [])
+                    except Exception:
+                        logger.error(f"Mostbet invalid JSON on page {page}")
+                        break
                     if not matches:
                         break
                     all_matches.extend(matches)
@@ -287,15 +299,26 @@ async def mostbet_get_odds(line_id: int) -> dict:
     }
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as h:
-            r = await h.get(
-                f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/{line_id}/outcomes/list",
-                headers={"Accept": "application/json"},
-                params={"locale": "en", "limit": 100}
-            )
+            for attempt in range(3):
+                r = await h.get(
+                    f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/{line_id}/outcomes/list",
+                    headers={"Accept": "application/json"},
+                    params={"locale": "en", "limit": 100}
+                )
+                if r.status_code == 429:
+                    retry_after = min(int(r.headers.get("Retry-After", 10)), 30)
+                    logger.warning(f"Mostbet odds 429 (attempt {attempt+1}) — waiting {retry_after}s")
+                    await asyncio.sleep(retry_after)
+                    continue
+                break
             if r.status_code != 200:
                 logger.error(f"Mostbet odds error: {r.status_code}")
                 return result
-            outcomes = r.json().get("lineMatchOutcomes", [])
+            try:
+                outcomes = r.json().get("lineMatchOutcomes", [])
+            except Exception:
+                logger.error(f"Mostbet odds invalid JSON for line_id={line_id}")
+                return result
             for o in outcomes:
                 title = o.get("outcomeTitle", "").lower()
                 group = o.get("groupTitle", "").lower()
