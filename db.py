@@ -9,7 +9,9 @@ logger = logging.getLogger(__name__)
 
 # ─── DB ───────────────────────────────────────────────────────────────────────
 import os as _os
-DB = _os.path.join(_os.environ.get("BOT_DB_DIR", "."), "bot.db")
+_db_dir = _os.environ.get("BOT_DB_DIR", ".")
+_os.makedirs(_db_dir, exist_ok=True)
+DB = _os.path.join(_db_dir, "bot.db")
 
 def con() -> sqlite3.Connection:
     """Open a DB connection with WAL mode, busy timeout, and foreign keys."""
