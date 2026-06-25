@@ -23,6 +23,48 @@ logger = logging.getLogger(__name__)
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB cap on uploaded images
 
+# ─── Localized UI strings ─────────────────────────────────────────────────────
+_THINKING = {
+    "ru": "⏳ Анализирую...", "az": "⏳ Analiz edilir...",
+    "en": "⏳ Analysing...", "tr": "⏳ Analiz ediliyor...",
+    "kz": "⏳ Талдау жасалуда...", "uz": "⏳ Tahlil qilinmoqda...",
+    "ar": "⏳ جارٍ التحليل...",
+}
+_SPORT_TITLE = {
+    "ru": "🏟 Выберите вид спорта:", "az": "🏟 İdman növünü seçin:",
+    "en": "🏟 Choose sport:", "tr": "🏟 Spor seçin:",
+    "kz": "🏟 Спорт түрін таңдаңыз:", "uz": "🏟 Sport turini tanlang:",
+    "ar": "🏟 اختر الرياضة:",
+}
+
+
+def _loc(d: dict, lang: str) -> str:
+    """Pick a localized string from a dict, falling back to Russian."""
+    return d.get(lang, d["ru"])
+
+
+def _build_sport_kb(sports_map: dict) -> InlineKeyboardMarkup:
+    """Top-level sport selector keyboard (sorted by match count)."""
+    sport_keys = sorted(sports_map, key=lambda c: -len(sports_map[c]))
+    btns = []
+    for i, cat in enumerate(sport_keys[:8]):
+        emoji = _sport_emoji(cat)
+        btns.append([InlineKeyboardButton(f"{emoji} {cat} ({len(sports_map[cat])})",
+                                          callback_data=f"fm_sp_{i}")])
+    return InlineKeyboardMarkup(btns)
+
+
+async def _build_league_kb(leagues_map: dict) -> InlineKeyboardMarkup:
+    """Tournament selector keyboard with AI-normalized names + back button."""
+    league_keys = sorted(leagues_map, key=lambda l: -len(leagues_map[l]))
+    display_names = await asyncio.gather(*[normalize_tournament_ai(lg) for lg in league_keys[:10]])
+    btns = []
+    for i, (lg, display_lg) in enumerate(zip(league_keys[:10], display_names)):
+        btns.append([InlineKeyboardButton(f"🏆 {display_lg} ({len(leagues_map[lg])})",
+                                          callback_data=f"fm_lg_{i}")])
+    btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
+    return InlineKeyboardMarkup(btns)
+
 
 async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, status_msg):
     """Build prompt, call Claude, send reply. status_msg is the '⏳' message to edit."""
@@ -138,20 +180,7 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
         sports_map.setdefault(cat, []).append(m)
 
     context.user_data["fm_sports"] = sports_map
-    sport_keys = sorted(sports_map, key=lambda c: -len(sports_map[c]))
-
-    btns = []
-    for i, cat in enumerate(sport_keys[:8]):
-        emoji = _sport_emoji(cat)
-        btns.append([InlineKeyboardButton(f"{emoji} {cat} ({len(sports_map[cat])})",
-                                          callback_data=f"fm_sp_{i}")])
-    title = {
-        "ru": "🏟 Выберите вид спорта:", "az": "🏟 İdman növünü seçin:",
-        "en": "🏟 Choose sport:", "tr": "🏟 Spor seçin:",
-        "kz": "🏟 Спорт түрін таңдаңыз:", "uz": "🏟 Sport turini tanlang:",
-        "ar": "🏟 اختر الرياضة:",
-    }
-    await msg.edit_text(title.get(lang, title["ru"]), reply_markup=InlineKeyboardMarkup(btns))
+    await msg.edit_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sports_map))
 
 
 async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -170,21 +199,14 @@ async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         league = (m.get("lineSubCategory") or "Other").strip()
         leagues_map.setdefault(league, []).append(m)
 
-    league_keys = sorted(leagues_map, key=lambda l: -len(leagues_map[l]))
     context.user_data["fm_leagues"] = leagues_map
 
-    btns = []
-    display_names = await asyncio.gather(*[normalize_tournament_ai(lg) for lg in league_keys[:10]])
-    for i, (lg, display_lg) in enumerate(zip(league_keys[:10], display_names)):
-        btns.append([InlineKeyboardButton(f"🏆 {display_lg} ({len(leagues_map[lg])})",
-                                          callback_data=f"fm_lg_{i}")])
-    btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
-
+    kb = await _build_league_kb(leagues_map)
     title = {
         "ru": f"Турниры — {sport_name}:", "az": f"Turnirler — {sport_name}:",
         "en": f"Tournaments — {sport_name}:", "tr": f"Turnuvalar — {sport_name}:",
     }
-    await q.edit_message_text(title.get(lang, title["ru"]), reply_markup=InlineKeyboardMarkup(btns))
+    await q.edit_message_text(_loc(title, lang), reply_markup=kb)
 
 
 async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -263,16 +285,10 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["pending_content"] = content
     context.user_data["pending_text"] = f"{t1} {t2}"
 
-    thinking = {
-        "ru": "⏳ Анализирую...", "az": "⏳ Analiz edilir...",
-        "en": "⏳ Analysing...", "tr": "⏳ Analiz ediliyor...",
-        "kz": "⏳ Талдау жасалуда...", "uz": "⏳ Tahlil qilinmoqda...",
-        "ar": "⏳ جارٍ التحليل...",
-    }
     header = f"🏆 {t1} — {t2}\n📍 {league}"
     if dt_str: header += f"\n🕐 {dt_str}"
     status_msg = await context.bot.send_message(
-        chat_id=uid, text=header + f"\n\n{thinking.get(lang, '⏳')}")
+        chat_id=uid, text=header + f"\n\n{_loc(_THINKING, lang)}")
     await context.bot.send_chat_action(chat_id=uid, action="typing")
     await _generate_forecast(uid, context, status_msg)
 
@@ -283,17 +299,7 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if q.data == "fm_back_sport":
         sports_map = context.user_data.get("fm_sports", {})
-        sport_keys = sorted(sports_map, key=lambda c: -len(sports_map[c]))
-        btns = []
-        for i, cat in enumerate(sport_keys[:8]):
-            emoji = _sport_emoji(cat)
-            btns.append([InlineKeyboardButton(f"{emoji} {cat} ({len(sports_map[cat])})",
-                                              callback_data=f"fm_sp_{i}")])
-        title = {
-            "ru": "🏟 Выберите вид спорта:", "az": "🏟 İdman növünü seçin:",
-            "en": "🏟 Choose sport:", "tr": "🏟 Spor seçin:",
-        }
-        await q.edit_message_text(title.get(lang, title["ru"]), reply_markup=InlineKeyboardMarkup(btns))
+        await q.edit_message_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sports_map))
 
     elif q.data == "fm_back_league":
         idx = context.user_data.get("fm_sport_idx", 0)
@@ -303,18 +309,12 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("Ошибка."); return
         sport_name = sport_keys[idx]
         leagues_map = context.user_data.get("fm_leagues", {})
-        league_keys = sorted(leagues_map, key=lambda l: -len(leagues_map[l]))
-        btns = []
-        display_names = await asyncio.gather(*[normalize_tournament_ai(lg) for lg in league_keys[:10]])
-        for i, (lg, display_lg) in enumerate(zip(league_keys[:10], display_names)):
-            btns.append([InlineKeyboardButton(f"🏆 {display_lg} ({len(leagues_map[lg])})",
-                                              callback_data=f"fm_lg_{i}")])
-        btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
+        kb = await _build_league_kb(leagues_map)
         title = {
             "ru": f"Турниры — {sport_name}:", "az": f"Turnirler — {sport_name}:",
             "en": f"Tournaments — {sport_name}:", "tr": f"Turnuvalar — {sport_name}:",
         }
-        await q.edit_message_text(title.get(lang, title["ru"]), reply_markup=InlineKeyboardMarkup(btns))
+        await q.edit_message_text(_loc(title, lang), reply_markup=kb)
 
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -413,13 +413,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["pending_text"] = ""
         context.user_data["parsed_teams"] = None
         context.user_data["has_real_data"] = False
-        thinking = {
-            "ru": "⏳ Анализирую...", "az": "⏳ Analiz edilir...",
-            "en": "⏳ Analysing...", "tr": "⏳ Analiz ediliyor...",
-            "kz": "⏳ Талдау жасалуда...", "uz": "⏳ Tahlil qilinmoqda...",
-            "ar": "⏳ جارٍ التحليل...",
-        }
-        status_msg = await update.message.reply_text(thinking.get(lang, "⏳"))
+        status_msg = await update.message.reply_text(_loc(_THINKING, lang))
         await _generate_forecast(uid, context, status_msg)
         return
 
