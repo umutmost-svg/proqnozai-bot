@@ -7,7 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import ADMIN_ID, MOSTBET_BASE, live_subs, blocked_until, mostbet_cache
-from db import db_set, db_stats, db_search, con
+from db import db_set, db_stats, db_search, _one, _all
 from translations import sport_label, exp_label
 from mostbet import _mostbet_load_matches
 
@@ -89,11 +89,10 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         top = "\n".join(
             f"{i+1}. {r[1] or r[0]}: {r[2]} запросов"
             for i, r in enumerate(s["top_req"]))
-        with con() as c:
-            sport_rows = c.execute(
-                "SELECT sports, COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
-                "AND sports!='' GROUP BY sports ORDER BY COUNT(*) DESC"
-            ).fetchall()
+        sport_rows = _all(
+            "SELECT sports, COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
+            "AND sports!='' GROUP BY sports ORDER BY COUNT(*) DESC"
+        )
         sport_str = " | ".join(
             f"{SPORT_NAMES.get(s, s)}: {n}" for s, n in sport_rows)
         await q.edit_message_text(
@@ -113,20 +112,14 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Broadcast menu ────────────────────────────────────────────────────────
     elif data == "adm_broadcast_menu":
-        with con() as c:
-            total = c.execute(
-                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0"
-            ).fetchone()[0]
+        total = _one("SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0") or 0
         await q.edit_message_text(
             f"📢 РАССЫЛКА\n\nВсего активных: {total} чел.\n\nВыберите аудиторию:",
             reply_markup=broadcast_menu_kb())
 
     # ── Segment: all ──────────────────────────────────────────────────────────
     elif data == "adm_bcast_seg_all":
-        with con() as c:
-            cnt = c.execute(
-                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0"
-            ).fetchone()[0]
+        cnt = _one("SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0") or 0
         context.user_data["adm_bcast_seg"] = "all"
         context.user_data["adm_act"] = "broadcast"
         await q.edit_message_text(
@@ -134,10 +127,7 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── By language ───────────────────────────────────────────────────────────
     elif data == "adm_bcast_by_lang":
-        with con() as c:
-            rows = c.execute(
-                "SELECT lang, COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 GROUP BY lang"
-            ).fetchall()
+        rows = _all("SELECT lang, COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 GROUP BY lang")
         counts = dict(rows)
         btns = []
         for code, name in LANG_NAMES.items():
@@ -148,10 +138,7 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("adm_bcast_lang_"):
         code = data[len("adm_bcast_lang_"):]
-        with con() as c:
-            cnt = c.execute(
-                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 AND lang=?", (code,)
-            ).fetchone()[0]
+        cnt = _one("SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 AND lang=?", (code,)) or 0
         context.user_data["adm_bcast_seg"] = f"lang:{code}"
         context.user_data["adm_act"] = "broadcast"
         await q.edit_message_text(
@@ -160,11 +147,10 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── By sport ──────────────────────────────────────────────────────────────
     elif data == "adm_bcast_by_sport":
-        with con() as c:
-            rows = c.execute(
-                "SELECT sports, COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
-                "AND sports!='' GROUP BY sports ORDER BY COUNT(*) DESC"
-            ).fetchall()
+        rows = _all(
+            "SELECT sports, COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
+            "AND sports!='' GROUP BY sports ORDER BY COUNT(*) DESC"
+        )
         counts = dict(rows)
         btns = []
         for code, name in SPORT_NAMES.items():
@@ -175,10 +161,7 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("adm_bcast_sport_"):
         code = data[len("adm_bcast_sport_"):]
-        with con() as c:
-            cnt = c.execute(
-                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 AND sports=?", (code,)
-            ).fetchone()[0]
+        cnt = _one("SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 AND sports=?", (code,)) or 0
         context.user_data["adm_bcast_seg"] = f"sport:{code}"
         context.user_data["adm_act"] = "broadcast"
         await q.edit_message_text(
@@ -187,20 +170,19 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── By activity ───────────────────────────────────────────────────────────
     elif data == "adm_bcast_by_act":
-        with con() as c:
-            active7 = c.execute(
-                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
-                "AND last_active != '' AND date(last_active) >= date('now', '-7 days')"
-            ).fetchone()[0]
-            inactive30 = c.execute(
-                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
-                "AND (last_active='' OR date(last_active) < date('now', '-30 days'))"
-            ).fetchone()[0]
-            inactive7_30 = c.execute(
-                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
-                "AND last_active != '' AND date(last_active) < date('now', '-7 days') "
-                "AND date(last_active) >= date('now', '-30 days')"
-            ).fetchone()[0]
+        active7 = _one(
+            "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
+            "AND last_active != '' AND date(last_active) >= date('now', '-7 days')"
+        ) or 0
+        inactive30 = _one(
+            "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
+            "AND (last_active='' OR date(last_active) < date('now', '-30 days'))"
+        ) or 0
+        inactive7_30 = _one(
+            "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
+            "AND last_active != '' AND date(last_active) < date('now', '-7 days') "
+            "AND date(last_active) >= date('now', '-30 days')"
+        ) or 0
         btns = [
             [InlineKeyboardButton(f"🟢 Активные (≤7 дней) — {active7} чел.",   callback_data="adm_bcast_act_active")],
             [InlineKeyboardButton(f"🟡 Отток (7-30 дней) — {inactive7_30} чел.", callback_data="adm_bcast_act_churn")],
@@ -212,23 +194,22 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("adm_bcast_act_"):
         seg = data[len("adm_bcast_act_"):]
         seg_labels = {"active": "🟢 Активные (≤7 дней)", "churn": "🟡 Отток (7-30 дней)", "sleep": "🔴 Спящие (>30 дней)"}
-        with con() as c:
-            if seg == "active":
-                cnt = c.execute(
-                    "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
-                    "AND last_active != '' AND date(last_active) >= date('now', '-7 days')"
-                ).fetchone()[0]
-            elif seg == "churn":
-                cnt = c.execute(
-                    "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
-                    "AND last_active != '' AND date(last_active) < date('now', '-7 days') "
-                    "AND date(last_active) >= date('now', '-30 days')"
-                ).fetchone()[0]
-            else:
-                cnt = c.execute(
-                    "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
-                    "AND (last_active='' OR date(last_active) < date('now', '-30 days'))"
-                ).fetchone()[0]
+        if seg == "active":
+            cnt = _one(
+                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
+                "AND last_active != '' AND date(last_active) >= date('now', '-7 days')"
+            ) or 0
+        elif seg == "churn":
+            cnt = _one(
+                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
+                "AND last_active != '' AND date(last_active) < date('now', '-7 days') "
+                "AND date(last_active) >= date('now', '-30 days')"
+            ) or 0
+        else:
+            cnt = _one(
+                "SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0 "
+                "AND (last_active='' OR date(last_active) < date('now', '-30 days'))"
+            ) or 0
         context.user_data["adm_bcast_seg"] = f"act:{seg}"
         context.user_data["adm_act"] = "broadcast"
         await q.edit_message_text(
@@ -254,10 +235,7 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Blocklist ─────────────────────────────────────────────────────────────
     elif data == "adm_blocklist":
-        with con() as c:
-            rows = c.execute(
-                "SELECT user_id,username,display_name FROM users WHERE is_blocked=1"
-            ).fetchall()
+        rows = _all("SELECT user_id,username,display_name FROM users WHERE is_blocked=1")
         if not rows:
             await q.edit_message_text("Нет заблокированных.", reply_markup=back); return
         btns = [
@@ -320,39 +298,22 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def _get_uids_for_seg(seg: str) -> list[int]:
-    with con() as c:
-        if seg == "all":
-            rows = c.execute(
-                "SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0"
-            ).fetchall()
-        elif seg.startswith("lang:"):
-            code = seg[5:]
-            rows = c.execute(
-                "SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0 AND lang=?", (code,)
-            ).fetchall()
-        elif seg.startswith("sport:"):
-            code = seg[6:]
-            rows = c.execute(
-                "SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0 AND sports=?", (code,)
-            ).fetchall()
-        elif seg == "act:active":
-            rows = c.execute(
-                "SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0 "
-                "AND last_active != '' AND date(last_active) >= date('now', '-7 days')"
-            ).fetchall()
-        elif seg == "act:churn":
-            rows = c.execute(
-                "SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0 "
-                "AND last_active != '' AND date(last_active) < date('now', '-7 days') "
-                "AND date(last_active) >= date('now', '-30 days')"
-            ).fetchall()
-        elif seg == "act:sleep":
-            rows = c.execute(
-                "SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0 "
-                "AND (last_active='' OR date(last_active) < date('now', '-30 days'))"
-            ).fetchall()
-        else:
-            rows = []
+    base = "SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0"
+    if seg == "all":
+        rows = _all(base)
+    elif seg.startswith("lang:"):
+        rows = _all(base + " AND lang=?", (seg[5:],))
+    elif seg.startswith("sport:"):
+        rows = _all(base + " AND sports=?", (seg[6:],))
+    elif seg == "act:active":
+        rows = _all(base + " AND last_active != '' AND date(last_active) >= date('now', '-7 days')")
+    elif seg == "act:churn":
+        rows = _all(base + " AND last_active != '' AND date(last_active) < date('now', '-7 days')"
+                         " AND date(last_active) >= date('now', '-30 days')")
+    elif seg == "act:sleep":
+        rows = _all(base + " AND (last_active='' OR date(last_active) < date('now', '-30 days'))")
+    else:
+        rows = []
     return [r[0] for r in rows]
 
 
