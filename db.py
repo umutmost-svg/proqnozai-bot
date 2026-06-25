@@ -76,7 +76,7 @@ def db_init():
         # Migration: add tz_offset column to existing DBs
         try:
             c.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER DEFAULT 0")
-        except Exception:
+        except sqlite3.OperationalError:
             pass  # column already exists
 
 _LANG_TZ = {"az": 4, "ru": 3, "tr": 3, "kz": 5, "uz": 5, "ar": 3, "en": 0}

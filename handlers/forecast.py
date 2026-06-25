@@ -396,8 +396,12 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if (largest.file_size or 0) > MAX_IMAGE_BYTES:
             __import__('logging').getLogger("suspicious").warning(f"BIGIMG | {info} | {largest.file_size}b")
             await update.message.reply_text(tr(uid, "img_too_big")); return
-        f = await context.bot.get_file(largest.file_id)
-        fb = await f.download_as_bytearray()
+        try:
+            f = await context.bot.get_file(largest.file_id)
+            fb = await f.download_as_bytearray()
+        except Exception as e:
+            logger.error(f"photo download error uid={uid}: {e}")
+            await update.message.reply_text(tr(uid, "api_error")); return
         if len(fb) > MAX_IMAGE_BYTES:
             await update.message.reply_text(tr(uid, "img_too_big")); return
         content = [
