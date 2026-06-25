@@ -67,13 +67,15 @@ def main():
     db_init()
 
     from stats_server import run_stats_server
-    threading.Thread(target=run_stats_server, daemon=True).start()
+    threading.Thread(target=run_stats_server, daemon=True, name="stats-server").start()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     register_handlers(app)
     app.add_error_handler(_error_handler)
 
     async def post_init(application):
+        from stats_server import set_bot_app
+        set_bot_app(application, asyncio.get_event_loop())
         db_restore_live_subs()
         asyncio.create_task(poller(application))
         asyncio.create_task(daily_push(application))

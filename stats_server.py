@@ -1,16 +1,45 @@
 """
 Lightweight stats HTTP server that runs inside the bot process.
 Exposes GET /stats?token=X → JSON with all dashboard metrics.
+Exposes POST /broadcast     → send message to user segment.
 """
+import asyncio
 import json
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
-from db import con
+from db import con, _all
 
 STATS_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
 STATS_PORT  = int(os.environ.get("STATS_PORT", "8888"))
+
+_bot_app  = None
+_bot_loop = None
+
+
+def set_bot_app(app, loop):
+    global _bot_app, _bot_loop
+    _bot_app  = app
+    _bot_loop = loop
+
+
+def _uids_for_seg(seg: str) -> list[int]:
+    base = "SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0"
+    if seg == "all":
+        rows = _all(base)
+    elif seg.startswith("lang:"):
+        rows = _all(base + " AND lang=?", (seg[5:],))
+    elif seg == "act:active":
+        rows = _all(base + " AND last_active != '' AND date(last_active) >= date('now', '-7 days')")
+    elif seg == "act:churn":
+        rows = _all(base + " AND last_active != '' AND date(last_active) < date('now', '-7 days')"
+                         " AND date(last_active) >= date('now', '-30 days')")
+    elif seg == "act:sleep":
+        rows = _all(base + " AND (last_active='' OR date(last_active) < date('now', '-30 days'))")
+    else:
+        rows = []
+    return [r[0] for r in rows]
 
 
 def _collect():
@@ -77,6 +106,51 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, body, "application/json")
         except Exception as e:
             self._send(500, str(e).encode())
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path != "/broadcast":
+            self._send(404, b"not found"); return
+
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length))
+        except Exception:
+            self._send(400, b"invalid json"); return
+
+        if STATS_TOKEN and body.get("token") != STATS_TOKEN:
+            self._send(401, b"unauthorized"); return
+
+        text    = (body.get("text") or "").strip()
+        segment = body.get("segment", "all")
+
+        if not text:
+            self._send(400, b"empty text"); return
+
+        if not _bot_app or not _bot_loop:
+            self._send(503, b"bot not ready"); return
+
+        uids = _uids_for_seg(segment)
+
+        async def _send_all():
+            ok = fail = 0
+            for uid in uids:
+                try:
+                    await _bot_app.bot.send_message(chat_id=uid, text=text)
+                    ok += 1
+                except Exception:
+                    fail += 1
+                await asyncio.sleep(0.05)
+            return ok, fail
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(_send_all(), _bot_loop)
+            ok, fail = future.result(timeout=180)
+        except Exception as e:
+            self._send(500, str(e).encode()); return
+
+        result = json.dumps({"ok": ok, "fail": fail, "total": len(uids)})
+        self._send(200, result.encode(), "application/json")
 
     def _send(self, code, body, ct="text/plain"):
         self.send_response(code)

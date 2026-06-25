@@ -8,13 +8,15 @@ import os
 from functools import wraps
 
 import httpx
-from flask import Flask, Response, render_template_string, request
+from flask import Flask, Response, render_template_string, request, redirect, url_for
 
 app = Flask(__name__)
 
-STATS_URL   = os.environ.get("STATS_URL", "http://worker.railway.internal:8888/stats")
-STATS_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
-DASH_USER   = os.environ.get("DASHBOARD_USER", "admin")
+_BOT_BASE     = os.environ.get("BOT_API_URL", "http://worker.railway.internal:8888")
+STATS_URL     = os.environ.get("STATS_URL", _BOT_BASE + "/stats")
+BROADCAST_URL = _BOT_BASE + "/broadcast"
+STATS_TOKEN   = os.environ.get("DASHBOARD_TOKEN", "")
+DASH_USER     = os.environ.get("DASHBOARD_USER", "admin")
 
 
 # ─── Basic Auth ───────────────────────────────────────────────────────────────
@@ -174,6 +176,8 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-t
     </div>
   </div>
   <div class="header-right">
+    <a href="/" class="theme-btn" style="text-decoration:none">📊 Статистика</a>
+    <a href="/broadcast" class="theme-btn" style="text-decoration:none">📢 Рассылка</a>
     <span class="refresh-badge">{{ generated_at }}</span>
     <button class="theme-btn active" onclick="setTheme('dark')">🌙 Тёмная</button>
     <button class="theme-btn" onclick="setTheme('light')">☀️ Светлая</button>
@@ -536,6 +540,173 @@ def index():
         fb_data=[fb_wins, fb_lose, fb_unrated],
         generated_at=generated_at,
     )
+
+
+BROADCAST_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Proqnozai — Рассылка</title>
+<style>
+:root{--bg:#0f1117;--bg2:#1a1d27;--border:#2a2d3a;--accent:#6c63ff;--accent2:#a78bfa;--green:#22c55e;--red:#ef4444;--text:#e2e8f0;--muted:#94a3b8;}
+[data-theme="light"]{--bg:#f1f5f9;--bg2:#ffffff;--border:#e2e8f0;--accent:#6c63ff;--text:#0f172a;--muted:#64748b;}
+[data-theme="ocean"]{--bg:#0c1929;--bg2:#112236;--border:#1e3a5f;--accent:#38bdf8;--text:#e0f2fe;--muted:#7dd3fc;}
+[data-theme="forest"]{--bg:#0a1612;--bg2:#122218;--border:#1e3a28;--accent:#22c55e;--text:#dcfce7;--muted:#86efac;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;}
+header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;}
+.logo{display:flex;align-items:center;gap:10px;}
+.logo h1{font-size:17px;font-weight:700;color:var(--accent);}
+.header-right{display:flex;align-items:center;gap:12px;}
+.btn{background:none;border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s;text-decoration:none;display:inline-block;}
+.btn:hover{border-color:var(--accent);color:var(--accent);}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent);padding:10px 24px;font-size:14px;font-weight:600;}
+.btn-primary:hover{background:var(--accent2);border-color:var(--accent2);color:#fff;}
+.container{max-width:760px;margin:40px auto;padding:0 20px;}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.3);}
+h2{font-size:20px;font-weight:700;margin-bottom:6px;}
+.sub{color:var(--muted);font-size:13px;margin-bottom:24px;}
+label{display:block;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px;}
+select,textarea{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;transition:border-color .2s;outline:none;margin-bottom:20px;}
+select:focus,textarea:focus{border-color:var(--accent);}
+textarea{min-height:160px;resize:vertical;}
+.char-count{text-align:right;font-size:11px;color:var(--muted);margin-top:-16px;margin-bottom:20px;}
+.alert{padding:16px 20px;border-radius:8px;margin-bottom:24px;font-size:14px;}
+.alert-success{background:#14532d;border:1px solid #16a34a;color:#86efac;}
+.alert-error{background:#450a0a;border:1px solid #b91c1c;color:#fca5a5;}
+.preview-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:13px;color:var(--muted);min-height:60px;white-space:pre-wrap;margin-bottom:20px;}
+.seg-count{display:inline-block;background:rgba(108,99,255,.15);color:var(--accent);border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;margin-left:8px;}
+.divider{border:none;border-top:1px solid var(--border);margin:24px 0;}
+</style>
+</head>
+<body data-theme="dark">
+<header>
+  <div class="logo">
+    <span style="font-size:22px">⚽</span>
+    <h1>Proqnozai Bot</h1>
+  </div>
+  <div class="header-right">
+    <a href="/" class="btn">📊 Статистика</a>
+    <a href="/broadcast" class="btn" style="border-color:var(--accent);color:var(--accent)">📢 Рассылка</a>
+    <button class="btn" onclick="setTheme('dark')">🌙</button>
+    <button class="btn" onclick="setTheme('light')">☀️</button>
+    <button class="btn" onclick="setTheme('ocean')">🌊</button>
+    <button class="btn" onclick="setTheme('forest')">🌿</button>
+  </div>
+</header>
+
+<div class="container">
+  <div class="card">
+    <h2>📢 Рассылка</h2>
+    <p class="sub">Отправить сообщение сегменту пользователей через Telegram-бота</p>
+
+    {% if result %}
+    <div class="alert alert-{{ 'success' if result.ok > 0 else 'error' }}">
+      {% if result.ok > 0 %}
+      ✅ Рассылка завершена: доставлено <strong>{{ result.ok }}</strong> из {{ result.total }},
+      не доставлено {{ result.fail }}.
+      {% else %}
+      ❌ Рассылка не удалась: {{ result.error or 'неизвестная ошибка' }}
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <form method="POST" action="/broadcast" onsubmit="return confirmSend()">
+      <label for="segment">Аудитория</label>
+      <select name="segment" id="segment" onchange="updateCount()">
+        <option value="all">👥 Все активные пользователи</option>
+        <optgroup label="По языку">
+          <option value="lang:az">🇦🇿 Azərbaycan</option>
+          <option value="lang:ru">🇷🇺 Русский</option>
+          <option value="lang:en">🇬🇧 English</option>
+          <option value="lang:tr">🇹🇷 Türkçe</option>
+          <option value="lang:kz">🇰🇿 Қазақша</option>
+          <option value="lang:uz">🇺🇿 O'zbek</option>
+          <option value="lang:ar">🇸🇦 العربية</option>
+        </optgroup>
+        <optgroup label="По активности">
+          <option value="act:active">🟢 Активные (≤7 дней)</option>
+          <option value="act:churn">🟡 Отток (7–30 дней)</option>
+          <option value="act:sleep">🔴 Спящие (>30 дней)</option>
+        </optgroup>
+      </select>
+
+      <label for="text">Текст сообщения</label>
+      <textarea name="text" id="text" placeholder="Введите текст рассылки..." oninput="updateCount()"
+                maxlength="4096">{{ prefill or '' }}</textarea>
+      <div class="char-count"><span id="charCount">0</span> / 4096 символов</div>
+
+      <label>Превью</label>
+      <div class="preview-box" id="preview">Начните вводить текст...</div>
+
+      <hr class="divider">
+      <button type="submit" class="btn btn-primary">📤 Отправить рассылку</button>
+      <span style="color:var(--muted);font-size:12px;margin-left:12px;">⚠️ Действие необратимо</span>
+    </form>
+  </div>
+
+  <div style="margin-top:16px;text-align:center;color:var(--muted);font-size:12px;">
+    Рассылка отправляется напрямую через бот · Лимит Telegram: 30 сообщений/сек
+  </div>
+</div>
+
+<script>
+(function(){
+  const saved = localStorage.getItem('theme') || 'dark';
+  document.body.setAttribute('data-theme', saved);
+})();
+function setTheme(t){
+  document.body.setAttribute('data-theme',t);
+  localStorage.setItem('theme',t);
+}
+function updateCount(){
+  const t = document.getElementById('text').value;
+  document.getElementById('charCount').textContent = t.length;
+  document.getElementById('preview').textContent = t || 'Начните вводить текст...';
+}
+function confirmSend(){
+  const seg = document.getElementById('segment').options[document.getElementById('segment').selectedIndex].text;
+  const len = document.getElementById('text').value.trim().length;
+  if(!len){ alert('Введите текст'); return false; }
+  return confirm('Отправить рассылку?\nАудитория: ' + seg + '\n\nЭто действие необратимо.');
+}
+updateCount();
+</script>
+</body>
+</html>"""
+
+
+@app.route("/broadcast", methods=["GET", "POST"])
+@require_auth
+def broadcast():
+    result = None
+    prefill = ""
+
+    if request.method == "POST":
+        text    = (request.form.get("text") or "").strip()
+        segment = request.form.get("segment", "all")
+        prefill = text
+
+        if not text:
+            result = {"ok": 0, "fail": 0, "total": 0, "error": "Пустой текст"}
+        else:
+            try:
+                resp = httpx.post(
+                    BROADCAST_URL,
+                    json={"token": STATS_TOKEN, "text": text, "segment": segment},
+                    timeout=190,
+                )
+                data = resp.json()
+                if resp.status_code == 200:
+                    result = data
+                else:
+                    result = {"ok": 0, "fail": 0, "total": 0,
+                              "error": data.get("detail", f"HTTP {resp.status_code}")}
+            except Exception as e:
+                result = {"ok": 0, "fail": 0, "total": 0, "error": str(e)}
+
+    return render_template_string(BROADCAST_TEMPLATE, result=result, prefill=prefill)
 
 
 @app.route("/health")
