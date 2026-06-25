@@ -36,6 +36,7 @@ def admin_kb():
         [InlineKeyboardButton("🔍 Поиск пользователя", callback_data="adm_search")],
         [InlineKeyboardButton("🔴 Live подписки",       callback_data="adm_live")],
         [InlineKeyboardButton("🔧 Тест Mostbet API",    callback_data="adm_test_mostbet")],
+        [InlineKeyboardButton("🎰 Дамп коэф. матча",   callback_data="adm_odds_dump")],
     ])
 
 
@@ -293,6 +294,13 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await q.edit_message_text(f"MOSTBET API\n\nОшибка: {e}", reply_markup=back)
 
+    # ── Odds dump ─────────────────────────────────────────────────────────────
+    elif data == "adm_odds_dump":
+        context.user_data["adm_act"] = "odds_dump"
+        await q.edit_message_text(
+            "🎰 ДАМП КОЭФФИЦИЕНТОВ\n\nОтправьте ID матча Mostbet (числовой).\n"
+            "Можно найти в /testapi или через меню прогнозов.")
+
     elif data == "adm_back":
         await q.edit_message_text("АДМИН ПАНЕЛЬ", reply_markup=admin_kb())
 
@@ -341,6 +349,41 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Получателей: {len(uids)} чел.\n\n"
             f"Превью:\n{preview}",
             reply_markup=confirm_kb)
+
+    elif act == "odds_dump":
+        try:
+            line_id = int(text.strip())
+        except ValueError:
+            await update.message.reply_text("❌ Неверный ID. Нужно число."); return
+        await update.message.reply_text(f"⏳ Загружаю коэффициенты матча {line_id}...")
+        try:
+            import httpx as _httpx
+            from collections import defaultdict as _dd
+            from config import MOSTBET_BASE
+            async with _httpx.AsyncClient(timeout=12, follow_redirects=True) as h:
+                r = await h.get(
+                    f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/{line_id}/outcomes/list",
+                    headers={"Accept": "application/json"},
+                    params={"locale": "en", "limit": 200}
+                )
+            if r.status_code != 200:
+                await update.message.reply_text(f"❌ HTTP {r.status_code}"); return
+            outcomes = r.json().get("lineMatchOutcomes", [])
+            groups = _dd(list)
+            for o in outcomes:
+                g = o.get("groupTitle", "NO_GROUP")
+                groups[g].append(f"{o.get('outcomeTitle')}={o.get('odd')}")
+            lines = [f"📦 Матч {line_id}: {len(outcomes)} исходов\n"]
+            for g, items in sorted(groups.items()):
+                chunk = " | ".join(items[:5])
+                if len(items) > 5: chunk += f" (+{len(items)-5})"
+                lines.append(f"▪ {g}: {chunk}")
+            # Split into chunks of 4096 chars
+            msg = "\n".join(lines)
+            for i in range(0, len(msg), 3800):
+                await update.message.reply_text(msg[i:i+3800])
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {e}")
 
     elif act == "search":
         results = db_search(text.strip())

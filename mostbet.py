@@ -293,9 +293,25 @@ async def mostbet_get_odds(line_id: int) -> dict:
         if now - ts < MOSTBET_CACHE_TTL:
             return data
     result = {
+        # 1X2
         "w1": None, "x": None, "w2": None,
+        # Double chance
+        "dc_1x": None, "dc_12": None, "dc_x2": None,
+        # Handicap (main line, e.g. -1/+1)
+        "hcp_w1": None, "hcp_w2": None, "hcp_val": None,
+        # Totals
+        "over15": None, "under15": None,
         "over25": None, "under25": None,
+        "over35": None, "under35": None,
+        # BTTS
         "btts_yes": None, "btts_no": None,
+        # 1st half 1X2
+        "h1_w1": None, "h1_x": None, "h1_w2": None,
+        # 1st half total
+        "h1_over05": None, "h1_under05": None,
+        "h1_over15": None, "h1_under15": None,
+        # Draw no bet
+        "dnb_w1": None, "dnb_w2": None,
     }
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as h:
@@ -303,7 +319,7 @@ async def mostbet_get_odds(line_id: int) -> dict:
                 r = await h.get(
                     f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/{line_id}/outcomes/list",
                     headers={"Accept": "application/json"},
-                    params={"locale": "en", "limit": 100}
+                    params={"locale": "en", "limit": 200}
                 )
                 if r.status_code == 429:
                     retry_after = min(int(r.headers.get("Retry-After", 10)), 30)
@@ -319,34 +335,88 @@ async def mostbet_get_odds(line_id: int) -> dict:
             except Exception:
                 logger.error(f"Mostbet odds invalid JSON for line_id={line_id}")
                 return result
+
             for o in outcomes:
-                title = o.get("outcomeTitle", "").lower()
-                group = o.get("groupTitle", "").lower()
-                odd   = o.get("odd", "")
+                title = (o.get("outcomeTitle") or "").lower().strip()
+                group = (o.get("groupTitle") or "").lower().strip()
                 try:
-                    odd_f = float(odd)
+                    odd_f = float(o.get("odd", ""))
                 except Exception:
                     continue
-                # 1X2
-                if group in ("winner", "match result", "1x2", "result"):
-                    if "1" == title or "w1" in title or "(1)" in title:
+
+                # ── 1X2 ──────────────────────────────────────────────────────
+                if any(k in group for k in ("winner", "match result", "1x2", "result", "match winner")):
+                    if title in ("1", "w1", "home") or "(1)" in title:
                         result["w1"] = odd_f
-                    elif "x" == title or "draw" in title or "x" in title:
+                    elif title in ("x", "draw", "tie"):
                         result["x"] = odd_f
-                    elif "2" == title or "w2" in title or "(2)" in title:
+                    elif title in ("2", "w2", "away") or "(2)" in title:
                         result["w2"] = odd_f
-                # Total over/under 2.5
-                if "2.5" in title or "2.5" in group:
-                    if "over" in title or "more" in title or "больше" in title or "(+)" in title:
-                        result["over25"] = odd_f
-                    elif "under" in title or "less" in title or "меньше" in title or "(-)" in title:
-                        result["under25"] = odd_f
-                # BTTS
-                if "both" in group or "btts" in group or "gg" in group or "обе" in group:
-                    if "yes" in title or "да" in title:
+
+                # ── Double chance ─────────────────────────────────────────────
+                elif any(k in group for k in ("double chance", "double result")):
+                    if "1x" in title or "home or draw" in title:
+                        result["dc_1x"] = odd_f
+                    elif "12" in title or "home or away" in title:
+                        result["dc_12"] = odd_f
+                    elif "x2" in title or "draw or away" in title:
+                        result["dc_x2"] = odd_f
+
+                # ── Draw no bet ───────────────────────────────────────────────
+                elif any(k in group for k in ("draw no bet", "dnb", "moneyline")):
+                    if title in ("1", "w1", "home"):
+                        result["dnb_w1"] = odd_f
+                    elif title in ("2", "w2", "away"):
+                        result["dnb_w2"] = odd_f
+
+                # ── Handicap ──────────────────────────────────────────────────
+                elif any(k in group for k in ("handicap", "asian handicap", "european handicap")):
+                    # Try to capture a non-zero handicap line
+                    m = _re.search(r'\(([+-]?\d+\.?\d*)\)', title)
+                    if m:
+                        val = float(m.group(1))
+                        if val != 0 and (result["hcp_val"] is None or abs(val) < abs(result["hcp_val"])):
+                            # Store the smallest absolute handicap line (most balanced)
+                            if title.startswith("1") or "home" in title or "w1" in title:
+                                result["hcp_w1"] = odd_f
+                                result["hcp_val"] = val
+                            elif title.startswith("2") or "away" in title or "w2" in title:
+                                result["hcp_w2"] = odd_f
+
+                # ── Totals ────────────────────────────────────────────────────
+                elif any(k in group for k in ("total", "goals", "total goals", "over/under")):
+                    is_h1 = any(k in group for k in ("1st", "first half", "halftime", "half time", "ht"))
+                    is_over = any(k in title for k in ("over", "more", "+", "больше"))
+                    is_under = any(k in title for k in ("under", "less", "-", "меньше"))
+                    for line, over_key, under_key in [
+                        ("0.5",  "h1_over05" if is_h1 else None, "h1_under05" if is_h1 else None),
+                        ("1.5",  "h1_over15" if is_h1 else "over15", "h1_under15" if is_h1 else "under15"),
+                        ("2.5",  None if is_h1 else "over25", None if is_h1 else "under25"),
+                        ("3.5",  None if is_h1 else "over35", None if is_h1 else "under35"),
+                    ]:
+                        if line in title:
+                            if is_over and over_key:
+                                result[over_key] = odd_f
+                            elif is_under and under_key:
+                                result[under_key] = odd_f
+                            break
+
+                # ── 1st half 1X2 ──────────────────────────────────────────────
+                elif any(k in group for k in ("1st half", "first half", "halftime", "half time", "ht result")):
+                    if title in ("1", "w1", "home") or "(1)" in title:
+                        result["h1_w1"] = odd_f
+                    elif title in ("x", "draw"):
+                        result["h1_x"] = odd_f
+                    elif title in ("2", "w2", "away") or "(2)" in title:
+                        result["h1_w2"] = odd_f
+
+                # ── BTTS ──────────────────────────────────────────────────────
+                elif any(k in group for k in ("both", "btts", "gg", "обе", "goals both")):
+                    if any(k in title for k in ("yes", "да", "gg")):
                         result["btts_yes"] = odd_f
-                    elif "no" in title or "нет" in title:
+                    elif any(k in title for k in ("no", "нет", "ng")):
                         result["btts_no"] = odd_f
+
     except Exception as e:
         logger.error(f"mostbet_get_odds: {e}")
     mostbet_cache[f"odds_{line_id}"] = (time.time(), result)
@@ -355,39 +425,102 @@ async def mostbet_get_odds(line_id: int) -> dict:
 
 def format_mostbet_odds(odds: dict, lang: str) -> str:
     """Format Mostbet odds as a clean string to inject into Claude prompt."""
-    if not any([odds["w1"], odds["over25"], odds["btts_yes"]]):
+    if not any(odds.get(k) for k in ("w1", "over25", "btts_yes", "dc_1x", "hcp_w1")):
         return ""
-    lines = []
-    # Map new langs to existing formats
+
     if lang in ("kz", "uz", "tr"):
         lang = "ru"
     elif lang == "ar":
         lang = "en"
+
+    def _line(label, *vals):
+        """Return 'label: v1 | v2 ...' only when all values are present."""
+        if all(v is not None for v in vals):
+            return f"{label}: {' | '.join(str(v) for v in vals)}"
+        return None
+
     if lang == "ru":
-        lines.append("РЕАЛЬНЫЕ КОЭФФИЦИЕНТЫ MOSTBET:")
-        if odds["w1"] and odds["x"] and odds["w2"]:
-            lines.append(f"1X2: П1={odds['w1']} | X={odds['x']} | П2={odds['w2']}")
-        if odds["over25"] and odds["under25"]:
-            lines.append(f"Тотал 2.5: Больше={odds['over25']} | Меньше={odds['under25']}")
-        if odds["btts_yes"] and odds["btts_no"]:
-            lines.append(f"Обе забьют: Да={odds['btts_yes']} | Нет={odds['btts_no']}")
-        lines.append("ВАЖНО: используй ИМЕННО эти коэффициенты в прогнозе, не выдумывай свои.")
+        lines = ["РЕАЛЬНЫЕ КОЭФФИЦИЕНТЫ MOSTBET:"]
+        if r := _line("1X2  П1/X/П2", odds.get("w1"), odds.get("x"), odds.get("w2")):
+            lines.append(r)
+        if odds.get("dc_1x") or odds.get("dc_12") or odds.get("dc_x2"):
+            dc = []
+            if odds.get("dc_1x"): dc.append(f"1X={odds['dc_1x']}")
+            if odds.get("dc_12"): dc.append(f"12={odds['dc_12']}")
+            if odds.get("dc_x2"): dc.append(f"X2={odds['dc_x2']}")
+            lines.append("Двойной шанс: " + " | ".join(dc))
+        if odds.get("hcp_w1") and odds.get("hcp_val") is not None:
+            sign = "+" if odds["hcp_val"] > 0 else ""
+            lines.append(f"Фора: П1({sign}{odds['hcp_val']})={odds['hcp_w1']}" +
+                         (f" | П2({-odds['hcp_val']:.1f})={odds['hcp_w2']}" if odds.get("hcp_w2") else ""))
+        if odds.get("over15") and odds.get("under15"):
+            lines.append(f"Тотал 1.5: Б={odds['over15']} | М={odds['under15']}")
+        if odds.get("over25") and odds.get("under25"):
+            lines.append(f"Тотал 2.5: Б={odds['over25']} | М={odds['under25']}")
+        if odds.get("over35") and odds.get("under35"):
+            lines.append(f"Тотал 3.5: Б={odds['over35']} | М={odds['under35']}")
+        if r := _line("Обе забьют Да/Нет", odds.get("btts_yes"), odds.get("btts_no")):
+            lines.append(r)
+        if r := _line("1-й тайм 1X2", odds.get("h1_w1"), odds.get("h1_x"), odds.get("h1_w2")):
+            lines.append(r)
+        if odds.get("h1_over15") and odds.get("h1_under15"):
+            lines.append(f"Тотал 1-го тайма 1.5: Б={odds['h1_over15']} | М={odds['h1_under15']}")
+        if r := _line("Победа без ничьей", odds.get("dnb_w1"), odds.get("dnb_w2")):
+            lines.append(r)
+        lines.append("ВАЖНО: используй ЭТИ коэффициенты в прогнозе — они отражают реальную оценку рынка.")
+
     elif lang == "az":
-        lines.append("MOSTBET REAL KEFLƏRİ:")
-        if odds["w1"] and odds["x"] and odds["w2"]:
-            lines.append(f"1X2: Q1={odds['w1']} | X={odds['x']} | Q2={odds['w2']}")
-        if odds["over25"] and odds["under25"]:
+        lines = ["MOSTBET REAL KEFLƏRİ:"]
+        if r := _line("1X2  Q1/X/Q2", odds.get("w1"), odds.get("x"), odds.get("w2")):
+            lines.append(r)
+        if odds.get("dc_1x") or odds.get("dc_12") or odds.get("dc_x2"):
+            dc = []
+            if odds.get("dc_1x"): dc.append(f"1X={odds['dc_1x']}")
+            if odds.get("dc_12"): dc.append(f"12={odds['dc_12']}")
+            if odds.get("dc_x2"): dc.append(f"X2={odds['dc_x2']}")
+            lines.append("İkiqat şans: " + " | ".join(dc))
+        if odds.get("hcp_w1") and odds.get("hcp_val") is not None:
+            sign = "+" if odds["hcp_val"] > 0 else ""
+            lines.append(f"Fora: Q1({sign}{odds['hcp_val']})={odds['hcp_w1']}" +
+                         (f" | Q2({-odds['hcp_val']:.1f})={odds['hcp_w2']}" if odds.get("hcp_w2") else ""))
+        if odds.get("over25") and odds.get("under25"):
             lines.append(f"Total 2.5: Üstündə={odds['over25']} | Altında={odds['under25']}")
-        if odds["btts_yes"] and odds["btts_no"]:
-            lines.append(f"Hər ikisi qol: Bəli={odds['btts_yes']} | Xeyr={odds['btts_no']}")
-        lines.append("VACIB: proqnozda MƏHZbu kefləri istifadə et.")
-    else:
-        lines.append("REAL MOSTBET ODDS:")
-        if odds["w1"] and odds["x"] and odds["w2"]:
-            lines.append(f"1X2: W1={odds['w1']} | X={odds['x']} | W2={odds['w2']}")
-        if odds["over25"] and odds["under25"]:
+        if odds.get("over35") and odds.get("under35"):
+            lines.append(f"Total 3.5: Üstündə={odds['over35']} | Altında={odds['under35']}")
+        if r := _line("Hər ikisi qol B/X", odds.get("btts_yes"), odds.get("btts_no")):
+            lines.append(r)
+        if r := _line("1-ci yarım 1X2", odds.get("h1_w1"), odds.get("h1_x"), odds.get("h1_w2")):
+            lines.append(r)
+        lines.append("VACİB: proqnozda MƏHZbu keflərdən istifadə et — bunlar bazarın real qiymətləndirilməsidir.")
+
+    else:  # en and others
+        lines = ["REAL MOSTBET ODDS:"]
+        if r := _line("1X2  W1/X/W2", odds.get("w1"), odds.get("x"), odds.get("w2")):
+            lines.append(r)
+        if odds.get("dc_1x") or odds.get("dc_12") or odds.get("dc_x2"):
+            dc = []
+            if odds.get("dc_1x"): dc.append(f"1X={odds['dc_1x']}")
+            if odds.get("dc_12"): dc.append(f"12={odds['dc_12']}")
+            if odds.get("dc_x2"): dc.append(f"X2={odds['dc_x2']}")
+            lines.append("Double chance: " + " | ".join(dc))
+        if odds.get("hcp_w1") and odds.get("hcp_val") is not None:
+            sign = "+" if odds["hcp_val"] > 0 else ""
+            lines.append(f"Handicap: W1({sign}{odds['hcp_val']})={odds['hcp_w1']}" +
+                         (f" | W2({-odds['hcp_val']:.1f})={odds['hcp_w2']}" if odds.get("hcp_w2") else ""))
+        if odds.get("over15") and odds.get("under15"):
+            lines.append(f"Total 1.5: Over={odds['over15']} | Under={odds['under15']}")
+        if odds.get("over25") and odds.get("under25"):
             lines.append(f"Total 2.5: Over={odds['over25']} | Under={odds['under25']}")
-        if odds["btts_yes"] and odds["btts_no"]:
-            lines.append(f"BTTS: Yes={odds['btts_yes']} | No={odds['btts_no']}")
-        lines.append("IMPORTANT: use THESE exact odds in the forecast, do not invent your own.")
+        if odds.get("over35") and odds.get("under35"):
+            lines.append(f"Total 3.5: Over={odds['over35']} | Under={odds['under35']}")
+        if r := _line("BTTS Yes/No", odds.get("btts_yes"), odds.get("btts_no")):
+            lines.append(r)
+        if r := _line("1st Half 1X2", odds.get("h1_w1"), odds.get("h1_x"), odds.get("h1_w2")):
+            lines.append(r)
+        if odds.get("h1_over15") and odds.get("h1_under15"):
+            lines.append(f"1st Half Total 1.5: Over={odds['h1_over15']} | Under={odds['h1_under15']}")
+        if r := _line("Draw No Bet W1/W2", odds.get("dnb_w1"), odds.get("dnb_w2")):
+            lines.append(r)
+        lines.append("IMPORTANT: use THESE exact odds in the forecast — they reflect real market assessment.")
+
     return "\n".join(lines)
