@@ -14,7 +14,6 @@ from football_api import search_match, fetch_real_data
 from mostbet import (
     _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
-    normalize_tournament_ai,
 )
 from handlers.utils import main_menu, _sport_emoji, _fmt_dt, fmt_dt_for_user
 from handlers.registration import handle_name
@@ -106,13 +105,13 @@ def _build_sport_kb(sports_map: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(btns)
 
 
-async def _build_league_kb(leagues_map: dict) -> InlineKeyboardMarkup:
-    """Tournament selector keyboard with AI-normalized names + back button."""
+def _build_league_kb(leagues_map: dict) -> InlineKeyboardMarkup:
+    """Tournament selector keyboard. Tournament names are shown exactly as they
+    come from Mostbet (no translation/rewrite) so they match the website."""
     league_keys = _sorted_leagues(leagues_map)[:_LEAGUE_LIMIT]
-    display_names = await asyncio.gather(*[normalize_tournament_ai(lg) for lg in league_keys])
     btns = []
-    for i, (lg, display_lg) in enumerate(zip(league_keys, display_names)):
-        btns.append([InlineKeyboardButton(f"🏆 {display_lg} ({len(leagues_map[lg])})",
+    for i, lg in enumerate(league_keys):
+        btns.append([InlineKeyboardButton(f"🏆 {lg} ({len(leagues_map[lg])})",
                                           callback_data=f"fm_lg_{i}")])
     btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
     return InlineKeyboardMarkup(btns)
@@ -253,7 +252,7 @@ async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["fm_leagues"] = leagues_map
 
-    kb = await _build_league_kb(leagues_map)
+    kb = _build_league_kb(leagues_map)
     title = {
         "ru": f"Турниры — {sport_name}:", "az": f"Turnirler — {sport_name}:",
         "en": f"Tournaments — {sport_name}:", "tr": f"Turnuvalar — {sport_name}:",
@@ -303,7 +302,7 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t1     = m.get("team1Title", "?")
     t2     = m.get("team2Title", "?")
     mid    = m.get("id")
-    league = await normalize_tournament_ai(m.get("lineSubCategory", ""))
+    league = (m.get("lineSubCategory") or "").strip()
     dt_str = fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
 
     loading = {
@@ -361,7 +360,7 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("Ошибка."); return
         sport_name = sport_keys[idx]
         leagues_map = context.user_data.get("fm_leagues", {})
-        kb = await _build_league_kb(leagues_map)
+        kb = _build_league_kb(leagues_map)
         title = {
             "ru": f"Турниры — {sport_name}:", "az": f"Turnirler — {sport_name}:",
             "en": f"Tournaments — {sport_name}:", "tr": f"Turnuvalar — {sport_name}:",
