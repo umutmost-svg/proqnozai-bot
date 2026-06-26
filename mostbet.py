@@ -227,8 +227,8 @@ async def _mostbet_load_matches() -> list:
         return all_matches
 
 
-def _is_within_week(match_date_str: str) -> bool:
-    """Check if match is within next 7 days or live."""
+def _is_within_week(match_date_str: str, days: int = 7) -> bool:
+    """Check if match is within the next `days` days (default 7) or live."""
     if not match_date_str:
         return True  # unknown date - include
     try:
@@ -244,7 +244,7 @@ def _is_within_week(match_date_str: str) -> bool:
             return True
         now_utc = datetime.now(timezone.utc)
         delta = (dt - now_utc).total_seconds()
-        return -3600 <= delta <= 7 * 24 * 3600  # from 1hr ago to 7 days ahead
+        return -3600 <= delta <= days * 24 * 3600  # from 1hr ago to `days` ahead
     except Exception:
         return True  # parse error - include
 

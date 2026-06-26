@@ -58,6 +58,25 @@ _PRIORITY_LEAGUES = (
 _LEAGUE_LIMIT = 14
 _MATCH_LIMIT = 12
 
+# Time windows: regular leagues show matches up to a week out; pinned major
+# tournaments get a wider window so upcoming knockout rounds stay visible.
+_REGULAR_WINDOW_DAYS = 7
+_PRIORITY_WINDOW_DAYS = 14
+
+
+def _is_priority_league(name: str) -> bool:
+    n = (name or "").lower()
+    return any(kw in n for kw in _PRIORITY_LEAGUES)
+
+
+def _match_in_window(m: dict) -> bool:
+    """Live matches always show. Otherwise use a wider date window for matches
+    belonging to a pinned major tournament."""
+    if m.get("isLive"):
+        return True
+    days = _PRIORITY_WINDOW_DAYS if _is_priority_league(m.get("lineSubCategory", "")) else _REGULAR_WINDOW_DAYS
+    return _is_within_week(m.get("matchBeginAt", ""), days)
+
 
 def _league_rank(name: str) -> int:
     """Lower = higher priority. Pinned tournaments rank by their position in
@@ -193,7 +212,7 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(loading.get(lang, "⏳"))
 
     all_m = await _mostbet_load_matches()
-    week_m = [m for m in all_m if m.get("isLive") or _is_within_week(m.get("matchBeginAt", ""))]
+    week_m = [m for m in all_m if _match_in_window(m)]
 
     if not week_m:
         no_m = {
