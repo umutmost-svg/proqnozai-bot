@@ -43,6 +43,39 @@ def _loc(d: dict, lang: str) -> str:
     return d.get(lang, d["ru"])
 
 
+# Major tournaments pinned to the top of the league list regardless of match
+# count, so low-volume but high-interest events (World Cup, Euro, finals) are
+# never pushed off the truncated list by busy domestic divisions.
+_PRIORITY_LEAGUES = (
+    "world cup", "fifa", "чемпионат мира", "world championship",
+    "euro", "nations league", "champions league", "europa league",
+    "conference league", "copa america", "copa libertadores",
+    "afcon", "africa cup", "asian cup", "gold cup",
+    "olympic", "олимп",
+)
+
+# How many leagues / matches to show in the truncated keyboards.
+_LEAGUE_LIMIT = 14
+_MATCH_LIMIT = 12
+
+
+def _league_rank(name: str) -> int:
+    """Lower = higher priority. Pinned tournaments rank by their position in
+    _PRIORITY_LEAGUES; everything else shares the same lowest rank."""
+    n = name.lower()
+    for i, kw in enumerate(_PRIORITY_LEAGUES):
+        if kw in n:
+            return i
+    return len(_PRIORITY_LEAGUES)
+
+
+def _sorted_leagues(leagues_map: dict) -> list:
+    """Pinned major tournaments first, then by match count desc.
+    MUST be used identically wherever a league index is built or resolved,
+    or callback indices will point at the wrong league."""
+    return sorted(leagues_map, key=lambda l: (_league_rank(l), -len(leagues_map[l])))
+
+
 def _build_sport_kb(sports_map: dict) -> InlineKeyboardMarkup:
     """Top-level sport selector keyboard (sorted by match count)."""
     sport_keys = sorted(sports_map, key=lambda c: -len(sports_map[c]))
@@ -56,10 +89,10 @@ def _build_sport_kb(sports_map: dict) -> InlineKeyboardMarkup:
 
 async def _build_league_kb(leagues_map: dict) -> InlineKeyboardMarkup:
     """Tournament selector keyboard with AI-normalized names + back button."""
-    league_keys = sorted(leagues_map, key=lambda l: -len(leagues_map[l]))
-    display_names = await asyncio.gather(*[normalize_tournament_ai(lg) for lg in league_keys[:10]])
+    league_keys = _sorted_leagues(leagues_map)[:_LEAGUE_LIMIT]
+    display_names = await asyncio.gather(*[normalize_tournament_ai(lg) for lg in league_keys])
     btns = []
-    for i, (lg, display_lg) in enumerate(zip(league_keys[:10], display_names)):
+    for i, (lg, display_lg) in enumerate(zip(league_keys, display_names)):
         btns.append([InlineKeyboardButton(f"🏆 {display_lg} ({len(leagues_map[lg])})",
                                           callback_data=f"fm_lg_{i}")])
     btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
@@ -214,7 +247,7 @@ async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id; lang = db_lang(uid)
     idx = int(q.data.split("_")[2])
     leagues_map = context.user_data.get("fm_leagues", {})
-    league_keys = sorted(leagues_map, key=lambda l: -len(leagues_map[l]))
+    league_keys = _sorted_leagues(leagues_map)[:_LEAGUE_LIMIT]
     if idx >= len(league_keys):
         await q.edit_message_text("Ошибка."); return
 
@@ -225,7 +258,7 @@ async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fm_matches"] = matches
 
     btns = []
-    for i, m in enumerate(matches[:10]):
+    for i, m in enumerate(matches[:_MATCH_LIMIT]):
         t1 = m.get("team1Title", "?")[:18]
         t2 = m.get("team2Title", "?")[:18]
         prefix = "🔴 LIVE" if m.get("isLive") else fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
