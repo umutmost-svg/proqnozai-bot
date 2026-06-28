@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes
 from config import ADMIN_ID, MOSTBET_BASE, live_subs, blocked_until, mostbet_cache
 from db import db_set, db_stats, db_search, _one, _all
 from translations import sport_label, exp_label
-from mostbet import _mostbet_load_matches
+from mostbet import _mostbet_load_matches  # noqa: F401 (used in adm_cb)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ def admin_kb():
         [InlineKeyboardButton("🔴 Live подписки",       callback_data="adm_live")],
         [InlineKeyboardButton("🔧 Тест Mostbet API",    callback_data="adm_test_mostbet")],
         [InlineKeyboardButton("🎰 Дамп коэф. матча",   callback_data="adm_odds_dump")],
+        [InlineKeyboardButton("🗂 Дамп категорий/ЧМ",  callback_data="adm_cat_dump")],
     ])
 
 
@@ -300,6 +301,47 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             "🎰 ДАМП КОЭФФИЦИЕНТОВ\n\nОтправьте ID матча Mostbet (числовой).\n"
             "Можно найти в /testapi или через меню прогнозов.")
+
+    # ── Categories dump ───────────────────────────────────────────────────────
+    elif data == "adm_cat_dump":
+        await q.edit_message_text("⏳ Загружаю и анализирую матчи...")
+        try:
+            from collections import Counter
+            all_m = await _mostbet_load_matches()
+            if not all_m:
+                await q.edit_message_text("❌ Матчи не загрузились (пустой ответ).", reply_markup=back); return
+
+            cats = Counter((m.get("lineCategory") or "?").strip() for m in all_m)
+            subs = Counter((m.get("lineSubCategory") or "?").strip() for m in all_m)
+
+            # Search for World Cup-ish matches by subcategory OR team names
+            kw = ("world", "cup", "fifa", "mundial", "чемпионат мира", "кубок мира", "dünya")
+            wc = []
+            for m in all_m:
+                blob = " ".join([
+                    str(m.get("lineSubCategory") or ""), str(m.get("lineCategory") or ""),
+                    str(m.get("team1Title") or ""), str(m.get("team2Title") or ""),
+                ]).lower()
+                if any(k in blob for k in kw):
+                    wc.append(m)
+
+            lines = [f"📦 Всего матчей: {len(all_m)}\n",
+                     "🏷 КАТЕГОРИИ (lineCategory):"]
+            for c, n in cats.most_common(15):
+                lines.append(f"  {c}: {n}")
+
+            lines.append(f"\n🔎 Совпадений по ЧМ-словам: {len(wc)}")
+            for m in wc[:15]:
+                lines.append(
+                    f"  [{m.get('lineCategory')}] / {m.get('lineSubCategory')} | "
+                    f"{m.get('team1Title')} vs {m.get('team2Title')} | "
+                    f"{'LIVE' if m.get('isLive') else m.get('matchBeginAt','?')} | id={m.get('id')}")
+
+            msg = "\n".join(lines)
+            for i in range(0, len(msg), 3800):
+                await context.bot.send_message(chat_id=q.from_user.id, text=msg[i:i+3800])
+        except Exception as e:
+            await q.edit_message_text(f"❌ Ошибка: {e}", reply_markup=back)
 
     elif data == "adm_back":
         await q.edit_message_text("АДМИН ПАНЕЛЬ", reply_markup=admin_kb())
