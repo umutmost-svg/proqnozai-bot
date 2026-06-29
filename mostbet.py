@@ -172,7 +172,7 @@ async def _mostbet_load_matches() -> list:
 
         all_matches = []
         _LOAD_TIMEOUT = 300       # max seconds for the entire paginated fetch
-        _PAGE_LIMIT = 200         # matches per page (fewer pages → full coverage)
+        _PAGE_LIMIT = 100         # matches per page (API max is 100)
         _PAGE_SLEEP = 1.0         # pause between pages to avoid 429
         _MAX_429 = 6              # give up after this many consecutive rate-limits
         try:
