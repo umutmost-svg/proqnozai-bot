@@ -106,18 +106,26 @@ async def claude_forecast(uid: int, msg_content: list, sys_prompt: str, max_tok:
     # Full messages: previous turns (text-only) + current turn (may include images)
     messages = list(history) + [{"role": "user", "content": msg_content}]
 
+    # Extended thinking: the model reasons deeply (weighing form, H2H, injuries,
+    # odds value) before writing a concise answer. Budget is separate from the
+    # visible output, so the forecast stays short while the analysis gets deeper.
+    think_budget = 2500
     try:
         resp = await _create_with_retry(
             model="claude-opus-4-8",
-            max_tokens=max_tok,
+            max_tokens=max_tok + think_budget,
             system=sys_prompt,
             messages=messages,
+            thinking={"type": "enabled", "budget_tokens": think_budget},
         )
-        if not resp.content or not getattr(resp.content[0], "text", ""):
+        # With thinking enabled the response has thinking block(s) then a text
+        # block — pick the text, not content[0].
+        reply = next((b.text for b in (resp.content or [])
+                      if getattr(b, "type", "") == "text" and getattr(b, "text", "")), "")
+        if not reply:
             logger.error(f"claude_forecast empty response | uid={uid}")
             return tr(uid, "api_error")
-        reply = resp.content[0].text
-        logger.info(f"claude_forecast OK | uid={uid} tok={max_tok}")
+        logger.info(f"claude_forecast OK | uid={uid} tok={max_tok}+{think_budget} think")
 
         # Persist this turn as text-only so next call has context
         updated = list(history) + [

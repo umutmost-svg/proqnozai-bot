@@ -178,6 +178,17 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     }
     hint = extra_hints.get(lang, extra_hints["ru"]).get(exp, "")
     sys_prompt = tr(uid, "system_prompt") + hint
+    # Quality directive (English — followed regardless of output language).
+    sys_prompt += (
+        "\n\nANALYSIS PRIORITIES (think hard, output stays concise):\n"
+        "- Weigh injuries/suspensions heavily: key players out shift the prediction.\n"
+        "- Use H2H and recent form trend, not just averages.\n"
+        "- VALUE: compare your own win probability with the odds-implied probability "
+        "(1/odd). Recommend the bet only where YOUR probability clearly exceeds the "
+        "implied one; if nothing offers value, say the favourite is fairly priced.\n"
+        "- State confidence honestly; avoid overconfident percentages without support.\n"
+        "- Keep the visible answer in the required short format."
+    )
 
     if context.user_data.get("has_real_data"):
         data_note = {
