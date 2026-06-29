@@ -39,6 +39,7 @@ def admin_kb():
         [InlineKeyboardButton("🎰 Дамп коэф. матча",   callback_data="adm_odds_dump")],
         [InlineKeyboardButton("🗂 Дамп категорий/ЧМ",  callback_data="adm_cat_dump")],
         [InlineKeyboardButton("🛰 Probe URL",          callback_data="adm_probe")],
+        [InlineKeyboardButton("🧪 Тест данных матча",  callback_data="adm_data_test")],
     ])
 
 
@@ -367,6 +368,19 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await q.edit_message_text(f"❌ Ошибка: {e}", reply_markup=back)
 
+    # ── Test real-data fetch ──────────────────────────────────────────────────
+    elif data == "adm_data_test":
+        from config import APIFOOTBALL_KEY, FOOTBALL_KEY
+        context.user_data["adm_act"] = "data_test"
+        await q.edit_message_text(
+            "🧪 ТЕСТ ДАННЫХ МАТЧА\n\n"
+            f"APIFOOTBALL_KEY: {'✅ задан' if APIFOOTBALL_KEY else '❌ НЕ задан'}\n"
+            f"FOOTBALL_KEY: {'✅ задан' if FOOTBALL_KEY else '❌ НЕ задан'}\n\n"
+            "Отправьте две команды через дефис, напр.:\n"
+            "Germany - Paraguay\n\n"
+            "Бот покажет, что реально вернёт fetch_real_data "
+            "(реальные данные или оценка ИИ).")
+
     # ── Probe arbitrary URL (from whitelisted IP) ─────────────────────────────
     elif data == "adm_probe":
         context.user_data["adm_act"] = "probe"
@@ -428,6 +442,30 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Получателей: {len(uids)} чел.\n\n"
             f"Превью:\n{preview}",
             reply_markup=confirm_kb)
+
+    elif act == "data_test":
+        sep = "-" if "-" in text else ("—" if "—" in text else None)
+        if not sep:
+            await update.message.reply_text("❌ Формат: Команда1 - Команда2"); return
+        t1, _, t2 = text.partition(sep)
+        t1, t2 = t1.strip(), t2.strip()
+        if not t1 or not t2:
+            await update.message.reply_text("❌ Нужны обе команды."); return
+        await update.message.reply_text(f"⏳ Тяну данные для {t1} vs {t2}...")
+        try:
+            from football_api import fetch_real_data
+            res = await fetch_real_data(t1, t2)
+            if not res:
+                verdict = "❌ ПУСТО — ни реальных данных, ни оценки."
+            elif res.startswith("REAL MATCH DATA"):
+                verdict = "✅ РЕАЛЬНЫЕ ДАННЫЕ получены."
+            else:
+                verdict = "⚠️ Только ОЦЕНКА ИИ (реальные API ничего не вернули)."
+            out = f"{verdict}\n\n{res or '(пусто)'}"
+            for i in range(0, min(len(out), 7600), 3800):
+                await update.message.reply_text(out[i:i+3800])
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {e}")
 
     elif act == "probe":
         url = text.strip()
