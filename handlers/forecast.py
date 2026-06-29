@@ -202,19 +202,7 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
 
     db_save_history(uid, text, reply)
 
-    # Combine watch button + "open on site" link (lineUrl) into one keyboard.
-    rows = []
-    if watch_kb:
-        rows.extend(watch_kb.inline_keyboard)
-    line_url = context.user_data.get("pending_match_url")
-    if line_url:
-        open_lbl = {
-            "ru": "🔗 Открыть на сайте", "az": "🔗 Saytda aç", "en": "🔗 Open on site",
-            "tr": "🔗 Sitede aç", "kz": "🔗 Сайтта ашу", "uz": "🔗 Saytda ochish",
-            "ar": "🔗 افتح على الموقع",
-        }
-        rows.append([InlineKeyboardButton(_loc(open_lbl, lang), url=line_url)])
-    final_kb = InlineKeyboardMarkup(rows) if rows else None
+    final_kb = watch_kb
     await status_msg.edit_text(reply, reply_markup=final_kb, parse_mode="Markdown")
 
 
@@ -332,7 +320,6 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if country and country.lower() not in league.lower():
         league = f"{league} · {country}"
     dt_str = fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
-    context.user_data["pending_match_url"] = m.get("lineUrl") or ""
 
     loading = {
         "ru": "⏳ Загружаю коэффициенты...", "az": "⏳ Keflər yüklənir...",
@@ -493,7 +480,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["pending_text"] = ""
         context.user_data["parsed_teams"] = None
         context.user_data["has_real_data"] = False
-        context.user_data["pending_match_url"] = ""
         status_msg = await update.message.reply_text(_loc(_THINKING, lang))
         await _generate_forecast(uid, context, status_msg)
         return
