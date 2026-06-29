@@ -150,22 +150,6 @@ def _fuzzy_score(q_tokens: set, cand: str) -> float:
 
 # ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
 
-# Only these sports are loaded/shown. Matched as substrings against the match's
-# lineCategory (case-insensitive). Everything else is discarded on load.
-_ALLOWED_CATEGORY_KW = (
-    # Football
-    "football", "soccer", "футбол", "futbol",
-    # Combat sports / fights
-    "mma", "ufc", "boxing", "бокс", "бои", "fight", "единоборства",
-    "kickbox", "muay", "bellator",
-)
-
-
-def _is_allowed_category(category: str) -> bool:
-    c = (category or "").lower()
-    return any(kw in c for kw in _ALLOWED_CATEGORY_KW)
-
-
 async def _mostbet_load_matches() -> list:
     """Load all matches from Mostbet with caching (15 min TTL).
     Uses lock so only one concurrent request goes to Mostbet API."""
@@ -238,13 +222,10 @@ async def _mostbet_load_matches() -> list:
                         break
                     if not matches:
                         break
-                    # Advance pagination by the full page's last id BEFORE filtering,
-                    # so discarded sports don't break the lastId cursor.
                     last_id = matches[-1]["id"]
-                    kept = [m for m in matches if _is_allowed_category(m.get("lineCategory"))]
-                    all_matches.extend(kept)
-                    logger.info(f"Mostbet page {page}: {len(matches)} fetched, "
-                                f"{len(kept)} kept (football/fights), total: {len(all_matches)}")
+                    all_matches.extend(matches)
+                    logger.info(f"Mostbet page {page}: {len(matches)} matches "
+                                f"(total: {len(all_matches)})")
                     if len(matches) < _PAGE_LIMIT:
                         break
         except Exception as e:
