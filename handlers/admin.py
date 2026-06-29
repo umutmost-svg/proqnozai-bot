@@ -304,39 +304,62 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Categories dump ───────────────────────────────────────────────────────
     elif data == "adm_cat_dump":
-        await q.edit_message_text("⏳ Загружаю и анализирую матчи...")
+        await q.edit_message_text("⏳ Запрашиваю сырые данные Mostbet (несколько страниц)...")
         try:
+            import json as _json
             from collections import Counter
-            all_m = await _mostbet_load_matches()
-            if not all_m:
-                await q.edit_message_text("❌ Матчи не загрузились (пустой ответ).", reply_markup=back); return
+            from config import MOSTBET_BASE
 
-            cats = Counter((m.get("lineCategory") or "?").strip() for m in all_m)
-            subs = Counter((m.get("lineSubCategory") or "?").strip() for m in all_m)
+            # Direct UNFILTERED fetch so we see every sport the API actually returns.
+            raw = []
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as hc:
+                last_id = 0
+                for _ in range(8):  # up to 8 pages = 800 matches sample
+                    r = await hc.get(
+                        f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/list",
+                        headers={"Accept": "application/json", "User-Agent": "ProqnozAI/1.0"},
+                        params={"lastId": last_id, "locale": "en", "limit": 100})
+                    if r.status_code != 200:
+                        raw = raw or f"HTTP {r.status_code}"
+                        break
+                    page = r.json().get("lineMatches", [])
+                    if not page:
+                        break
+                    raw.extend(page)
+                    if len(page) < 100:
+                        break
+                    last_id = page[-1]["id"]
+                    await asyncio.sleep(0.5)
 
-            # Search for World Cup-ish matches by subcategory OR team names
+            if isinstance(raw, str):
+                await q.edit_message_text(f"❌ Ошибка API: {raw}", reply_markup=back); return
+            if not raw:
+                await q.edit_message_text("❌ Пустой ответ API.", reply_markup=back); return
+
+            cats = Counter((m.get("lineCategory") or "?").strip() for m in raw)
             kw = ("world", "cup", "fifa", "mundial", "чемпионат мира", "кубок мира", "dünya")
-            wc = []
-            for m in all_m:
-                blob = " ".join([
-                    str(m.get("lineSubCategory") or ""), str(m.get("lineCategory") or ""),
-                    str(m.get("team1Title") or ""), str(m.get("team2Title") or ""),
-                ]).lower()
-                if any(k in blob for k in kw):
-                    wc.append(m)
+            wc = [m for m in raw if any(
+                k in " ".join([str(m.get("lineSubCategory") or ""), str(m.get("lineCategory") or ""),
+                               str(m.get("team1Title") or ""), str(m.get("team2Title") or "")]).lower()
+                for k in kw)]
 
-            lines = [f"📦 Всего матчей: {len(all_m)}\n",
-                     "🏷 КАТЕГОРИИ (lineCategory):"]
-            for c, n in cats.most_common(15):
+            # 1. Raw fields of the first match — what the API actually sends
+            sample = raw[0]
+            sample_dump = _json.dumps(sample, ensure_ascii=False, indent=1)[:2500]
+            await context.bot.send_message(
+                chat_id=q.from_user.id,
+                text=f"🧬 СЫРЫЕ ПОЛЯ первого матча (выборка {len(raw)}):\n\n{sample_dump}")
+
+            # 2. Categories + WC search
+            lines = [f"🏷 КАТЕГОРИИ (из {len(raw)} матчей):"]
+            for c, n in cats.most_common(25):
                 lines.append(f"  {c}: {n}")
-
             lines.append(f"\n🔎 Совпадений по ЧМ-словам: {len(wc)}")
             for m in wc[:15]:
                 lines.append(
                     f"  [{m.get('lineCategory')}] / {m.get('lineSubCategory')} | "
                     f"{m.get('team1Title')} vs {m.get('team2Title')} | "
                     f"{'LIVE' if m.get('isLive') else m.get('matchBeginAt','?')} | id={m.get('id')}")
-
             msg = "\n".join(lines)
             for i in range(0, len(msg), 3800):
                 await context.bot.send_message(chat_id=q.from_user.id, text=msg[i:i+3800])
