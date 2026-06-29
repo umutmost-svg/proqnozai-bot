@@ -171,35 +171,47 @@ async def _mostbet_load_matches() -> list:
                 return data
 
         all_matches = []
-        _LOAD_TIMEOUT = 120  # max seconds for the entire paginated fetch
+        _LOAD_TIMEOUT = 300       # max seconds for the entire paginated fetch
+        _PAGE_LIMIT = 200         # matches per page (fewer pages → full coverage)
+        _PAGE_SLEEP = 1.0         # pause between pages to avoid 429
+        _MAX_429 = 6              # give up after this many consecutive rate-limits
         try:
             deadline = asyncio.get_event_loop().time() + _LOAD_TIMEOUT
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as h:
                 last_id = 0
                 page = 0
+                rate_hits = 0
                 while True:
                     if asyncio.get_event_loop().time() > deadline:
-                        logger.warning("Mostbet load deadline reached — stopping pagination")
+                        logger.warning(f"Mostbet load deadline reached at page {page} "
+                                       f"({len(all_matches)} matches so far) — stopping")
                         break
                     if page > 0:
-                        await asyncio.sleep(2.0)
+                        await asyncio.sleep(_PAGE_SLEEP)
                     page += 1
                     r = await h.get(
                         f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/list",
                         headers={"Accept": "application/json", "User-Agent": "ProqnozAI/1.0"},
-                        params={"lastId": last_id, "locale": "en", "limit": 100}
+                        params={"lastId": last_id, "locale": "en", "limit": _PAGE_LIMIT}
                     )
                     if r.status_code == 429:
-                        # Honour Retry-After if present, otherwise fall back to 30s
-                        retry_after = int(r.headers.get("Retry-After", 30))
-                        retry_after = min(retry_after, 60)  # cap at 60s
-                        logger.warning(f"Mostbet 429 on page {page} — waiting {retry_after}s")
-                        if cache_key in mostbet_cache:
+                        rate_hits += 1
+                        retry_after = min(int(r.headers.get("Retry-After", 15)), 30)
+                        logger.warning(f"Mostbet 429 on page {page} (hit {rate_hits}/{_MAX_429}) "
+                                       f"— waiting {retry_after}s, kept {len(all_matches)} so far")
+                        # Don't throw away fresh progress: only bail to stale cache if
+                        # we have collected nothing yet AND keep hitting the limit.
+                        if not all_matches and rate_hits >= _MAX_429 and cache_key in mostbet_cache:
                             _, stale = mostbet_cache[cache_key]
                             logger.info(f"Returning stale cache: {len(stale)} matches")
                             return stale
+                        if rate_hits >= _MAX_429:
+                            logger.warning("Mostbet 429 limit reached — stopping with partial data")
+                            break
+                        page -= 1  # retry the same page
                         await asyncio.sleep(retry_after)
                         continue
+                    rate_hits = 0
                     if r.status_code != 200:
                         logger.error(f"Mostbet list error: {r.status_code} | {r.text[:100]}")
                         break
@@ -212,12 +224,12 @@ async def _mostbet_load_matches() -> list:
                         break
                     all_matches.extend(matches)
                     logger.info(f"Mostbet loaded page {page}: {len(matches)} matches (total: {len(all_matches)})")
-                    if len(matches) < 100:
+                    if len(matches) < _PAGE_LIMIT:
                         break
                     last_id = matches[-1]["id"]
         except Exception as e:
             logger.error(f"_mostbet_load_matches: {e}")
-            if cache_key in mostbet_cache:
+            if not all_matches and cache_key in mostbet_cache:
                 _, stale = mostbet_cache[cache_key]
                 return stale
 
