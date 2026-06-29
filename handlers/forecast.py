@@ -179,15 +179,21 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     hint = extra_hints.get(lang, extra_hints["ru"]).get(exp, "")
     sys_prompt = tr(uid, "system_prompt") + hint
     # Quality directive (English — followed regardless of output language).
+    # Overrides the base "12 lines max" rule: produce a richer, well-structured
+    # analysis using the real data we now provide. Write in the user's language.
     sys_prompt += (
-        "\n\nANALYSIS PRIORITIES (think hard, output stays concise):\n"
-        "- Weigh injuries/suspensions heavily: key players out shift the prediction.\n"
-        "- Use H2H and recent form trend, not just averages.\n"
-        "- VALUE: compare your own win probability with the odds-implied probability "
-        "(1/odd). Recommend the bet only where YOUR probability clearly exceeds the "
-        "implied one; if nothing offers value, say the favourite is fairly priced.\n"
-        "- State confidence honestly; avoid overconfident percentages without support.\n"
-        "- Keep the visible answer in the required short format."
+        "\n\nIMPORTANT — extend the format above with these EXTRA sections "
+        "(in the user's language, keep emojis, no markdown except the bet line):\n"
+        "🔑 Key factor: 1–2 sentences naming the single biggest factor "
+        "(injuries, form streak, H2H, motivation).\n"
+        "🩹 Injuries/absences: list key missing players if provided in the data; "
+        "otherwise write 'no significant absences'.\n"
+        "📈 Form & H2H: one line each, based on the REAL data (recent results, "
+        "avg total goals per match, head-to-head trend).\n"
+        "💎 Value verdict: compare your win probability with the odds-implied one "
+        "(1/odd). Say clearly whether the recommended bet has value or the price is fair.\n"
+        "\nThink it through carefully before writing. Be specific and grounded in the "
+        "provided data — never vague. Aim for a useful, readable analysis (~15-20 lines)."
     )
 
     if context.user_data.get("has_real_data"):
@@ -228,7 +234,7 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
                 msg = T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"])
                 await status_msg.edit_text(msg); return
 
-    reply = await claude_forecast(uid, msg_content, sys_prompt, 800)
+    reply = await claude_forecast(uid, msg_content, sys_prompt, 1100)
     logger.info(f"FORECAST OK | uid={uid}")
 
     watch_kb = None
