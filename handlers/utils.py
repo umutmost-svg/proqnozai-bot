@@ -63,9 +63,9 @@ def _sport_emoji(cat: str) -> str:
 
 # All match times are shown in Baku time (UTC+4) for every user.
 BAKU_OFFSET = 4
-# Timezone Mostbet returns its "DD.MM.YYYY HH:MM" times in. If a match shows an
-# hour off, change this single value (e.g. 3 = Moscow, 0 = UTC).
-MOSTBET_SRC_TZ = 4
+# Mostbet returns its "DD.MM.YYYY HH:MM" times in Moscow time (UTC+3); we shift
+# +1h to Baku (UTC+4). Change this if the source zone ever changes.
+MOSTBET_SRC_TZ = 3
 
 
 def _fmt_dt(dt_raw: str, tz_offset: int = BAKU_OFFSET) -> str:
