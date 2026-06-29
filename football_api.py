@@ -111,8 +111,41 @@ async def _api_get(h: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response |
     return None
 
 
+def _fixture_lines(fixtures: list) -> list[str]:
+    return [
+        f"{f['fixture']['date'][:10]}: "
+        f"{f['teams']['home']['name']} "
+        f"{f['goals']['home']}–{f['goals']['away']} "
+        f"{f['teams']['away']['name']}"
+        for f in fixtures
+    ]
+
+
+def _finished_recent(fixtures: list, limit: int = 5) -> list:
+    """Finished fixtures, most recent first, capped at `limit`."""
+    ft = [f for f in fixtures if f["fixture"]["status"]["short"] in ("FT", "AET", "PEN")]
+    ft.sort(key=lambda f: f["fixture"]["date"], reverse=True)
+    return ft[:limit]
+
+
+async def _team_recent(h, hdrs, tid: int) -> list:
+    """Recent finished fixtures for a team. The free plan blocks the `last`
+    parameter, so we query by season (current, then previous year) and trim."""
+    from datetime import date as _date
+    yr = _date.today().year
+    for season in (yr, yr - 1):
+        r = await _api_get(h, "https://v3.football.api-sports.io/fixtures",
+            headers=hdrs, params={"team": tid, "season": season})
+        if not r or r.status_code != 200:
+            continue
+        recent = _finished_recent(r.json().get("response", []))
+        if recent:
+            return recent
+    return []
+
+
 async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
-    """Fetch last 5 results + H2H from api-sports.io (football only, 100 req/day free)."""
+    """Fetch last-5 results + H2H + injuries from api-sports.io (football only)."""
     parts = []
     if not APIFOOTBALL_KEY:
         return parts
@@ -133,42 +166,26 @@ async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
                 if slot == 1: t1_id = tid
                 else:         t2_id = tid
 
-                r2 = await _api_get(h, "https://v3.football.api-sports.io/fixtures",
-                    headers=hdrs, params={"team": tid, "last": 5, "status": "FT"})
-                if r2 and r2.status_code == 200:
-                    fixtures = r2.json().get("response", [])
-                    if fixtures:
-                        lines = [
-                            f"{f['fixture']['date'][:10]}: "
-                            f"{f['teams']['home']['name']} "
-                            f"{f['goals']['home']}–{f['goals']['away']} "
-                            f"{f['teams']['away']['name']}"
-                            for f in fixtures
-                        ]
-                        avg_str = _avg_goals_str(fixtures, tid, tname)
-                        block = f"{tname} last 5:\n" + "\n".join(lines)
-                        if avg_str:
-                            block += f"\n{avg_str}"
-                        parts.append(block)
+                fixtures = await _team_recent(h, hdrs, tid)
+                if fixtures:
+                    avg_str = _avg_goals_str(fixtures, tid, tname)
+                    block = f"{tname} last {len(fixtures)}:\n" + "\n".join(_fixture_lines(fixtures))
+                    if avg_str:
+                        block += f"\n{avg_str}"
+                    parts.append(block)
 
                 inj = await _fetch_injuries(h, hdrs, tid, tname)
                 if inj:
                     parts.append(inj)
 
             if t1_id and t2_id:
+                # H2H also can't use `last` on the free plan — fetch all and trim.
                 r3 = await _api_get(h, "https://v3.football.api-sports.io/fixtures/headtohead",
-                    headers=hdrs, params={"h2h": f"{t1_id}-{t2_id}", "last": 5})
+                    headers=hdrs, params={"h2h": f"{t1_id}-{t2_id}"})
                 if r3 and r3.status_code == 200:
-                    h2h = r3.json().get("response", [])
+                    h2h = _finished_recent(r3.json().get("response", []))
                     if h2h:
-                        lines = [
-                            f"{f['fixture']['date'][:10]}: "
-                            f"{f['teams']['home']['name']} "
-                            f"{f['goals']['home']}–{f['goals']['away']} "
-                            f"{f['teams']['away']['name']}"
-                            for f in h2h
-                        ]
-                        parts.append("H2H last 5:\n" + "\n".join(lines))
+                        parts.append("H2H last 5:\n" + "\n".join(_fixture_lines(h2h)))
     except Exception as e:
         logger.error(f"_fetch_apifootball: {e}")
     return parts

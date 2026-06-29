@@ -484,15 +484,13 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     tid = tm.get("id")
                     diag.append(f"→ {tm.get('name')} (id={tid}, "
                                 f"national={tm.get('national')})")
-                    # Probe /fixtures both with and without the status filter.
-                    for label, prm in [
-                        ("last=5", {"team": tid, "last": 5}),
-                        ("last=5&status=FT", {"team": tid, "last": 5, "status": "FT"}),
-                    ]:
+                    # Free plan blocks `last`; probe by season to see which
+                    # seasons this plan can actually access.
+                    for season in (2026, 2025, 2023):
                         rf = await _h.get("https://v3.football.api-sports.io/fixtures",
-                                          headers=hd, params=prm)
+                                          headers=hd, params={"team": tid, "season": season})
                         jf = rf.json() if rf.status_code == 200 else {}
-                        msg = f"/fixtures {label}: HTTP {rf.status_code}, найдено {jf.get('results', 0)}"
+                        msg = f"/fixtures season={season}: HTTP {rf.status_code}, найдено {jf.get('results', 0)}"
                         if jf.get("errors"):
                             msg += f" | errors: {jf.get('errors')}"
                         diag.append(msg)
