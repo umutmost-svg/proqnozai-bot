@@ -108,24 +108,33 @@ async def claude_forecast(uid: int, msg_content: list, sys_prompt: str, max_tok:
 
     # Extended thinking: the model reasons deeply (weighing form, H2H, injuries,
     # odds value) before writing a concise answer. Budget is separate from the
-    # visible output, so the forecast stays short while the analysis gets deeper.
+    # visible output. If the gateway rejects thinking, fall back to a plain call
+    # so forecasts never break.
     think_budget = 2500
     try:
-        resp = await _create_with_retry(
-            model="claude-opus-4-8",
-            max_tokens=max_tok + think_budget,
-            system=sys_prompt,
-            messages=messages,
-            thinking={"type": "enabled", "budget_tokens": think_budget},
-        )
-        # With thinking enabled the response has thinking block(s) then a text
-        # block — pick the text, not content[0].
+        try:
+            resp = await _create_with_retry(
+                model="claude-opus-4-8",
+                max_tokens=max_tok + think_budget,
+                system=sys_prompt,
+                messages=messages,
+                thinking={"type": "enabled", "budget_tokens": think_budget},
+            )
+        except (anthropic.BadRequestError, TypeError) as e:
+            logger.warning(f"thinking unavailable, falling back to plain call: {e}")
+            resp = await _create_with_retry(
+                model="claude-opus-4-8",
+                max_tokens=max_tok,
+                system=sys_prompt,
+                messages=messages,
+            )
+        # Pick the text block (with thinking, content[0] is a thinking block).
         reply = next((b.text for b in (resp.content or [])
                       if getattr(b, "type", "") == "text" and getattr(b, "text", "")), "")
         if not reply:
             logger.error(f"claude_forecast empty response | uid={uid}")
             return tr(uid, "api_error")
-        logger.info(f"claude_forecast OK | uid={uid} tok={max_tok}+{think_budget} think")
+        logger.info(f"claude_forecast OK | uid={uid}")
 
         # Persist this turn as text-only so next call has context
         updated = list(history) + [
