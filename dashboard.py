@@ -602,12 +602,12 @@ textarea{min-height:160px;resize:vertical;}
     <p class="sub">Отправить сообщение сегменту пользователей через Telegram-бота</p>
 
     {% if result %}
-    <div class="alert alert-{{ 'success' if result.ok > 0 else 'error' }}">
-      {% if result.ok > 0 %}
-      ✅ Рассылка завершена: доставлено <strong>{{ result.ok }}</strong> из {{ result.total }},
-      не доставлено {{ result.fail }}.
+    <div class="alert alert-{{ 'success' if result.started > 0 else 'error' }}">
+      {% if result.started > 0 %}
+      🚀 Рассылка запущена для <strong>{{ result.started }}</strong> чел.
+      Отправка идёт в фоне (~20 сообщений/сек). Прогресс можно отслеживать в логах бота.
       {% else %}
-      ❌ Рассылка не удалась: {{ result.error or 'неизвестная ошибка' }}
+      ❌ Не удалось запустить: {{ result.error or 'неизвестная ошибка' }}
       {% endif %}
     </div>
     {% endif %}
@@ -689,22 +689,23 @@ def broadcast():
         prefill = text
 
         if not text:
-            result = {"ok": 0, "fail": 0, "total": 0, "error": "Пустой текст"}
+            result = {"started": 0, "error": "Пустой текст"}
         else:
             try:
                 resp = httpx.post(
                     BROADCAST_URL,
                     json={"token": STATS_TOKEN, "text": text, "segment": segment},
-                    timeout=190,
+                    timeout=15,
                 )
                 data = resp.json()
                 if resp.status_code == 200:
-                    result = data
+                    result = data  # {"started": N}
+                elif resp.status_code == 409:
+                    result = {"started": 0, "error": "Рассылка уже выполняется, дождитесь её окончания."}
                 else:
-                    result = {"ok": 0, "fail": 0, "total": 0,
-                              "error": data.get("detail", f"HTTP {resp.status_code}")}
+                    result = {"started": 0, "error": data.get("detail", f"HTTP {resp.status_code}")}
             except Exception as e:
-                result = {"ok": 0, "fail": 0, "total": 0, "error": str(e)}
+                result = {"started": 0, "error": str(e)}
 
     return render_template_string(BROADCAST_TEMPLATE, result=result, prefill=prefill)
 

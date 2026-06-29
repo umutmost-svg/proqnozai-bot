@@ -17,6 +17,9 @@ STATS_PORT  = int(os.environ.get("STATS_PORT", "8888"))
 _bot_app  = None
 _bot_loop = None
 
+# Progress of the current/last broadcast, read via GET /broadcast/status.
+_broadcast_state = {"running": False, "ok": 0, "fail": 0, "total": 0, "done": False}
+
 
 def set_bot_app(app, loop):
     global _bot_app, _bot_loop
@@ -92,6 +95,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, b"ok")
             return
 
+        if parsed.path == "/broadcast/status":
+            if STATS_TOKEN and token != STATS_TOKEN:
+                self._send(401, b"unauthorized"); return
+            self._send(200, json.dumps(_broadcast_state).encode(), "application/json")
+            return
+
         if parsed.path != "/stats":
             self._send(404, b"not found")
             return
@@ -130,26 +139,26 @@ class _Handler(BaseHTTPRequestHandler):
         if not _bot_app or not _bot_loop:
             self._send(503, b"bot not ready"); return
 
+        if _broadcast_state["running"]:
+            self._send(409, json.dumps(_broadcast_state).encode(), "application/json"); return
+
         uids = _uids_for_seg(segment)
 
         async def _send_all():
-            ok = fail = 0
+            _broadcast_state.update(running=True, ok=0, fail=0, total=len(uids), done=False)
             for uid in uids:
                 try:
                     await _bot_app.bot.send_message(chat_id=uid, text=text)
-                    ok += 1
+                    _broadcast_state["ok"] += 1
                 except Exception:
-                    fail += 1
+                    _broadcast_state["fail"] += 1
                 await asyncio.sleep(0.05)
-            return ok, fail
+            _broadcast_state.update(running=False, done=True)
 
-        try:
-            future = asyncio.run_coroutine_threadsafe(_send_all(), _bot_loop)
-            ok, fail = future.result(timeout=180)
-        except Exception as e:
-            self._send(500, str(e).encode()); return
-
-        result = json.dumps({"ok": ok, "fail": fail, "total": len(uids)})
+        # Fire-and-forget: schedule on the bot loop and return immediately so the
+        # dashboard never waits/times out. Progress is read via GET /broadcast/status.
+        asyncio.run_coroutine_threadsafe(_send_all(), _bot_loop)
+        result = json.dumps({"started": len(uids)})
         self._send(200, result.encode(), "application/json")
 
     def _send(self, code, body, ct="text/plain"):

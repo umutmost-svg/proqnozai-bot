@@ -1,14 +1,17 @@
 import asyncio
 import os
 import logging
+from logging.handlers import RotatingFileHandler
 from collections import defaultdict, deque
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
+# Rotating handlers cap disk usage: bot.log 5MB×3, suspicious.log 2MB×3.
+_bot_fh = RotatingFileHandler("bot.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler("bot.log", encoding="utf-8"), logging.StreamHandler()])
+    handlers=[_bot_fh, logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 sus = logging.getLogger("suspicious")
-_sh = logging.FileHandler("suspicious.log", encoding="utf-8")
+_sh = RotatingFileHandler("suspicious.log", maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8")
 _sh.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
 sus.addHandler(_sh); sus.setLevel(logging.WARNING)
 
