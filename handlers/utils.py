@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from db import db_lang, db_get_tz
+from db import db_lang
 from translations import T
 
 
@@ -61,38 +61,39 @@ def _sport_emoji(cat: str) -> str:
     return next((v for k, v in SPORT_EMOJI.items() if k in cl), "🏆")
 
 
-def _fmt_dt(dt_raw: str, tz_offset: int = 0) -> str:
-    """Format match datetime string.
+# All match times are shown in Baku time (UTC+4) for every user.
+BAKU_OFFSET = 4
+# Timezone Mostbet returns its "DD.MM.YYYY HH:MM" times in. If a match shows an
+# hour off, change this single value (e.g. 3 = Moscow, 0 = UTC).
+MOSTBET_SRC_TZ = 4
 
-    ISO format (T or Z) → assumed UTC → apply tz_offset (football-data.org, api-sports).
-    DD.MM.YYYY format (Mostbet) → shown as-is, no conversion (Mostbet returns local time).
-    YYYY-MM-DD HH:MM format → assumed UTC → apply tz_offset.
+
+def _fmt_dt(dt_raw: str, tz_offset: int = BAKU_OFFSET) -> str:
+    """Format a match datetime string into Baku time (UTC+4).
+
+    ISO (T/Z) and "YYYY-MM-DD HH:MM" → assumed UTC → shifted to Baku.
+    "DD.MM.YYYY HH:MM" (Mostbet) → assumed MOSTBET_SRC_TZ → shifted to Baku.
     """
     if not dt_raw or len(dt_raw) < 16:
         return ""
     try:
         ds = dt_raw.strip()
         if "T" in ds:
-            # ISO format from football APIs — always UTC
             dt = datetime.fromisoformat(ds.replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             else:
                 dt = dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
-            dt_local = dt + timedelta(hours=tz_offset)
-            sign = "+" if tz_offset >= 0 else ""
-            return dt_local.strftime("%d.%m %H:%M") + f" (UTC{sign}{tz_offset})"
+            src_offset = 0  # UTC
         elif "." in ds:
-            # Mostbet format: "DD.MM.YYYY HH:MM:SS" — already in local time, show as-is
-            dt = datetime.strptime(ds[:16], "%d.%m.%Y %H:%M")
-            return dt.strftime("%d.%m %H:%M")
+            dt = datetime.strptime(ds[:16], "%d.%m.%Y %H:%M").replace(tzinfo=timezone.utc)
+            src_offset = MOSTBET_SRC_TZ
         else:
-            # "YYYY-MM-DD HH:MM:SS" — assumed UTC, apply user offset
-            dt = datetime.strptime(ds[:16], "%Y-%m-%d %H:%M")
-            dt = dt.replace(tzinfo=timezone.utc)
-            dt_local = dt + timedelta(hours=tz_offset)
-            sign = "+" if tz_offset >= 0 else ""
-            return dt_local.strftime("%d.%m %H:%M") + f" (UTC{sign}{tz_offset})"
+            dt = datetime.strptime(ds[:16], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            src_offset = 0  # UTC
+        # Convert from the source zone to Baku.
+        dt_baku = dt + timedelta(hours=tz_offset - src_offset)
+        return dt_baku.strftime("%d.%m %H:%M") + " (Bakı)"
     except Exception:
         try:
             return dt_raw[8:10] + "." + dt_raw[5:7] + " " + dt_raw[11:16]
@@ -101,4 +102,5 @@ def _fmt_dt(dt_raw: str, tz_offset: int = 0) -> str:
 
 
 def fmt_dt_for_user(dt_raw: str, uid: int) -> str:
-    return _fmt_dt(dt_raw, db_get_tz(uid))
+    # Always Baku time, regardless of the user's language/region.
+    return _fmt_dt(dt_raw, BAKU_OFFSET)
