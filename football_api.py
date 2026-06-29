@@ -38,7 +38,7 @@ async def _normalize_names(t1: str, t2: str) -> tuple[str, str]:
 
 
 def _avg_goals_str(fixtures: list, team_id: int, team_name: str) -> str:
-    """Calculate avg goals scored/conceded from last N fixtures for a team."""
+    """Calculate avg goals scored/conceded/total from last N fixtures for a team."""
     scored = []
     conceded = []
     for f in fixtures:
@@ -52,7 +52,38 @@ def _avg_goals_str(fixtures: list, team_id: int, team_name: str) -> str:
     n = len(scored)
     avg_s = sum(scored) / n
     avg_c = sum(conceded) / n
-    return f"Avg goals scored: {avg_s:.1f} | conceded: {avg_c:.1f} (last {n})"
+    avg_total = avg_s + avg_c
+    return (f"Avg goals scored: {avg_s:.1f} | conceded: {avg_c:.1f} | "
+            f"total per match: {avg_total:.1f} (last {n})")
+
+
+async def _fetch_injuries(h, hdrs, team_id: int, team_name: str) -> str:
+    """Current-season injuries/suspensions for a team (api-sports /injuries)."""
+    from datetime import date as _date
+    year = _date.today().year
+    for season in (year, year - 1):  # cover split-year seasons
+        r = await _api_get(h, "https://v3.football.api-sports.io/injuries",
+            headers=hdrs, params={"team": team_id, "season": season})
+        if not r or r.status_code != 200:
+            continue
+        rows = r.json().get("response", [])
+        if not rows:
+            continue
+        # Most recent unique players (latest fixtures come last in the feed).
+        seen = {}
+        for it in rows:
+            p = (it.get("player") or {})
+            name = p.get("name")
+            if not name:
+                continue
+            reason = p.get("reason") or p.get("type") or "—"
+            seen[name] = reason  # later entries overwrite → keep most recent
+        if not seen:
+            continue
+        players = list(seen.items())[-8:]
+        lines = [f"  - {nm}: {rs}" for nm, rs in players]
+        return f"{team_name} injuries/out ({len(seen)}):\n" + "\n".join(lines)
+    return ""
 
 
 async def _api_get(h: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response | None:
@@ -119,6 +150,10 @@ async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
                         if avg_str:
                             block += f"\n{avg_str}"
                         parts.append(block)
+
+                inj = await _fetch_injuries(h, hdrs, tid, tname)
+                if inj:
+                    parts.append(inj)
 
             if t1_id and t2_id:
                 r3 = await _api_get(h, "https://v3.football.api-sports.io/fixtures/headtohead",
