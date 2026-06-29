@@ -365,6 +365,10 @@ async def mostbet_get_odds(line_id: int) -> dict:
                     break
 
         if outcomes:
+            # Handicap lines collected as {abs_value: {"w1": (val, odd), "w2": (val, odd)}}
+            # so the W1/W2 pair is always read from the SAME line.
+            handicaps: dict = {}
+
             for o in outcomes:
                 title = (o.get("outcomeTitle") or "").lower().strip()
                 group = (o.get("groupTitle") or "").lower().strip()
@@ -373,8 +377,23 @@ async def mostbet_get_odds(line_id: int) -> dict:
                 except Exception:
                     continue
 
-                # ── 1X2 ──────────────────────────────────────────────────────
-                if any(k in group for k in ("winner", "match result", "1x2", "result", "match winner")):
+                # Half-time markets must be detected first so the generic "result"
+                # / "1x2" keywords below don't swallow them into full-time fields.
+                is_half = any(k in group for k in ("1st half", "first half", "halftime",
+                                                   "half time", "ht ", "1st period"))
+
+                # ── 1st-half 1X2 ──────────────────────────────────────────────
+                if is_half and any(k in group for k in ("result", "1x2", "winner", "1x 2")):
+                    if title in ("1", "w1", "home") or "(1)" in title:
+                        result["h1_w1"] = odd_f
+                    elif title in ("x", "draw"):
+                        result["h1_x"] = odd_f
+                    elif title in ("2", "w2", "away") or "(2)" in title:
+                        result["h1_w2"] = odd_f
+
+                # ── Full-time 1X2 ─────────────────────────────────────────────
+                elif (not is_half) and any(k in group for k in
+                                           ("winner", "match result", "1x2", "result", "match winner")):
                     if title in ("1", "w1", "home") or "(1)" in title:
                         result["w1"] = odd_f
                     elif title in ("x", "draw", "tie"):
@@ -399,45 +418,35 @@ async def mostbet_get_odds(line_id: int) -> dict:
                         result["dnb_w2"] = odd_f
 
                 # ── Handicap ──────────────────────────────────────────────────
-                elif any(k in group for k in ("handicap", "asian handicap", "european handicap")):
-                    # Try to capture a non-zero handicap line
+                elif (not is_half) and any(k in group for k in
+                                           ("handicap", "asian handicap", "european handicap")):
                     m = _re.search(r'\(([+-]?\d+\.?\d*)\)', title)
                     if m:
                         val = float(m.group(1))
-                        if val != 0 and (result["hcp_val"] is None or abs(val) < abs(result["hcp_val"])):
-                            # Store the smallest absolute handicap line (most balanced)
+                        if val != 0:
+                            slot = handicaps.setdefault(abs(val), {})
                             if title.startswith("1") or "home" in title or "w1" in title:
-                                result["hcp_w1"] = odd_f
-                                result["hcp_val"] = val
+                                slot["w1"] = (val, odd_f)
                             elif title.startswith("2") or "away" in title or "w2" in title:
-                                result["hcp_w2"] = odd_f
+                                slot["w2"] = (val, odd_f)
 
                 # ── Totals ────────────────────────────────────────────────────
                 elif any(k in group for k in ("total", "goals", "total goals", "over/under")):
-                    is_h1 = any(k in group for k in ("1st", "first half", "halftime", "half time", "ht"))
-                    is_over = any(k in title for k in ("over", "more", "+", "больше"))
-                    is_under = any(k in title for k in ("under", "less", "-", "меньше"))
+                    is_over = any(k in title for k in ("over", "more", "больше")) or "(+)" in title
+                    is_under = any(k in title for k in ("under", "less", "меньше")) or "(-)" in title
                     for line, over_key, under_key in [
-                        ("0.5",  "h1_over05" if is_h1 else None, "h1_under05" if is_h1 else None),
-                        ("1.5",  "h1_over15" if is_h1 else "over15", "h1_under15" if is_h1 else "under15"),
-                        ("2.5",  None if is_h1 else "over25", None if is_h1 else "under25"),
-                        ("3.5",  None if is_h1 else "over35", None if is_h1 else "under35"),
+                        ("0.5",  "h1_over05" if is_half else None, "h1_under05" if is_half else None),
+                        ("1.5",  "h1_over15" if is_half else "over15", "h1_under15" if is_half else "under15"),
+                        ("2.5",  None if is_half else "over25", None if is_half else "under25"),
+                        ("3.5",  None if is_half else "over35", None if is_half else "under35"),
                     ]:
-                        if line in title:
+                        # Match the line as a whole token, so "0.5" doesn't match "10.5".
+                        if _re.search(rf'(?<!\d){_re.escape(line)}', title):
                             if is_over and over_key:
                                 result[over_key] = odd_f
                             elif is_under and under_key:
                                 result[under_key] = odd_f
                             break
-
-                # ── 1st half 1X2 ──────────────────────────────────────────────
-                elif any(k in group for k in ("1st half", "first half", "halftime", "half time", "ht result")):
-                    if title in ("1", "w1", "home") or "(1)" in title:
-                        result["h1_w1"] = odd_f
-                    elif title in ("x", "draw"):
-                        result["h1_x"] = odd_f
-                    elif title in ("2", "w2", "away") or "(2)" in title:
-                        result["h1_w2"] = odd_f
 
                 # ── BTTS ──────────────────────────────────────────────────────
                 elif any(k in group for k in ("both", "btts", "gg", "обе", "goals both")):
@@ -445,6 +454,18 @@ async def mostbet_get_odds(line_id: int) -> dict:
                         result["btts_yes"] = odd_f
                     elif any(k in title for k in ("no", "нет", "ng")):
                         result["btts_no"] = odd_f
+
+            # Resolve handicap: pick the most balanced line (smallest |value|) that
+            # has BOTH sides, falling back to the smallest line with at least W1.
+            if handicaps:
+                both = {v: s for v, s in handicaps.items() if "w1" in s and "w2" in s}
+                pool = both or {v: s for v, s in handicaps.items() if "w1" in s}
+                if pool:
+                    slot = pool[min(pool)]
+                    result["hcp_val"] = slot["w1"][0]
+                    result["hcp_w1"] = slot["w1"][1]
+                    if "w2" in slot:
+                        result["hcp_w2"] = slot["w2"][1]
 
     except Exception as e:
         logger.error(f"mostbet_get_odds: {e}")

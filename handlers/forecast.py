@@ -105,14 +105,27 @@ def _build_sport_kb(sports_map: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(btns)
 
 
+def _league_country(matches: list) -> str:
+    """Region/country of a tournament (lineSuperCategory), if consistent."""
+    cats = {(m.get("lineSuperCategory") or "").strip() for m in matches}
+    cats.discard("")
+    return next(iter(cats)) if len(cats) == 1 else ""
+
+
 def _build_league_kb(leagues_map: dict) -> InlineKeyboardMarkup:
     """Tournament selector keyboard. Tournament names are shown exactly as they
-    come from Mostbet (no translation/rewrite) so they match the website."""
+    come from Mostbet (no translation/rewrite) so they match the website.
+    Country (lineSuperCategory) is appended when known."""
     league_keys = _sorted_leagues(leagues_map)[:_LEAGUE_LIMIT]
     btns = []
     for i, lg in enumerate(league_keys):
-        btns.append([InlineKeyboardButton(f"🏆 {lg} ({len(leagues_map[lg])})",
-                                          callback_data=f"fm_lg_{i}")])
+        matches = leagues_map[lg]
+        country = _league_country(matches)
+        label = f"🏆 {lg}"
+        if country and country.lower() not in lg.lower():
+            label += f" · {country}"
+        label += f" ({len(matches)})"
+        btns.append([InlineKeyboardButton(label, callback_data=f"fm_lg_{i}")])
     btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
     return InlineKeyboardMarkup(btns)
 
@@ -189,7 +202,19 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
 
     db_save_history(uid, text, reply)
 
-    final_kb = watch_kb
+    # Combine watch button + "open on site" link (lineUrl) into one keyboard.
+    rows = []
+    if watch_kb:
+        rows.extend(watch_kb.inline_keyboard)
+    line_url = context.user_data.get("pending_match_url")
+    if line_url:
+        open_lbl = {
+            "ru": "🔗 Открыть на сайте", "az": "🔗 Saytda aç", "en": "🔗 Open on site",
+            "tr": "🔗 Sitede aç", "kz": "🔗 Сайтта ашу", "uz": "🔗 Saytda ochish",
+            "ar": "🔗 افتح على الموقع",
+        }
+        rows.append([InlineKeyboardButton(_loc(open_lbl, lang), url=line_url)])
+    final_kb = InlineKeyboardMarkup(rows) if rows else None
     await status_msg.edit_text(reply, reply_markup=final_kb, parse_mode="Markdown")
 
 
@@ -303,7 +328,11 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t2     = m.get("team2Title", "?")
     mid    = m.get("id")
     league = (m.get("lineSubCategory") or "").strip()
+    country = (m.get("lineSuperCategory") or "").strip()
+    if country and country.lower() not in league.lower():
+        league = f"{league} · {country}"
     dt_str = fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
+    context.user_data["pending_match_url"] = m.get("lineUrl") or ""
 
     loading = {
         "ru": "⏳ Загружаю коэффициенты...", "az": "⏳ Keflər yüklənir...",
@@ -464,6 +493,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["pending_text"] = ""
         context.user_data["parsed_teams"] = None
         context.user_data["has_real_data"] = False
+        context.user_data["pending_match_url"] = ""
         status_msg = await update.message.reply_text(_loc(_THINKING, lang))
         await _generate_forecast(uid, context, status_msg)
         return
