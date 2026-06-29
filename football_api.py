@@ -279,8 +279,10 @@ async def fetch_real_data(team1: str, team2: str) -> str:
     """
     Fetch form + H2H data for both teams.
     1. Normalize names to English via Haiku
-    2. Try api-sports.io + football-data.org in parallel (30s total cap)
-    3. Fall back to Claude knowledge estimate (all sports, marked as estimated)
+    2. Prefer football-data.org (its free tier has CURRENT seasons incl. World
+       Cup); fall back to api-sports (free tier only covers seasons 2022-2024,
+       so it's useless for current matches and we avoid burning its quota).
+    3. Fall back to Claude knowledge estimate (marked as estimated).
     """
     if not team1 or not team2:
         return ""
@@ -288,26 +290,28 @@ async def fetch_real_data(team1: str, team2: str) -> str:
     t1_en, t2_en = await _normalize_names(team1, team2)
     logger.info(f"fetch_real_data: '{team1}'→'{t1_en}', '{team2}'→'{t2_en}'")
 
-    # Try real APIs in parallel with a hard cap so slow APIs never block the forecast
-    try:
-        api_parts, fd_parts = await asyncio.wait_for(
-            asyncio.gather(
-                _fetch_apifootball(t1_en, t2_en),
-                _fetch_footballdata(t1_en, t2_en),
-            ),
-            timeout=30,
-        )
-    except asyncio.TimeoutError:
-        logger.warning("fetch_real_data: football APIs timed out after 30s — falling back to AI estimate")
-        api_parts, fd_parts = [], []
+    header = "REAL MATCH DATA (use for form analysis — do not invent results):\n\n"
 
-    parts = api_parts or fd_parts
-    if parts:
-        return "REAL MATCH DATA (use for form analysis — do not invent results):\n\n" + "\n\n".join(parts)
+    # Primary: football-data.org (current-season data on the free tier).
+    if FOOTBALL_KEY:
+        try:
+            fd_parts = await asyncio.wait_for(_fetch_footballdata(t1_en, t2_en), timeout=20)
+        except asyncio.TimeoutError:
+            fd_parts = []
+        if fd_parts:
+            return header + "\n\n".join(fd_parts)
 
-    # No real data — use Haiku knowledge
-    estimated = await _sonnet_form_estimate(team1, team2, t1_en, t2_en)
-    return estimated
+    # Secondary: api-sports (only call if it might help — old seasons).
+    if APIFOOTBALL_KEY:
+        try:
+            api_parts = await asyncio.wait_for(_fetch_apifootball(t1_en, t2_en), timeout=20)
+        except asyncio.TimeoutError:
+            api_parts = []
+        if api_parts:
+            return header + "\n\n".join(api_parts)
+
+    # No real data — use Claude knowledge, clearly labelled as an estimate.
+    return await _sonnet_form_estimate(team1, team2, t1_en, t2_en)
 
 
 # ─── Football-only helpers for live tracking ──────────────────────────────────
