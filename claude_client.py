@@ -120,8 +120,12 @@ async def claude_forecast(uid: int, msg_content: list, sys_prompt: str, max_tok:
                 messages=messages,
                 thinking={"type": "enabled", "budget_tokens": think_budget},
             )
-        except (anthropic.BadRequestError, TypeError) as e:
-            logger.warning(f"thinking unavailable, falling back to plain call: {e}")
+        except anthropic.RateLimitError:
+            raise  # let the outer handler show the overload message
+        except Exception as e:
+            # Any other failure from the thinking call → retry once without it,
+            # so an unsupported/rejected thinking param never breaks forecasts.
+            logger.warning(f"thinking call failed, falling back to plain: {type(e).__name__}: {e}")
             resp = await _create_with_retry(
                 model="claude-opus-4-8",
                 max_tokens=max_tok,
