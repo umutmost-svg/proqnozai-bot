@@ -453,6 +453,38 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Нужны обе команды."); return
         await update.message.reply_text(f"⏳ Тяну данные для {t1} vs {t2}...")
         try:
+            import httpx as _httpx
+            from config import APIFOOTBALL_KEY
+            # Raw api-sports diagnostics: /status reveals key validity, plan,
+            # and remaining quota; /teams reveals lookup + any "errors" field.
+            diag = ["🔬 api-sports диагностика:"]
+            async with _httpx.AsyncClient(timeout=12) as _h:
+                hd = {"x-apisports-key": APIFOOTBALL_KEY}
+                rs = await _h.get("https://v3.football.api-sports.io/status", headers=hd)
+                js = rs.json() if rs.status_code == 200 else {}
+                resp = js.get("response", {}) or {}
+                acc = resp.get("subscription", {}) or {}
+                req = resp.get("requests", {}) or {}
+                diag.append(f"/status HTTP {rs.status_code}")
+                if js.get("errors"):
+                    diag.append(f"❌ errors: {js.get('errors')}")
+                if acc:
+                    diag.append(f"План: {acc.get('plan')} | active: {acc.get('active')} | end: {acc.get('end')}")
+                if req:
+                    diag.append(f"Запросы: {req.get('current')}/{req.get('limit_day')} за день")
+                rt = await _h.get("https://v3.football.api-sports.io/teams",
+                                  headers=hd, params={"name": t1})
+                jt = rt.json() if rt.status_code == 200 else {}
+                diag.append(f"\n/teams?name={t1}: HTTP {rt.status_code}, "
+                            f"найдено {jt.get('results', 0)}")
+                if jt.get("errors"):
+                    diag.append(f"❌ errors: {jt.get('errors')}")
+                elif jt.get("response"):
+                    tm = jt["response"][0]["team"]
+                    diag.append(f"→ {tm.get('name')} (id={tm.get('id')}, "
+                                f"national={tm.get('national')})")
+            await update.message.reply_text("\n".join(diag))
+
             from football_api import fetch_real_data
             res = await fetch_real_data(t1, t2)
             if not res:
