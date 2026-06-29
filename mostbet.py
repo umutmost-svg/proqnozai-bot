@@ -326,29 +326,45 @@ async def mostbet_get_odds(line_id: int) -> dict:
         # Draw no bet
         "dnb_w1": None, "dnb_w2": None,
     }
+    # Collect all outcomes across pages. API caps limit at 100 and paginates
+    # via lastId (cursor = last outcomeId); only "Oddschecker"-labelled
+    # outcomes are returned, so the full set is usually small.
+    outcomes: list = []
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as h:
-            for attempt in range(3):
-                r = await h.get(
-                    f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/{line_id}/outcomes/list",
-                    headers={"Accept": "application/json"},
-                    params={"locale": "en", "limit": 200}
-                )
-                if r.status_code == 429:
-                    retry_after = min(int(r.headers.get("Retry-After", 10)), 30)
-                    logger.warning(f"Mostbet odds 429 (attempt {attempt+1}) — waiting {retry_after}s")
-                    await asyncio.sleep(retry_after)
-                    continue
-                break
-            if r.status_code != 200:
-                logger.error(f"Mostbet odds error: {r.status_code}")
-                return result
-            try:
-                outcomes = r.json().get("lineMatchOutcomes", [])
-            except Exception:
-                logger.error(f"Mostbet odds invalid JSON for line_id={line_id}")
-                return result
+            last_id = 0
+            for _page in range(10):  # safety cap: up to 1000 outcomes
+                r = None
+                for attempt in range(3):
+                    r = await h.get(
+                        f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/{line_id}/outcomes/list",
+                        headers={"Accept": "application/json"},
+                        params={"lastId": last_id, "locale": "en", "limit": 100}
+                    )
+                    if r.status_code == 429:
+                        retry_after = min(int(r.headers.get("Retry-After", 10)), 30)
+                        logger.warning(f"Mostbet odds 429 (attempt {attempt+1}) — waiting {retry_after}s")
+                        await asyncio.sleep(retry_after)
+                        continue
+                    break
+                if not r or r.status_code != 200:
+                    logger.error(f"Mostbet odds error: {r.status_code if r else 'no response'}")
+                    break
+                try:
+                    page = r.json().get("lineMatchOutcomes", [])
+                except Exception:
+                    logger.error(f"Mostbet odds invalid JSON for line_id={line_id}")
+                    break
+                if not page:
+                    break
+                outcomes.extend(page)
+                if len(page) < 100:
+                    break
+                last_id = page[-1].get("outcomeId", 0)
+                if not last_id:
+                    break
 
+        if outcomes:
             for o in outcomes:
                 title = (o.get("outcomeTitle") or "").lower().strip()
                 group = (o.get("groupTitle") or "").lower().strip()
