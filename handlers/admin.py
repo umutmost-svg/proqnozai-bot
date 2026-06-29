@@ -38,6 +38,7 @@ def admin_kb():
         [InlineKeyboardButton("🔧 Тест Mostbet API",    callback_data="adm_test_mostbet")],
         [InlineKeyboardButton("🎰 Дамп коэф. матча",   callback_data="adm_odds_dump")],
         [InlineKeyboardButton("🗂 Дамп категорий/ЧМ",  callback_data="adm_cat_dump")],
+        [InlineKeyboardButton("🛰 Probe URL",          callback_data="adm_probe")],
     ])
 
 
@@ -366,6 +367,19 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await q.edit_message_text(f"❌ Ошибка: {e}", reply_markup=back)
 
+    # ── Probe arbitrary URL (from whitelisted IP) ─────────────────────────────
+    elif data == "adm_probe":
+        context.user_data["adm_act"] = "probe"
+        await q.edit_message_text(
+            "🛰 PROBE URL\n\nОтправьте полный URL (http/https) — бот запросит его "
+            "со своего IP и вернёт статус + начало ответа.\n\n"
+            "Как найти линию сайта:\n"
+            "1. Открой сайт Mostbet в браузере (ПК)\n"
+            "2. F12 → вкладка Network → фильтр Fetch/XHR\n"
+            "3. Кликни Футбол / нужный турнир\n"
+            "4. Найди запрос с матчами, ПКМ → Copy → Copy link address\n"
+            "5. Пришли этот URL сюда")
+
     elif data == "adm_back":
         await q.edit_message_text("АДМИН ПАНЕЛЬ", reply_markup=admin_kb())
 
@@ -414,6 +428,36 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Получателей: {len(uids)} чел.\n\n"
             f"Превью:\n{preview}",
             reply_markup=confirm_kb)
+
+    elif act == "probe":
+        url = text.strip()
+        if not url.lower().startswith(("http://", "https://")):
+            await update.message.reply_text("❌ Нужен полный URL с http(s)://"); return
+        await update.message.reply_text(f"⏳ Запрашиваю {url[:80]}...")
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as hc:
+                r = await hc.get(url, headers={
+                    "Accept": "application/json",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                })
+            ct = r.headers.get("content-type", "?")
+            head = f"📡 {r.status_code} | {ct} | {len(r.content)} bytes\n\n"
+            body = r.text
+            # If JSON, try to summarize top-level keys
+            try:
+                j = r.json()
+                if isinstance(j, dict):
+                    head += "JSON keys: " + ", ".join(list(j.keys())[:20]) + "\n\n"
+                elif isinstance(j, list):
+                    head += f"JSON array, len={len(j)}\n\n"
+            except Exception:
+                pass
+            out = head + body
+            for i in range(0, min(len(out), 7600), 3800):
+                await update.message.reply_text(out[i:i+3800])
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {e}")
 
     elif act == "odds_dump":
         try:
