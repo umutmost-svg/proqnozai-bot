@@ -469,25 +469,44 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             import httpx as _httpx
             from collections import defaultdict as _dd
             from config import MOSTBET_BASE
+            from mostbet import mostbet_get_odds, format_mostbet_odds
             async with _httpx.AsyncClient(timeout=12, follow_redirects=True) as h:
                 r = await h.get(
                     f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/{line_id}/outcomes/list",
                     headers={"Accept": "application/json"},
-                    params={"locale": "en", "limit": 200}
+                    params={"locale": "en", "limit": 100}
                 )
             if r.status_code != 200:
                 await update.message.reply_text(f"❌ HTTP {r.status_code}"); return
             outcomes = r.json().get("lineMatchOutcomes", [])
+
+            # 1. Raw groups
             groups = _dd(list)
             for o in outcomes:
                 g = o.get("groupTitle", "NO_GROUP")
                 groups[g].append(f"{o.get('outcomeTitle')}={o.get('odd')}")
-            lines = [f"📦 Матч {line_id}: {len(outcomes)} исходов\n"]
+            lines = [f"📦 Матч {line_id}: {len(outcomes)} исходов (1 стр.)\n",
+                     "🧩 СЫРЫЕ ГРУППЫ:"]
             for g, items in sorted(groups.items()):
                 chunk = " | ".join(items[:5])
                 if len(items) > 5: chunk += f" (+{len(items)-5})"
                 lines.append(f"▪ {g}: {chunk}")
-            # Split into chunks of 4096 chars
+
+            # 2. What the parser actually recognised (full paginated fetch)
+            parsed = await mostbet_get_odds(line_id)
+            recognised = {k: v for k, v in parsed.items() if v is not None}
+            lines.append(f"\n✅ РАСПОЗНАНО ПАРСЕРОМ ({len(recognised)} полей):")
+            if recognised:
+                for k, v in recognised.items():
+                    lines.append(f"  {k} = {v}")
+            else:
+                lines.append("  — ничего (рынки не совпали с ключевыми словами)")
+
+            # 3. The exact text injected into Claude's prompt
+            prompt_str = format_mostbet_odds(parsed, "ru")
+            lines.append("\n📤 В ПРОМПТ CLAUDE:")
+            lines.append(prompt_str or "  — (пусто, не передаётся)")
+
             msg = "\n".join(lines)
             for i in range(0, len(msg), 3800):
                 await update.message.reply_text(msg[i:i+3800])
