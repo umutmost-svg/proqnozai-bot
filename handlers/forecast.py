@@ -112,17 +112,48 @@ def _league_country(matches: list) -> str:
     return next(iter(cats)) if len(cats) == 1 else ""
 
 
+# Country/region (lineSuperCategory, English) → flag emoji. Falls back to 🏆.
+_COUNTRY_FLAG = {
+    "england": "🏴", "spain": "🇪🇸", "germany": "🇩🇪", "italy": "🇮🇹",
+    "france": "🇫🇷", "netherlands": "🇳🇱", "portugal": "🇵🇹", "belgium": "🇧🇪",
+    "turkey": "🇹🇷", "russia": "🇷🇺", "ukraine": "🇺🇦", "scotland": "🏴",
+    "greece": "🇬🇷", "austria": "🇦🇹", "switzerland": "🇨🇭", "poland": "🇵🇱",
+    "denmark": "🇩🇰", "norway": "🇳🇴", "sweden": "🇸🇪", "czech republic": "🇨🇿",
+    "croatia": "🇭🇷", "serbia": "🇷🇸", "romania": "🇷🇴", "hungary": "🇭🇺",
+    "ireland": "🇮🇪", "wales": "🏴", "finland": "🇫🇮", "bulgaria": "🇧🇬",
+    "usa": "🇺🇸", "united states": "🇺🇸", "mexico": "🇲🇽", "brazil": "🇧🇷",
+    "argentina": "🇦🇷", "chile": "🇨🇱", "colombia": "🇨🇴", "uruguay": "🇺🇾",
+    "japan": "🇯🇵", "south korea": "🇰🇷", "china": "🇨🇳", "australia": "🇦🇺",
+    "saudi arabia": "🇸🇦", "qatar": "🇶🇦", "uae": "🇦🇪", "egypt": "🇪🇬",
+    "morocco": "🇲🇦", "azerbaijan": "🇦🇿", "kazakhstan": "🇰🇿", "uzbekistan": "🇺🇿",
+    "georgia": "🇬🇪", "israel": "🇮🇱", "iran": "🇮🇷", "india": "🇮🇳",
+    "south africa": "🇿🇦", "nigeria": "🇳🇬", "ecuador": "🇪🇨", "peru": "🇵🇪",
+    "paraguay": "🇵🇾", "bolivia": "🇧🇴", "venezuela": "🇻🇪", "canada": "🇨🇦",
+    "slovakia": "🇸🇰", "slovenia": "🇸🇮", "cyprus": "🇨🇾", "iceland": "🇮🇸",
+    # Regions / international
+    "international": "🌍", "world": "🌍", "europe": "🇪🇺", "europa": "🇪🇺",
+    "south america": "🌎", "asia": "🌏", "africa": "🌍", "north america": "🌎",
+    "club friendlies": "🤝", "friendlies": "🤝",
+}
+
+
+def _country_flag(country: str) -> str:
+    return _COUNTRY_FLAG.get((country or "").strip().lower(), "🏆")
+
+
 def _build_league_kb(leagues_map: dict) -> InlineKeyboardMarkup:
     """Tournament selector keyboard. Tournament names are shown exactly as they
     come from Mostbet (no translation/rewrite) so they match the website.
-    Country (lineSuperCategory) is appended when known."""
+    A country flag (from lineSuperCategory) is shown for easy scanning."""
     league_keys = _sorted_leagues(leagues_map)[:_LEAGUE_LIMIT]
     btns = []
     for i, lg in enumerate(league_keys):
         matches = leagues_map[lg]
         country = _league_country(matches)
-        label = f"🏆 {lg}"
-        if country and country.lower() not in lg.lower():
+        flag = _country_flag(country)
+        label = f"{flag} {lg}"
+        if country and flag == "🏆" and country.lower() not in lg.lower():
+            # No flag matched — keep the country name as a textual hint.
             label += f" · {country}"
         label += f" ({len(matches)})"
         btns.append([InlineKeyboardButton(label, callback_data=f"fm_lg_{i}")])
@@ -317,8 +348,10 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mid    = m.get("id")
     league = (m.get("lineSubCategory") or "").strip()
     country = (m.get("lineSuperCategory") or "").strip()
-    if country and country.lower() not in league.lower():
+    flag = _country_flag(country)
+    if country and flag == "🏆" and country.lower() not in league.lower():
         league = f"{league} · {country}"
+    league = f"{flag} {league}".strip()
     dt_str = fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
 
     loading = {
