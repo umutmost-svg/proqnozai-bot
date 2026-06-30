@@ -377,13 +377,17 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         core = " ".join(
             f"{name}={'✅' if _os.environ.get(name) else '❌'}"
             for name in ("TELEGRAM_TOKEN", "ANTHROPIC_API_KEY", "ADMIN_ID", "BOT_DB_DIR"))
+        # Dump env var NAMES (no values) that look related — reveals typos/spaces.
+        related = sorted(n for n in _os.environ
+                         if any(k in n.upper() for k in ("FOOTBALL", "API", "KEY")))
+        names = "\n".join(f"  «{n}» (len={len(_os.environ.get(n,''))})" for n in related) or "  (нет)"
         await q.edit_message_text(
             "🧪 ТЕСТ ДАННЫХ МАТЧА\n\n"
             f"APIFOOTBALL_KEY: {'✅ задан' if APIFOOTBALL_KEY else '❌ НЕ задан'}\n"
             f"FOOTBALL_KEY: {'✅ задан' if FOOTBALL_KEY else '❌ НЕ задан'}\n\n"
-            f"Контроль (должны быть ✅):\n{core}\n\n"
-            "Отправьте две команды через дефис, напр.:\n"
-            "Germany - Paraguay")
+            f"Контроль:\n{core}\n\n"
+            f"Похожие переменные в окружении:\n{names}\n\n"
+            "Отправьте две команды через дефис: Germany - Paraguay")
 
     # ── Probe arbitrary URL (from whitelisted IP) ─────────────────────────────
     elif data == "adm_probe":
