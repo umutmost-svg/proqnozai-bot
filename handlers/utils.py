@@ -8,13 +8,17 @@ from translations import T
 
 SUPPORT_URL = "https://t.me/AIproqnoz_support"
 
+# Universal language button — same label in every language so one handler matches.
+LANG_BTN = "🌐 Dil · Язык · Lang"
+
+
 def main_menu(uid):
     lang = db_lang(uid)
     tl = T[lang]
     return ReplyKeyboardMarkup([
         [tl["menu_forecast"],  tl["menu_express"]],
         [tl["menu_history"],   tl["menu_profile"]],
-        [tl["menu_support"]],
+        [tl["menu_support"],   LANG_BTN],
     ], resize_keyboard=True, is_persistent=True)
 
 
@@ -93,7 +97,7 @@ def _fmt_dt(dt_raw: str, tz_offset: int = BAKU_OFFSET) -> str:
             src_offset = 0  # UTC
         # Convert from the source zone to Baku.
         dt_baku = dt + timedelta(hours=tz_offset - src_offset)
-        return dt_baku.strftime("%d.%m %H:%M") + " (Bakı)"
+        return dt_baku.strftime("%d.%m %H:%M") + " (UTC+4)"
     except Exception:
         try:
             return dt_raw[8:10] + "." + dt_raw[5:7] + " " + dt_raw[11:16]

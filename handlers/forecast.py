@@ -15,7 +15,7 @@ from mostbet import (
     _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
 )
-from handlers.utils import main_menu, _sport_emoji, _fmt_dt, fmt_dt_for_user
+from handlers.utils import main_menu, _sport_emoji, _fmt_dt, fmt_dt_for_user, LANG_BTN, lang_kb
 from handlers.registration import handle_name
 
 logger = logging.getLogger(__name__)
@@ -192,6 +192,8 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
         "avg total goals per match, head-to-head trend).\n"
         "💎 Value verdict: compare your win probability with the odds-implied one "
         "(1/odd). Say clearly whether the recommended bet has value or the price is fair.\n"
+        "🔢 Exact score: give the single most likely final score (e.g. 2:1) plus "
+        "one alternative scoreline, based on the teams' attack/defence and avg goals.\n"
         "\nThink it through carefully before writing. Be specific and grounded in the "
         "provided data — never vague. Aim for a useful, readable analysis (~15-20 lines)."
     )
@@ -468,6 +470,9 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await express_cmd(update, context); return
     if text == tl["menu_forecast"]:
         await forecast_menu_start(update, context); return
+    if text == LANG_BTN:
+        await update.message.reply_text(tr(uid, "choose_lang"), reply_markup=lang_kb())
+        return
 
     # Compare handler
     if context.user_data.get("awaiting_compare"):
