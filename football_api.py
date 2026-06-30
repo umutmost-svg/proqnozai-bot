@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from datetime import date
 
 import httpx
@@ -9,6 +10,20 @@ import httpx
 from config import APIFOOTBALL_KEY, FOOTBALL_KEY
 
 logger = logging.getLogger(__name__)
+
+# Simple in-memory TTL cache to stay under football-data's 10 req/min limit.
+_fd_cache: dict = {}  # key -> (expires_at, value)
+
+
+def _cache_get(key: str):
+    item = _fd_cache.get(key)
+    if item and item[0] > time.time():
+        return item[1]
+    return None
+
+
+def _cache_set(key: str, value, ttl: int):
+    _fd_cache[key] = (time.time() + ttl, value)
 
 
 async def _normalize_names(t1: str, t2: str) -> tuple[str, str]:
@@ -248,22 +263,30 @@ async def _fetch_footballdata(t1_en: str, t2_en: str, league_hint: str = "") -> 
     try:
         async with httpx.AsyncClient(timeout=10) as h:
             hdrs = {"X-Auth-Token": FOOTBALL_KEY}
-            rc = await _api_get(h, f"https://api.football-data.org/v4/competitions/{code}/teams",
-                                headers=hdrs)
-            if not rc or rc.status_code != 200:
-                return parts
-            comp_teams = rc.json().get("teams", [])
+            # Competition roster — changes rarely, cache 24h.
+            comp_teams = _cache_get(f"comp:{code}")
+            if comp_teams is None:
+                rc = await _api_get(h, f"https://api.football-data.org/v4/competitions/{code}/teams",
+                                    headers=hdrs)
+                if not rc or rc.status_code != 200:
+                    return parts
+                comp_teams = rc.json().get("teams", [])
+                _cache_set(f"comp:{code}", comp_teams, 24 * 3600)
             for name in (t1_en, t2_en):
                 t = _fd_match_team(comp_teams, name)
                 if not t:
                     continue
                 tid, tname = t["id"], t.get("name", name)
-                r2 = await _api_get(h, f"https://api.football-data.org/v4/teams/{tid}/matches",
-                                    headers=hdrs, params={"status": "FINISHED", "limit": 8})
-                if not r2 or r2.status_code != 200:
-                    continue
-                ms = sorted(r2.json().get("matches", []),
-                            key=lambda m: m.get("utcDate", ""), reverse=True)[:6]
+                # Team form — cache 6h.
+                ms = _cache_get(f"matches:{tid}")
+                if ms is None:
+                    r2 = await _api_get(h, f"https://api.football-data.org/v4/teams/{tid}/matches",
+                                        headers=hdrs, params={"status": "FINISHED", "limit": 8})
+                    if not r2 or r2.status_code != 200:
+                        continue
+                    ms = sorted(r2.json().get("matches", []),
+                                key=lambda m: m.get("utcDate", ""), reverse=True)[:6]
+                    _cache_set(f"matches:{tid}", ms, 6 * 3600)
                 if not ms:
                     continue
                 lines, scored, conceded = [], [], []
