@@ -390,7 +390,10 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     content = [{"type": "text", "text": f"Match: {t1} vs {t2} | Tournament: {league} | Date: {dt_str}"}]
 
     odds_task = asyncio.create_task(mostbet_get_odds(mid)) if mid else None
-    real_data_task = asyncio.create_task(fetch_real_data(t1, t2, league_raw))
+    # Competition name lives in lineSuperCategory ("World Cup 2026"), the stage
+    # ("Round of 32") in lineSubCategory — pass both so the mapping finds it.
+    league_hint = f"{country} {league_raw}".strip()
+    real_data_task = asyncio.create_task(fetch_real_data(t1, t2, league_hint))
 
     mb_odds = await odds_task if odds_task else {}
     real_data = await real_data_task
