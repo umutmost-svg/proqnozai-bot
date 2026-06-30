@@ -370,16 +370,20 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Test real-data fetch ──────────────────────────────────────────────────
     elif data == "adm_data_test":
+        import os as _os
         from config import APIFOOTBALL_KEY, FOOTBALL_KEY
         context.user_data["adm_act"] = "data_test"
+        # Show presence of core vars too — confirms this is the right service.
+        core = " ".join(
+            f"{name}={'✅' if _os.environ.get(name) else '❌'}"
+            for name in ("TELEGRAM_TOKEN", "ANTHROPIC_API_KEY", "ADMIN_ID", "BOT_DB_DIR"))
         await q.edit_message_text(
             "🧪 ТЕСТ ДАННЫХ МАТЧА\n\n"
             f"APIFOOTBALL_KEY: {'✅ задан' if APIFOOTBALL_KEY else '❌ НЕ задан'}\n"
             f"FOOTBALL_KEY: {'✅ задан' if FOOTBALL_KEY else '❌ НЕ задан'}\n\n"
+            f"Контроль (должны быть ✅):\n{core}\n\n"
             "Отправьте две команды через дефис, напр.:\n"
-            "Germany - Paraguay\n\n"
-            "Бот покажет, что реально вернёт fetch_real_data "
-            "(реальные данные или оценка ИИ).")
+            "Germany - Paraguay")
 
     # ── Probe arbitrary URL (from whitelisted IP) ─────────────────────────────
     elif data == "adm_probe":
