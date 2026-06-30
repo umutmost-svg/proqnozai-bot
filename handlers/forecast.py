@@ -184,18 +184,24 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     sys_prompt += (
         "\n\nIMPORTANT — extend the format above with these EXTRA sections "
         "(in the user's language, keep emojis, no markdown except the bet line):\n"
+        "📋 Last matches: when REAL DATA is provided, list each team's last 5 "
+        "results exactly as given (date, teams, score) under the team name. "
+        "Localize team names but keep the scores. If no real data, skip this section.\n"
         "🔑 Key factor: 1–2 sentences naming the single biggest factor "
         "(injuries, form streak, H2H, motivation).\n"
         "🩹 Injuries/absences: list key missing players if provided in the data; "
         "otherwise write 'no significant absences'.\n"
-        "📈 Form & H2H: one line each, based on the REAL data (recent results, "
-        "avg total goals per match, head-to-head trend).\n"
+        "📈 Form: one line per team summarising the trend + avg total goals/match.\n"
         "💎 Value verdict: compare your win probability with the odds-implied one "
         "(1/odd). Say clearly whether the recommended bet has value or the price is fair.\n"
         "🔢 Exact score: give the single most likely final score (e.g. 2:1) plus "
         "one alternative scoreline, based on the teams' attack/defence and avg goals.\n"
-        "\nThink it through carefully before writing. Be specific and grounded in the "
-        "provided data — never vague. Aim for a useful, readable analysis (~15-20 lines)."
+        "\nLANGUAGE: write ALL names — teams, national teams, players, countries — "
+        "in the user's language (e.g. for Azerbaijani: Germany→Almaniya, "
+        "Norway→Norveç; for Russian: Germany→Германия). Never leave names in English "
+        "if the user's language differs.\n"
+        "Think it through carefully before writing. Be specific and grounded in the "
+        "provided data — never vague. Aim for a useful, readable analysis (~18-24 lines)."
     )
 
     if context.user_data.get("has_real_data"):
@@ -236,7 +242,7 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
                 msg = T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"])
                 await status_msg.edit_text(msg); return
 
-    reply = await claude_forecast(uid, msg_content, sys_prompt, 1100)
+    reply = await claude_forecast(uid, msg_content, sys_prompt, 1400)
     logger.info(f"FORECAST OK | uid={uid}")
 
     watch_kb = None
