@@ -364,6 +364,7 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t2     = m.get("team2Title", "?")
     mid    = m.get("id")
     league = (m.get("lineSubCategory") or "").strip()
+    league_raw = league  # keep raw tournament name for data-source mapping
     country = (m.get("lineSuperCategory") or "").strip()
     flag = _country_flag(country)
     if country and flag == "🏆" and country.lower() not in league.lower():
@@ -382,7 +383,7 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     content = [{"type": "text", "text": f"Match: {t1} vs {t2} | Tournament: {league} | Date: {dt_str}"}]
 
     odds_task = asyncio.create_task(mostbet_get_odds(mid)) if mid else None
-    real_data_task = asyncio.create_task(fetch_real_data(t1, t2))
+    real_data_task = asyncio.create_task(fetch_real_data(t1, t2, league_raw))
 
     mb_odds = await odds_task if odds_task else {}
     real_data = await real_data_task

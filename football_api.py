@@ -191,49 +191,96 @@ async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
     return parts
 
 
-async def _fetch_footballdata(t1_en: str, t2_en: str) -> list[str]:
-    """Fetch last 5 from football-data.org (football only, free tier)."""
+# Map a tournament name (Mostbet lineSubCategory) → football-data.org competition
+# code. Only free-tier competitions; substring match, first hit wins.
+_FD_COMP = {
+    "world cup": "WC", "fifa world cup": "WC", "mundial": "WC",
+    "european championship": "EC", "euro ": "EC",
+    "champions league": "CL",
+    "premier league": "PL", "epl": "PL",
+    "la liga": "PD", "laliga": "PD",
+    "bundesliga": "BL1",
+    "serie a": "SA",
+    "ligue 1": "FL1",
+    "eredivisie": "DED",
+    "primeira liga": "PPL",
+    "championship": "ELC",
+    "brasileir": "BSA",
+}
+
+
+def _fd_comp_code(league_hint: str) -> str:
+    h = (league_hint or "").lower()
+    for kw, code in _FD_COMP.items():
+        if kw in h:
+            return code
+    return ""
+
+
+def _fd_match_team(teams: list, name: str) -> dict | None:
+    """Pick the football-data team best matching `name` (token overlap)."""
+    q = name.lower().strip()
+    qtok = {t for t in re.sub(r"[^\w\s]", " ", q).split() if t}
+    best, best_score = None, 0.0
+    for t in teams:
+        for cand in (t.get("name", ""), t.get("shortName", ""), t.get("tla", "")):
+            c = (cand or "").lower().strip()
+            if not c:
+                continue
+            if c == q:
+                return t
+            ctok = {x for x in re.sub(r"[^\w\s]", " ", c).split() if x}
+            if not ctok:
+                continue
+            score = len(qtok & ctok) / max(len(qtok), len(ctok))
+            if score > best_score:
+                best, best_score = t, score
+    return best if best_score >= 0.5 else None
+
+
+async def _fetch_footballdata(t1_en: str, t2_en: str, league_hint: str = "") -> list[str]:
+    """Form + avg goals from football-data.org. Resolves teams via the COMPETITION
+    roster (their /teams?name= search is unreliable) so national teams work."""
     parts = []
-    if not FOOTBALL_KEY:
+    code = _fd_comp_code(league_hint)
+    if not FOOTBALL_KEY or not code:
         return parts
     try:
-        async with httpx.AsyncClient(timeout=8) as h:
+        async with httpx.AsyncClient(timeout=10) as h:
             hdrs = {"X-Auth-Token": FOOTBALL_KEY}
-            for name in [t1_en, t2_en]:
-                r = await _api_get(h, "https://api.football-data.org/v4/teams",
-                    headers=hdrs, params={"name": name, "limit": 1})
-                if not r or r.status_code != 200:
+            rc = await _api_get(h, f"https://api.football-data.org/v4/competitions/{code}/teams",
+                                headers=hdrs)
+            if not rc or rc.status_code != 200:
+                return parts
+            comp_teams = rc.json().get("teams", [])
+            for name in (t1_en, t2_en):
+                t = _fd_match_team(comp_teams, name)
+                if not t:
                     continue
-                teams = r.json().get("teams", [])
-                if not teams:
-                    continue
-                tid = teams[0]["id"]
+                tid, tname = t["id"], t.get("name", name)
                 r2 = await _api_get(h, f"https://api.football-data.org/v4/teams/{tid}/matches",
-                    headers=hdrs, params={"status": "FINISHED", "limit": 5})
-                if r2 and r2.status_code == 200:
-                    ms = r2.json().get("matches", [])
-                    if ms:
-                        lines = [
-                            f"{m['utcDate'][:10]}: {m['homeTeam']['name']} "
-                            f"{m['score']['fullTime'].get('home','?')}–"
-                            f"{m['score']['fullTime'].get('away','?')} "
-                            f"{m['awayTeam']['name']}"
-                            for m in ms
-                        ]
-                        scored = []
-                        conceded = []
-                        tname = teams[0]["name"]
-                        for m in ms:
-                            is_home = m["homeTeam"]["name"] == tname
-                            gh = m["score"]["fullTime"].get("home") or 0
-                            ga = m["score"]["fullTime"].get("away") or 0
-                            scored.append(gh if is_home else ga)
-                            conceded.append(ga if is_home else gh)
-                        block = f"{tname} last 5:\n" + "\n".join(lines)
-                        if scored:
-                            n = len(scored)
-                            block += f"\nAvg goals scored: {sum(scored)/n:.1f} | conceded: {sum(conceded)/n:.1f} (last {n})"
-                        parts.append(block)
+                                    headers=hdrs, params={"status": "FINISHED", "limit": 8})
+                if not r2 or r2.status_code != 200:
+                    continue
+                ms = sorted(r2.json().get("matches", []),
+                            key=lambda m: m.get("utcDate", ""), reverse=True)[:6]
+                if not ms:
+                    continue
+                lines, scored, conceded = [], [], []
+                for m in ms:
+                    gh = m["score"]["fullTime"].get("home")
+                    ga = m["score"]["fullTime"].get("away")
+                    lines.append(f"{m['utcDate'][:10]}: {m['homeTeam']['name']} "
+                                 f"{gh}–{ga} {m['awayTeam']['name']}")
+                    is_home = m["homeTeam"]["id"] == tid
+                    scored.append((gh if is_home else ga) or 0)
+                    conceded.append((ga if is_home else gh) or 0)
+                block = f"{tname} last {len(ms)}:\n" + "\n".join(lines)
+                n = len(scored)
+                block += (f"\nAvg goals scored: {sum(scored)/n:.1f} | "
+                          f"conceded: {sum(conceded)/n:.1f} | "
+                          f"total per match: {(sum(scored)+sum(conceded))/n:.1f} (last {n})")
+                parts.append(block)
     except Exception as e:
         logger.error(f"_fetch_footballdata: {e}")
     return parts
@@ -275,27 +322,28 @@ async def _sonnet_form_estimate(t1: str, t2: str, t1_en: str, t2_en: str) -> str
         return ""
 
 
-async def fetch_real_data(team1: str, team2: str) -> str:
+async def fetch_real_data(team1: str, team2: str, league_hint: str = "") -> str:
     """
-    Fetch form + H2H data for both teams.
+    Fetch form + goals data for both teams.
     1. Normalize names to English via Haiku
-    2. Prefer football-data.org (its free tier has CURRENT seasons incl. World
-       Cup); fall back to api-sports (free tier only covers seasons 2022-2024,
-       so it's useless for current matches and we avoid burning its quota).
-    3. Fall back to Claude knowledge estimate (marked as estimated).
+    2. Prefer football-data.org (free tier has CURRENT seasons incl. World Cup);
+       teams are resolved via the competition roster, so league_hint is needed.
+    3. Fall back to api-sports (only covers 2022-2024 on free — rarely useful).
+    4. Fall back to Claude knowledge estimate (marked as estimated).
     """
     if not team1 or not team2:
         return ""
 
     t1_en, t2_en = await _normalize_names(team1, team2)
-    logger.info(f"fetch_real_data: '{team1}'→'{t1_en}', '{team2}'→'{t2_en}'")
+    logger.info(f"fetch_real_data: '{team1}'→'{t1_en}', '{team2}'→'{t2_en}' | league='{league_hint}'")
 
     header = "REAL MATCH DATA (use for form analysis — do not invent results):\n\n"
 
     # Primary: football-data.org (current-season data on the free tier).
     if FOOTBALL_KEY:
         try:
-            fd_parts = await asyncio.wait_for(_fetch_footballdata(t1_en, t2_en), timeout=20)
+            fd_parts = await asyncio.wait_for(
+                _fetch_footballdata(t1_en, t2_en, league_hint), timeout=20)
         except asyncio.TimeoutError:
             fd_parts = []
         if fd_parts:

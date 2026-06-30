@@ -454,9 +454,11 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif act == "data_test":
         sep = "-" if "-" in text else ("—" if "—" in text else None)
         if not sep:
-            await update.message.reply_text("❌ Формат: Команда1 - Команда2"); return
-        t1, _, t2 = text.partition(sep)
-        t1, t2 = t1.strip(), t2.strip()
+            await update.message.reply_text("❌ Формат: Команда1 - Команда2 [- Лига]"); return
+        bits = [p.strip() for p in text.split(sep)]
+        t1 = bits[0] if bits else ""
+        t2 = bits[1] if len(bits) > 1 else ""
+        league_hint = bits[2] if len(bits) > 2 else "World Cup"
         if not t1 or not t2:
             await update.message.reply_text("❌ Нужны обе команды."); return
         await update.message.reply_text(f"⏳ Тяну данные для {t1} vs {t2}...")
@@ -537,7 +539,7 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("\n".join(fdiag))
 
             from football_api import fetch_real_data
-            res = await fetch_real_data(t1, t2)
+            res = await fetch_real_data(t1, t2, league_hint)
             if not res:
                 verdict = "❌ ПУСТО — ни реальных данных, ни оценки."
             elif res.startswith("REAL MATCH DATA"):
