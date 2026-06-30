@@ -45,6 +45,21 @@ def _uids_for_seg(seg: str) -> list[int]:
     return [r[0] for r in rows]
 
 
+def _user_search(qstr: str) -> list:
+    rows = _all(
+        "SELECT user_id, username, display_name, lang, is_blocked, total_requests, joined_at "
+        "FROM users WHERE username LIKE ? OR display_name LIKE ? OR CAST(user_id AS TEXT)=? "
+        "ORDER BY total_requests DESC LIMIT 20",
+        (f"%{qstr}%", f"%{qstr}%", qstr))
+    return [dict(user_id=r[0], username=r[1], display_name=r[2], lang=r[3],
+                 is_blocked=r[4], total_requests=r[5], joined_at=r[6]) for r in rows]
+
+
+def _set_blocked(uid: int, blocked: int):
+    with con() as c:
+        c.execute("UPDATE users SET is_blocked=? WHERE user_id=?", (blocked, uid))
+
+
 def _collect():
     from datetime import datetime, timedelta
     now = datetime.utcnow()
@@ -79,6 +94,8 @@ def _collect():
         "langs":              [[r[0], r[1]] for r in q("SELECT lang,COUNT(*) FROM users WHERE is_registered=1 GROUP BY lang ORDER BY 2 DESC")],
         "top_users":          [[r[0],r[1],r[2],r[3],r[4]] for r in q("SELECT user_id,display_name,username,total_requests,last_active FROM users WHERE is_registered=1 ORDER BY total_requests DESC LIMIT 10")],
         "daily":              [[r[0], r[1]] for r in q("SELECT date(created_at),COUNT(*) FROM requests WHERE date(created_at)>=? GROUP BY 1 ORDER BY 1", ((now - timedelta(days=14)).strftime("%Y-%m-%d"),))],
+        "forecasts_daily":    [[r[0], r[1]] for r in q("SELECT date(created_at),COUNT(*) FROM forecast_history WHERE date(created_at)>=? GROUP BY 1 ORDER BY 1", ((now - timedelta(days=14)).strftime("%Y-%m-%d"),))],
+        "winrate_daily":      [[r[0], r[1], r[2]] for r in q("SELECT date(created_at), SUM(CASE WHEN feedback=1 THEN 1 ELSE 0 END), COUNT(*) FROM forecast_history WHERE feedback IS NOT NULL AND date(created_at)>=? GROUP BY 1 ORDER BY 1", ((now - timedelta(days=14)).strftime("%Y-%m-%d"),))],
         "recent_users":       [[r[0],r[1],r[2],r[3],r[4]] for r in q("SELECT user_id,display_name,username,lang,joined_at FROM users WHERE is_registered=1 ORDER BY joined_at DESC LIMIT 10")],
         "recent_forecasts":   [[r[0],r[1],r[2],r[3],r[4]] for r in q("SELECT fh.user_id,u.display_name,fh.match_name,fh.feedback,fh.created_at FROM forecast_history fh LEFT JOIN users u ON fh.user_id=u.user_id ORDER BY fh.created_at DESC LIMIT 10")],
     }
@@ -101,6 +118,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(_broadcast_state).encode(), "application/json")
             return
 
+        if parsed.path == "/users/search":
+            if STATS_TOKEN and token != STATS_TOKEN:
+                self._send(401, b"unauthorized"); return
+            qstr = parse_qs(parsed.query).get("q", [""])[0].strip()
+            rows = _user_search(qstr) if qstr else []
+            self._send(200, json.dumps({"users": rows}, ensure_ascii=False).encode(),
+                       "application/json")
+            return
+
         if parsed.path != "/stats":
             self._send(404, b"not found")
             return
@@ -118,7 +144,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path != "/broadcast":
+        if parsed.path not in ("/broadcast", "/users/block"):
             self._send(404, b"not found"); return
 
         length = int(self.headers.get("Content-Length", 0))
@@ -129,6 +155,17 @@ class _Handler(BaseHTTPRequestHandler):
 
         if STATS_TOKEN and body.get("token") != STATS_TOKEN:
             self._send(401, b"unauthorized"); return
+
+        if parsed.path == "/users/block":
+            try:
+                uid = int(body.get("user_id"))
+            except (TypeError, ValueError):
+                self._send(400, b"bad user_id"); return
+            blocked = 1 if body.get("blocked") else 0
+            _set_blocked(uid, blocked)
+            self._send(200, json.dumps({"user_id": uid, "blocked": blocked}).encode(),
+                       "application/json")
+            return
 
         text    = (body.get("text") or "").strip()
         segment = body.get("segment", "all")

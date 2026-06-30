@@ -4,6 +4,7 @@ Auth: HTTP Basic Auth (login: admin, password: DASHBOARD_TOKEN)
 Stats source: bot's internal stats server (stats_server.py via Railway private network)
 """
 import base64
+import json
 import os
 from functools import wraps
 
@@ -47,7 +48,6 @@ TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="60">
 <title>Proqnozai — Дашборд</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
@@ -177,6 +177,7 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-t
   </div>
   <div class="header-right">
     <a href="/" class="theme-btn" style="text-decoration:none">📊 Статистика</a>
+    <a href="/users" class="theme-btn" style="text-decoration:none">👥 Пользователи</a>
     <a href="/broadcast" class="theme-btn" style="text-decoration:none">📢 Рассылка</a>
     <span class="refresh-badge">{{ generated_at }}</span>
     <button class="theme-btn active" onclick="setTheme('dark')">🌙 Тёмная</button>
@@ -194,25 +195,25 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-t
     <div class="card stat-card">
       <span class="stat-icon">👥</span>
       <div class="stat-label">Всего пользователей</div>
-      <div class="stat-value accent">{{ d.users_total }}</div>
+      <div class="stat-value accent" id="k_users">{{ d.users_total }}</div>
       <div class="stat-sub">{{ d.users_blocked }} заблокировано</div>
     </div>
     <div class="card stat-card">
       <span class="stat-icon">✨</span>
       <div class="stat-label">Новых сегодня</div>
-      <div class="stat-value green">+{{ d.users_today }}</div>
+      <div class="stat-value green" id="k_new">+{{ d.users_today }}</div>
       <div class="stat-sub">+{{ d.users_week }} за неделю</div>
     </div>
     <div class="card stat-card">
       <span class="stat-icon">🔥</span>
       <div class="stat-label">Активны сегодня (DAU)</div>
-      <div class="stat-value">{{ d.users_active_today }}</div>
+      <div class="stat-value" id="k_dau">{{ d.users_active_today }}</div>
       <div class="stat-sub">{{ d.users_active_week }} за неделю (WAU)</div>
     </div>
     <div class="card stat-card">
       <span class="stat-icon">📊</span>
       <div class="stat-label">Прогнозов всего</div>
-      <div class="stat-value accent">{{ d.forecasts_total }}</div>
+      <div class="stat-value accent" id="k_forecasts">{{ d.forecasts_total }}</div>
       <div class="stat-sub">{{ d.forecasts_today }} сегодня</div>
     </div>
     <div class="card stat-card">
@@ -277,6 +278,13 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-t
       <div style="font-weight:600;margin-bottom:12px;">🎯 Результаты прогнозов</div>
       <div class="chart-wrap-sm">
         <canvas id="feedbackChart"></canvas>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: span 3;">
+      <div style="font-weight:600;margin-bottom:12px;">📈 Точность (win-rate) за 14 дней, %</div>
+      <div class="chart-wrap-sm">
+        <canvas id="winrateChart"></canvas>
       </div>
     </div>
 
@@ -391,15 +399,17 @@ function cssVar(name) {
 }
 
 // ── Chart data ──────────────────────────────────────────────────────────────
-const dailyLabels = {{ daily_labels|tojson }};
-const dailyData   = {{ daily_values|tojson }};
-const langLabels  = {{ lang_labels|tojson }};
-const langData    = {{ lang_values|tojson }};
-const fbData      = {{ fb_data|tojson }};
+let dailyLabels = {{ daily_labels|tojson }};
+let dailyData   = {{ daily_values|tojson }};
+let langLabels  = {{ lang_labels|tojson }};
+let langData    = {{ lang_values|tojson }};
+let fbData      = {{ fb_data|tojson }};
+let winrateLabels = {{ winrate_labels|tojson }};
+let winrateData   = {{ winrate_values|tojson }};
 
 const COLORS = ['#6c63ff','#38bdf8','#22c55e','#f59e0b','#ef4444','#a78bfa','#fb923c'];
 
-let lineChart, langChart, barChart, feedbackChart;
+let lineChart, langChart, barChart, feedbackChart, winrateChart;
 
 function makeCharts() {
   const gridColor = () => cssVar('--border');
@@ -484,14 +494,61 @@ function makeCharts() {
       cutout: '65%'
     }
   });
+
+  // Line — win-rate trend
+  winrateChart = new Chart(document.getElementById('winrateChart'), {
+    type: 'line',
+    data: {
+      labels: winrateLabels,
+      datasets: [{
+        label: 'Win-rate %', data: winrateData,
+        borderColor: cssVar('--green'), backgroundColor: cssVar('--green') + '22',
+        borderWidth: 2, pointRadius: 3, fill: true, tension: 0.4,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: textColor(), maxTicksLimit: 7 } },
+        y: { grid: { color: gridColor() }, ticks: { color: textColor() }, beginAtZero: true, max: 100 }
+      }
+    }
+  });
 }
 
 function updateCharts() {
-  [lineChart, langChart, barChart, feedbackChart].forEach(c => { if(c) c.destroy(); });
+  [lineChart, langChart, barChart, feedbackChart, winrateChart].forEach(c => { if(c) c.destroy(); });
   setTimeout(makeCharts, 50);
 }
 
 makeCharts();
+
+// ── AJAX auto-refresh (no page reload, keeps theme & scroll) ─────────────────
+function setText(id, v){ const el = document.getElementById(id); if(el) el.textContent = v; }
+async function refreshData(){
+  try{
+    const r = await fetch('/api/data'); if(!r.ok) return;
+    const x = await r.json();
+    setText('k_users', x.users_total);
+    setText('k_new', '+' + (x.users_today||0));
+    setText('k_dau', x.users_active_today);
+    setText('k_forecasts', x.forecasts_total);
+    const fbt = x.fb_total||0, fbw = x.fb_wins||0;
+    setText('k_acc', (fbt ? Math.round(fbw/fbt*100) : 0) + '%');
+    dailyLabels = (x.daily||[]).map(r=>r[0].slice(5));
+    dailyData   = (x.daily||[]).map(r=>r[1]);
+    langLabels  = (x.langs||[]).map(r=>r[0]);
+    langData    = (x.langs||[]).map(r=>r[1]);
+    fbData      = [fbw, fbt-fbw, Math.max(0,(x.forecasts_total||0)-fbt)];
+    winrateLabels = (x.winrate_daily||[]).map(r=>r[0].slice(5));
+    winrateData   = (x.winrate_daily||[]).map(r=> r[2] ? Math.round(r[1]/r[2]*100) : 0);
+    updateCharts();
+    const badge = document.querySelector('.refresh-badge');
+    if(badge) badge.textContent = '🔄 ' + new Date().toLocaleTimeString('ru-RU');
+  }catch(e){}
+}
+setInterval(refreshData, 45000);
 </script>
 </body>
 </html>"""
@@ -525,6 +582,10 @@ def index():
     forecasts_total = raw.get("forecasts_total", 0)
     fb_unrated = max(0, forecasts_total - fb_total)
 
+    wr = raw.get("winrate_daily", [])
+    winrate_labels = [r[0][5:] for r in wr]
+    winrate_values = [round(r[1] / r[2] * 100) if r[2] else 0 for r in wr]
+
     from datetime import datetime
     generated_at = datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC")
 
@@ -538,8 +599,156 @@ def index():
         daily_labels=daily_labels, daily_values=daily_values,
         lang_labels=lang_labels, lang_values=lang_values,
         fb_data=[fb_wins, fb_lose, fb_unrated],
+        winrate_labels=winrate_labels, winrate_values=winrate_values,
         generated_at=generated_at,
     )
+
+
+def _stats_param():
+    return f"?token={STATS_TOKEN}" if STATS_TOKEN else ""
+
+
+@app.route("/api/data")
+@require_auth
+def api_data():
+    """JSON stats for the dashboard's AJAX auto-refresh."""
+    try:
+        resp = httpx.get(STATS_URL + _stats_param(), timeout=10)
+        resp.raise_for_status()
+        return Response(resp.text, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=502, mimetype="application/json")
+
+
+@app.route("/api/broadcast/status")
+@require_auth
+def api_broadcast_status():
+    try:
+        resp = httpx.get(f"{_BOT_BASE}/broadcast/status" + _stats_param(), timeout=8)
+        return Response(resp.text, mimetype="application/json", status=resp.status_code)
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=502, mimetype="application/json")
+
+
+@app.route("/api/users/search")
+@require_auth
+def api_users_search():
+    q = request.args.get("q", "").strip()
+    try:
+        resp = httpx.get(f"{_BOT_BASE}/users/search",
+                         params={"token": STATS_TOKEN, "q": q}, timeout=8)
+        return Response(resp.text, mimetype="application/json", status=resp.status_code)
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=502, mimetype="application/json")
+
+
+@app.route("/api/users/block", methods=["POST"])
+@require_auth
+def api_users_block():
+    body = request.get_json(silent=True) or {}
+    try:
+        resp = httpx.post(f"{_BOT_BASE}/users/block", json={
+            "token": STATS_TOKEN,
+            "user_id": body.get("user_id"),
+            "blocked": body.get("blocked"),
+        }, timeout=8)
+        return Response(resp.text, mimetype="application/json", status=resp.status_code)
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=502, mimetype="application/json")
+
+
+@app.route("/users")
+@require_auth
+def users_page():
+    return render_template_string(USERS_TEMPLATE)
+
+
+USERS_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Proqnozai — Пользователи</title>
+<style>
+:root{--bg:#0f1117;--bg2:#1a1d27;--border:#2a2d3a;--accent:#6c63ff;--green:#22c55e;--red:#ef4444;--text:#e2e8f0;--muted:#94a3b8;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;}
+header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;}
+.logo h1{font-size:17px;color:var(--accent);}
+.btn{background:none;border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;text-decoration:none;display:inline-block;}
+.btn:hover{border-color:var(--accent);color:var(--accent);}
+.container{max-width:980px;margin:32px auto;padding:0 20px;}
+.search{display:flex;gap:10px;margin-bottom:24px;}
+input{flex:1;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:11px 14px;font-size:14px;outline:none;}
+input:focus{border-color:var(--accent);}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent);padding:11px 22px;font-weight:600;}
+table{width:100%;border-collapse:collapse;background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
+th{color:var(--muted);font-size:11px;text-transform:uppercase;padding:12px;text-align:left;border-bottom:1px solid var(--border);}
+td{padding:12px;border-bottom:1px solid var(--border);font-size:13px;}
+tr:last-child td{border-bottom:none;}
+.badge{padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700;}
+.b-ok{background:#14532d;color:var(--green);}
+.b-blk{background:#450a0a;color:var(--red);}
+.act{cursor:pointer;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;color:#fff;}
+.a-block{background:var(--red);}
+.a-unblock{background:var(--green);}
+.muted{color:var(--muted);}
+.hint{color:var(--muted);text-align:center;padding:30px;}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><h1>⚽ Proqnozai — Пользователи</h1></div>
+  <div>
+    <a href="/" class="btn">📊 Статистика</a>
+    <a href="/broadcast" class="btn">📢 Рассылка</a>
+  </div>
+</header>
+<div class="container">
+  <div class="search">
+    <input id="q" placeholder="ID, @username или имя..." onkeydown="if(event.key==='Enter')doSearch()">
+    <button class="btn btn-primary" onclick="doSearch()">🔍 Найти</button>
+  </div>
+  <div id="result"><div class="hint">Введите запрос для поиска пользователей.</div></div>
+</div>
+<script>
+async function doSearch(){
+  const q = document.getElementById('q').value.trim();
+  const box = document.getElementById('result');
+  if(!q){ box.innerHTML = '<div class="hint">Введите запрос.</div>'; return; }
+  box.innerHTML = '<div class="hint">Поиск...</div>';
+  try{
+    const r = await fetch('/api/users/search?q=' + encodeURIComponent(q));
+    const data = await r.json();
+    const users = data.users || [];
+    if(!users.length){ box.innerHTML = '<div class="hint">Ничего не найдено.</div>'; return; }
+    let html = '<table><tr><th>ID</th><th>Имя</th><th>Username</th><th>Язык</th><th>Запросов</th><th>Статус</th><th></th></tr>';
+    for(const u of users){
+      const blocked = u.is_blocked;
+      html += '<tr>'
+        + '<td class="muted">'+u.user_id+'</td>'
+        + '<td><strong>'+(u.display_name||'—')+'</strong></td>'
+        + '<td class="muted">@'+(u.username||'-')+'</td>'
+        + '<td>'+(u.lang||'')+'</td>'
+        + '<td>'+(u.total_requests||0)+'</td>'
+        + '<td>'+(blocked?'<span class="badge b-blk">🚫 Блок</span>':'<span class="badge b-ok">✅ Активен</span>')+'</td>'
+        + '<td><button class="act '+(blocked?'a-unblock':'a-block')+'" onclick="toggleBlock('+u.user_id+','+(blocked?0:1)+')">'+(blocked?'Разблокировать':'Заблокировать')+'</button></td>'
+        + '</tr>';
+    }
+    html += '</table>';
+    box.innerHTML = html;
+  }catch(e){ box.innerHTML = '<div class="hint">Ошибка: '+e+'</div>'; }
+}
+async function toggleBlock(uid, blocked){
+  try{
+    await fetch('/api/users/block', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({user_id: uid, blocked: blocked})});
+    doSearch();
+  }catch(e){ alert('Ошибка: '+e); }
+}
+</script>
+</body>
+</html>"""
 
 
 BROADCAST_TEMPLATE = r"""<!DOCTYPE html>
@@ -588,6 +797,7 @@ textarea{min-height:160px;resize:vertical;}
   </div>
   <div class="header-right">
     <a href="/" class="btn">📊 Статистика</a>
+    <a href="/users" class="btn">👥 Пользователи</a>
     <a href="/broadcast" class="btn" style="border-color:var(--accent);color:var(--accent)">📢 Рассылка</a>
     <button class="btn" onclick="setTheme('dark')">🌙</button>
     <button class="btn" onclick="setTheme('light')">☀️</button>
@@ -611,6 +821,14 @@ textarea{min-height:160px;resize:vertical;}
       {% endif %}
     </div>
     {% endif %}
+
+    <div id="bcastProgress" style="display:none;margin-bottom:24px;">
+      <label>Прогресс рассылки</label>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;height:14px;overflow:hidden;margin:6px 0;">
+        <div id="bcastBar" style="height:14px;width:0%;background:var(--accent);transition:width .4s;"></div>
+      </div>
+      <div id="bcastText" class="sub" style="margin:0;"></div>
+    </div>
 
     <form method="POST" action="/broadcast" onsubmit="return confirmSend()">
       <label for="segment">Аудитория</label>
@@ -672,6 +890,26 @@ function confirmSend(){
   return confirm('Отправить рассылку?\nАудитория: ' + seg + '\n\nЭто действие необратимо.');
 }
 updateCount();
+
+// ── Live broadcast progress ──────────────────────────────────────────────────
+async function pollBroadcast(){
+  try{
+    const r = await fetch('/api/broadcast/status'); if(!r.ok) return;
+    const s = await r.json();
+    const box = document.getElementById('bcastProgress');
+    const total = s.total||0, done = (s.ok||0)+(s.fail||0);
+    if(s.running || (s.done && total)){
+      box.style.display = 'block';
+      const pct = total ? Math.round(done/total*100) : 0;
+      document.getElementById('bcastBar').style.width = pct + '%';
+      document.getElementById('bcastText').textContent =
+        (s.running ? '⏳ Идёт рассылка' : '✅ Завершено') +
+        `: ${done}/${total} · ✅ ${s.ok||0} · ❌ ${s.fail||0}`;
+    }
+  }catch(e){}
+}
+setInterval(pollBroadcast, 2000);
+pollBroadcast();
 </script>
 </body>
 </html>"""
