@@ -253,6 +253,31 @@ def _fd_match_team(teams: list, name: str) -> dict | None:
     return best if best_score >= 0.5 else None
 
 
+async def _fd_resolve_ai(roster_names: list, t1: str, t2: str) -> dict:
+    """Map two Mostbet team names onto exact football-data roster names via Haiku.
+    Bridges naming differences (e.g. 'Ivory Coast' ↔ 'Côte d'Ivoire')."""
+    try:
+        from claude_client import _create_with_retry
+        prompt = (
+            "Match each input team to the EXACT closest entry in the roster list. "
+            "Account for spelling/language differences and common aliases.\n"
+            f"Roster: {json.dumps(roster_names, ensure_ascii=False)}\n"
+            f'Input1: "{t1}"\nInput2: "{t2}"\n'
+            'Return JSON only: {"team1": "<exact roster name or null>", '
+            '"team2": "<exact roster name or null>"}'
+        )
+        r = await _create_with_retry(
+            model="claude-haiku-4-5-20251001", max_tokens=120,
+            messages=[{"role": "user", "content": prompt}])
+        if r.content:
+            m = re.search(r"\{.*\}", r.content[0].text, re.DOTALL)
+            if m:
+                return json.loads(m.group(0))
+    except Exception as e:
+        logger.warning(f"_fd_resolve_ai: {e}")
+    return {}
+
+
 async def _fetch_footballdata(t1_en: str, t2_en: str, league_hint: str = "") -> list[str]:
     """Form + avg goals from football-data.org. Resolves teams via the COMPETITION
     roster (their /teams?name= search is unreliable) so national teams work."""
@@ -272,8 +297,22 @@ async def _fetch_footballdata(t1_en: str, t2_en: str, league_hint: str = "") -> 
                     return parts
                 comp_teams = rc.json().get("teams", [])
                 _cache_set(f"comp:{code}", comp_teams, 24 * 3600)
+
+            # Resolve both Mostbet names → roster teams. Token match first;
+            # if either fails, ask Haiku to bridge the naming difference.
+            resolved = {name: _fd_match_team(comp_teams, name) for name in (t1_en, t2_en)}
+            if not all(resolved.values()):
+                roster_names = [t.get("name", "") for t in comp_teams]
+                ai = await _fd_resolve_ai(roster_names, t1_en, t2_en)
+                by_name = {t.get("name", "").lower(): t for t in comp_teams}
+                for orig, key in ((t1_en, "team1"), (t2_en, "team2")):
+                    if not resolved.get(orig):
+                        match = by_name.get(str(ai.get(key) or "").lower())
+                        if match:
+                            resolved[orig] = match
+
             for name in (t1_en, t2_en):
-                t = _fd_match_team(comp_teams, name)
+                t = resolved.get(name)
                 if not t:
                     continue
                 tid, tname = t["id"], t.get("name", name)
