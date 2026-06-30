@@ -19,7 +19,8 @@ sus.addHandler(_sh); sus.setLevel(logging.WARNING)
 TELEGRAM_TOKEN  = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_KEY   = os.environ["ANTHROPIC_API_KEY"]
 ADMIN_ID        = int(os.environ.get("ADMIN_ID", "0"))
-FOOTBALL_KEY    = os.environ.get("FOOTBALL_API_KEY", "")
+# Accept either name: FOOTBALL_KEY (preferred) or legacy FOOTBALL_API_KEY.
+FOOTBALL_KEY    = os.environ.get("FOOTBALL_KEY") or os.environ.get("FOOTBALL_API_KEY", "")
 APIFOOTBALL_KEY = os.environ.get("APIFOOTBALL_KEY", "")
 MOSTBET_BASE    = "https://mostbet2.com"   # Odds Checker API (IP whitelisted)
 
