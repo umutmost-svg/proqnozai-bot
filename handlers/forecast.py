@@ -200,6 +200,10 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
         "[📈 form] — one line per team: trend + avg total goals/match.\n"
         "[💎 value verdict] — compare your probability vs odds-implied (1/odd); is there value?\n"
         "[🔢 exact score] — most likely final score + one alternative.\n"
+        "TONE: write in a formal, professional analytical register — like a serious "
+        "betting-analyst report. No slang, no casual or chatty phrasing, no emojis "
+        "inside sentences (only the section-label emojis). Use complete, precise, "
+        "neutral sentences.\n"
         "Think carefully, ground everything in the provided data, ~18-24 lines."
     )
 
