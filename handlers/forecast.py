@@ -181,27 +181,26 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     # Quality directive (English — followed regardless of output language).
     # Overrides the base "12 lines max" rule: produce a richer, well-structured
     # analysis using the real data we now provide. Write in the user's language.
+    lang_name = {
+        "ru": "Russian", "az": "Azerbaijani", "en": "English", "tr": "Turkish",
+        "kz": "Kazakh", "uz": "Uzbek", "ar": "Arabic",
+    }.get(lang, "Russian")
     sys_prompt += (
-        "\n\nIMPORTANT — extend the format above with these EXTRA sections "
-        "(in the user's language, keep emojis, no markdown except the bet line):\n"
-        "📋 Last matches: when REAL DATA is provided, list each team's last 5 "
-        "results exactly as given (date, teams, score) under the team name. "
-        "Localize team names but keep the scores. If no real data, skip this section.\n"
-        "🔑 Key factor: 1–2 sentences naming the single biggest factor "
-        "(injuries, form streak, H2H, motivation).\n"
-        "🩹 Injuries/absences: list key missing players if provided in the data; "
-        "otherwise write 'no significant absences'.\n"
-        "📈 Form: one line per team summarising the trend + avg total goals/match.\n"
-        "💎 Value verdict: compare your win probability with the odds-implied one "
-        "(1/odd). Say clearly whether the recommended bet has value or the price is fair.\n"
-        "🔢 Exact score: give the single most likely final score (e.g. 2:1) plus "
-        "one alternative scoreline, based on the teams' attack/defence and avg goals.\n"
-        "\nLANGUAGE: write ALL names — teams, national teams, players, countries — "
-        "in the user's language (e.g. for Azerbaijani: Germany→Almaniya, "
-        "Norway→Norveç; for Russian: Germany→Германия). Never leave names in English "
-        "if the user's language differs.\n"
-        "Think it through carefully before writing. Be specific and grounded in the "
-        "provided data — never vague. Aim for a useful, readable analysis (~18-24 lines)."
+        f"\n\n### OUTPUT LANGUAGE = {lang_name}. The ENTIRE reply — section labels "
+        f"AND every team / country / player name — MUST be written in {lang_name}. "
+        f"Translate names too: e.g. Germany→(Almaniya/Германия), Norway→(Norveç/Норвегия), "
+        f"Ivory Coast→(Fil Dişi Sahili/Кот-д'Ивуар). NEVER output an English word if "
+        f"{lang_name} is not English. The labels below are written in English ONLY to "
+        f"tell you what to include — you MUST translate each label into {lang_name}.\n"
+        "Extend the format with these sections (emojis stay, no markdown except the bet line):\n"
+        "[📋 recent matches] — when REAL DATA is provided, list each team's last 5 "
+        "results (date, teams, score) under the localized team name; skip if no real data.\n"
+        "[🔑 key factor] — 1–2 sentences on the single biggest factor.\n"
+        "[🩹 injuries/absences] — key missing players if in the data, else 'none significant'.\n"
+        "[📈 form] — one line per team: trend + avg total goals/match.\n"
+        "[💎 value verdict] — compare your probability vs odds-implied (1/odd); is there value?\n"
+        "[🔢 exact score] — most likely final score + one alternative.\n"
+        "Think carefully, ground everything in the provided data, ~18-24 lines."
     )
 
     if context.user_data.get("has_real_data"):
