@@ -504,6 +504,38 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         diag.append(msg)
             await update.message.reply_text("\n".join(diag))
 
+            # ── football-data.org diagnostics ─────────────────────────────────
+            from config import FOOTBALL_KEY
+            fdiag = ["🔬 football-data.org:"]
+            if not FOOTBALL_KEY:
+                fdiag.append("❌ FOOTBALL_KEY не задан в config")
+            else:
+                async with _httpx.AsyncClient(timeout=12) as _h:
+                    fh = {"X-Auth-Token": FOOTBALL_KEY}
+                    rt = await _h.get("https://api.football-data.org/v4/teams",
+                                      headers=fh, params={"name": t1, "limit": 1})
+                    fdiag.append(f"/teams?name={t1}: HTTP {rt.status_code}")
+                    try:
+                        jt = rt.json()
+                        if rt.status_code == 200:
+                            tms = jt.get("teams", [])
+                            fdiag.append(f"  teams найдено: {len(tms)}"
+                                         + (f" → {tms[0].get('name')} (id={tms[0].get('id')})" if tms else ""))
+                        else:
+                            fdiag.append(f"  message: {jt.get('message', rt.text[:120])}")
+                    except Exception:
+                        fdiag.append(f"  raw: {rt.text[:120]}")
+                    # Can we reach the World Cup competition at all?
+                    rc = await _h.get("https://api.football-data.org/v4/competitions/WC/matches",
+                                      headers=fh, params={"status": "FINISHED"})
+                    fdiag.append(f"/competitions/WC/matches: HTTP {rc.status_code}")
+                    try:
+                        fdiag.append(f"  matches: {rc.json().get('resultSet', {}).get('count', '?')}"
+                                     if rc.status_code == 200 else f"  message: {rc.json().get('message','')[:120]}")
+                    except Exception:
+                        pass
+            await update.message.reply_text("\n".join(fdiag))
+
             from football_api import fetch_real_data
             res = await fetch_real_data(t1, t2)
             if not res:
