@@ -25,7 +25,7 @@ def require_auth(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
         if not STATS_TOKEN:
-            return f(*args, **kwargs)
+            return Response("DASHBOARD_TOKEN is required", 503)
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Basic "):
             try:
