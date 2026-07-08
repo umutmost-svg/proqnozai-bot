@@ -1,7 +1,7 @@
 """
 Lightweight stats HTTP server that runs inside the bot process.
-Exposes GET /stats?token=X → JSON with all dashboard metrics.
-Exposes POST /broadcast     → send message to user segment.
+Exposes GET /stats?token=X -> JSON with all dashboard metrics.
+Exposes POST /broadcast     -> send message to user segment.
 """
 import asyncio
 import json
@@ -25,6 +25,11 @@ def set_bot_app(app, loop):
     global _bot_app, _bot_loop
     _bot_app  = app
     _bot_loop = loop
+
+
+def _auth_ok(token: str) -> bool:
+    """Stats and admin endpoints must never run without an explicit token."""
+    return bool(STATS_TOKEN) and token == STATS_TOKEN
 
 
 def _uids_for_seg(seg: str) -> list[int]:
@@ -113,14 +118,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/broadcast/status":
-            if STATS_TOKEN and token != STATS_TOKEN:
-                self._send(401, b"unauthorized"); return
+            if not _auth_ok(token):
+                self._send(503 if not STATS_TOKEN else 401, b"dashboard token required"); return
             self._send(200, json.dumps(_broadcast_state).encode(), "application/json")
             return
 
         if parsed.path == "/users/search":
-            if STATS_TOKEN and token != STATS_TOKEN:
-                self._send(401, b"unauthorized"); return
+            if not _auth_ok(token):
+                self._send(503 if not STATS_TOKEN else 401, b"dashboard token required"); return
             qstr = parse_qs(parsed.query).get("q", [""])[0].strip()
             rows = _user_search(qstr) if qstr else []
             self._send(200, json.dumps({"users": rows}, ensure_ascii=False).encode(),
@@ -131,8 +136,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found")
             return
 
-        if STATS_TOKEN and token != STATS_TOKEN:
-            self._send(401, b"unauthorized")
+        if not _auth_ok(token):
+            self._send(503 if not STATS_TOKEN else 401, b"dashboard token required")
             return
 
         try:
@@ -153,8 +158,8 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:
             self._send(400, b"invalid json"); return
 
-        if STATS_TOKEN and body.get("token") != STATS_TOKEN:
-            self._send(401, b"unauthorized"); return
+        if not _auth_ok(body.get("token", "")):
+            self._send(503 if not STATS_TOKEN else 401, b"dashboard token required"); return
 
         if parsed.path == "/users/block":
             try:
