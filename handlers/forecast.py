@@ -12,7 +12,7 @@ from security import uinfo, sec_blocked, rate_check, record_viol, detect_injecti
 from claude_client import claude_forecast
 from football_api import search_match, fetch_real_data
 from mostbet import (
-    _mostbet_load_matches, _is_within_week,
+    _mostbet_load_matches, _is_within_week, _is_virtual_match,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
 )
 from handlers.utils import main_menu, _sport_emoji, _fmt_dt, fmt_dt_for_user, LANG_BTN, lang_kb
@@ -289,7 +289,7 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(loading.get(lang, "⏳"))
 
     all_m = await _mostbet_load_matches()
-    week_m = [m for m in all_m if _match_in_window(m)]
+    week_m = [m for m in all_m if _match_in_window(m) and not _is_virtual_match(m)]
 
     if not week_m:
         no_m = {
