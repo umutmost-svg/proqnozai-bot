@@ -148,6 +148,24 @@ def _fuzzy_score(q_tokens: set, cand: str) -> float:
     return len(common) / max(len(q_tokens), len(c_tokens))
 
 
+# Virtual football/eSports feeds appear in Mostbet's football category and can
+# otherwise crowd out real matches in the user-facing tournament list.
+_VIRTUAL_MATCH_KEYWORDS = (
+    "electronic game", "electronic games", "esports", "esport",
+    "esportsbattle", "e-sports", "efootball", "cyber football",
+    "cyberfootball", "fc 24", "fc 25", "fc 26", "fifa 2",
+    "2x3 min", "2x4 min", "2x5 min", "h2h liga",
+)
+
+
+def _is_virtual_match(m: dict) -> bool:
+    text = " ".join(str(m.get(k) or "") for k in (
+        "lineCategory", "lineSuperCategory", "lineSubCategory",
+        "team1Title", "team2Title", "matchTitle",
+    )).lower()
+    return any(kw in text for kw in _VIRTUAL_MATCH_KEYWORDS)
+
+
 # ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
 
 async def _mostbet_load_matches() -> list:
@@ -267,7 +285,8 @@ async def mostbet_find_match(team1: str, team2: str) -> dict | None:
     try:
         all_matches = await _mostbet_load_matches()
         matches = [m for m in all_matches
-                   if m.get("isLive") or _is_within_week(m.get("matchBeginAt", ""))]
+                   if not _is_virtual_match(m)
+                   and (m.get("isLive") or _is_within_week(m.get("matchBeginAt", "")))]
         logger.info(f"Mostbet filtered: {len(matches)}/{len(all_matches)} within 7 days")
 
         t1 = team1.strip(); t2 = team2.strip()
