@@ -29,5 +29,24 @@ jobs:
       - name: Compile Python files
         run: python -m compileall .
 
-      - name: Verify configured entrypoint exists
-        run: test -f main.py
+      - name: Verify Procfile Python entrypoints exist
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import shlex
+
+          procfile = Path("Procfile")
+          if not procfile.exists():
+              raise SystemExit("Procfile is missing")
+
+          for lineno, raw in enumerate(procfile.read_text().splitlines(), 1):
+              raw = raw.strip()
+              if not raw or raw.startswith("#") or ":" not in raw:
+                  continue
+              name, command = raw.split(":", 1)
+              parts = shlex.split(command.strip())
+              if len(parts) >= 2 and parts[0].startswith("python") and parts[1].endswith(".py"):
+                  target = Path(parts[1])
+                  if not target.exists():
+                      raise SystemExit(f"Procfile line {lineno} references missing file: {target}")
+          PY
