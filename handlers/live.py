@@ -37,15 +37,18 @@ async def watch_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer(); uid = q.from_user.id
     if q.data.startswith("watch_"):
         mid = q.data[6:]; mname = context.user_data.get(f"mn_{mid}", mid)
+        mostbet_line_id = context.user_data.get(f"mb_line_{mid}")
         live_subs[mid].add(uid); db_add_lsub(uid, mid, mname)
         try:
-            odds = await mostbet_get_odds(int(mid))
+            if not mostbet_line_id:
+                raise ValueError("missing Mostbet line id")
+            odds = await mostbet_get_odds(int(mostbet_line_id))
             with con() as c:
                 for market, odd in [("w1", odds["w1"]), ("over25", odds["over25"])]:
                     if odd:
                         c.execute(
                             "INSERT OR REPLACE INTO odds_alerts VALUES (?,?,?,?,datetime('now'))",
-                            (uid, mid, market, odd))
+                            (uid, str(mostbet_line_id), market, odd))
         except Exception:
             pass
         await q.edit_message_text(q.message.text + "\n\n" + tr(uid, "watch_started", match=mname))

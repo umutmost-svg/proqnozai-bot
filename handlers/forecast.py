@@ -232,6 +232,7 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
 
     # Fetch Mostbet odds for text-based queries
     parsed_teams = context.user_data.get("parsed_teams")
+    mb_match = None
     if parsed_teams:
         t1, t2 = parsed_teams
         mb_match = await mostbet_find_match(t1, t2)
@@ -255,6 +256,11 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
             ms = await search_match(" ".join(text.split()[:3]))
             if ms:
                 m = ms[0]; context.user_data[f"mn_{m['id']}"] = m["name"]
+                mb_line_id = context.user_data.get("pending_mostbet_line_id")
+                if not mb_line_id and mb_match:
+                    mb_line_id = str(mb_match.get("id") or "")
+                if mb_line_id:
+                    context.user_data[f"mb_line_{m['id']}"] = mb_line_id
                 watch_kb = InlineKeyboardMarkup([[InlineKeyboardButton(
                     tr(uid, "watch_btn") + f": {m['name'][:35]}",
                     callback_data=f"watch_{m['id']}")]])
@@ -416,6 +422,7 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["pending_content"] = content
     context.user_data["pending_text"] = f"{t1} {t2}"
+    context.user_data["pending_mostbet_line_id"] = str(mid) if mid else ""
 
     header = f"🏆 {t1} — {t2}\n📍 {league}"
     if dt_str: header += f"\n🕐 {dt_str}"
