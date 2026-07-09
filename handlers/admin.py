@@ -23,6 +23,31 @@ SPORT_NAMES = {
     "tennis": "🎾 Теннис",  "hockey": "🏒 Хоккей", "all": "🏆 Все виды",
 }
 
+# National-team names: if BOTH teams of a match are on this list, it's almost
+# certainly an international fixture (World Cup, Euro, friendlies, ...) —
+# useful as a detection signal that doesn't depend on how Mostbet happens to
+# label the tournament itself (see adm_cat_dump).
+NATION_NAMES = frozenset(n.lower() for n in (
+    "Argentina", "France", "Brazil", "Germany", "Spain", "England", "Portugal",
+    "Netherlands", "Belgium", "Croatia", "Morocco", "Japan", "South Korea",
+    "USA", "United States", "Mexico", "Canada", "Uruguay", "Colombia",
+    "Ecuador", "Senegal", "Ghana", "Nigeria", "Cameroon", "Tunisia", "Egypt",
+    "Algeria", "Ivory Coast", "Cote d'Ivoire", "Saudi Arabia", "Qatar", "Iran",
+    "Iraq", "Australia", "New Zealand", "Poland", "Serbia", "Switzerland",
+    "Denmark", "Sweden", "Norway", "Wales", "Scotland", "Ireland", "Ukraine",
+    "Turkey", "Greece", "Austria", "Czech Republic", "Czechia", "Slovakia",
+    "Slovenia", "Hungary", "Romania", "Bulgaria", "Finland", "Iceland",
+    "Italy", "Chile", "Peru", "Paraguay", "Bolivia", "Venezuela", "Panama",
+    "Costa Rica", "Jamaica", "Honduras", "China", "Uzbekistan", "Jordan",
+    "UAE", "United Arab Emirates", "Oman", "Bahrain", "Kuwait", "Syria",
+    "India", "Thailand", "Vietnam", "Indonesia", "Malaysia", "South Africa",
+    "DR Congo", "Congo", "Mali", "Burkina Faso", "Guinea", "Zambia",
+    "Angola", "Gabon", "Cape Verde", "Comoros", "Mozambique", "Benin",
+    "Georgia", "Israel", "Azerbaijan", "Kazakhstan", "Armenia", "Albania",
+    "North Macedonia", "Bosnia and Herzegovina", "Montenegro", "Kosovo",
+    "Luxembourg", "Estonia", "Latvia", "Lithuania", "Cyprus", "Malta",
+))
+
 
 def is_adm(update):
     return (update.effective_user.id if update.effective_user else 0) == ADMIN_ID
@@ -306,62 +331,68 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Categories dump ───────────────────────────────────────────────────────
     elif data == "adm_cat_dump":
-        await q.edit_message_text("⏳ Запрашиваю сырые данные Mostbet (несколько страниц)...")
+        await q.edit_message_text("⏳ Загружаю полный список матчей Mostbet (как в проде)...")
         try:
             import json as _json
             from collections import Counter
-            from config import MOSTBET_BASE
 
-            # Direct UNFILTERED fetch so we see every sport the API actually returns.
-            raw = []
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as hc:
-                last_id = 0
-                for _ in range(8):  # up to 8 pages = 800 matches sample
-                    r = await hc.get(
-                        f"{MOSTBET_BASE}/api/v3/advertiser/oddschecker/line/list",
-                        headers={"Accept": "application/json", "User-Agent": "ProqnozAI/1.0"},
-                        params={"lastId": last_id, "locale": "en", "limit": 100})
-                    if r.status_code != 200:
-                        raw = raw or f"HTTP {r.status_code}"
-                        break
-                    page = r.json().get("lineMatches", [])
-                    if not page:
-                        break
-                    raw.extend(page)
-                    if len(page) < 100:
-                        break
-                    last_id = page[-1]["id"]
-                    await asyncio.sleep(0.5)
-
-            if isinstance(raw, str):
-                await q.edit_message_text(f"❌ Ошибка API: {raw}", reply_markup=back); return
+            # Reuse the SAME paginated loader + cache the live bot uses, so this
+            # reflects the real dataset (previously this fetched only the first
+            # 8 pages / 800 matches, which could miss a tournament entirely if
+            # its matches happen to sort later in Mostbet's pagination).
+            raw = await _mostbet_load_matches()
             if not raw:
-                await q.edit_message_text("❌ Пустой ответ API.", reply_markup=back); return
+                await q.edit_message_text(
+                    "❌ Пустой ответ API (см. «🔧 Тест Mostbet API» для деталей).",
+                    reply_markup=back); return
 
             cats = Counter((m.get("lineCategory") or "?").strip() for m in raw)
             kw = ("world", "cup", "fifa", "mundial", "чемпионат мира", "кубок мира", "dünya")
             wc = [m for m in raw if any(
-                k in " ".join([str(m.get("lineSubCategory") or ""), str(m.get("lineCategory") or ""),
-                               str(m.get("team1Title") or ""), str(m.get("team2Title") or "")]).lower()
+                k in " ".join([str(m.get("lineCategory") or ""), str(m.get("lineSuperCategory") or ""),
+                               str(m.get("lineSubCategory") or ""), str(m.get("team1Title") or ""),
+                               str(m.get("team2Title") or ""), str(m.get("matchTitle") or "")]).lower()
                 for k in kw)]
+            # Team-name signal, independent of tournament label wording: if BOTH
+            # teams are national teams, it's almost certainly an international
+            # fixture (World Cup, Euro, friendlies...) regardless of how Mostbet
+            # named the competition itself.
+            nations = [m for m in raw
+                       if (m.get("team1Title") or "").strip().lower() in NATION_NAMES
+                       and (m.get("team2Title") or "").strip().lower() in NATION_NAMES]
 
             # 1. Raw fields of the first match — what the API actually sends
             sample = raw[0]
             sample_dump = _json.dumps(sample, ensure_ascii=False, indent=1)[:2500]
             await context.bot.send_message(
                 chat_id=q.from_user.id,
-                text=f"🧬 СЫРЫЕ ПОЛЯ первого матча (выборка {len(raw)}):\n\n{sample_dump}")
+                text=f"🧬 СЫРЫЕ ПОЛЯ первого матча (всего в кэше: {len(raw)}):\n\n{sample_dump}")
 
             # 2. Categories + WC search
             lines = [f"🏷 КАТЕГОРИИ (из {len(raw)} матчей):"]
             for c, n in cats.most_common(25):
                 lines.append(f"  {c}: {n}")
-            lines.append(f"\n🔎 Совпадений по ЧМ-словам: {len(wc)}")
-            for m in wc[:15]:
+            lines.append(f"\n🔎 Совпадений по ЧМ-словам: {len(wc)} "
+                         f"(искали в lineCategory/lineSuperCategory/lineSubCategory/team1Title/team2Title/matchTitle)")
+            for m in wc[:30]:
                 lines.append(
-                    f"  [{m.get('lineCategory')}] / {m.get('lineSubCategory')} | "
+                    f"  [{m.get('lineCategory')}] {m.get('lineSuperCategory')} / {m.get('lineSubCategory')} | "
                     f"{m.get('team1Title')} vs {m.get('team2Title')} | "
                     f"{'LIVE' if m.get('isLive') else m.get('matchBeginAt','?')} | id={m.get('id')}")
+            if len(wc) > 30:
+                lines.append(f"  ... и ещё {len(wc) - 30}")
+
+            lines.append(f"\n🌍 Матчи сборная-vs-сборная (по названиям команд): {len(nations)}")
+            for m in nations[:30]:
+                lines.append(
+                    f"  [{m.get('lineCategory')}] {m.get('lineSuperCategory')} / {m.get('lineSubCategory')} | "
+                    f"{m.get('team1Title')} vs {m.get('team2Title')} | "
+                    f"{'LIVE' if m.get('isLive') else m.get('matchBeginAt','?')} | id={m.get('id')}")
+            if len(nations) > 30:
+                lines.append(f"  ... и ещё {len(nations) - 30}")
+            if not nations:
+                lines.append("  (ни одного — похоже, сборников в фиде Mostbet сейчас нет вообще)")
+
             msg = "\n".join(lines)
             for i in range(0, len(msg), 3800):
                 await context.bot.send_message(chat_id=q.from_user.id, text=msg[i:i+3800])
