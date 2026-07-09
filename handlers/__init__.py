@@ -1,5 +1,10 @@
+import re
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, filters
+from telegram.ext import (
+    CommandHandler, MessageHandler, CallbackQueryHandler, filters,
+    ApplicationHandlerStop,
+)
 
 from config import ADMIN_ID
 from handlers.registration import start, lang_cb, lang_cmd, ob_cb, profile_cmd, tz_cmd, handle_tz_input
@@ -20,13 +25,15 @@ from db import db_lang, db_is_reg
 async def support_handler(update, context):
     uid = update.effective_user.id
     if not db_is_reg(uid):
-        return
+        return  # let the main handler prompt registration
     lang = db_lang(uid)
     tl = T[lang]
     text = tl.get("support_text", "🆘 *Поддержка*\n\nЕсли у вас вопросы или проблемы — напишите нам:")
     btn  = tl.get("support_btn", "💬 Написать в поддержку")
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(btn, url=SUPPORT_URL)]])
     await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+    # Handled: don't let handle_msg (group 1) also treat this as a forecast query.
+    raise ApplicationHandlerStop
 
 
 def register_handlers(app):
@@ -35,6 +42,7 @@ def register_handlers(app):
     app.add_handler(CommandHandler("profile", profile_cmd))
     app.add_handler(CommandHandler("tz",      tz_cmd))
     app.add_handler(CommandHandler("matches", matches_cmd))
+    app.add_handler(CommandHandler("compare", compare_cmd))
     app.add_handler(CommandHandler("admin",   admin_cmd))
     app.add_handler(CommandHandler("cancel",  cancel_cmd))
     app.add_handler(CommandHandler("testapi", testapi_cmd))
@@ -51,12 +59,17 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(express_cb,    pattern=r"^expr_"))
     app.add_handler(CallbackQueryHandler(adm_cb,        pattern=r"^adm_"))
 
-    # Support button — filter by all support menu texts across languages
-    support_texts = [tl["menu_support"] for tl in T.values() if "menu_support" in tl]
+    # Support button — filter by all support menu texts across languages.
+    # re.escape: menu labels are data, not regex.
+    support_texts = [re.escape(tl["menu_support"]) for tl in T.values() if "menu_support" in tl]
     app.add_handler(MessageHandler(
         filters.TEXT & filters.Regex("^(" + "|".join(support_texts) + ")$"),
         support_handler
     ), group=0)
 
-    app.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_ID), handle_adm_msg), group=0)
-    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_msg), group=1)
+    # ~COMMAND everywhere below: filters.TEXT alone also matches /commands, which
+    # would make every command fall through into these handlers as well.
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), handle_adm_msg), group=0)
+    app.add_handler(MessageHandler(
+        (filters.TEXT & ~filters.COMMAND) | filters.PHOTO, handle_msg), group=1)

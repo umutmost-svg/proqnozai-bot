@@ -1,7 +1,6 @@
 import asyncio
 import logging
-from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -47,20 +46,23 @@ async def watch_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for market, odd in [("w1", odds["w1"]), ("over25", odds["over25"])]:
                     if odd:
                         c.execute(
-                            "INSERT OR REPLACE INTO odds_alerts VALUES (?,?,?,?,datetime('now'))",
-                            (uid, str(mostbet_line_id), market, odd))
+                            "INSERT OR REPLACE INTO odds_alerts "
+                            "(user_id, match_id, market, last_odd, created_at, fixture_id, match_name) "
+                            "VALUES (?,?,?,?,datetime('now'),?,?)",
+                            (uid, str(mostbet_line_id), market, odd, mid, mname))
         except Exception:
             pass
-        await q.edit_message_text(q.message.text + "\n\n" + tr(uid, "watch_started", match=mname))
+        await q.edit_message_text((q.message.text or "") + "\n\n" + tr(uid, "watch_started", match=mname))
     elif q.data.startswith("unwatch_"):
         mid = q.data[8:]
         mname = next((s["match_name"] for s in db_user_lsubs(uid) if s["match_id"] == mid), mid)
         live_subs[mid].discard(uid); db_del_lsub(uid, mid)
+        with con() as c:
+            c.execute("DELETE FROM odds_alerts WHERE user_id=? AND fixture_id=?", (uid, mid))
         await q.edit_message_text(tr(uid, "watch_stopped", match=mname))
 
 
 async def poller(app):
-    alert_cnt: dict[str, int] = defaultdict(int)
     while True:
         await asyncio.sleep(60)
         if not live_subs: continue
@@ -87,10 +89,14 @@ async def poller(app):
                     team  = ev.get("team", {}).get("name", "")
                     player = ev.get("player", {}).get("name", "")
                     ev_min = ev.get("time", {}).get("elapsed", minute)
-                    tip = await live_tip(next(iter(uids)), match_name, ev_min, score,
-                                        f"{etype}-{detail}-{team}")
+                    # One tip per language, so every subscriber gets it in their own.
+                    tips: dict[str, str] = {}
                     for uid in list(uids):
                         lang = db_lang(uid)
+                        if lang not in tips:
+                            tips[lang] = await live_tip(uid, match_name, ev_min, score,
+                                                        f"{etype}-{detail}-{team}")
+                        tip = tips[lang]
                         try:
                             if etype == "Goal":
                                 msg = T[lang]["live_goal"].format(
@@ -113,9 +119,12 @@ async def poller(app):
 
                 if status == "HT" and mid not in ht_sent:
                     ht_sent.add(mid)
+                    tips = {}
                     for uid in list(uids):
                         lang = db_lang(uid)
-                        tip = await live_tip(uid, match_name, 45, score, "Half time")
+                        if lang not in tips:
+                            tips[lang] = await live_tip(uid, match_name, 45, score, "Half time")
+                        tip = tips[lang]
                         try:
                             await app.bot.send_message(
                                 chat_id=uid,
@@ -134,8 +143,13 @@ async def poller(app):
                                     match=match_name, score=score))
                         except Exception:
                             pass
-                        db_del_lsub(uid, mid); uids.discard(uid)
-                    live_subs[mid].clear()
+                        db_del_lsub(uid, mid)
+                    # Match over: drop every trace so nothing leaks or keeps alerting.
+                    with con() as c:
+                        c.execute("DELETE FROM odds_alerts WHERE fixture_id=?", (mid,))
+                    live_subs.pop(mid, None)
+                    ht_sent.discard(mid)
+                    last_events.pop(mid, None)
             except Exception as e:
                 logger.error(f"poller mid={mid}: {e}")
 
@@ -146,10 +160,13 @@ async def check_odds_changes(app):
         await asyncio.sleep(300)
         try:
             with con() as c:
+                # Safety net: drop alerts whose match is long over (covers rows
+                # created before fixture_id existed and matches that never hit FT).
+                c.execute("DELETE FROM odds_alerts WHERE created_at < datetime('now','-7 days')")
                 alerts = c.execute(
-                    "SELECT user_id, match_id, market, last_odd FROM odds_alerts"
+                    "SELECT user_id, match_id, market, last_odd, match_name FROM odds_alerts"
                 ).fetchall()
-            for uid, mid, market, last_odd in alerts:
+            for uid, mid, market, last_odd, mname in alerts:
                 try:
                     odds = await mostbet_get_odds(int(mid))
                     market_map = {
@@ -160,10 +177,11 @@ async def check_odds_changes(app):
                     if new_odd and last_odd and abs(new_odd - last_odd) >= 0.3:
                         lang = db_lang(uid)
                         direction = "↑" if new_odd > last_odd else "↓"
+                        label = mname or mid
                         msgs = {
-                            "ru": f"ИЗМЕНЕНИЕ КОЭФФИЦИЕНТА {direction}\nМатч: {mid}\nРынок: {market}\nБыло: {last_odd} → Стало: {new_odd}\nРазница: {abs(new_odd-last_odd):.2f}",
-                            "en": f"ODDS CHANGE {direction}\nMatch: {mid}\n{market}: {last_odd} → {new_odd}",
-                            "az": f"KEF DƏYİŞDİ {direction}\nMatç: {mid}\n{market}: {last_odd} → {new_odd}",
+                            "ru": f"ИЗМЕНЕНИЕ КОЭФФИЦИЕНТА {direction}\nМатч: {label}\nРынок: {market}\nБыло: {last_odd} → Стало: {new_odd}\nРазница: {abs(new_odd-last_odd):.2f}",
+                            "en": f"ODDS CHANGE {direction}\nMatch: {label}\n{market}: {last_odd} → {new_odd}",
+                            "az": f"KEF DƏYİŞDİ {direction}\nMatç: {label}\n{market}: {last_odd} → {new_odd}",
                         }
                         await app.bot.send_message(chat_id=uid, text=msgs.get(lang, msgs["ru"]))
                         with con() as c:
@@ -177,30 +195,37 @@ async def check_odds_changes(app):
 
 
 async def daily_push(app):
-    _last_sent_date = None
+    """Nudge inactive users at 10:00 in THEIR timezone (users.tz_offset)."""
+    msgs = {
+        "az": "Bugun maraqli oyunlar var! Proqnoz ucun yazin.",
+        "ru": "Сегодня интересные матчи! Напишите для прогноза.",
+        "en": "Interesting matches today! Write for a forecast.",
+    }
+    sent: set[tuple[str, int]] = set()  # (local date iso, uid) already pushed
     while True:
         await asyncio.sleep(60)
-        now = datetime.now()
-        today = now.date()
-        if now.hour != 10 or _last_sent_date == today:
-            continue
-        _last_sent_date = today
-        msgs = {
-            "az": "Bugun maraqli oyunlar var! Proqnoz ucun yazin.",
-            "ru": "Сегодня интересные матчи! Напишите для прогноза.",
-            "en": "Interesting matches today! Write for a forecast.",
-        }
+        now_utc = datetime.now(timezone.utc)
         try:
             with con() as c:
                 rows = c.execute(
-                    "SELECT user_id,lang FROM users WHERE is_registered=1 AND is_blocked=0 "
+                    "SELECT user_id,lang,tz_offset FROM users WHERE is_registered=1 AND is_blocked=0 "
                     "AND (last_active='' OR date(last_active) <= date('now', '-2 days'))"
                 ).fetchall()
-            for uid, lang in rows:
+            for uid, lang, tz in rows:
+                local = now_utc + timedelta(hours=tz or 0)
+                if local.hour != 10:
+                    continue
+                key = (local.date().isoformat(), uid)
+                if key in sent:
+                    continue
+                sent.add(key)
                 try:
                     await app.bot.send_message(chat_id=uid, text=msgs.get(lang, msgs["ru"]))
                     await asyncio.sleep(0.1)
                 except Exception:
                     pass
+            # Keep the dedup set from growing across days.
+            cutoff = (now_utc - timedelta(days=2)).date().isoformat()
+            sent = {k for k in sent if k[0] >= cutoff}
         except Exception as e:
             logger.error(f"daily_push: {e}")

@@ -1,7 +1,5 @@
 import asyncio
-import json
 import logging
-import re
 
 import anthropic
 
@@ -12,33 +10,6 @@ logger = logging.getLogger(__name__)
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 request_semaphore = asyncio.Semaphore(5)
-
-
-async def parse_match_query(text: str, lang: str) -> dict:
-    """Use Claude Haiku to extract team names and date from user query."""
-    _default = {"team1": None, "team2": None, "date": None, "sport": "football"}
-    try:
-        prompt = (
-            f'Extract match info from this text: "{text}"\n'
-            'Return JSON only, no explanation:\n'
-            '{"team1": "...", "team2": "...", "date": "DD.MM.YYYY or null", '
-            '"sport": "football/basketball/ufc/tennis/other"}\n'
-            'If you cannot find two teams, return '
-            '{"team1": null, "team2": null, "date": null, "sport": "football"}'
-        )
-        r = await _create_with_retry(
-            model="claude-haiku-4-5-20251001", max_tokens=100,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        if not r.content:
-            return _default
-        raw = r.content[0].text.strip()
-        m = re.search(r'\{.*\}', raw, re.DOTALL)
-        if m:
-            return json.loads(m.group(0))
-    except Exception as e:
-        logger.error(f"parse_match_query: {e}")
-    return _default
 
 
 async def live_tip(uid: int, match: str, minute: int, score: str, event: str) -> str:

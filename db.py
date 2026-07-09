@@ -2,6 +2,7 @@ import os
 import sqlite3
 import json
 import logging
+from contextlib import contextmanager
 from datetime import datetime
 
 from config import live_subs
@@ -14,12 +15,19 @@ os.makedirs(_db_dir, exist_ok=True)
 DB = os.path.join(_db_dir, "bot.db")
 
 
-def con() -> sqlite3.Connection:
+@contextmanager
+def con():
+    """Connection context manager: commit on success, rollback on error,
+    always close (sqlite3's own __exit__ commits but never closes)."""
     c = sqlite3.connect(DB, timeout=10)
-    c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA busy_timeout=5000")
-    c.execute("PRAGMA synchronous=NORMAL")
-    return c
+    try:
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA busy_timeout=5000")
+        c.execute("PRAGMA synchronous=NORMAL")
+        with c:
+            yield c
+    finally:
+        c.close()
 
 
 def _one(sql, params=()):
@@ -89,10 +97,25 @@ def db_init():
             user_id INTEGER, created_at TEXT DEFAULT (datetime('now'))
         );
         """)
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        for stmt in (
+            "ALTER TABLE users ADD COLUMN tz_offset INTEGER DEFAULT 0",
+            # Link odds alerts back to the live-subscription fixture so they can
+            # be cleaned up on unwatch / full time, and keep a human-readable name.
+            "ALTER TABLE odds_alerts ADD COLUMN fixture_id TEXT DEFAULT ''",
+            "ALTER TABLE odds_alerts ADD COLUMN match_name TEXT DEFAULT ''",
+        ):
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
+
+def db_flag_done(key: str) -> bool:
+    return bool(_one("SELECT 1 FROM _migrations WHERE key=?", (key,)))
+
+
+def db_flag_mark(key: str):
+    _run("INSERT OR IGNORE INTO _migrations (key) VALUES (?)", (key,))
 
 
 _LANG_TZ = {"az": 4, "ru": 3, "tr": 3, "kz": 5, "uz": 5, "ar": 3, "en": 0}
@@ -193,11 +216,17 @@ def db_stats() -> dict:
                 langs=langs, ob_done=ob_done, live_ct=live_ct, top_req=top_req)
 
 
+def like_escape(q: str) -> str:
+    """Escape LIKE wildcards so user input matches literally (use ESCAPE '\\')."""
+    return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def db_search(q) -> list[dict]:
     with con() as c:
         cur = c.execute(
-            "SELECT * FROM users WHERE username LIKE ? OR display_name LIKE ? OR CAST(user_id AS TEXT)=? LIMIT 5",
-            (f"%{q}%", f"%{q}%", q))
+            "SELECT * FROM users WHERE username LIKE ? ESCAPE '\\' "
+            "OR display_name LIKE ? ESCAPE '\\' OR CAST(user_id AS TEXT)=? LIMIT 5",
+            (f"%{like_escape(q)}%", f"%{like_escape(q)}%", q))
         cols = [d[0] for d in cur.description]
         rows = cur.fetchall()
     return [dict(zip(cols, r)) for r in rows]
@@ -244,8 +273,11 @@ def db_get_history(uid) -> list[dict]:
                  feedback=r[4], created_at=r[5]) for r in rows]
 
 
-def db_set_feedback(history_id, feedback):
-    _run("UPDATE forecast_history SET feedback=? WHERE id=?", (feedback, history_id))
+def db_set_feedback(uid, history_id, feedback):
+    # Ownership check: callback data is client-forgeable, so never update
+    # another user's history row.
+    _run("UPDATE forecast_history SET feedback=? WHERE id=? AND user_id=?",
+         (feedback, history_id, uid))
 
 
 def db_feedback_stats(uid) -> dict:

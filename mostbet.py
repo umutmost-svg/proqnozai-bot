@@ -2,135 +2,13 @@ import asyncio
 import logging
 import re as _re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from config import MOSTBET_BASE, MOSTBET_CACHE_TTL, mostbet_cache, _mostbet_lock
+from config import MOSTBET_BASE, MOSTBET_CACHE_TTL, MOSTBET_SRC_TZ, mostbet_cache, _mostbet_lock
 
 logger = logging.getLogger(__name__)
-
-# ─── Tournament name normalisation ───────────────────────────────────────────
-
-_TOURNAMENT_MAP = {
-    # Football — club
-    "epl": "Premier League (England)",
-    "english premier league": "Premier League (England)",
-    "premier league": "Premier League (England)",
-    "laliga": "La Liga (Spain)",
-    "la liga": "La Liga (Spain)",
-    "bundesliga": "Bundesliga (Germany)",
-    "serie a": "Serie A (Italy)",
-    "ligue 1": "Ligue 1 (France)",
-    "eredivisie": "Eredivisie (Netherlands)",
-    "primeira liga": "Primeira Liga (Portugal)",
-    "süper lig": "Süper Lig (Turkey)",
-    "super lig": "Süper Lig (Turkey)",
-    "championship": "Championship (England)",
-    "liga nos": "Primeira Liga (Portugal)",
-    "scottish premiership": "Scottish Premiership",
-    "mls": "MLS (USA)",
-    "brasileirao": "Brasileirão (Brazil)",
-    "serie b": "Serie B (Italy)",
-    "2. bundesliga": "2. Bundesliga (Germany)",
-    "ligue 2": "Ligue 2 (France)",
-    "liga 2": "Liga 2",
-    # Football — European
-    "ucl": "UEFA Champions League",
-    "champions league": "UEFA Champions League",
-    "uefa champions league": "UEFA Champions League",
-    "uel": "UEFA Europa League",
-    "europa league": "UEFA Europa League",
-    "uefa europa league": "UEFA Europa League",
-    "uecl": "UEFA Conference League",
-    "conference league": "UEFA Conference League",
-    # Football — national teams
-    "world cup": "FIFA World Cup",
-    "euro": "UEFA Euro",
-    "copa america": "Copa América",
-    "africa cup": "Africa Cup of Nations",
-    "afcon": "Africa Cup of Nations",
-    "nations league": "UEFA Nations League",
-    # Basketball
-    "nba": "NBA (USA)",
-    "euroleague": "EuroLeague",
-    "eurocup": "EuroCup",
-    "vtb united league": "VTB United League",
-    # Tennis
-    "atp": "ATP Tour",
-    "wta": "WTA Tour",
-    "wimbledon": "Wimbledon",
-    "us open": "US Open (Tennis)",
-    "french open": "Roland Garros",
-    "roland garros": "Roland Garros",
-    "australian open": "Australian Open",
-    # MMA / Boxing
-    "ufc": "UFC",
-    "bellator": "Bellator MMA",
-    # Hockey
-    "nhl": "NHL (USA/Canada)",
-    "khl": "KHL",
-    # Cybersport
-    "cs2": "CS2",
-    "csgo": "CS:GO",
-    "dota 2": "Dota 2",
-    "lol": "League of Legends",
-    "valorant": "Valorant",
-}
-
-_tournament_norm_cache: dict[str, str] = {}
-
-def normalize_tournament(raw: str) -> str:
-    """Clean up a tournament name. Trusts Mostbet's name — only expands
-    exact short abbreviations, never rewrites a descriptive name."""
-    if not raw:
-        return raw
-    key = raw.strip().lower()
-    # Only expand when the WHOLE name is a known abbreviation (exact match).
-    # Substring matching is unsafe: "World Cup. CONCACAF" must NOT become
-    # "FIFA World Cup" and lose the qualifier context.
-    if key in _TOURNAMENT_MAP:
-        return _TOURNAMENT_MAP[key]
-    # Otherwise keep Mostbet's name as-is (lightly cleaned).
-    return raw.strip()
-
-
-async def normalize_tournament_ai(raw: str) -> str:
-    """Normalize a tournament name. Mostbet names are already accurate, so we
-    only translate to a clean English form, preserving qualifier/region context."""
-    if not raw:
-        return raw
-    key = raw.strip().lower()
-    # Exact-match abbreviations expand instantly
-    if key in _TOURNAMENT_MAP:
-        return _TOURNAMENT_MAP[key]
-    # Already plain ASCII English? Trust it as-is, no API call needed.
-    if raw.isascii():
-        return raw.strip()
-    # Cache check
-    if key in _tournament_norm_cache:
-        return _tournament_norm_cache[key]
-    # Non-Latin name → translate to English, but KEEP all context (region, stage)
-    try:
-        from claude_client import _create_with_retry
-        r = await _create_with_retry(
-            model="claude-haiku-4-5-20251001", max_tokens=40,
-            messages=[{"role": "user", "content":
-                f'Translate this sports tournament name to standard English. '
-                f'Keep ALL details (region, qualification stage, division). '
-                f'Do NOT replace it with a different competition. '
-                f'Return ONLY the name.\nInput: "{raw}"'}]
-        )
-        if r.content:
-            result = r.content[0].text.strip().strip('"')
-            if result:
-                _tournament_norm_cache[key] = result
-                return result
-    except Exception as e:
-        logger.warning(f"normalize_tournament_ai: {e}")
-    _tournament_norm_cache[key] = raw.strip()
-    return raw.strip()
-
 
 _NOISE = {"fc", "cf", "ac", "sc", "afc", "fk", "sk", "bk", "rsc", "rc", "ud", "cd", "sd",
           "fútbol", "club", "sporting", "atletico", "atletik", "united", "city", "the"}
@@ -150,10 +28,17 @@ def _fuzzy_score(q_tokens: set, cand: str) -> float:
 
 # Virtual football/eSports feeds appear in Mostbet's football category and can
 # otherwise crowd out real matches in the user-facing tournament list.
+#
+# NOTE: no bare "fifa 2" token here on purpose. EA dropped the "FIFA" brand
+# after the 2023 game (current esports feeds use "FC 24"/"FC 25"/"FC 26",
+# already covered below), and "fifa 2" as a 6-char substring matches "FIFA"
+# immediately followed by ANY year starting with 2 — i.e. every FIFA World
+# Cup from 2000 to 2999 ("FIFA 2026", "FIFA 2030", ...). That silently wiped
+# real World Cup tournaments from the match list.
 _VIRTUAL_MATCH_KEYWORDS = (
     "electronic game", "electronic games", "esports", "esport",
     "esportsbattle", "e-sports", "efootball", "cyber football",
-    "cyberfootball", "fc 24", "fc 25", "fc 26", "fifa 2",
+    "cyberfootball", "fc 24", "fc 25", "fc 26",
     "2x3 min", "2x4 min", "2x5 min", "h2h liga",
 )
 
@@ -164,6 +49,15 @@ def _is_virtual_match(m: dict) -> bool:
         "team1Title", "team2Title", "matchTitle",
     )).lower()
     return any(kw in text for kw in _VIRTUAL_MATCH_KEYWORDS)
+
+
+def _is_outright_market(m: dict) -> bool:
+    """Tournament outright / futures markets ("Cup. Winner", top scorer, etc.)
+    list a placeholder second team ("?") instead of a real opponent — per the
+    Oddschecker API docs these are not head-to-head matches and must never
+    reach match-selection UI or be treated as a team name."""
+    t2 = (m.get("team2Title") or "").strip()
+    return t2 in ("", "?")
 
 
 # ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
@@ -263,14 +157,17 @@ def _is_within_week(match_date_str: str, days: int = 7) -> bool:
     if not match_date_str:
         return True  # unknown date - include
     try:
-        from datetime import timezone
         # Format: "01.06.2025 19:00:00" or "2025-06-01T19:00:00"
         ds = match_date_str.strip()
         if "T" in ds:
             dt = datetime.fromisoformat(ds.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)  # assume UTC, same as _fmt_dt
         elif "." in ds:
+            # Same source zone as display formatting (_fmt_dt), or the window
+            # would be shifted by MOSTBET_SRC_TZ hours relative to shown times.
             dt = datetime.strptime(ds[:16], "%d.%m.%Y %H:%M")
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=timezone(timedelta(hours=MOSTBET_SRC_TZ)))
         else:
             return True
         now_utc = datetime.now(timezone.utc)
@@ -285,7 +182,7 @@ async def mostbet_find_match(team1: str, team2: str) -> dict | None:
     try:
         all_matches = await _mostbet_load_matches()
         matches = [m for m in all_matches
-                   if not _is_virtual_match(m)
+                   if not _is_virtual_match(m) and not _is_outright_market(m)
                    and (m.get("isLive") or _is_within_week(m.get("matchBeginAt", "")))]
         logger.info(f"Mostbet filtered: {len(matches)}/{len(all_matches)} within 7 days")
 
