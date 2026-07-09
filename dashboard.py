@@ -4,6 +4,7 @@ Auth: HTTP Basic Auth (login: admin, password: DASHBOARD_TOKEN)
 Stats source: bot's internal stats server (stats_server.py via Railway private network)
 """
 import base64
+import hmac
 import json
 import os
 from functools import wraps
@@ -31,7 +32,8 @@ def require_auth(f):
             try:
                 decoded = base64.b64decode(auth[6:]).decode()
                 user, pwd = decoded.split(":", 1)
-                if user == DASH_USER and pwd == STATS_TOKEN:
+                # & (not `and`): constant-time, no short-circuit on wrong user.
+                if hmac.compare_digest(user, DASH_USER) & hmac.compare_digest(pwd, STATS_TOKEN):
                     return f(*args, **kwargs)
             except Exception:
                 pass

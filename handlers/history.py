@@ -42,7 +42,7 @@ async def history_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("fb_"):
         parts = data.split("_")
         feedback = int(parts[1]); hist_id = int(parts[2])
-        db_set_feedback(hist_id, feedback)
+        db_set_feedback(uid, hist_id, feedback)
         await q.edit_message_text(tr(uid, "feedback_done"))
 
     elif data.startswith("repeat_"):

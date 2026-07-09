@@ -6,20 +6,29 @@ from telegram.ext import ApplicationBuilder
 from telegram.error import TelegramError
 
 from config import TELEGRAM_TOKEN, MOSTBET_CACHE_TTL
-from db import db_init, db_restore_live_subs, db_all_uids, db_lang
+from db import db_init, db_restore_live_subs, db_all_uids, db_lang, db_flag_done, db_flag_mark
 from mostbet import _mostbet_load_matches
 from handlers import register_handlers
 from handlers.live import poller, check_odds_changes, daily_push
 from handlers.utils import main_menu
-from translations import T
+from translations import T, tr
 
 import logging
 logger = logging.getLogger(__name__)
 
 
+# Bump this key whenever the main menu layout changes: the broadcast below runs
+# once per key, not on every restart (a crash-loop must never spam the user base).
+MENU_BROADCAST_KEY = "menu_broadcast_2026_07"
+
+
 async def _broadcast_menu_update(application):
-    """Send updated menu keyboard to all registered users on bot start."""
+    """Send updated menu keyboard to all registered users, once per menu version."""
     await asyncio.sleep(5)
+    if db_flag_done(MENU_BROADCAST_KEY):
+        return
+    # Mark before sending so a crash mid-broadcast can't cause a repeat storm.
+    db_flag_mark(MENU_BROADCAST_KEY)
     uids = db_all_uids()
     if not uids:
         return
@@ -56,9 +65,10 @@ async def _error_handler(update, context):
     logger.error("Unhandled exception in handler", exc_info=context.error)
     try:
         if update and getattr(update, "effective_chat", None):
+            user = getattr(update, "effective_user", None)
+            text = tr(user.id, "api_error") if user else "⚠️ Error. Please try again."
             await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="⚠️ Произошла ошибка. Попробуйте ещё раз.")
+                chat_id=update.effective_chat.id, text="⚠️ " + text)
     except Exception:
         pass
 

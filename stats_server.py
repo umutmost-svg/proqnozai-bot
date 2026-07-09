@@ -4,12 +4,13 @@ Exposes GET /stats?token=X -> JSON with all dashboard metrics.
 Exposes POST /broadcast     -> send message to user segment.
 """
 import asyncio
+import hmac
 import json
 import os
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-from db import con, _all
+from db import con, _all, like_escape
 
 STATS_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
 STATS_PORT  = int(os.environ.get("STATS_PORT", "8888"))
@@ -29,7 +30,7 @@ def set_bot_app(app, loop):
 
 def _auth_ok(token: str) -> bool:
     """Stats and admin endpoints must never run without an explicit token."""
-    return bool(STATS_TOKEN) and token == STATS_TOKEN
+    return bool(STATS_TOKEN) and hmac.compare_digest(token, STATS_TOKEN)
 
 
 def _uids_for_seg(seg: str) -> list[int]:
@@ -53,9 +54,9 @@ def _uids_for_seg(seg: str) -> list[int]:
 def _user_search(qstr: str) -> list:
     rows = _all(
         "SELECT user_id, username, display_name, lang, is_blocked, total_requests, joined_at "
-        "FROM users WHERE username LIKE ? OR display_name LIKE ? OR CAST(user_id AS TEXT)=? "
-        "ORDER BY total_requests DESC LIMIT 20",
-        (f"%{qstr}%", f"%{qstr}%", qstr))
+        "FROM users WHERE username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\' "
+        "OR CAST(user_id AS TEXT)=? ORDER BY total_requests DESC LIMIT 20",
+        (f"%{like_escape(qstr)}%", f"%{like_escape(qstr)}%", qstr))
     return [dict(user_id=r[0], username=r[1], display_name=r[2], lang=r[3],
                  is_blocked=r[4], total_requests=r[5], joined_at=r[6]) for r in rows]
 
@@ -66,8 +67,8 @@ def _set_blocked(uid: int, blocked: int):
 
 
 def _collect():
-    from datetime import datetime, timedelta
-    now = datetime.utcnow()
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
     week_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
 
@@ -212,6 +213,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def run_stats_server():
-    """Run the stats HTTP server (blocking — call in a thread)."""
-    server = HTTPServer(("0.0.0.0", STATS_PORT), _Handler)
+    """Run the stats HTTP server (blocking — call in a thread).
+    Threading: a slow /stats must not block Railway's /health checks."""
+    server = ThreadingHTTPServer(("0.0.0.0", STATS_PORT), _Handler)
     server.serve_forever()

@@ -23,6 +23,9 @@ ADMIN_ID        = int(os.environ.get("ADMIN_ID", "0"))
 FOOTBALL_KEY    = os.environ.get("FOOTBALL_KEY") or os.environ.get("FOOTBALL_API_KEY", "")
 APIFOOTBALL_KEY = os.environ.get("APIFOOTBALL_KEY", "")
 MOSTBET_BASE    = "https://mostbet2.com"   # Odds Checker API (IP whitelisted)
+# Mostbet returns its "DD.MM.YYYY HH:MM" times in Moscow time (UTC+3).
+# Used by both the date-window filter and display formatting — keep in sync.
+MOSTBET_SRC_TZ  = 3
 
 RATE_WINDOW = 60; RATE_MAX = 5; SPAM_AFTER = 3; SPAM_DUR = 600
 MOSTBET_CACHE_TTL = 900           # 15 minutes cache

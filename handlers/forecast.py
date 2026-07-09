@@ -5,7 +5,7 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from config import reg_step
+from config import reg_step, violations, SPAM_DUR, SPAM_AFTER
 from db import db_ensure, db_get, db_lang, db_is_reg, db_is_blocked, db_log_req, db_save_history
 from translations import T, tr
 from security import uinfo, sec_blocked, rate_check, record_viol, detect_injection
@@ -19,6 +19,7 @@ from handlers.utils import main_menu, _sport_emoji, _fmt_dt, fmt_dt_for_user, LA
 from handlers.registration import handle_name
 
 logger = logging.getLogger(__name__)
+sus = logging.getLogger("suspicious")
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB cap on uploaded images
 
@@ -501,18 +502,16 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Security
     blk, secs = sec_blocked(uid)
     if blk:
-        __import__('logging').getLogger("suspicious").warning(f"BLK | {info}")
+        sus.warning(f"BLK | {info}")
         await update.message.reply_text(tr(uid, "blocked", m=secs//60, s=secs%60)); return
     exceeded, wait = rate_check(uid)
     if exceeded:
-        from config import violations
         if record_viol(uid, info):
-            await update.message.reply_text(tr(uid, "auto_blocked", min=__import__('config').SPAM_DUR//60))
+            await update.message.reply_text(tr(uid, "auto_blocked", min=SPAM_DUR//60))
         else:
             await update.message.reply_text(
-                tr(uid, "rate_limit", w=wait, v=violations[uid], max=__import__('config').SPAM_AFTER))
+                tr(uid, "rate_limit", w=wait, v=violations[uid], max=SPAM_AFTER))
         return
-    from config import violations
     violations[uid] = 0
 
     mtype = "PHOTO" if update.message.photo else "TEXT"
@@ -522,12 +521,12 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     photo = update.message.photo
     if len(text) > 1000:
-        __import__('logging').getLogger("suspicious").warning(f"LONG | {info}")
+        sus.warning(f"LONG | {info}")
         await update.message.reply_text(tr(uid, "long_text")); return
     if detect_injection(text):
-        __import__('logging').getLogger("suspicious").warning(f"INJ | {info} | text={text[:120]!r}")
+        sus.warning(f"INJ | {info} | text={text[:120]!r}")
         if record_viol(uid, info):
-            await update.message.reply_text(tr(uid, "auto_blocked", min=__import__('config').SPAM_DUR//60))
+            await update.message.reply_text(tr(uid, "auto_blocked", min=SPAM_DUR//60))
         else:
             await update.message.reply_text(tr(uid, "injection"))
         return

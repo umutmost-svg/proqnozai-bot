@@ -2,6 +2,7 @@ from datetime import datetime, timezone, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
+from config import MOSTBET_SRC_TZ
 from db import db_lang
 from translations import T
 
@@ -67,9 +68,6 @@ def _sport_emoji(cat: str) -> str:
 
 # All match times are shown in Baku time (UTC+4) for every user.
 BAKU_OFFSET = 4
-# Mostbet returns its "DD.MM.YYYY HH:MM" times in Moscow time (UTC+3); we shift
-# +1h to Baku (UTC+4). Change this if the source zone ever changes.
-MOSTBET_SRC_TZ = 3
 
 
 def _fmt_dt(dt_raw: str, tz_offset: int = BAKU_OFFSET) -> str:

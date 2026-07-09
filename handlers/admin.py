@@ -4,7 +4,7 @@ import time
 
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ApplicationHandlerStop
 
 from config import ADMIN_ID, MOSTBET_BASE, live_subs, blocked_until, mostbet_cache
 from db import db_set, db_stats, db_search, _one, _all
@@ -431,6 +431,13 @@ async def handle_adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     act = context.user_data.get("adm_act")
     if not act: return
     context.user_data.pop("adm_act")
+    await _handle_adm_act(update, context, act)
+    # The message was consumed by an admin action — stop it from also reaching
+    # handle_msg (group 1), which would treat it as a forecast query.
+    raise ApplicationHandlerStop
+
+
+async def _handle_adm_act(update: Update, context: ContextTypes.DEFAULT_TYPE, act: str):
     text = update.message.text or ""
 
     if act == "broadcast":

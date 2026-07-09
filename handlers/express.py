@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -6,8 +5,9 @@ from telegram.ext import ContextTypes
 
 from db import db_is_reg, db_get, db_lang
 from translations import T, tr, SPORTS_LABELS, EXP_LABELS
-from claude_client import client, request_semaphore
+from claude_client import _create_with_retry
 from mostbet import _mostbet_load_matches, _is_within_week, _is_virtual_match
+from handlers.utils import _fmt_dt
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ async def express_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for m in selected:
                 t1 = m.get("team1Title", "?"); t2 = m.get("team2Title", "?")
                 league = m.get("lineSubCategory", "")
-                dt = m.get("matchBeginAt", "")[:16]
+                dt = _fmt_dt(m.get("matchBeginAt", ""))
                 lines_mb.append(f"- {t1} vs {t2} | {league} | {dt}")
             real_matches_str = "\n".join(lines_mb) + "\n\n" + _use.get(lang, _use["ru"]) + "\n"
 
@@ -131,12 +131,10 @@ Stavka: [turi] | Koef: X.XX
     prompt = express_prompts.get(lang, express_prompts["ru"])
 
     try:
-        async with request_semaphore:
-            resp = await asyncio.to_thread(
-                client.messages.create,
-                model="claude-haiku-4-5-20251001", max_tokens=800,
-                messages=[{"role": "user", "content": prompt}]
-            )
+        resp = await _create_with_retry(
+            model="claude-haiku-4-5-20251001", max_tokens=800,
+            messages=[{"role": "user", "content": prompt}]
+        )
         reply = resp.content[0].text
     except Exception:
         reply = tr(uid, "api_error")
@@ -177,12 +175,10 @@ async def handle_compare(uid: int, text: str, context: ContextTypes.DEFAULT_TYPE
     prompt = compare_prompts.get(lang, compare_prompts["ru"])
 
     try:
-        async with request_semaphore:
-            resp = await asyncio.to_thread(
-                client.messages.create,
-                model="claude-haiku-4-5-20251001", max_tokens=800,
-                messages=[{"role": "user", "content": prompt}]
-            )
+        resp = await _create_with_retry(
+            model="claude-haiku-4-5-20251001", max_tokens=800,
+            messages=[{"role": "user", "content": prompt}]
+        )
         reply = resp.content[0].text
     except Exception:
         reply = tr(uid, "api_error")
