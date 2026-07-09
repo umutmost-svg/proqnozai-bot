@@ -23,6 +23,31 @@ SPORT_NAMES = {
     "tennis": "🎾 Теннис",  "hockey": "🏒 Хоккей", "all": "🏆 Все виды",
 }
 
+# National-team names: if BOTH teams of a match are on this list, it's almost
+# certainly an international fixture (World Cup, Euro, friendlies, ...) —
+# useful as a detection signal that doesn't depend on how Mostbet happens to
+# label the tournament itself (see adm_cat_dump).
+NATION_NAMES = frozenset(n.lower() for n in (
+    "Argentina", "France", "Brazil", "Germany", "Spain", "England", "Portugal",
+    "Netherlands", "Belgium", "Croatia", "Morocco", "Japan", "South Korea",
+    "USA", "United States", "Mexico", "Canada", "Uruguay", "Colombia",
+    "Ecuador", "Senegal", "Ghana", "Nigeria", "Cameroon", "Tunisia", "Egypt",
+    "Algeria", "Ivory Coast", "Cote d'Ivoire", "Saudi Arabia", "Qatar", "Iran",
+    "Iraq", "Australia", "New Zealand", "Poland", "Serbia", "Switzerland",
+    "Denmark", "Sweden", "Norway", "Wales", "Scotland", "Ireland", "Ukraine",
+    "Turkey", "Greece", "Austria", "Czech Republic", "Czechia", "Slovakia",
+    "Slovenia", "Hungary", "Romania", "Bulgaria", "Finland", "Iceland",
+    "Italy", "Chile", "Peru", "Paraguay", "Bolivia", "Venezuela", "Panama",
+    "Costa Rica", "Jamaica", "Honduras", "China", "Uzbekistan", "Jordan",
+    "UAE", "United Arab Emirates", "Oman", "Bahrain", "Kuwait", "Syria",
+    "India", "Thailand", "Vietnam", "Indonesia", "Malaysia", "South Africa",
+    "DR Congo", "Congo", "Mali", "Burkina Faso", "Guinea", "Zambia",
+    "Angola", "Gabon", "Cape Verde", "Comoros", "Mozambique", "Benin",
+    "Georgia", "Israel", "Azerbaijan", "Kazakhstan", "Armenia", "Albania",
+    "North Macedonia", "Bosnia and Herzegovina", "Montenegro", "Kosovo",
+    "Luxembourg", "Estonia", "Latvia", "Lithuania", "Cyprus", "Malta",
+))
+
 
 def is_adm(update):
     return (update.effective_user.id if update.effective_user else 0) == ADMIN_ID
@@ -328,6 +353,13 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                str(m.get("lineSubCategory") or ""), str(m.get("team1Title") or ""),
                                str(m.get("team2Title") or ""), str(m.get("matchTitle") or "")]).lower()
                 for k in kw)]
+            # Team-name signal, independent of tournament label wording: if BOTH
+            # teams are national teams, it's almost certainly an international
+            # fixture (World Cup, Euro, friendlies...) regardless of how Mostbet
+            # named the competition itself.
+            nations = [m for m in raw
+                       if (m.get("team1Title") or "").strip().lower() in NATION_NAMES
+                       and (m.get("team2Title") or "").strip().lower() in NATION_NAMES]
 
             # 1. Raw fields of the first match — what the API actually sends
             sample = raw[0]
@@ -349,6 +381,18 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"{'LIVE' if m.get('isLive') else m.get('matchBeginAt','?')} | id={m.get('id')}")
             if len(wc) > 30:
                 lines.append(f"  ... и ещё {len(wc) - 30}")
+
+            lines.append(f"\n🌍 Матчи сборная-vs-сборная (по названиям команд): {len(nations)}")
+            for m in nations[:30]:
+                lines.append(
+                    f"  [{m.get('lineCategory')}] {m.get('lineSuperCategory')} / {m.get('lineSubCategory')} | "
+                    f"{m.get('team1Title')} vs {m.get('team2Title')} | "
+                    f"{'LIVE' if m.get('isLive') else m.get('matchBeginAt','?')} | id={m.get('id')}")
+            if len(nations) > 30:
+                lines.append(f"  ... и ещё {len(nations) - 30}")
+            if not nations:
+                lines.append("  (ни одного — похоже, сборников в фиде Mostbet сейчас нет вообще)")
+
             msg = "\n".join(lines)
             for i in range(0, len(msg), 3800):
                 await context.bot.send_message(chat_id=q.from_user.id, text=msg[i:i+3800])
