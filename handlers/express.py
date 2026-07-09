@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 from db import db_is_reg, db_get, db_lang
 from translations import T, tr, SPORTS_LABELS, EXP_LABELS
 from claude_client import _create_with_retry
-from mostbet import _mostbet_load_matches, _is_within_week, _is_virtual_match
+from mostbet import _mostbet_load_matches, _is_within_week, _is_virtual_match, _is_outright_market
 from handlers.utils import _fmt_dt
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ async def express_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     real_matches_str = ""
     if mb_matches:
         week_matches = [m for m in mb_matches
-                        if not _is_virtual_match(m)
+                        if not _is_virtual_match(m) and not _is_outright_market(m)
                         and (m.get("isLive") or _is_within_week(m.get("matchBeginAt", "")))]
         selected = week_matches[:n]
         if selected:

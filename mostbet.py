@@ -44,6 +44,15 @@ def _is_virtual_match(m: dict) -> bool:
     return any(kw in text for kw in _VIRTUAL_MATCH_KEYWORDS)
 
 
+def _is_outright_market(m: dict) -> bool:
+    """Tournament outright / futures markets ("Cup. Winner", top scorer, etc.)
+    list a placeholder second team ("?") instead of a real opponent — per the
+    Oddschecker API docs these are not head-to-head matches and must never
+    reach match-selection UI or be treated as a team name."""
+    t2 = (m.get("team2Title") or "").strip()
+    return t2 in ("", "?")
+
+
 # ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
 
 async def _mostbet_load_matches() -> list:
@@ -166,7 +175,7 @@ async def mostbet_find_match(team1: str, team2: str) -> dict | None:
     try:
         all_matches = await _mostbet_load_matches()
         matches = [m for m in all_matches
-                   if not _is_virtual_match(m)
+                   if not _is_virtual_match(m) and not _is_outright_market(m)
                    and (m.get("isLive") or _is_within_week(m.get("matchBeginAt", "")))]
         logger.info(f"Mostbet filtered: {len(matches)}/{len(all_matches)} within 7 days")
 
