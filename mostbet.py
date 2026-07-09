@@ -28,10 +28,17 @@ def _fuzzy_score(q_tokens: set, cand: str) -> float:
 
 # Virtual football/eSports feeds appear in Mostbet's football category and can
 # otherwise crowd out real matches in the user-facing tournament list.
+#
+# NOTE: no bare "fifa 2" token here on purpose. EA dropped the "FIFA" brand
+# after the 2023 game (current esports feeds use "FC 24"/"FC 25"/"FC 26",
+# already covered below), and "fifa 2" as a 6-char substring matches "FIFA"
+# immediately followed by ANY year starting with 2 — i.e. every FIFA World
+# Cup from 2000 to 2999 ("FIFA 2026", "FIFA 2030", ...). That silently wiped
+# real World Cup tournaments from the match list.
 _VIRTUAL_MATCH_KEYWORDS = (
     "electronic game", "electronic games", "esports", "esport",
     "esportsbattle", "e-sports", "efootball", "cyber football",
-    "cyberfootball", "fc 24", "fc 25", "fc 26", "fifa 2",
+    "cyberfootball", "fc 24", "fc 25", "fc 26",
     "2x3 min", "2x4 min", "2x5 min", "h2h liga",
 )
 
