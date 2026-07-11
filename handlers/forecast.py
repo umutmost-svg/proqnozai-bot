@@ -1,22 +1,28 @@
 import asyncio
 import base64
 import logging
+from datetime import datetime, timedelta, timezone
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import reg_step, violations, SPAM_DUR, SPAM_AFTER
-from db import db_ensure, db_get, db_lang, db_is_reg, db_is_blocked, db_log_req, db_save_history
+from db import (db_ensure, db_get, db_lang, db_is_reg, db_is_blocked, db_log_req,
+                db_save_history, db_get_tz)
 from translations import T, tr
 from security import uinfo, sec_blocked, rate_check, record_viol, detect_injection
 from claude_client import claude_forecast
 from football_api import search_match, fetch_real_data
 from match_validation import MatchRef, validate_match
+from event_list import (
+    normalize_fixture, select_visible, group_by_sport, group_by_league,
+    MAX_LEAGUES, MAX_MATCHES_PER_LEAGUE,
+)
 from mostbet import (
-    _mostbet_load_matches, _is_within_week, _is_virtual_match, _is_outright_market,
+    _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
 )
-from handlers.utils import main_menu, _sport_emoji, _fmt_dt, fmt_dt_for_user, LANG_BTN, lang_kb
+from handlers.utils import _sport_emoji, LANG_BTN, lang_kb
 from handlers.registration import handle_name
 
 logger = logging.getLogger(__name__)
@@ -63,74 +69,51 @@ def _pick_watch_candidate(candidates: list, ref: dict | None) -> dict | None:
     return None
 
 
-# Major tournaments pinned to the top of the league list regardless of match
-# count, so low-volume but high-interest events (World Cup, Euro, finals) are
-# never pushed off the truncated list by busy domestic divisions.
-_PRIORITY_LEAGUES = (
-    "world cup", "fifa", "чемпионат мира", "world championship",
-    "euro", "nations league", "champions league", "europa league",
-    "conference league", "copa america", "copa libertadores",
-    "afcon", "africa cup", "asian cup", "gold cup",
-    "olympic", "олимп",
-)
-
-# How many leagues / matches to show in the truncated keyboards.
-_LEAGUE_LIMIT = 14
-_MATCH_LIMIT = 12
-
-# Time windows: regular leagues show matches up to a week out; pinned major
-# tournaments get a wider window so upcoming knockout rounds stay visible.
-_REGULAR_WINDOW_DAYS = 7
-_PRIORITY_WINDOW_DAYS = 14
+# Pagination caps (from event_list): 15 leagues, 10 matches per league.
+_LEAGUE_LIMIT = MAX_LEAGUES
+_MATCH_LIMIT = MAX_MATCHES_PER_LEAGUE
 
 
-def _is_priority_league(name: str) -> bool:
-    n = (name or "").lower()
-    return any(kw in n for kw in _PRIORITY_LEAGUES)
+def _user_tz(uid: int) -> timezone:
+    """The user's timezone (from their stored offset). Display uses this; all
+    internal comparisons stay in UTC."""
+    return timezone(timedelta(hours=db_get_tz(uid) or 0))
 
 
-def _match_in_window(m: dict) -> bool:
-    """Live matches always show. Otherwise use a wider date window for matches
-    belonging to a pinned major tournament."""
-    if m.get("isLive"):
-        return True
-    days = _PRIORITY_WINDOW_DAYS if _is_priority_league(m.get("lineSubCategory", "")) else _REGULAR_WINDOW_DAYS
-    return _is_within_week(m.get("matchBeginAt", ""), days)
+def _fmt_kickoff(dt_utc, uid: int) -> str:
+    """Format a tz-aware UTC kickoff in the user's local timezone."""
+    if dt_utc is None:
+        return ""
+    off = db_get_tz(uid) or 0
+    local = dt_utc.astimezone(timezone(timedelta(hours=off)))
+    sign = "+" if off >= 0 else "-"
+    return local.strftime("%d.%m %H:%M") + f" (UTC{sign}{abs(off)})"
 
 
-def _league_rank(name: str) -> int:
-    """Lower = higher priority. Pinned tournaments rank by their position in
-    _PRIORITY_LEAGUES; everything else shares the same lowest rank."""
-    n = name.lower()
-    for i, kw in enumerate(_PRIORITY_LEAGUES):
-        if kw in n:
-            return i
-    return len(_PRIORITY_LEAGUES)
+async def _expired_menu(q, uid: int) -> None:
+    """Shown when a keyboard's snapshot is gone or an index is stale/invalid, so
+    an index from an old keyboard can never silently resolve to another event."""
+    await q.edit_message_text(tr(uid, "ev_menu_expired"))
 
 
-def _sorted_leagues(leagues_map: dict) -> list:
-    """Pinned major tournaments first, then by match count desc.
-    MUST be used identically wherever a league index is built or resolved,
-    or callback indices will point at the wrong league."""
-    return sorted(leagues_map, key=lambda l: (_league_rank(l), -len(leagues_map[l])))
+def _match_label(it, uid: int) -> str:
+    """Button label: live state or localized day/time, then the teams."""
+    if it.is_live or it.status == "live":
+        prefix = "🔴 LIVE"
+    else:
+        t = _fmt_kickoff(it.kickoff_utc, uid)
+        prefix = ("⏸ " + t) if it.postponed else t
+    return f"{prefix}  {it.home[:18]} — {it.away[:18]}".strip()
 
 
-def _build_sport_kb(sports_map: dict) -> InlineKeyboardMarkup:
-    """Top-level sport selector keyboard (sorted by match count)."""
-    sport_keys = sorted(sports_map, key=lambda c: -len(sports_map[c]))
+def _build_sport_kb(sport_groups: list) -> InlineKeyboardMarkup:
+    """Top-level sport selector from the frozen ordered [(sport, items)] list."""
     btns = []
-    for i, cat in enumerate(sport_keys[:8]):
+    for i, (cat, items) in enumerate(sport_groups[:8]):
         emoji = _sport_emoji(cat)
-        btns.append([InlineKeyboardButton(f"{emoji} {cat} ({len(sports_map[cat])})",
+        btns.append([InlineKeyboardButton(f"{emoji} {cat} ({len(items)})",
                                           callback_data=f"fm_sp_{i}")])
     return InlineKeyboardMarkup(btns)
-
-
-def _league_country(matches: list) -> str:
-    """Region/country of a tournament (lineSuperCategory), if consistent."""
-    cats = {(m.get("lineSuperCategory") or "").strip() for m in matches}
-    cats.discard("")
-    return next(iter(cats)) if len(cats) == 1 else ""
 
 
 # Country/region (lineSuperCategory, English) → flag emoji. Falls back to 🏆.
@@ -162,21 +145,18 @@ def _country_flag(country: str) -> str:
     return _COUNTRY_FLAG.get((country or "").strip().lower(), "🏆")
 
 
-def _build_league_kb(leagues_map: dict) -> InlineKeyboardMarkup:
-    """Tournament selector keyboard. Tournament names are shown exactly as they
-    come from Mostbet (no translation/rewrite) so they match the website.
-    A country flag (from lineSuperCategory) is shown for easy scanning."""
-    league_keys = _sorted_leagues(leagues_map)[:_LEAGUE_LIMIT]
+def _build_league_kb(groups: list) -> InlineKeyboardMarkup:
+    """Tournament selector from the frozen ordered LeagueGroup list. Names are
+    shown as Mostbet supplies them; a country flag aids scanning. `groups` is
+    already priority-sorted and capped, and each button index resolves against
+    this exact stored list."""
     btns = []
-    for i, lg in enumerate(league_keys):
-        matches = leagues_map[lg]
-        country = _league_country(matches)
-        flag = _country_flag(country)
-        label = f"{flag} {lg}"
-        if country and flag == "🏆" and country.lower() not in lg.lower():
-            # No flag matched — keep the country name as a textual hint.
-            label += f" · {country}"
-        label += f" ({len(matches)})"
+    for i, g in enumerate(groups):
+        flag = _country_flag(g.country or "")
+        label = f"{flag} {g.league_name}"
+        if g.country and flag == "🏆" and g.country.lower() not in g.league_name.lower():
+            label += f" · {g.country}"
+        label += f" ({len(g.items)})"
         btns.append([InlineKeyboardButton(label, callback_data=f"fm_lg_{i}")])
     btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
     return InlineKeyboardMarkup(btns)
@@ -318,106 +298,113 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(loading.get(lang, "⏳"))
 
     all_m = await _mostbet_load_matches()
-    week_m = [m for m in all_m if _match_in_window(m)
-              and not _is_virtual_match(m) and not _is_outright_market(m)]
+    if not all_m:
+        # Empty feed = provider failure (network/429), not "no matches".
+        await msg.edit_text(tr(uid, "ev_provider_unavailable")); return
 
-    if not week_m:
-        no_m = {
-            "ru": "⚠️ Загрузка матчей временно недоступна. Попробуйте позже.",
-            "az": "⚠️ Matçlar müvəqqəti yüklənmir. Bir az sonra yenidən cəhd edin.",
-            "en": "⚠️ Match loading temporarily unavailable. Please try again later.",
-            "tr": "⚠️ Maç yüklemesi geçici olarak kullanılamıyor. Lütfen daha sonra tekrar deneyin.",
-            "kz": "⚠️ Матчтар уақытша жүктелмейді. Кейінірек қайталаңыз.",
-            "uz": "⚠️ O'yinlar vaqtincha yuklanmayapti. Keyinroq urinib ko'ring.",
-            "ar": "⚠️ تحميل المباريات غير متاح مؤقتاً. يرجى المحاولة لاحقاً.",
-        }
-        await msg.edit_text(no_m.get(lang, no_m["ru"])); return
+    now_utc = datetime.now(timezone.utc)
+    items = select_visible(
+        [it for m in all_m if (it := normalize_fixture(m)) is not None],
+        now_utc, _user_tz(uid), include_later=False)
 
-    sports_map = {}
-    for m in week_m:
-        cat = (m.get("lineCategory") or "Other").strip()
-        sports_map.setdefault(cat, []).append(m)
+    if not items:
+        # Nothing LIVE / today / tomorrow — all three buckets are empty.
+        await msg.edit_text("\n".join(
+            [tr(uid, "ev_no_live"), tr(uid, "ev_no_today"), tr(uid, "ev_no_tomorrow")]))
+        return
 
-    context.user_data["fm_sports"] = sports_map
-    await msg.edit_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sports_map))
+    sport_groups = group_by_sport(items)
+    # Start a new event-list session: freeze this snapshot and invalidate the
+    # deeper screens so an old league/match keyboard can never resolve against a
+    # newly-built list (it hits a missing snapshot → expired-menu message).
+    context.user_data["ev_session"] = context.user_data.get("ev_session", 0) + 1
+    context.user_data["fm_sports"] = sport_groups
+    context.user_data["fm_leagues"] = None
+    context.user_data["fm_matches"] = None
+
+    await msg.edit_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sport_groups))
+
+
+def _tournaments_title(sport_name: str, lang: str) -> str:
+    title = {
+        "ru": f"Турниры — {sport_name}:", "az": f"Turnirler — {sport_name}:",
+        "en": f"Tournaments — {sport_name}:", "tr": f"Turnuvalar — {sport_name}:",
+    }
+    return title.get(lang, title["ru"])
 
 
 async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid = q.from_user.id; lang = db_lang(uid)
+    sport_groups = context.user_data.get("fm_sports")
     idx = int(q.data.split("_")[2])
-    sports_map = context.user_data.get("fm_sports", {})
-    sport_keys = sorted(sports_map, key=lambda c: -len(sports_map[c]))
-    if idx >= len(sport_keys):
-        await q.edit_message_text("Ошибка."); return
+    if not sport_groups or idx >= len(sport_groups):
+        await _expired_menu(q, uid); return
 
-    sport_name = sport_keys[idx]
+    sport_name, sport_items = sport_groups[idx]
     context.user_data["fm_sport_idx"] = idx
-    leagues_map = {}
-    for m in sports_map[sport_name]:
-        league = (m.get("lineSubCategory") or "Other").strip()
-        leagues_map.setdefault(league, []).append(m)
 
-    context.user_data["fm_leagues"] = leagues_map
+    groups, leagues_truncated = group_by_league(sport_items)
+    # Freeze the exact ordered league list this keyboard is built from; the
+    # match screen is invalidated until a league is chosen.
+    context.user_data["fm_leagues"] = groups
+    context.user_data["fm_matches"] = None
 
-    kb = _build_league_kb(leagues_map)
-    title = {
-        "ru": f"Турниры — {sport_name}:", "az": f"Turnirler — {sport_name}:",
-        "en": f"Tournaments — {sport_name}:", "tr": f"Turnuvalar — {sport_name}:",
-    }
-    await q.edit_message_text(_loc(title, lang), reply_markup=kb)
+    title = _tournaments_title(sport_name, lang)
+    if leagues_truncated:
+        title += "\n" + tr(uid, "ev_more_leagues")
+    await q.edit_message_text(title, reply_markup=_build_league_kb(groups))
 
 
 async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid = q.from_user.id; lang = db_lang(uid)
+    groups = context.user_data.get("fm_leagues")
     idx = int(q.data.split("_")[2])
-    leagues_map = context.user_data.get("fm_leagues", {})
-    league_keys = _sorted_leagues(leagues_map)[:_LEAGUE_LIMIT]
-    if idx >= len(league_keys):
-        await q.edit_message_text("Ошибка."); return
+    if not groups or idx >= len(groups):
+        await _expired_menu(q, uid); return
 
-    league_name = league_keys[idx]
+    g = groups[idx]
     context.user_data["fm_league_idx"] = idx
-    matches = sorted(leagues_map[league_name],
-                     key=lambda m: (0 if m.get("isLive") else 1, m.get("matchBeginAt", "")))
+    # g.items is already kickoff-sorted and capped to _MATCH_LIMIT; freeze it as
+    # the exact snapshot this keyboard's fm_mt_ indices resolve against.
+    matches = g.items
     context.user_data["fm_matches"] = matches
 
-    btns = []
-    for i, m in enumerate(matches[:_MATCH_LIMIT]):
-        t1 = m.get("team1Title", "?")[:18]
-        t2 = m.get("team2Title", "?")[:18]
-        prefix = "🔴 LIVE" if m.get("isLive") else fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
-        btns.append([InlineKeyboardButton(f"{prefix}  {t1} — {t2}", callback_data=f"fm_mt_{i}")])
+    btns = [[InlineKeyboardButton(_match_label(it, uid), callback_data=f"fm_mt_{i}")]
+            for i, it in enumerate(matches)]
     btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_league")])
 
     title = {
-        "ru": f"Матчи — {league_name}:", "az": f"Matçlar — {league_name}:",
-        "en": f"Matches — {league_name}:", "tr": f"Maçlar — {league_name}:",
-    }
-    await q.edit_message_text(title.get(lang, title["ru"]), reply_markup=InlineKeyboardMarkup(btns))
+        "ru": f"Матчи — {g.league_name}:", "az": f"Matçlar — {g.league_name}:",
+        "en": f"Matches — {g.league_name}:", "tr": f"Maçlar — {g.league_name}:",
+    }.get(lang)
+    title = title or f"Матчи — {g.league_name}:"
+    if g.truncated:
+        title += "\n" + tr(uid, "ev_more_matches")
+    await q.edit_message_text(title, reply_markup=InlineKeyboardMarkup(btns))
 
 
 async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid = q.from_user.id; lang = db_lang(uid)
+    matches = context.user_data.get("fm_matches")
     idx = int(q.data.split("_")[2])
-    matches = context.user_data.get("fm_matches", [])
-    if idx >= len(matches):
-        await q.edit_message_text("Ошибка."); return
+    if not matches or idx >= len(matches):
+        await _expired_menu(q, uid); return
 
-    m = matches[idx]
-    t1     = m.get("team1Title", "?")
-    t2     = m.get("team2Title", "?")
-    mid    = m.get("id")
-    league = (m.get("lineSubCategory") or "").strip()
+    it = matches[idx]
+    t1     = it.home
+    t2     = it.away
+    mid    = it.fixture_id            # authoritative provider fixture id
+    league = it.league_name
     league_raw = league  # keep raw tournament name for data-source mapping
-    country = (m.get("lineSuperCategory") or "").strip()
+    country = it.country or ""
     flag = _country_flag(country)
     if country and flag == "🏆" and country.lower() not in league.lower():
         league = f"{league} · {country}"
     league = f"{flag} {league}".strip()
-    dt_str = fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
+    dt_str = "🔴 LIVE" if it.is_live else _fmt_kickoff(it.kickoff_utc, uid)
 
     loading = {
         "ru": "⏳ Загружаю коэффициенты...", "az": "⏳ Keflər yüklənir...",
@@ -449,7 +436,7 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["odds_attached"] = True
     # Deterministic reference for validating any live fixture we later attach.
     context.user_data["match_ref"] = {
-        "home": t1, "away": t2, "is_live": bool(m.get("isLive")),
+        "home": t1, "away": t2, "is_live": it.is_live,
     }
     if real_data:
         content.append({"type": "text", "text": real_data})
@@ -474,23 +461,20 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id; lang = db_lang(uid)
 
     if q.data == "fm_back_sport":
-        sports_map = context.user_data.get("fm_sports", {})
-        await q.edit_message_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sports_map))
+        sport_groups = context.user_data.get("fm_sports")
+        if not sport_groups:
+            await _expired_menu(q, uid); return
+        await q.edit_message_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sport_groups))
 
     elif q.data == "fm_back_league":
+        groups = context.user_data.get("fm_leagues")
+        if not groups:
+            await _expired_menu(q, uid); return
         idx = context.user_data.get("fm_sport_idx", 0)
-        sports_map = context.user_data.get("fm_sports", {})
-        sport_keys = sorted(sports_map, key=lambda c: -len(sports_map[c]))
-        if idx >= len(sport_keys):
-            await q.edit_message_text("Ошибка."); return
-        sport_name = sport_keys[idx]
-        leagues_map = context.user_data.get("fm_leagues", {})
-        kb = _build_league_kb(leagues_map)
-        title = {
-            "ru": f"Турниры — {sport_name}:", "az": f"Turnirler — {sport_name}:",
-            "en": f"Tournaments — {sport_name}:", "tr": f"Turnuvalar — {sport_name}:",
-        }
-        await q.edit_message_text(_loc(title, lang), reply_markup=kb)
+        sport_groups = context.user_data.get("fm_sports") or []
+        sport_name = sport_groups[idx][0] if idx < len(sport_groups) else ""
+        title = _tournaments_title(sport_name, lang)
+        await q.edit_message_text(title, reply_markup=_build_league_kb(groups))
 
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
