@@ -1,14 +1,16 @@
 """
-End-to-end tests for ProqnozAI bot.
+MANUAL integration tests for ProqnozAI bot — hit real external APIs
+(Mostbet, Anthropic). Not collected by pytest (see testpaths in
+pyproject.toml) and never run in CI. Offline unit tests live in tests/.
 
 Tests are grouped by layer:
   1. DB  — CRUD, allowlist, conversation memory
   2. Translations — all 7 langs have required keys, tr() works
   3. Security — rate limiting, injection detection
   4. Mostbet API — live endpoint reachable, matches parseable
-  5. TheSportsDB — team search + last-5 reachable
+  5. Opus form estimate — knowledge-based form text when APIs are empty
   6. Name normalisation — Haiku translates Cyrillic names
-  7. Claude forecast — Sonnet returns non-empty forecast
+  7. Claude forecast — Opus returns non-empty forecast
   8. Full pipeline — normalise → fetch_real_data → claude_forecast
 
 Run:
@@ -234,18 +236,19 @@ class TestMostbetAPI(unittest.IsolatedAsyncioTestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Haiku form estimate (requires Anthropic key)
+# 5. Opus form estimate (requires Anthropic key)
 # ─────────────────────────────────────────────────────────────────────────────
 @unittest.skipUnless(HAVE_ANTHROPIC, "ANTHROPIC_API_KEY not set")
-class TestHaikuFormEstimate(unittest.IsolatedAsyncioTestCase):
+class TestFormEstimate(unittest.IsolatedAsyncioTestCase):
 
     async def test_known_teams_return_text(self):
         from football_api import _sonnet_form_estimate
         result = await _sonnet_form_estimate("Арсенал", "Челси", "Arsenal", "Chelsea")
-        print(f"\n  [Haiku form] Arsenal vs Chelsea: {len(result)} chars")
+        print(f"\n  [Form estimate] Arsenal vs Chelsea: {len(result)} chars")
         self.assertIsInstance(result, str)
         self.assertGreater(len(result), 50)
-        self.assertIn("FORM ANALYSIS", result)
+        # Current implementation labels the block as an AI estimate in Russian.
+        self.assertIn("ФОРМА", result)
 
     async def test_unknown_teams_graceful(self):
         from football_api import _sonnet_form_estimate
