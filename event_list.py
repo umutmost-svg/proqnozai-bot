@@ -281,14 +281,18 @@ def visible_bucket(item: EventItem, now_utc: datetime, user_tz: timezone,
 
 def _dedup(items: list[EventItem]) -> list[EventItem]:
     """Drop duplicate provider fixture ids, then duplicate composite events
-    (same teams + kickoff under different fixture ids). First occurrence wins."""
+    (same league + teams + kickoff under different fixture ids). First occurrence
+    wins. The composite key includes league_key AND kickoff so genuinely distinct
+    fixtures are never collapsed: the same teams in two competitions (different
+    league_key), a two-legged tie on different dates (different kickoff), and a
+    senior vs reserve/women side (different team_key) all survive."""
     out, seen_fid, seen_comp = [], set(), set()
     for it in items:
         if it.fixture_id in seen_fid:
             continue
         seen_fid.add(it.fixture_id)
         ko = it.kickoff_utc.isoformat() if it.kickoff_utc else "live"
-        comp = (it.home_team_key, it.away_team_key, ko)
+        comp = (it.league_key, it.home_team_key, it.away_team_key, ko)
         if comp in seen_comp:
             continue
         seen_comp.add(comp)

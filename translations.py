@@ -57,8 +57,8 @@ Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
 "ev_no_live":             "Canlı matç yoxdur.",
 "ev_no_today":            "Bu gün matç yoxdur.",
 "ev_no_tomorrow":         "Sabah matç yoxdur.",
-"ev_more_leagues":        "➕ Daha çox turnir mövcuddur.",
-"ev_more_matches":        "➕ Bu turnirdə daha çox matç var.",
+"ev_more_leagues":        "ℹ️ Prioritet üzrə ilk 15 turnir göstərilir; başqaları da var.",
+"ev_more_matches":        "ℹ️ Ən erkən 10 matç göstərilir; başqaları da var.",
 "system_prompt": """Sən idman analitikisən. Qısa və aydın yaz. İstənilən idmanı analiz et.
 
 QAYDALAR:
@@ -160,8 +160,8 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "ev_no_live":             "Нет матчей вживую.",
 "ev_no_today":            "Нет матчей сегодня.",
 "ev_no_tomorrow":         "Нет матчей завтра.",
-"ev_more_leagues":        "➕ Доступно больше турниров.",
-"ev_more_matches":        "➕ В этом турнире есть ещё матчи.",
+"ev_more_leagues":        "ℹ️ Показаны 15 приоритетных турниров; есть и другие.",
+"ev_more_matches":        "ℹ️ Показаны первые 10 матчей по времени; есть и другие.",
 "system_prompt": """Ты — спортивный аналитик. Пиши коротко и по делу. Анализируй любой спорт.
 
 ПРАВИЛА:
@@ -263,8 +263,8 @@ Choose your sport and let's go!""",
 "ev_no_live":             "No live matches.",
 "ev_no_today":            "No matches today.",
 "ev_no_tomorrow":         "No matches tomorrow.",
-"ev_more_leagues":        "➕ More tournaments available.",
-"ev_more_matches":        "➕ More matches available in this tournament.",
+"ev_more_leagues":        "ℹ️ Showing the top 15 tournaments by priority; more exist.",
+"ev_more_matches":        "ℹ️ Showing the earliest 10 matches; more exist.",
 "system_prompt": """You are a sports analyst. Be brief and direct. Analyse any sport.
 
 RULES:
@@ -361,8 +361,8 @@ Spor seçin ve başlayalım!""",
 "ev_no_live":             "Canlı maç yok.",
 "ev_no_today":            "Bugün maç yok.",
 "ev_no_tomorrow":         "Yarın maç yok.",
-"ev_more_leagues":        "➕ Daha fazla turnuva mevcut.",
-"ev_more_matches":        "➕ Bu turnuvada daha fazla maç var.",
+"ev_more_leagues":        "ℹ️ Önceliğe göre ilk 15 turnuva gösteriliyor; başkaları da var.",
+"ev_more_matches":        "ℹ️ En erken 10 maç gösteriliyor; başkaları da var.",
 "system_prompt": """Sen spor analistisin. Kısa ve net yaz. Her sporu analiz et.
 
 KURALLAR:
@@ -460,8 +460,8 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "ev_no_live":             "Тікелей эфирде матч жоқ.",
 "ev_no_today":            "Бүгін матч жоқ.",
 "ev_no_tomorrow":         "Ертең матч жоқ.",
-"ev_more_leagues":        "➕ Қосымша турнирлер бар.",
-"ev_more_matches":        "➕ Бұл турнирде тағы матчтар бар.",
+"ev_more_leagues":        "ℹ️ Басымдық бойынша алғашқы 15 турнир көрсетілген; тағы бар.",
+"ev_more_matches":        "ℹ️ Ең ерте 10 матч көрсетілген; тағы бар.",
 "system_prompt": """Сен спорт аналитикісің. Қысқа және нақты жаз. Кез келген спортты талда.
 
 ЕРЕЖЕЛЕР:
@@ -559,8 +559,8 @@ Sport turini tanlang va boshlaymiz!""",
 "ev_no_live":             "Jonli o'yinlar yo'q.",
 "ev_no_today":            "Bugun o'yin yo'q.",
 "ev_no_tomorrow":         "Ertaga o'yin yo'q.",
-"ev_more_leagues":        "➕ Yana turnirlar mavjud.",
-"ev_more_matches":        "➕ Bu turnirda yana o'yinlar bor.",
+"ev_more_leagues":        "ℹ️ Muhimlik bo'yicha dastlabki 15 turnir ko'rsatilmoqda; yana bor.",
+"ev_more_matches":        "ℹ️ Eng erta 10 o'yin ko'rsatilmoqda; yana bor.",
 "system_prompt": """Sen sport analitikisisan. Qisqa va aniq yoz. Har qanday sportni tahlil qil.
 
 QOIDALAR:
@@ -658,8 +658,8 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "ev_no_live":             "لا توجد مباريات مباشرة.",
 "ev_no_today":            "لا توجد مباريات اليوم.",
 "ev_no_tomorrow":         "لا توجد مباريات غداً.",
-"ev_more_leagues":        "➕ تتوفر بطولات إضافية.",
-"ev_more_matches":        "➕ تتوفر مباريات إضافية في هذه البطولة.",
+"ev_more_leagues":        "ℹ️ يتم عرض أهم 15 بطولة حسب الأولوية؛ وهناك المزيد.",
+"ev_more_matches":        "ℹ️ يتم عرض أقرب 10 مباريات موعداً؛ وهناك المزيد.",
 "system_prompt": """أنت محلل رياضي. اكتب بإيجاز ووضوح. حلّل أي رياضة.
 
 القواعد:
