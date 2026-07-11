@@ -52,6 +52,13 @@ Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
 "ob_exp":        "Mərcdə təcrübəniz nə qədərdir?",
 "ob_done":       "Hazırdır! Seçdiyiniz idman: {sports}. Artıq proqnoz ala bilərsiniz.",
 "match_too_far": "Bu matç 1 həftədən uzaqdadır. Yalnız növbəti 7 gün ərzindəki matçlar üçün proqnoz verirəm.",
+"ev_menu_expired":        "⚠️ Matç siyahısı köhnəlib. Zəhmət olmasa, siyahını yenidən açın.",
+"ev_provider_unavailable": "⚠️ Matç məlumatları müvəqqəti əlçatmazdır. Bir az sonra yenidən cəhd edin.",
+"ev_no_live":             "Canlı matç yoxdur.",
+"ev_no_today":            "Bu gün matç yoxdur.",
+"ev_no_tomorrow":         "Sabah matç yoxdur.",
+"ev_more_leagues":        "➕ Daha çox turnir mövcuddur.",
+"ev_more_matches":        "➕ Bu turnirdə daha çox matç var.",
 "system_prompt": """Sən idman analitikisən. Qısa və aydın yaz. İstənilən idmanı analiz et.
 
 QAYDALAR:
@@ -148,6 +155,13 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "ob_exp":        "Каков ваш опыт в ставках?",
 "ob_done":       "Готово! Выбранный спорт: {sports}. Можете запрашивать прогнозы.",
 "match_too_far": "Этот матч слишком далеко. Я даю прогнозы только на матчи в ближайшие 7 дней.",
+"ev_menu_expired":        "⚠️ Список матчей устарел. Пожалуйста, откройте его заново.",
+"ev_provider_unavailable": "⚠️ Данные матчей временно недоступны. Попробуйте позже.",
+"ev_no_live":             "Нет матчей вживую.",
+"ev_no_today":            "Нет матчей сегодня.",
+"ev_no_tomorrow":         "Нет матчей завтра.",
+"ev_more_leagues":        "➕ Доступно больше турниров.",
+"ev_more_matches":        "➕ В этом турнире есть ещё матчи.",
 "system_prompt": """Ты — спортивный аналитик. Пиши коротко и по делу. Анализируй любой спорт.
 
 ПРАВИЛА:
@@ -244,6 +258,13 @@ Choose your sport and let's go!""",
 "ob_exp":        "What is your betting experience?",
 "ob_done":       "Done! Your sport: {sports}. You can now request forecasts.",
 "match_too_far": "This match is too far ahead. I only give forecasts for matches within the next 7 days.",
+"ev_menu_expired":        "⚠️ This match list has expired. Please reopen it.",
+"ev_provider_unavailable": "⚠️ Match data is temporarily unavailable. Please try again later.",
+"ev_no_live":             "No live matches.",
+"ev_no_today":            "No matches today.",
+"ev_no_tomorrow":         "No matches tomorrow.",
+"ev_more_leagues":        "➕ More tournaments available.",
+"ev_more_matches":        "➕ More matches available in this tournament.",
 "system_prompt": """You are a sports analyst. Be brief and direct. Analyse any sport.
 
 RULES:
@@ -335,6 +356,13 @@ Ben bir AI spor analistiyim. Yapabileceklerim:
 Spor seçin ve başlayalım!""",
 "post_onboarding": "Hazır! Ne yapmak istersiniz?\n\n⚽ Tahmin için «Maç tahminleri» tuşuna basın\n⚡ Kupon için «Ekspress» tuşuna basın\n📸 Ya da fikstür fotoğrafı gönderin",
 "match_too_far": "Bu maç çok uzakta. Yalnızca önümüzdeki 7 gün içindeki maçlar için tahmin yapıyorum.",
+"ev_menu_expired":        "⚠️ Maç listesi zaman aşımına uğradı. Lütfen yeniden açın.",
+"ev_provider_unavailable": "⚠️ Maç verileri geçici olarak kullanılamıyor. Lütfen daha sonra tekrar deneyin.",
+"ev_no_live":             "Canlı maç yok.",
+"ev_no_today":            "Bugün maç yok.",
+"ev_no_tomorrow":         "Yarın maç yok.",
+"ev_more_leagues":        "➕ Daha fazla turnuva mevcut.",
+"ev_more_matches":        "➕ Bu turnuvada daha fazla maç var.",
 "system_prompt": """Sen spor analistisin. Kısa ve net yaz. Her sporu analiz et.
 
 KURALLAR:
@@ -427,6 +455,13 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 Спорт түрін таңдап, бастайық!""",
 "post_onboarding": "Дайын! Не істегіңіз келеді?\n\n⚽ Болжам үшін «Матч болжамдары» батырмасын басыңыз\n⚡ Купон үшін «Экспресс» батырмасын басыңыз\n📸 Немесе кесте фотосын жіберіңіз",
 "match_too_far": "Бұл матч тым алыс. Мен тек келесі 7 күн ішіндегі матчтарға болжам беремін.",
+"ev_menu_expired":        "⚠️ Матчтар тізімі ескірді. Оны қайта ашыңыз.",
+"ev_provider_unavailable": "⚠️ Матч деректері уақытша қолжетімсіз. Кейінірек қайталаңыз.",
+"ev_no_live":             "Тікелей эфирде матч жоқ.",
+"ev_no_today":            "Бүгін матч жоқ.",
+"ev_no_tomorrow":         "Ертең матч жоқ.",
+"ev_more_leagues":        "➕ Қосымша турнирлер бар.",
+"ev_more_matches":        "➕ Бұл турнирде тағы матчтар бар.",
 "system_prompt": """Сен спорт аналитикісің. Қысқа және нақты жаз. Кез келген спортты талда.
 
 ЕРЕЖЕЛЕР:
@@ -519,6 +554,13 @@ Men AI sport analitikiman. Nima qila olaman:
 Sport turini tanlang va boshlaymiz!""",
 "post_onboarding": "Tayyor! Nima qilishni xohlaysiz?\n\n⚽ Bashorat uchun «O'yin bashoratlari» tugmasini bosing\n⚡ Kupon uchun «Ekspress» tugmasini bosing\n📸 Yoki jadval rasmini yuboring",
 "match_too_far": "Bu o'yin juda uzoqda. Men faqat keyingi 7 kun ichidagi o'yinlar uchun bashorat beraman.",
+"ev_menu_expired":        "⚠️ O'yinlar ro'yxati eskirdi. Iltimos, uni qayta oching.",
+"ev_provider_unavailable": "⚠️ O'yin ma'lumotlari vaqtincha mavjud emas. Keyinroq urinib ko'ring.",
+"ev_no_live":             "Jonli o'yinlar yo'q.",
+"ev_no_today":            "Bugun o'yin yo'q.",
+"ev_no_tomorrow":         "Ertaga o'yin yo'q.",
+"ev_more_leagues":        "➕ Yana turnirlar mavjud.",
+"ev_more_matches":        "➕ Bu turnirda yana o'yinlar bor.",
 "system_prompt": """Sen sport analitikisisan. Qisqa va aniq yoz. Har qanday sportni tahlil qil.
 
 QOIDALAR:
@@ -611,6 +653,13 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 اختر رياضتك ولنبدأ!""",
 "post_onboarding": "جاهز! ماذا تريد أن تفعل؟\n\n⚽ للتوقع اضغط «توقعات المباريات»\n⚡ للكوبون اضغط «رهان مركب»\n📸 أو أرسل صورة الجدول",
 "match_too_far": "هذه المباراة بعيدة جداً. أقدم التوقعات فقط للمباريات خلال الأيام السبعة القادمة.",
+"ev_menu_expired":        "⚠️ انتهت صلاحية قائمة المباريات. يرجى إعادة فتحها.",
+"ev_provider_unavailable": "⚠️ بيانات المباريات غير متاحة مؤقتاً. يرجى المحاولة لاحقاً.",
+"ev_no_live":             "لا توجد مباريات مباشرة.",
+"ev_no_today":            "لا توجد مباريات اليوم.",
+"ev_no_tomorrow":         "لا توجد مباريات غداً.",
+"ev_more_leagues":        "➕ تتوفر بطولات إضافية.",
+"ev_more_matches":        "➕ تتوفر مباريات إضافية في هذه البطولة.",
 "system_prompt": """أنت محلل رياضي. اكتب بإيجاز ووضوح. حلّل أي رياضة.
 
 القواعد:
