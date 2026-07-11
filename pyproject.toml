@@ -1,0 +1,42 @@
+[tool.ruff]
+# Gradual adoption: keep the ruleset minimal so lint never forces unrelated
+# cleanup of the existing codebase. Tighten rule-by-rule in dedicated PRs.
+line-length = 120
+target-version = "py313"
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+]
+
+[tool.ruff.lint]
+# E4/E7/E9 + F = import errors, comparison/statement errors, syntax errors,
+# pyflakes (undefined names, unused imports). Deliberately NOT enabling
+# style rules (E1/E2/E5, W, I, UP, ...) — reformatting legacy modules is out
+# of scope for lint adoption.
+select = ["E4", "E7", "E9", "F"]
+# The legacy handler style intentionally uses compact one-line statements
+# (`if x: return`) and short loop names; don't force a rewrite:
+ignore = ["E701", "E702", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+# Frozen legacy lint debt (unused imports/variables that predate ruff).
+# New code — including everything in tests/ — gets the full ruleset.
+# Clean these up in dedicated PRs, then drop the entries.
+"dashboard.py" = ["F401"]
+"handlers/__init__.py" = ["F401"]
+"handlers/admin.py" = ["F401"]
+"handlers/forecast.py" = ["F401"]
+"handlers/registration.py" = ["F401"]
+"handlers/express.py" = ["F841"]
+# Manual integration script: env/stub setup must precede project imports.
+"test_e2e.py" = ["E402", "E731", "F401", "F811"]
+
+[tool.pytest.ini_options]
+# Only the offline unit-test package runs by default. test_e2e.py is a
+# manual integration script (real network) and must not be collected.
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,32 @@
+{
+  "lineMatchOutcomes": [
+    {"outcomeId": 1,  "groupTitle": "1x2",                    "outcomeTitle": "1",          "odd": "2.10"},
+    {"outcomeId": 2,  "groupTitle": "1x2",                    "outcomeTitle": "x",          "odd": "3.40"},
+    {"outcomeId": 3,  "groupTitle": "1x2",                    "outcomeTitle": "2",          "odd": "3.60"},
+    {"outcomeId": 4,  "groupTitle": "Double chance",          "outcomeTitle": "1x",         "odd": "1.30"},
+    {"outcomeId": 5,  "groupTitle": "Double chance",          "outcomeTitle": "12",         "odd": "1.32"},
+    {"outcomeId": 6,  "groupTitle": "Double chance",          "outcomeTitle": "x2",         "odd": "1.75"},
+    {"outcomeId": 7,  "groupTitle": "Draw no bet",            "outcomeTitle": "1",          "odd": "1.55"},
+    {"outcomeId": 8,  "groupTitle": "Draw no bet",            "outcomeTitle": "2",          "odd": "2.45"},
+    {"outcomeId": 9,  "groupTitle": "Handicap",               "outcomeTitle": "1 (-1.5)",   "odd": "3.10"},
+    {"outcomeId": 10, "groupTitle": "Handicap",               "outcomeTitle": "2 (+1.5)",   "odd": "1.38"},
+    {"outcomeId": 11, "groupTitle": "Handicap",               "outcomeTitle": "1 (-2.5)",   "odd": "5.50"},
+    {"outcomeId": 12, "groupTitle": "Total goals",            "outcomeTitle": "over 1.5",   "odd": "1.28"},
+    {"outcomeId": 13, "groupTitle": "Total goals",            "outcomeTitle": "under 1.5",  "odd": "3.70"},
+    {"outcomeId": 14, "groupTitle": "Total goals",            "outcomeTitle": "over 2.5",   "odd": "1.85"},
+    {"outcomeId": 15, "groupTitle": "Total goals",            "outcomeTitle": "under 2.5",  "odd": "1.95"},
+    {"outcomeId": 16, "groupTitle": "Total goals",            "outcomeTitle": "over 3.5",   "odd": "3.20"},
+    {"outcomeId": 17, "groupTitle": "Total goals",            "outcomeTitle": "under 3.5",  "odd": "1.33"},
+    {"outcomeId": 18, "groupTitle": "Total goals",            "outcomeTitle": "over 10.5",  "odd": "41.00"},
+    {"outcomeId": 19, "groupTitle": "Both teams to score",    "outcomeTitle": "yes",        "odd": "1.72"},
+    {"outcomeId": 20, "groupTitle": "Both teams to score",    "outcomeTitle": "no",         "odd": "2.05"},
+    {"outcomeId": 21, "groupTitle": "1st half - result",      "outcomeTitle": "1",          "odd": "2.90"},
+    {"outcomeId": 22, "groupTitle": "1st half - result",      "outcomeTitle": "x",          "odd": "2.10"},
+    {"outcomeId": 23, "groupTitle": "1st half - result",      "outcomeTitle": "2",          "odd": "4.20"},
+    {"outcomeId": 24, "groupTitle": "1st half - total",       "outcomeTitle": "over 0.5",   "odd": "1.40"},
+    {"outcomeId": 25, "groupTitle": "1st half - total",       "outcomeTitle": "under 0.5",  "odd": "2.80"},
+    {"outcomeId": 26, "groupTitle": "1st half - total",       "outcomeTitle": "over 1.5",   "odd": "2.60"},
+    {"outcomeId": 27, "groupTitle": "1st half - total",       "outcomeTitle": "under 1.5",  "odd": "1.48"},
+    {"outcomeId": 28, "groupTitle": "Corners",                "outcomeTitle": "over 9.5",   "odd": "1.90"}
+  ]
+}
