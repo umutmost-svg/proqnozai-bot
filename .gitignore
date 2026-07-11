@@ -1,4 +1,24 @@
 __pycache__/
 *.pyc
+
+# Local env & secrets
+.env
+
+# Virtual environments
+.venv/
+venv/
+
+# Logs
 *.log
+
+# Local SQLite (incl. WAL/SHM side files)
 bot.db
+bot.db-wal
+bot.db-shm
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
