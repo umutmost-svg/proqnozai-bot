@@ -8,6 +8,8 @@ from datetime import date
 import httpx
 
 from config import APIFOOTBALL_KEY, FOOTBALL_KEY
+from metrics import compute_team_metrics, format_metrics_block
+from provenance import Provenance
 
 logger = logging.getLogger(__name__)
 
@@ -52,24 +54,25 @@ async def _normalize_names(t1: str, t2: str) -> tuple[str, str]:
     return t1, t2
 
 
-def _avg_goals_str(fixtures: list, team_id: int, team_name: str) -> str:
-    """Calculate avg goals scored/conceded/total from last N fixtures for a team."""
-    scored = []
-    conceded = []
+def _team_results(fixtures: list, team_id: int) -> list[dict]:
+    """Normalize api-sports fixtures into {scored, conceded} from team_id's view,
+    for the deterministic metrics engine. Missing goals stay None. Fixtures are
+    de-duplicated by fixture id so a repeated fixture is never double-counted."""
+    out, seen = [], set()
     for f in fixtures:
+        fid = (f.get("fixture") or {}).get("id")
+        if fid is not None:
+            if fid in seen:
+                continue
+            seen.add(fid)
         is_home = f["teams"]["home"]["id"] == team_id
-        g_home = f["goals"]["home"] or 0
-        g_away = f["goals"]["away"] or 0
-        scored.append(g_home if is_home else g_away)
-        conceded.append(g_away if is_home else g_home)
-    if not scored:
-        return ""
-    n = len(scored)
-    avg_s = sum(scored) / n
-    avg_c = sum(conceded) / n
-    avg_total = avg_s + avg_c
-    return (f"Avg goals scored: {avg_s:.1f} | conceded: {avg_c:.1f} | "
-            f"total per match: {avg_total:.1f} (last {n})")
+        g_home = f["goals"]["home"]
+        g_away = f["goals"]["away"]
+        out.append({
+            "scored": g_home if is_home else g_away,
+            "conceded": g_away if is_home else g_home,
+        })
+    return out
 
 
 async def _fetch_injuries(h, hdrs, team_id: int, team_name: str) -> str:
@@ -183,15 +186,22 @@ async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
 
                 fixtures = await _team_recent(h, hdrs, tid)
                 if fixtures:
-                    avg_str = _avg_goals_str(fixtures, tid, tname)
-                    block = f"{tname} last {len(fixtures)}:\n" + "\n".join(_fixture_lines(fixtures))
-                    if avg_str:
-                        block += f"\n{avg_str}"
-                    parts.append(block)
+                    metrics = compute_team_metrics(_team_results(fixtures, tid))
+                    block = (f"{tname} last {len(fixtures)}:\n"
+                             + "\n".join(_fixture_lines(fixtures))
+                             + "\n" + format_metrics_block(tname, metrics))
+                    parts.append(Provenance("api-football").wrap(block))
 
+                # Injuries: an empty feed means "no information", NOT "no
+                # injuries". Emit the players only when the feed returned some;
+                # otherwise record injuries as a missing field so Claude states
+                # it as unavailable rather than asserting a clean bill of health.
                 inj = await _fetch_injuries(h, hdrs, tid, tname)
                 if inj:
-                    parts.append(inj)
+                    parts.append(Provenance("api-football").wrap(inj))
+                else:
+                    parts.append(Provenance("api-football", missing=["injuries"]).wrap(
+                        f"{tname} injuries/suspensions: data unavailable (feed returned nothing)"))
 
             if t1_id and t2_id:
                 # H2H also can't use `last` on the free plan — fetch all and trim.
@@ -200,7 +210,8 @@ async def _fetch_apifootball(t1_en: str, t2_en: str) -> list[str]:
                 if r3 and r3.status_code == 200:
                     h2h = _finished_recent(r3.json().get("response", []))
                     if h2h:
-                        parts.append("H2H last 5:\n" + "\n".join(_fixture_lines(h2h)))
+                        parts.append(Provenance("api-football").wrap(
+                            "H2H last 5:\n" + "\n".join(_fixture_lines(h2h))))
     except Exception as e:
         logger.error(f"_fetch_apifootball: {e}")
     return parts
@@ -328,70 +339,45 @@ async def _fetch_footballdata(t1_en: str, t2_en: str, league_hint: str = "") -> 
                     _cache_set(f"matches:{tid}", ms, 6 * 3600)
                 if not ms:
                     continue
-                lines, scored, conceded = [], [], []
+                lines, results, seen = [], [], set()
                 for m in ms:
+                    # Belt-and-suspenders: the query already asks for FINISHED,
+                    # but never let a postponed/cancelled fixture into metrics.
+                    if m.get("status") not in (None, "FINISHED"):
+                        continue
+                    mid_ = m.get("id")
+                    if mid_ is not None:
+                        if mid_ in seen:
+                            continue
+                        seen.add(mid_)
                     gh = m["score"]["fullTime"].get("home")
                     ga = m["score"]["fullTime"].get("away")
                     lines.append(f"{m['utcDate'][:10]}: {m['homeTeam']['name']} "
                                  f"{gh}–{ga} {m['awayTeam']['name']}")
                     is_home = m["homeTeam"]["id"] == tid
-                    scored.append((gh if is_home else ga) or 0)
-                    conceded.append((ga if is_home else gh) or 0)
-                block = f"{tname} last {len(ms)}:\n" + "\n".join(lines)
-                n = len(scored)
-                block += (f"\nAvg goals scored: {sum(scored)/n:.1f} | "
-                          f"conceded: {sum(conceded)/n:.1f} | "
-                          f"total per match: {(sum(scored)+sum(conceded))/n:.1f} (last {n})")
-                parts.append(block)
+                    results.append({"scored": gh if is_home else ga,
+                                    "conceded": ga if is_home else gh})
+                if not results:
+                    continue
+                metrics = compute_team_metrics(results)
+                block = (f"{tname} last {len(results)}:\n" + "\n".join(lines)
+                         + "\n" + format_metrics_block(tname, metrics))
+                parts.append(Provenance("football-data").wrap(block))
     except Exception as e:
         logger.error(f"_fetch_footballdata: {e}")
     return parts
 
 
-async def _sonnet_form_estimate(t1: str, t2: str, t1_en: str, t2_en: str) -> str:
-    """
-    Ask Claude Sonnet to recall team/player form from training knowledge.
-    Used only when real APIs return no data.
-    Result is labelled as estimated so the forecast model treats it accordingly.
-    """
-    try:
-        from claude_client import _create_with_retry
-        prompt = (
-            f"You are a sports analyst. Describe the recent form and playing style for these "
-            f"two sports participants using your training knowledge.\n\n"
-            f"Participant 1: {t1_en} (may also appear as: {t1})\n"
-            f"Participant 2: {t2_en} (may also appear as: {t2})\n\n"
-            f"For each participant write 2-4 sentences covering:\n"
-            f"- Recent results trend (winning/losing streak, consistency)\n"
-            f"- Strengths and style of play\n"
-            f"- Notable facts (key players, home/away record, head-to-head if known)\n\n"
-            f"IMPORTANT: Always give your best estimate even if not 100% certain — "
-            f"label uncertain facts with (estimated). Never leave a participant undescribed.\n"
-            f"Format: two clearly labelled paragraphs, one per participant."
-        )
-        r = await _create_with_retry(
-            model="claude-opus-4-8", max_tokens=300,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        if not r.content:
-            return ""
-        text = r.content[0].text.strip()
-        if len(text) < 20:
-            return ""
-        return f"ФОРМА (оценка ИИ, может не отражать последние матчи):\n\n{text}"
-    except Exception as e:
-        logger.warning(f"_sonnet_form_estimate: {e}")
-        return ""
-
-
 async def fetch_real_data(team1: str, team2: str, league_hint: str = "") -> str:
     """
-    Fetch form + goals data for both teams.
-    1. Normalize names to English via Haiku
+    Fetch real provider form + goals data for both teams. FACTUAL DATA ONLY —
+    this function never asks the LLM to invent form, results, injuries or stats.
+    1. Normalize names to English via Haiku (translation only, not facts).
     2. Prefer football-data.org (free tier has CURRENT seasons incl. World Cup);
        teams are resolved via the competition roster, so league_hint is needed.
     3. Fall back to api-sports (only covers 2022-2024 on free — rarely useful).
-    4. Fall back to Claude knowledge estimate (marked as estimated).
+    4. If no provider returns data, return "" — the caller flags the forecast as
+       having no real data and the prompt tells Claude to state it as unavailable.
     """
     if not team1 or not team2:
         return ""
@@ -420,8 +406,11 @@ async def fetch_real_data(team1: str, team2: str, league_hint: str = "") -> str:
         if api_parts:
             return header + "\n\n".join(api_parts)
 
-    # No real data — use Claude knowledge, clearly labelled as an estimate.
-    return await _sonnet_form_estimate(team1, team2, t1_en, t2_en)
+    # No real provider data. Return empty so the caller sets has_real_data=False;
+    # the forecast prompt then requires Claude to state form/H2H as unavailable
+    # instead of fabricating it. We never invent factual sports data.
+    logger.info(f"fetch_real_data: no provider data for '{team1}' vs '{team2}'")
+    return ""
 
 
 # ─── Football-only helpers for live tracking ──────────────────────────────────
@@ -438,6 +427,7 @@ async def search_match(query):
                     home = f["teams"]["home"]["name"]; away = f["teams"]["away"]["name"]
                     if query.lower() in home.lower() or query.lower() in away.lower():
                         out.append({"id": str(f["fixture"]["id"]), "name": f"{home} vs {away}",
+                            "home": home, "away": away,
                             "status": f["fixture"]["status"]["short"],
                             "minute": f["fixture"]["status"].get("elapsed", 0),
                             "score": f"{f['goals']['home']}-{f['goals']['away']}", "live": True})
@@ -450,6 +440,7 @@ async def search_match(query):
                     home = f["teams"]["home"]["name"]; away = f["teams"]["away"]["name"]
                     if query.lower() in home.lower() or query.lower() in away.lower():
                         out.append({"id": str(f["fixture"]["id"]), "name": f"{home} vs {away}",
+                            "home": home, "away": away,
                             "status": f["fixture"]["status"]["short"], "minute": 0,
                             "score": "0-0", "live": False})
                 return out[:3]

@@ -57,9 +57,9 @@ Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
 QAYDALAR:
 - Keflər varsa — yalnız onları istifadə et
 - Yalnız mətn və emoji, ** markdown yox (mərc sətri istisna)
-- FORMA: hər iştirakçı üçün 1 qısa cümlə — həmişə yaz, (təxmini) etiketi ilə olsa belə
+- FORMA: hər iştirakçının formasını YALNIZ verilən real məlumat əsasında yaz; məlumat yoxdursa "məlumat mövcud deyil" yaz — UYDURMA
 - Real matç verileri varsa — ortalama qol sayını göstər
-- MƏLUMAT YOXDUR demək YASAQDIR — həmişə analiz ver
+- Real məlumat yoxdursa bunu açıq yaz ("məlumat mövcud deyil") — fakt, nəticə, zədə və ya heyət UYDURMA
 - Bütün proqnoz — maksimum 12 sətir
 
 FORMAT (bütün sətirler MƏCBURI):
@@ -153,9 +153,9 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 ПРАВИЛА:
 - Если есть коэффициенты — используй только их
 - Только текст и emoji, без ** markdown (кроме строки ставки)
-- ФОРМА: 1 короткое предложение на каждого — всегда пиши, даже с (оценочно)
+- ФОРМА: описывай форму каждого ТОЛЬКО по предоставленным реальным данным; если данных нет — напиши "данные недоступны", НЕ выдумывай
 - Если есть реальные данные матчей — укажи среднее количество голов
-- ЗАПРЕЩЕНО писать "данных нет", "статистика недоступна" или аналогичное
+- Если реальных данных нет — честно укажи это ("данные недоступны"); НЕ выдумывай факты, результаты, травмы и составы
 - Весь прогноз — максимум 12 строк
 
 ФОРМАТ (все строки ОБЯЗАТЕЛЬНЫ):
@@ -249,9 +249,9 @@ Choose your sport and let's go!""",
 RULES:
 - If odds are provided — use only those
 - Plain text and emoji only, no ** markdown (except the bet line)
-- FORM: 1 short sentence per participant — always write it, use (est.) if uncertain
+- FORM: describe each participant's form ONLY from the provided real data; if none is provided, write "data unavailable" — do NOT invent
 - If real match data is provided — include avg goals per game
-- FORBIDDEN to write "no data", "stats unavailable" or similar
+- If real data is missing, state it honestly ("data unavailable"); do NOT fabricate facts, results, injuries or lineups
 - Entire forecast — 12 lines max
 
 FORMAT (all lines MANDATORY):
@@ -340,9 +340,9 @@ Spor seçin ve başlayalım!""",
 KURALLAR:
 - Oran varsa — sadece onları kullan
 - Sadece metin ve emoji, ** markdown yok (bahis satırı hariç)
-- FORM: her katılımcı için 1 kısa cümle — her zaman yaz, (tahmini) etiketiyle olsa bile
+- FORM: her katılımcının formunu YALNIZCA verilen gerçek veriye göre yaz; veri yoksa "veri mevcut değil" yaz — UYDURMA
 - Gerçek maç verisi varsa — ortalama gol sayısını göster
-- "Veri yok", "istatistik mevcut değil" yazmak YASAKTIR
+- Gerçek veri yoksa bunu dürüstçe belirt ("veri mevcut değil"); gerçek, sonuç, sakatlık veya kadro UYDURMA
 - Tüm tahmin — maksimum 12 satır
 
 FORMAT (tüm satırlar ZORUNLU):
@@ -432,9 +432,9 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 ЕРЕЖЕЛЕР:
 - Коэффициенттер берілсе — тек соларды қолдан
 - Тек мәтін және emoji, ** markdown жоқ (ставка жолы ерекше)
-- ФОРМА: әр қатысушы үшін 1 сөйлем — әрқашан жаз, (бағалау) белгісімен болса да
+- ФОРМА: әр қатысушының формасын ТЕК берілген нақты дерекпен жаз; дерек болмаса "деректер қолжетімсіз" деп жаз — ОЙДАН ШЫҒАРМА
 - Нақты матч деректері болса — орташа гол санын көрсет
-- "Деректер жоқ", "статистика жоқ" ЖАЗУҒА ТЫЙЫМ САЛЫНҒАН
+- Нақты дерек болмаса — оны шыншыл көрсет ("деректер қолжетімсіз"); факті, нәтиже, жарақат, құрам ОЙДАН ШЫҒАРМА
 - Бүкіл болжам — максимум 12 жол
 
 ФОРМАТ (барлық жолдар МІНДЕТТІ):
@@ -524,9 +524,9 @@ Sport turini tanlang va boshlaymiz!""",
 QOIDALAR:
 - Koeffitsientlar berilsa — faqat shularni ishlatish
 - Faqat matn va emoji, ** markdown yo'q (garov satri bundan mustasno)
-- SHAKL: har bir ishtirokchi uchun 1 jumla — doim yoz, (taxminiy) bilan bo'lsa ham
+- SHAKL: har bir ishtirokchining formasini FAQAT berilgan haqiqiy ma'lumot asosida yoz; ma'lumot bo'lmasa "ma'lumot mavjud emas" deb yoz — O'YLAB TOPMA
 - Haqiqiy ma'lumotlar bo'lsa — o'rtacha gol sonini ko'rsat
-- "Ma'lumot yo'q", "statistika mavjud emas" yozish TAQIQLANGAN
+- Haqiqiy ma'lumot bo'lmasa, buni rostini yoz ("ma'lumot mavjud emas"); fakt, natija, jarohat yoki tarkib O'YLAB TOPMA
 - Butun bashorat — maksimum 12 qator
 
 FORMAT (barcha satrlar MAJBURIY):
@@ -616,9 +616,9 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 القواعد:
 - إذا وُجدت أرباح — استخدمها فقط
 - نص عادي وإيموجي فقط، لا Markdown ** (إلا سطر الرهان)
-- الشكل: جملة واحدة لكل مشارك — اكتبها دائماً، حتى بـ (تقديري)
+- الشكل: صف حالة كل مشارك من البيانات الحقيقية المتوفرة فقط؛ إن لم تتوفر بيانات فاكتب "لا تتوفر بيانات" — لا تختلق
 - إذا توفرت بيانات حقيقية — أضف متوسط الأهداف
-- محظور كتابة "لا توجد بيانات" أو "الإحصائيات غير متاحة"
+- إن غابت البيانات الحقيقية فاذكر ذلك بصدق ("لا تتوفر بيانات")؛ لا تختلق وقائع أو نتائج أو إصابات أو تشكيلات
 - التوقع كله — 12 سطراً كحد أقصى
 
 الصيغة (جميع الأسطر إلزامية):
