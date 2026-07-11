@@ -148,6 +148,46 @@ async def _async_msg(msg):
     return msg
 
 
+async def test_new_session_preserves_unrelated_forecast_state(temp_db, monkeypatch):
+    uid = 811008
+    temp_db.db_ensure(uid, "u", "en")
+
+    async def _load():
+        return [_raw(1, "Arsenal", "Chelsea")]
+
+    monkeypatch.setattr(fc, "_mostbet_load_matches", _load)
+
+    # Seed forecast state unrelated to the event snapshot.
+    ctx = _ctx(fm_matches=[normalize_fixture(_raw(9, "Old", "Stale"))],
+               odds_attached=True, has_real_data=True,
+               parsed_teams=("X", "Y"), pending_content=[{"type": "text", "text": "keep"}])
+    msg = _FakeMsg()
+    update = types.SimpleNamespace(
+        effective_user=types.SimpleNamespace(id=uid),
+        message=types.SimpleNamespace(reply_text=lambda *a, **k: _async_msg(msg)))
+
+    await fc.forecast_menu_start(update, ctx)
+
+    # Only the event snapshot is invalidated…
+    assert ctx.user_data["fm_matches"] is None
+    assert ctx.user_data["fm_leagues"] is None
+    # …unrelated forecast state is untouched.
+    assert ctx.user_data["odds_attached"] is True
+    assert ctx.user_data["has_real_data"] is True
+    assert ctx.user_data["parsed_teams"] == ("X", "Y")
+    assert ctx.user_data["pending_content"] == [{"type": "text", "text": "keep"}]
+
+
+def test_fmt_kickoff_uses_user_timezone(temp_db):
+    from datetime import datetime, timezone
+    uid = 811009
+    temp_db.db_ensure(uid, "u", "en")
+    temp_db.db_set(uid, "tz_offset", 5)
+    out = fc._fmt_kickoff(datetime(2026, 7, 12, 12, 0, tzinfo=timezone.utc), uid)
+    assert "17:00" in out          # 12:00 UTC → 17:00 at UTC+5
+    assert "UTC+5" in out
+
+
 # ─── Truncation visible to the user ───────────────────────────────────────────
 
 async def test_sport_cb_flags_more_leagues(temp_db):

@@ -36,6 +36,11 @@ def test_iso_time_parsed_to_utc():
     assert parse_kickoff_utc("2026-07-12T15:00:00Z") == datetime(2026, 7, 12, 15, 0, tzinfo=UTC)
 
 
+def test_iso_time_with_offset_parsed_to_utc():
+    # +02:00 → normalized back to UTC.
+    assert parse_kickoff_utc("2026-07-12T17:00:00+02:00") == datetime(2026, 7, 12, 15, 0, tzinfo=UTC)
+
+
 def test_bad_time_returns_none():
     assert parse_kickoff_utc("nonsense") is None
     assert parse_kickoff_utc("") is None
@@ -102,6 +107,23 @@ def test_english_and_azerbaijan_premier_disambiguated():
     assert league_rank("Premier League", "Azerbaijan") == 11
 
 
+def test_other_domestic_premier_leagues_not_given_english_priority():
+    # A country with no explicit entry must NOT inherit England's PL rank.
+    assert league_rank("Premier League", "Egypt") == len(el._LEAGUE_PRIORITY)
+    assert league_rank("Premier League", "Egypt") != 5
+
+
+def test_conference_league_not_matched_as_europa():
+    # Old and new names both resolve to Conference (rank 2), never Europa (1).
+    assert league_rank("UEFA Europa Conference League", "Europe") == 2
+    assert league_rank("UEFA Conference League", "Europe") == 2
+    assert league_rank("UEFA Europa League", "Europe") == 1
+
+
+def test_super_lig_matched_with_diacritic():
+    assert league_rank("Süper Lig", "Turkey") == 10
+
+
 # ─── Status precedence & filtering ────────────────────────────────────────────
 
 def _item(**kw):
@@ -120,6 +142,19 @@ def test_explicit_finished_beats_kickoff():
 
 def test_live_flag_keeps_live_bucket():
     assert visible_bucket(_item(is_live=True, kickoff_utc=None), NOW, UTC) == el.LIVE
+
+
+def test_live_stays_visible_even_when_kickoff_older_than_grace():
+    # A live match that kicked off hours ago (past the grace window) is LIVE, not
+    # dropped — the live flag/status wins over the kickoff-grace fallback.
+    old = NOW - FINISHED_GRACE - timedelta(hours=2)
+    assert visible_bucket(_item(is_live=True, kickoff_utc=old), NOW, UTC) == el.LIVE
+    assert visible_bucket(_item(status="live", is_live=False, kickoff_utc=old), NOW, UTC) == el.LIVE
+
+
+def test_cancelled_and_abandoned_excluded():
+    assert visible_bucket(_item(status="cancelled", kickoff_utc=NOW), NOW, UTC) is None
+    assert visible_bucket(_item(status="abandoned", kickoff_utc=NOW), NOW, UTC) is None
 
 
 def test_nonlive_past_no_status_removed_after_grace():
@@ -182,6 +217,33 @@ def test_distinct_matches_not_collapsed():
     a = normalize_fixture(_raw(fid=1, when="12.07.2026 18:00:00"))
     b = normalize_fixture(_raw(fid=2, t1="Liverpool", t2="Everton",
                                when="12.07.2026 20:00:00"))
+    assert len(select_visible([a, b], NOW, UTC)) == 2
+
+
+def test_same_teams_two_competitions_not_collapsed():
+    # Same teams, same kickoff, DIFFERENT competition → distinct fixtures.
+    a = normalize_fixture(_raw(fid=1, league="Premier League", country="England"))
+    b = normalize_fixture(_raw(fid=2, league="FA Cup", country="England"))
+    assert len(select_visible([a, b], NOW, UTC)) == 2
+
+
+def test_two_legged_tie_different_dates_not_collapsed():
+    a = normalize_fixture(_raw(fid=1, league="Champions League", country="Europe",
+                               when="12.07.2026 20:00:00"))
+    b = normalize_fixture(_raw(fid=2, league="Champions League", country="Europe",
+                               when="13.07.2026 20:00:00"))
+    assert len(select_visible([a, b], NOW, UTC)) == 2
+
+
+def test_women_and_senior_not_collapsed():
+    a = normalize_fixture(_raw(fid=1, t1="Arsenal", t2="Chelsea"))
+    b = normalize_fixture(_raw(fid=2, t1="Arsenal W", t2="Chelsea W"))
+    assert len(select_visible([a, b], NOW, UTC)) == 2
+
+
+def test_reserve_and_senior_not_collapsed():
+    a = normalize_fixture(_raw(fid=1, t1="Barcelona", t2="Sevilla"))
+    b = normalize_fixture(_raw(fid=2, t1="Barcelona B", t2="Sevilla"))
     assert len(select_visible([a, b], NOW, UTC)) == 2
 
 
