@@ -1,71 +1,69 @@
-"""League prioritisation, stable sorting and match time-window selection.
+"""League prioritisation and deterministic ordering.
 
-Callback indices (fm_lg_{i}) are resolved by re-running the same sort, so
-_sorted_leagues must be deterministic — these tests guard that contract.
+The event menu resolves callback indices against a frozen snapshot; the league
+ordering that produces those indices must be deterministic and follow the
+required priority. These tests guard that contract (logic now lives in
+event_list; see also test_event_list.py and test_event_menu_snapshot.py).
 """
-from datetime import datetime, timedelta, timezone
-
-from config import MOSTBET_SRC_TZ
-from handlers.forecast import (
-    _is_priority_league,
-    _league_rank,
-    _match_in_window,
-    _sorted_leagues,
-)
-
-SRC_TZ = timezone(timedelta(hours=MOSTBET_SRC_TZ))
+from event_list import group_by_league, league_rank, normalize_fixture
 
 
-def _dt(days_ahead: float) -> str:
-    return (datetime.now(SRC_TZ) + timedelta(days=days_ahead)).strftime("%d.%m.%Y %H:%M:%S")
+def _raw(fid, league, country, t1="A", t2="B"):
+    return {"id": fid, "team1Title": t1, "team2Title": t2, "lineCategory": "Football",
+            "lineSubCategory": league, "lineSuperCategory": country,
+            "matchBeginAt": "12.07.2026 18:00:00", "isLive": False}
 
 
-def test_priority_league_detection():
-    assert _is_priority_league("FIFA World Cup 2026")
-    assert _is_priority_league("UEFA Champions League")
-    assert not _is_priority_league("Premier League")
-    assert not _is_priority_league("")
-    assert not _is_priority_league(None)
+# The required priority order, top to bottom.
+_ORDER = [
+    ("Champions League", "Europe"),
+    ("Europa League", "Europe"),
+    ("Conference League", "Europe"),
+    ("World Cup", "World"),
+    ("Euro 2028", "Europe"),
+    ("Premier League", "England"),
+    ("La Liga", "Spain"),
+    ("Serie A", "Italy"),
+    ("Bundesliga", "Germany"),
+    ("Ligue 1", "France"),
+    ("Süper Lig", "Turkey"),
+    ("Premier League", "Azerbaijan"),
+]
 
 
-def test_league_rank_orders_by_priority_list():
-    assert _league_rank("World Cup 2026") < _league_rank("Champions League")
-    assert _league_rank("Champions League") < _league_rank("Serie A")
+def test_full_priority_order_is_strictly_increasing():
+    ranks = [league_rank(name, country) for name, country in _ORDER]
+    assert ranks == sorted(ranks)
+    assert len(set(ranks)) == len(ranks)  # each named league gets a distinct rank
 
 
-def test_sorted_leagues_pins_majors_before_busy_domestic_leagues():
-    leagues = {
-        "Premier League": [{}] * 30,
-        "World Cup 2026": [{}] * 2,
-        "Serie A": [{}] * 20,
-    }
-    order = _sorted_leagues(leagues)
-    assert order[0] == "World Cup 2026"
-    # Non-priority leagues sort by match count desc.
-    assert order[1:] == ["Premier League", "Serie A"]
+def test_unlisted_leagues_rank_after_all_named():
+    named_max = max(league_rank(n, c) for n, c in _ORDER)
+    assert league_rank("Some Regional Cup", "Nowhere") > named_max
 
 
-def test_sorted_leagues_is_deterministic():
-    leagues = {
-        "League A": [{}] * 5,
-        "League B": [{}] * 5,
-        "Champions League": [{}] * 1,
-        "Euro 2028": [{}] * 1,
-    }
-    first = _sorted_leagues(leagues)
+def test_group_by_league_orders_by_priority():
+    raws = [
+        _raw(1, "Serie A", "Italy"),
+        _raw(2, "Champions League", "Europe", t1="X", t2="Y"),
+        _raw(3, "Random League", "Nowhere", t1="P", t2="Q"),
+        _raw(4, "Premier League", "England", t1="M", t2="N"),
+    ]
+    items = [normalize_fixture(r) for r in raws]
+    groups, _ = group_by_league(items)
+    names = [g.league_name for g in groups]
+    assert names[:3] == ["Champions League", "Premier League", "Serie A"]
+    assert names[-1] == "Random League"
+
+
+def test_group_by_league_is_deterministic():
+    raws = [
+        _raw(1, "League A", "X"), _raw(2, "League B", "Y", t1="C", t2="D"),
+        _raw(3, "Champions League", "Europe", t1="E", t2="F"),
+        _raw(4, "Euro 2028", "Europe", t1="G", t2="H"),
+    ]
+    items = [normalize_fixture(r) for r in raws]
+    first = [g.league_key for g in group_by_league(items)[0]]
     for _ in range(5):
-        assert _sorted_leagues(dict(leagues)) == first
-
-
-def test_live_match_always_in_window():
-    assert _match_in_window({"isLive": True, "matchBeginAt": _dt(30)})
-
-
-def test_regular_league_uses_seven_day_window():
-    assert _match_in_window({"lineSubCategory": "Premier League", "matchBeginAt": _dt(5)})
-    assert not _match_in_window({"lineSubCategory": "Premier League", "matchBeginAt": _dt(10)})
-
-
-def test_priority_league_uses_fourteen_day_window():
-    assert _match_in_window({"lineSubCategory": "World Cup 2026", "matchBeginAt": _dt(10)})
-    assert not _match_in_window({"lineSubCategory": "World Cup 2026", "matchBeginAt": _dt(20)})
+        again = [g.league_key for g in group_by_league(list(items))[0]]
+        assert again == first
