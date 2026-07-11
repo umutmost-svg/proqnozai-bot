@@ -27,7 +27,7 @@ import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import httpx

@@ -5,7 +5,6 @@ enrichment key is monkeypatched on so the code path runs while the injected
 client controls every response.
 """
 import asyncio
-import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -13,7 +12,7 @@ import pytest
 
 import enrichment
 from enrichment import (
-    EnrichmentBlock, EnrichmentResult, TTLCache, enrich_football_match,
+    EnrichmentBlock, TTLCache, enrich_football_match,
 )
 from match_validation import Confidence
 
