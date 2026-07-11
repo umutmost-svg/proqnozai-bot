@@ -56,7 +56,7 @@ import db
 import security
 import translations
 from translations import T, tr
-from football_api import fetch_real_data, _normalize_names, _sonnet_form_estimate
+from football_api import fetch_real_data, _normalize_names
 import httpx
 
 _raw_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -236,24 +236,8 @@ class TestMostbetAPI(unittest.IsolatedAsyncioTestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Opus form estimate (requires Anthropic key)
+# 5. Form estimate removed: factual data is provider-only, never LLM-invented.
 # ─────────────────────────────────────────────────────────────────────────────
-@unittest.skipUnless(HAVE_ANTHROPIC, "ANTHROPIC_API_KEY not set")
-class TestFormEstimate(unittest.IsolatedAsyncioTestCase):
-
-    async def test_known_teams_return_text(self):
-        from football_api import _sonnet_form_estimate
-        result = await _sonnet_form_estimate("Арсенал", "Челси", "Arsenal", "Chelsea")
-        print(f"\n  [Form estimate] Arsenal vs Chelsea: {len(result)} chars")
-        self.assertIsInstance(result, str)
-        self.assertGreater(len(result), 50)
-        # Current implementation labels the block as an AI estimate in Russian.
-        self.assertIn("ФОРМА", result)
-
-    async def test_unknown_teams_graceful(self):
-        from football_api import _sonnet_form_estimate
-        result = await _sonnet_form_estimate("ZZZUNKNOWN", "ZZZUNKNOWN2", "ZZZUNKNOWN", "ZZZUNKNOWN2")
-        self.assertIsInstance(result, str)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

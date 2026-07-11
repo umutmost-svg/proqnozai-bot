@@ -11,6 +11,7 @@ from translations import T, tr
 from security import uinfo, sec_blocked, rate_check, record_viol, detect_injection
 from claude_client import claude_forecast
 from football_api import search_match, fetch_real_data
+from match_validation import MatchRef, validate_match
 from mostbet import (
     _mostbet_load_matches, _is_within_week, _is_virtual_match, _is_outright_market,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
@@ -41,6 +42,25 @@ _SPORT_TITLE = {
 def _loc(d: dict, lang: str) -> str:
     """Pick a localized string from a dict, falling back to Russian."""
     return d.get(lang, d["ru"])
+
+
+def _pick_watch_candidate(candidates: list, ref: dict | None) -> dict | None:
+    """Choose a live/today fixture to attach a watch button to, validating each
+    candidate against the requested match so we never attach a DIFFERENT match's
+    fixture id (which would then drive live tracking and odds alerts). Without a
+    reference (e.g. photo flow) preserve the previous first-hit behavior."""
+    if not candidates:
+        return None
+    if not ref:
+        return candidates[0]
+    requested = MatchRef(home=ref.get("home", ""), away=ref.get("away", ""),
+                         is_live=ref.get("is_live"))
+    for c in candidates:
+        cand = MatchRef(home=c.get("home", ""), away=c.get("away", ""),
+                        is_live=c.get("live"))
+        if validate_match(requested, cand).usable:
+            return c
+    return None
 
 
 # Major tournaments pinned to the top of the league list regardless of match
@@ -197,8 +217,12 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
         "[📋 recent matches] — when REAL DATA is provided, list each team's last 5 "
         "results (date, teams, score) under the localized team name; skip if no real data.\n"
         "[🔑 key factor] — 1–2 sentences on the single biggest factor.\n"
-        "[🩹 injuries/absences] — key missing players if in the data, else 'none significant'.\n"
-        "[📈 form] — one line per team: trend + avg total goals/match.\n"
+        "[🩹 injuries/absences] — list key missing players ONLY if they appear in the "
+        "provided data. If the data marks injuries as unavailable or does not include "
+        "them, write that injury data is unavailable — NEVER claim a team has no "
+        "injuries/absences when the feed provided no information.\n"
+        "[📈 form] — one line per team: trend + avg total goals/match, using ONLY the "
+        "provided computed metrics; if no data, write that form data is unavailable.\n"
         "[💎 value verdict] — compare your probability vs odds-implied (1/odd); is there value?\n"
         "[🔢 exact score] — most likely final score + one alternative.\n"
         "TONE: write in a formal, professional analytical register — like a serious "
@@ -221,20 +245,23 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
         sys_prompt += data_note.get(lang, data_note["ru"])
     else:
         no_data_note = {
-            "ru": "\n\nФОРМА: Реальные данные не предоставлены. ОБЯЗАТЕЛЬНО напиши форму и стиль каждой команды/участника на основе своих знаний. Помечай неточности как '(оценочно)'. ЗАПРЕЩЕНО писать 'данные уточняются', 'статистика недоступна', 'нет информации' или что-либо подобное — всегда давай содержательный анализ.",
-            "az": "\n\nFORMA: Real məlumatlar verilməyib. Biliklərinə əsasən hər iştirakçının formasını MÜTLƏQ təsvir et. Qeyri-dəqiq faktları '(təxmini)' kimi işarələ. 'Məlumat yoxdur', 'statistika əlçatmazdır' yazmaq YASAQDIR.",
-            "en": "\n\nFORM: No live data provided. ALWAYS write form and style for each team/participant based on your knowledge. Mark uncertain facts as '(estimated)'. FORBIDDEN to write 'no data', 'stats unavailable', 'data pending' or anything similar — always give substantive analysis.",
-            "tr": "\n\nFORM: Gerçek veri sağlanmadı. Bilgine dayanarak her katılımcının formasını MUTLAKA yaz. Belirsiz bilgileri '(tahmini)' olarak işaretle. 'Veri yok', 'istatistik mevcut değil' yazmak YASAKTIR.",
-            "kz": "\n\nФОРМА: Нақты деректер берілмеді. Білімің негізінде әр қатысушының форасын МІНДЕТТІ түрде жаз. Белгісіз фактілерді '(бағалау)' деп белгіле. 'Деректер жоқ' немесе ұқсас жазу ТЫЙЫМ САЛЫНҒАН.",
-            "uz": "\n\nSHAKL: Haqiqiy ma'lumotlar berilmagan. Bilimingga asoslanib har bir ishtirokchining formasini ALBATTA yoz. Noaniq faktlarni '(taxminiy)' deb belgi. 'Ma'lumot yo'q' yozish TAQIQLANGAN.",
-            "ar": "\n\nالشكل: لا توجد بيانات حقيقية. استناداً لمعرفتك اكتب دائماً شكل وأسلوب كل مشارك. اذكر الحقائق غير المؤكدة بـ '(تقديري)'. محظور كتابة 'لا توجد بيانات' أو 'الإحصائيات غير متاحة' أو ما شابه ذلك.",
+            "ru": "\n\nДАННЫЕ: Реальные данные о матчах, форме, травмах и статистике НЕ предоставлены. НЕ придумывай результаты, форму, травмы, составы или статистику. Честно укажи, что данные недоступны, и строй анализ только на коэффициентах (если они есть) и общих тактических соображениях, без конкретных вымышленных фактов.",
+            "az": "\n\nMƏLUMAT: Matç, forma, zədə və statistika üzrə real məlumat VERİLMƏYİB. Nəticələri, formanı, zədələri, heyəti və ya statistikanı UYDURMA. Məlumatın mövcud olmadığını açıq yaz və analizi yalnız keflərə (varsa) və ümumi taktiki mülahizələrə əsaslandır.",
+            "en": "\n\nDATA: No real data on matches, form, injuries or statistics was provided. Do NOT invent results, form, injuries, lineups or statistics. State honestly that the data is unavailable and base the analysis only on the odds (if any) and general tactical reasoning — no specific fabricated facts.",
+            "tr": "\n\nVERİ: Maç, form, sakatlık ve istatistik hakkında gerçek veri SAĞLANMADI. Sonuçları, formu, sakatlıkları, kadroyu veya istatistiği UYDURMA. Verinin mevcut olmadığını dürüstçe belirt ve analizi yalnızca oranlara (varsa) ve genel taktik değerlendirmeye dayandır.",
+            "kz": "\n\nДЕРЕК: Матч, форма, жарақат және статистика бойынша нақты дерек БЕРІЛМЕДІ. Нәтижелерді, форманы, жарақаттарды, құрамды немесе статистиканы ОЙДАН ШЫҒАРМА. Деректің қолжетімсіз екенін шыншыл көрсет және талдауды тек коэффициенттерге (болса) және жалпы тактикалық пайымдауға негізде.",
+            "uz": "\n\nMA'LUMOT: O'yin, forma, jarohat va statistika bo'yicha haqiqiy ma'lumot BERILMAGAN. Natijalar, forma, jarohatlar, tarkib yoki statistikani O'YLAB TOPMA. Ma'lumot mavjud emasligini rostini yoz va tahlilni faqat koeffitsientlar (bo'lsa) va umumiy taktik mulohazaga asosla.",
+            "ar": "\n\nالبيانات: لم تُقدَّم بيانات حقيقية عن المباريات أو الشكل أو الإصابات أو الإحصائيات. لا تختلق نتائج أو شكلاً أو إصابات أو تشكيلات أو إحصائيات. اذكر بصدق أن البيانات غير متوفرة وابنِ التحليل فقط على الأرباح (إن وُجدت) والاعتبارات التكتيكية العامة دون وقائع مُختلقة.",
         }
         sys_prompt += no_data_note.get(lang, no_data_note["ru"])
 
-    # Fetch Mostbet odds for text-based queries
+    # Fetch Mostbet odds for text-based queries. In the menu flow fm_match_cb has
+    # already attached odds for this exact match, so guard against a second
+    # (duplicate) injection — the fuzzy re-lookup here is only for other flows.
     parsed_teams = context.user_data.get("parsed_teams")
+    odds_attached = context.user_data.pop("odds_attached", False)
     mb_match = None
-    if parsed_teams:
+    if parsed_teams and not odds_attached:
         t1, t2 = parsed_teams
         mb_match = await mostbet_find_match(t1, t2)
         if mb_match:
@@ -255,8 +282,9 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
         from config import APIFOOTBALL_KEY
         if APIFOOTBALL_KEY:
             ms = await search_match(" ".join(text.split()[:3]))
-            if ms:
-                m = ms[0]; context.user_data[f"mn_{m['id']}"] = m["name"]
+            m = _pick_watch_candidate(ms, context.user_data.get("match_ref"))
+            if m:
+                context.user_data[f"mn_{m['id']}"] = m["name"]
                 mb_line_id = context.user_data.get("pending_mostbet_line_id")
                 if not mb_line_id and mb_match:
                     mb_line_id = str(mb_match.get("id") or "")
@@ -416,6 +444,13 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content.append({"type": "text", "text": odds_str})
 
     context.user_data["parsed_teams"] = (t1, t2)
+    # Odds for this exact match are already in `content`; tell _generate_forecast
+    # not to re-fetch and inject them a second time (duplicate-odds fix).
+    context.user_data["odds_attached"] = True
+    # Deterministic reference for validating any live fixture we later attach.
+    context.user_data["match_ref"] = {
+        "home": t1, "away": t2, "is_live": bool(m.get("isLive")),
+    }
     if real_data:
         content.append({"type": "text", "text": real_data})
         context.user_data["has_real_data"] = True
@@ -554,6 +589,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["pending_content"] = content
         context.user_data["pending_text"] = ""
         context.user_data["parsed_teams"] = None
+        context.user_data["match_ref"] = None
         context.user_data["has_real_data"] = False
         status_msg = await update.message.reply_text(_loc(_THINKING, lang))
         await _generate_forecast(uid, context, status_msg)
