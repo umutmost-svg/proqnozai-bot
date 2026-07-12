@@ -59,6 +59,11 @@ Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
 "ev_no_tomorrow":         "Sabah matç yoxdur.",
 "ev_more_leagues":        "ℹ️ Prioritet üzrə ilk 15 turnir göstərilir; başqaları da var.",
 "ev_more_matches":        "ℹ️ Ən erkən 10 matç göstərilir; başqaları da var.",
+"enr_football_unavailable": "ℹ️ Bu matç üçün doğrulanmış futbol məlumatı əlçatan deyil — proqnoz keflərə əsaslanır.",
+"enr_standings_unavailable": "ℹ️ Turnir cədvəli əlçatan deyil.",
+"enr_lineups_unavailable": "ℹ️ Heyətlər hələ məlum deyil.",
+"enr_injuries_unavailable": "ℹ️ Zədə/diskvalifikasiya məlumatı əlçatan deyil.",
+"enr_unverified":         "ℹ️ Matç doğrulana bilmədi — yalnız keflər göstərilir.",
 "system_prompt": """Sən idman analitikisən. Qısa və aydın yaz. İstənilən idmanı analiz et.
 
 QAYDALAR:
@@ -162,6 +167,11 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "ev_no_tomorrow":         "Нет матчей завтра.",
 "ev_more_leagues":        "ℹ️ Показаны 15 приоритетных турниров; есть и другие.",
 "ev_more_matches":        "ℹ️ Показаны первые 10 матчей по времени; есть и другие.",
+"enr_football_unavailable": "ℹ️ Проверенные футбольные данные для этого матча недоступны — прогноз на основе коэффициентов.",
+"enr_standings_unavailable": "ℹ️ Турнирная таблица недоступна.",
+"enr_lineups_unavailable": "ℹ️ Составы пока неизвестны.",
+"enr_injuries_unavailable": "ℹ️ Данные о травмах/дисквалификациях недоступны.",
+"enr_unverified":         "ℹ️ Матч не удалось подтвердить — показаны только коэффициенты.",
 "system_prompt": """Ты — спортивный аналитик. Пиши коротко и по делу. Анализируй любой спорт.
 
 ПРАВИЛА:
@@ -265,6 +275,11 @@ Choose your sport and let's go!""",
 "ev_no_tomorrow":         "No matches tomorrow.",
 "ev_more_leagues":        "ℹ️ Showing the top 15 tournaments by priority; more exist.",
 "ev_more_matches":        "ℹ️ Showing the earliest 10 matches; more exist.",
+"enr_football_unavailable": "ℹ️ Verified football data is unavailable for this match — the forecast is based on the odds.",
+"enr_standings_unavailable": "ℹ️ League standings are unavailable.",
+"enr_lineups_unavailable": "ℹ️ Lineups are not yet available.",
+"enr_injuries_unavailable": "ℹ️ Injury/suspension data is unavailable.",
+"enr_unverified":         "ℹ️ The match could not be verified — showing odds only.",
 "system_prompt": """You are a sports analyst. Be brief and direct. Analyse any sport.
 
 RULES:
@@ -363,6 +378,11 @@ Spor seçin ve başlayalım!""",
 "ev_no_tomorrow":         "Yarın maç yok.",
 "ev_more_leagues":        "ℹ️ Önceliğe göre ilk 15 turnuva gösteriliyor; başkaları da var.",
 "ev_more_matches":        "ℹ️ En erken 10 maç gösteriliyor; başkaları da var.",
+"enr_football_unavailable": "ℹ️ Bu maç için doğrulanmış futbol verisi yok — tahmin oranlara dayanıyor.",
+"enr_standings_unavailable": "ℹ️ Puan durumu mevcut değil.",
+"enr_lineups_unavailable": "ℹ️ Kadrolar henüz belli değil.",
+"enr_injuries_unavailable": "ℹ️ Sakatlık/ceza verisi mevcut değil.",
+"enr_unverified":         "ℹ️ Maç doğrulanamadı — yalnızca oranlar gösteriliyor.",
 "system_prompt": """Sen spor analistisin. Kısa ve net yaz. Her sporu analiz et.
 
 KURALLAR:
@@ -462,6 +482,11 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "ev_no_tomorrow":         "Ертең матч жоқ.",
 "ev_more_leagues":        "ℹ️ Басымдық бойынша алғашқы 15 турнир көрсетілген; тағы бар.",
 "ev_more_matches":        "ℹ️ Ең ерте 10 матч көрсетілген; тағы бар.",
+"enr_football_unavailable": "ℹ️ Бұл матч бойынша расталған футбол деректері жоқ — болжам коэффициенттерге негізделген.",
+"enr_standings_unavailable": "ℹ️ Турнир кестесі қолжетімсіз.",
+"enr_lineups_unavailable": "ℹ️ Құрамдар әзірге белгісіз.",
+"enr_injuries_unavailable": "ℹ️ Жарақат/дисквалификация деректері қолжетімсіз.",
+"enr_unverified":         "ℹ️ Матчты растау мүмкін болмады — тек коэффициенттер көрсетілген.",
 "system_prompt": """Сен спорт аналитикісің. Қысқа және нақты жаз. Кез келген спортты талда.
 
 ЕРЕЖЕЛЕР:
@@ -561,6 +586,11 @@ Sport turini tanlang va boshlaymiz!""",
 "ev_no_tomorrow":         "Ertaga o'yin yo'q.",
 "ev_more_leagues":        "ℹ️ Muhimlik bo'yicha dastlabki 15 turnir ko'rsatilmoqda; yana bor.",
 "ev_more_matches":        "ℹ️ Eng erta 10 o'yin ko'rsatilmoqda; yana bor.",
+"enr_football_unavailable": "ℹ️ Bu o'yin uchun tasdiqlangan futbol ma'lumotlari yo'q — bashorat koeffitsientlarga asoslangan.",
+"enr_standings_unavailable": "ℹ️ Turnir jadvali mavjud emas.",
+"enr_lineups_unavailable": "ℹ️ Tarkiblar hali ma'lum emas.",
+"enr_injuries_unavailable": "ℹ️ Jarohat/diskvalifikatsiya ma'lumotlari mavjud emas.",
+"enr_unverified":         "ℹ️ O'yinni tasdiqlab bo'lmadi — faqat koeffitsientlar ko'rsatilmoqda.",
 "system_prompt": """Sen sport analitikisisan. Qisqa va aniq yoz. Har qanday sportni tahlil qil.
 
 QOIDALAR:
@@ -660,6 +690,11 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "ev_no_tomorrow":         "لا توجد مباريات غداً.",
 "ev_more_leagues":        "ℹ️ يتم عرض أهم 15 بطولة حسب الأولوية؛ وهناك المزيد.",
 "ev_more_matches":        "ℹ️ يتم عرض أقرب 10 مباريات موعداً؛ وهناك المزيد.",
+"enr_football_unavailable": "ℹ️ لا تتوفر بيانات كرة قدم موثّقة لهذه المباراة — يعتمد التوقع على الأرباح.",
+"enr_standings_unavailable": "ℹ️ جدول الترتيب غير متوفر.",
+"enr_lineups_unavailable": "ℹ️ التشكيلات غير متوفرة بعد.",
+"enr_injuries_unavailable": "ℹ️ بيانات الإصابات/الإيقافات غير متوفرة.",
+"enr_unverified":         "ℹ️ تعذّر التحقق من المباراة — يتم عرض الأرباح فقط.",
 "system_prompt": """أنت محلل رياضي. اكتب بإيجاز ووضوح. حلّل أي رياضة.
 
 القواعد:

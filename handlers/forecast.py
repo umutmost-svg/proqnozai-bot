@@ -6,13 +6,14 @@ from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from config import reg_step, violations, SPAM_DUR, SPAM_AFTER
+from config import reg_step, violations, SPAM_DUR, SPAM_AFTER, APIFOOTBALL_KEY
 from db import (db_ensure, db_get, db_lang, db_is_reg, db_is_blocked, db_log_req,
                 db_save_history, db_get_tz)
 from translations import T, tr
 from security import uinfo, sec_blocked, rate_check, record_viol, detect_injection
 from claude_client import claude_forecast
 from football_api import search_match, fetch_real_data
+from enrichment import enrich_football_match
 from match_validation import MatchRef, validate_match
 from event_list import (
     normalize_fixture, select_visible, group_by_sport, group_by_league,
@@ -48,6 +49,31 @@ _SPORT_TITLE = {
 def _loc(d: dict, lang: str) -> str:
     """Pick a localized string from a dict, falling back to Russian."""
     return d.get(lang, d["ru"])
+
+
+# Mostbet lineCategory values that mean association football (enrichment scope).
+_FOOTBALL_SPORTS = {"football", "soccer", "futbol"}
+
+# Enrichment block name (from EnrichmentResult.missing_fields) → localized note
+# shown to the user when a verified fixture is missing that block.
+_ENRICH_GAP_KEYS = {
+    "standings": "enr_standings_unavailable",
+    "lineups": "enr_lineups_unavailable",
+    "injuries": "enr_injuries_unavailable",
+}
+
+
+def _enrichment_gap_note(uid: int, missing_fields: list) -> str | None:
+    """Honest localized note listing which verified blocks are unavailable.
+    Only the user-facing blocks (standings/lineups/injuries) are surfaced;
+    recent/H2H/stats gaps are already stated in the analysis itself."""
+    seen, lines = set(), []
+    for name in missing_fields:
+        key = _ENRICH_GAP_KEYS.get(name)
+        if key and key not in seen:
+            seen.add(key)
+            lines.append(tr(uid, key))
+    return "\n".join(lines) if lines else None
 
 
 def _pick_watch_candidate(candidates: list, ref: dict | None) -> dict | None:
@@ -276,6 +302,12 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
 
     db_save_history(uid, text, reply)
 
+    # Append the honest enrichment note (unverified fixture, or missing verified
+    # blocks) so the user sees exactly what real data was / was not available.
+    note = context.user_data.pop("enrichment_note", None)
+    if note:
+        reply = f"{reply}\n\n{note}"
+
     final_kb = watch_kb
     await status_msg.edit_text(reply, reply_markup=final_kb)
 
@@ -420,10 +452,38 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Competition name lives in lineSuperCategory ("World Cup 2026"), the stage
     # ("Round of 32") in lineSubCategory — pass both so the mapping finds it.
     league_hint = f"{country} {league_raw}".strip()
-    real_data_task = asyncio.create_task(fetch_real_data(t1, t2, league_hint))
+
+    # Football matches get VERIFIED API-Football enrichment (HIGH-confidence
+    # fixture only). Everything else keeps the existing provider path. Mostbet
+    # remains the source of the event and the odds regardless.
+    is_football = (it.sport or "").strip().lower() in _FOOTBALL_SPORTS
+    enr_task = real_data_task = None
+    if is_football and APIFOOTBALL_KEY:
+        enr_task = asyncio.create_task(enrich_football_match(
+            line_id=str(mid or ""), home=t1, away=t2, kickoff=it.kickoff_utc,
+            league=league_hint, is_live=it.is_live))
+    else:
+        real_data_task = asyncio.create_task(fetch_real_data(t1, t2, league_hint))
 
     mb_odds = await odds_task if odds_task else {}
-    real_data = await real_data_task
+    real_data = ""
+    context.user_data.pop("enrichment_note", None)
+    if enr_task is not None:
+        try:
+            enr = await enr_task
+        except Exception as e:  # provider failure must never break the forecast
+            logger.error(f"enrichment failed uid={uid}: {e}")
+            enr = None
+        if enr is not None and enr.verified:
+            real_data = enr.prompt_text()
+            note = _enrichment_gap_note(uid, enr.missing_fields)
+            if note:
+                context.user_data["enrichment_note"] = note
+        else:
+            # No verified fixture → keep odds, no LLM factual fallback, be honest.
+            context.user_data["enrichment_note"] = tr(uid, "enr_football_unavailable")
+    elif real_data_task is not None:
+        real_data = await real_data_task
 
     if mb_odds:
         odds_str = format_mostbet_odds(mb_odds, lang)
