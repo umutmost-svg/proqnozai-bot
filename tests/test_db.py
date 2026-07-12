@@ -70,7 +70,8 @@ def test_db_set_rejects_non_allowlisted_field(temp_db):
 
 
 def test_lang_fallback_for_unknown_user(temp_db):
-    assert temp_db.db_lang(839999) == "az"
+    # Unknown user → the safe default language (DEFAULT_LANG), never a crash.
+    assert temp_db.db_lang(839999) == temp_db.DEFAULT_LANG == "ru"
 
 
 # ── Forecast history & feedback ownership ─────────────────────────────────────
