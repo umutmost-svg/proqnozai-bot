@@ -181,7 +181,8 @@ async def check_odds_changes(app):
                         msgs = {
                             "ru": f"ИЗМЕНЕНИЕ КОЭФФИЦИЕНТА {direction}\nМатч: {label}\nРынок: {market}\nБыло: {last_odd} → Стало: {new_odd}\nРазница: {abs(new_odd-last_odd):.2f}",
                             "en": f"ODDS CHANGE {direction}\nMatch: {label}\n{market}: {last_odd} → {new_odd}",
-                            "az": f"KEF DƏYİŞDİ {direction}\nMatç: {label}\n{market}: {last_odd} → {new_odd}",
+                            "az": f"ƏMSAL DƏYİŞDİ {direction}\nMatç: {label}\n{market}: {last_odd} → {new_odd}",
+                            "tr": f"ORAN DEĞİŞTİ {direction}\nMaç: {label}\n{market}: {last_odd} → {new_odd}",
                         }
                         await app.bot.send_message(chat_id=uid, text=msgs.get(lang, msgs["ru"]))
                         with con() as c:

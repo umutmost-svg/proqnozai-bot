@@ -59,11 +59,11 @@ Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
 "ev_no_tomorrow":         "Sabah matç yoxdur.",
 "ev_more_leagues":        "ℹ️ Prioritet üzrə ilk 15 turnir göstərilir; başqaları da var.",
 "ev_more_matches":        "ℹ️ Ən erkən 10 matç göstərilir; başqaları da var.",
-"enr_football_unavailable": "ℹ️ Bu matç üçün doğrulanmış futbol məlumatı əlçatan deyil — proqnoz keflərə əsaslanır.",
+"enr_football_unavailable": "ℹ️ Bu matç üçün doğrulanmış futbol məlumatı yoxdur — proqnoz əmsallara əsaslanır.",
 "enr_standings_unavailable": "ℹ️ Turnir cədvəli əlçatan deyil.",
 "enr_lineups_unavailable": "ℹ️ Heyətlər hələ məlum deyil.",
 "enr_injuries_unavailable": "ℹ️ Zədə/diskvalifikasiya məlumatı əlçatan deyil.",
-"enr_unverified":         "ℹ️ Matç doğrulana bilmədi — yalnız keflər göstərilir.",
+"enr_unverified":         "ℹ️ Matç doğrulanmadı — yalnız əmsallar göstərilir.",
 "system_prompt": """Sən idman analitikisən. Qısa və aydın yaz. İstənilən idmanı analiz et.
 
 QAYDALAR:

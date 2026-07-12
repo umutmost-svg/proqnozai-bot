@@ -460,7 +460,7 @@ async def _fm_match_run(context, q, uid: int, lang: str, it) -> None:
     dt_str = "🔴 LIVE" if it.is_live else _fmt_kickoff(it.kickoff_utc, uid)
 
     loading = {
-        "ru": "⏳ Загружаю коэффициенты...", "az": "⏳ Keflər yüklənir...",
+        "ru": "⏳ Загружаю коэффициенты...", "az": "⏳ Əmsallar yüklənir...",
         "en": "⏳ Loading odds...", "tr": "⏳ Oranlar yükleniyor...",
         "kz": "⏳ Коэффициенттер жүктелуде...", "uz": "⏳ Koeffitsientlar yuklanmoqda...",
         "ar": "⏳ جارٍ تحميل الأرباح...",
