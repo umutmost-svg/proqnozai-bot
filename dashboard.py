@@ -6,6 +6,7 @@ Stats source: bot's internal stats server (stats_server.py via Railway private n
 import base64
 import hmac
 import json
+import logging
 import os
 from functools import wraps
 
@@ -13,6 +14,24 @@ import httpx
 from flask import Flask, Response, render_template_string, request, redirect, url_for
 
 app = Flask(__name__)
+logger = logging.getLogger("dashboard")
+
+
+def _backend_error_json() -> Response:
+    """503 JSON for an unreachable/failed stats backend. The exception detail is
+    logged server-side but NEVER returned — the response must not leak the
+    internal worker URL, the token, or a stack trace."""
+    return Response(
+        json.dumps({"error": "stats backend unavailable"}),
+        status=503, mimetype="application/json")
+
+
+_BACKEND_DOWN_PAGE = (
+    "<div style='font-family:sans-serif;padding:40px;max-width:640px;margin:auto'>"
+    "<h2>Dashboard temporarily unavailable</h2>"
+    "<p>The stats service is not reachable right now. This usually clears on its "
+    "own; if it persists, check that the bot worker is running.</p></div>"
+)
 
 _BOT_BASE     = os.environ.get("BOT_API_URL", "http://worker.railway.internal:8888")
 STATS_URL     = os.environ.get("STATS_URL", _BOT_BASE + "/stats")
@@ -566,7 +585,10 @@ def index():
         resp.raise_for_status()
         raw = resp.json()
     except Exception as e:
-        return f"<pre style='color:red;padding:20px'>Ошибка получения данных:\n{e}\n\nURL: {STATS_URL}</pre>", 500
+        # Log the detail (server-side only); never leak the internal URL/token or
+        # a stack trace to the browser. Degrade to a safe placeholder page.
+        logger.warning("stats backend unavailable for '/': %s", e)
+        return _BACKEND_DOWN_PAGE, 503
 
     fb_total = raw.get("fb_total", 0)
     fb_wins  = raw.get("fb_wins", 0)
@@ -619,7 +641,8 @@ def api_data():
         resp.raise_for_status()
         return Response(resp.text, mimetype="application/json")
     except Exception as e:
-        return Response(json.dumps({"error": str(e)}), status=502, mimetype="application/json")
+        logger.warning("stats backend unavailable for API route: %s", e)
+        return _backend_error_json()
 
 
 @app.route("/api/broadcast/status")
@@ -629,7 +652,8 @@ def api_broadcast_status():
         resp = httpx.get(f"{_BOT_BASE}/broadcast/status" + _stats_param(), timeout=8)
         return Response(resp.text, mimetype="application/json", status=resp.status_code)
     except Exception as e:
-        return Response(json.dumps({"error": str(e)}), status=502, mimetype="application/json")
+        logger.warning("stats backend unavailable for API route: %s", e)
+        return _backend_error_json()
 
 
 @app.route("/api/users/search")
@@ -641,7 +665,8 @@ def api_users_search():
                          params={"token": STATS_TOKEN, "q": q}, timeout=8)
         return Response(resp.text, mimetype="application/json", status=resp.status_code)
     except Exception as e:
-        return Response(json.dumps({"error": str(e)}), status=502, mimetype="application/json")
+        logger.warning("stats backend unavailable for API route: %s", e)
+        return _backend_error_json()
 
 
 @app.route("/api/users/block", methods=["POST"])
@@ -656,7 +681,8 @@ def api_users_block():
         }, timeout=8)
         return Response(resp.text, mimetype="application/json", status=resp.status_code)
     except Exception as e:
-        return Response(json.dumps({"error": str(e)}), status=502, mimetype="application/json")
+        logger.warning("stats backend unavailable for API route: %s", e)
+        return _backend_error_json()
 
 
 @app.route("/users")
@@ -945,7 +971,8 @@ def broadcast():
                 else:
                     result = {"started": 0, "error": data.get("detail", f"HTTP {resp.status_code}")}
             except Exception as e:
-                result = {"started": 0, "error": str(e)}
+                logger.warning("broadcast backend unavailable: %s", e)
+                result = {"started": 0, "error": "Сервис недоступен, попробуйте позже."}
 
     return render_template_string(BROADCAST_TEMPLATE, result=result, prefill=prefill)
 
@@ -955,6 +982,15 @@ def health():
     return "ok"
 
 
+def _port() -> int:
+    """Resolve the bind port from the platform-provided PORT (Railway/Heroku),
+    defaulting to 5000 for local runs."""
+    try:
+        return int(os.environ.get("PORT", "5000"))
+    except (TypeError, ValueError):
+        return 5000
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    # Bind 0.0.0.0 so the platform can route external traffic to the web process.
+    app.run(host="0.0.0.0", port=_port(), debug=False)
