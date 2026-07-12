@@ -5,7 +5,7 @@ from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
 
 from config import reg_step, UNIVERSAL_WELCOME
-from db import db_ensure, db_get, db_set, db_lang, db_is_reg, db_get_tz, con
+from db import db_ensure, db_get, db_set, db_lang, db_is_reg, db_get_tz, con, normalize_lang
 from translations import T, tr, LANG_NAMES, OB_SPORTS, sport_label, exp_label
 from handlers.utils import main_menu, lang_kb, ob_kb
 
@@ -27,7 +27,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def lang_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    uid = q.from_user.id; lang = q.data.split("_")[1]
+    uid = q.from_user.id
+    # Never persist an unsupported value: an old/invalid lang_* button
+    # normalizes to the default instead of writing junk into users.lang.
+    lang = normalize_lang(q.data.split("_", 1)[1] if "_" in q.data else "")
     db_ensure(uid, q.from_user.username or "", q.from_user.language_code)
     db_set(uid, "lang", lang)
 

@@ -801,7 +801,11 @@ def exp_label(uid, val):
 
 def tr(uid, key, **kw):
     from db import db_lang
-    lang = db_lang(uid)
-    # Fallback chain: current lang -> ru -> en -> empty string
-    txt = T.get(lang, {}).get(key) or T.get("ru", {}).get(key) or T.get("en", {}).get(key, "")
+    lang = db_lang(uid)  # already normalized to a supported code
+    # Fallback chain: requested language -> ru -> en -> the key itself (never
+    # empty), so a missing string degrades to a visible, debuggable token.
+    txt = (T.get(lang, {}).get(key)
+           or T.get("ru", {}).get(key)
+           or T.get("en", {}).get(key)
+           or key)
     return txt.format(**kw) if kw else txt
