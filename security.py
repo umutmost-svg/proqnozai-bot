@@ -13,7 +13,11 @@ _INJECTION_PATTERNS = [
     r"ignore (all |the |your )?(previous|prior|above)",
     r"forget (all |your |the )?(instructions|context|everything)",
     r"disregard (all |the |your )?(previous|prior|above|instructions)",
-    r"system\s*prompt", r"\bjailbreak\b", r"\bDAN\b",
+    # NOTE: no bare \bDAN\b here. With IGNORECASE it matched the ordinary
+    # Turkish ablative suffix after an apostrophe ("Trabzonspor'dan haber…"),
+    # auto-blocking legitimate users in a primary market. The jailbreak is
+    # caught by its explicit phrasings instead.
+    r"system\s*prompt", r"\bjailbreak\b", r"\bDAN mode\b", r"\bdo anything now\b",
     r"act as (a |an )?(dan|jailbroken|unrestricted)",
     r"you are (now )?(a |an )?(dan|unrestricted|developer mode)",
     r"developer mode", r"reveal (your |the )?(prompt|instructions|system)",
