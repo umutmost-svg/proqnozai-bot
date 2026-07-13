@@ -87,6 +87,113 @@ most common cause of a "dashboard is down" report when the code itself is fine.
 5. `PORT` is provided by the platform; the app binds `0.0.0.0:$PORT`.
 6. The worker's SQLite lives on a persistent volume (`BOT_DB_DIR`).
 
+## Common deployment failures
+
+The most frequent ways the dashboard "breaks" in production — and how to fix each.
+
+### 1. Dashboard shows 503 after login
+
+**Symptoms**
+
+- Login succeeds.
+- Dashboard loads.
+- Data panel shows 503.
+- Worker responds with: `dashboard token required`.
+
+**Root cause**
+
+The **worker** service does not have `DASHBOARD_TOKEN` configured. The dashboard
+sends the token correctly, but the worker's `stats_server.py` has an empty
+`STATS_TOKEN`, so it returns:
+
+```
+503 dashboard token required
+```
+
+instead of:
+
+```
+401 unauthorized
+```
+
+The status code is the tell: `/stats` returns **503 only when the worker's own
+token is empty**; a token that is set but *mismatched* returns **401**. A 503
+therefore means "worker has no token", not "wrong token".
+
+**Resolution**
+
+Set the **same** `DASHBOARD_TOKEN` value on **both** services:
+
+- Dashboard (web)
+- Worker (bot)
+
+Then redeploy the worker.
+
+**Expected verification**
+
+```
+GET /health            → 200
+GET /stats?token=<token>  → 200
+```
+
+(`/health` returns 200 even without a token; `/stats` needs the matching token.)
+
+### 2. Dashboard cannot start
+
+Common causes:
+
+- **`PORT` not bound** — the app must bind `0.0.0.0:$PORT`; a hardcoded or missing
+  port means the platform can't route to it.
+- **Wrong start command** — the web service must run `python dashboard.py` (not
+  `python main.py`, which is the worker).
+- **Web service not created** — the dashboard must exist as its **own** Railway
+  service; a worker-only deploy has no public dashboard URL.
+
+### 3. Dashboard opens but has no data
+
+Common causes:
+
+- **`BOT_API_URL` incorrect** — points somewhere other than the worker's stats
+  server.
+- **Worker unreachable** — the worker is down or not on the same private network.
+- **Internal Railway hostname incorrect** — e.g. the `*.railway.internal` host or
+  `STATS_PORT` does not match the worker.
+- **Worker not running** — no stats server is listening to answer `/stats`.
+
+### 4. Health check fails
+
+The Railway health check must point to:
+
+```
+/health
+```
+
+**Never** use:
+
+```
+/
+```
+
+The root endpoint is protected with HTTP Basic Auth and returns **401** to an
+unauthenticated probe, which marks the deploy unhealthy and stops it from
+receiving traffic. `/health` is the only unauthenticated route and always
+returns `200 ok`.
+
+### Security note
+
+If `DASHBOARD_TOKEN` has ever appeared in any of:
+
+- browser errors
+- logs
+- screenshots
+- chats
+- recordings
+
+treat it as **compromised**. Rotate the token immediately. The dashboard and the
+worker must **both** receive the new value (set it on both services, then
+redeploy the worker). The token doubles as the dashboard's Basic-Auth password
+and the worker's stats-server token, so a leak exposes both.
+
 ## Related
 
 - `ARCHITECTURE.md` → processes, deploy.
