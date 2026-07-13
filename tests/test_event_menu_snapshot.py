@@ -3,18 +3,33 @@ the frozen snapshot, missing/stale indexes yield the expired-menu state, an
 already-rendered index cannot be re-pointed by refreshed data, and truncation is
 surfaced to the user. No network."""
 import types
-
+from datetime import datetime, timedelta, timezone
 
 import handlers.forecast as fc
+from config import MOSTBET_SRC_TZ
 from event_list import normalize_fixture
 from translations import T
 
+_SRC_TZ = timezone(timedelta(hours=MOSTBET_SRC_TZ))
+
+
+def _when(hours_from_now: float = 6.0) -> str:
+    """Kickoff in Mostbet's source-tz string format, RELATIVE to the real clock.
+
+    forecast_menu_start buckets matches against datetime.now(); a hardcoded
+    calendar date here silently rots as real time advances (a past kickoff gets
+    filtered as finished and the menu takes the empty-state early return). All
+    fixtures that must be VISIBLE therefore derive from now, never a literal
+    date."""
+    return (datetime.now(_SRC_TZ) + timedelta(hours=hours_from_now)).strftime(
+        "%d.%m.%Y %H:%M:%S")
+
 
 def _raw(fid, t1, t2, league="Premier League", country="England",
-         when="12.07.2026 18:00:00", live=False):
+         when=None, live=False):
     return {"id": fid, "team1Title": t1, "team2Title": t2, "lineCategory": "Football",
             "lineSubCategory": league, "lineSuperCategory": country,
-            "matchBeginAt": when, "isLive": live}
+            "matchBeginAt": when if when is not None else _when(), "isLive": live}
 
 
 class _FakeQuery:
@@ -178,6 +193,33 @@ async def test_new_session_preserves_unrelated_forecast_state(temp_db, monkeypat
     assert ctx.user_data["pending_content"] == [{"type": "text", "text": "keep"}]
 
 
+async def test_menu_start_filters_finished_and_stays_deterministic(temp_db, monkeypatch):
+    """Regression for the calendar-date rot that broke CI: a kickoff far in the
+    past must be filtered from a fresh menu on ANY run date, while a relative
+    future kickoff stays visible — so this suite can never go stale again."""
+    uid = 811010
+    temp_db.db_ensure(uid, "u", "en")
+
+    async def _load():
+        return [_raw(1, "Past", "Gone", when=_when(-48)),      # long finished → hidden
+                _raw(2, "Soon", "Visible")]                     # relative future → shown
+
+    monkeypatch.setattr(fc, "_mostbet_load_matches", _load)
+    ctx = _ctx()
+    msg = _FakeMsg()
+    update = types.SimpleNamespace(
+        effective_user=types.SimpleNamespace(id=uid),
+        message=types.SimpleNamespace(reply_text=lambda *a, **k: _async_msg(msg)))
+
+    await fc.forecast_menu_start(update, ctx)
+
+    # The menu was built (not the empty-state early return) from the one
+    # visible match; the finished one is gone.
+    sports = ctx.user_data["fm_sports"]
+    assert sports and len(sports[0][1]) == 1
+    assert sports[0][1][0].home == "Soon"
+
+
 def test_fmt_kickoff_uses_user_timezone(temp_db):
     from datetime import datetime, timezone
     uid = 811009
@@ -206,7 +248,7 @@ async def test_league_cb_flags_more_matches(temp_db):
     temp_db.db_ensure(uid, "u", "en")
     from event_list import group_by_league
     items = [normalize_fixture(_raw(2000 + j, f"H{j}", f"A{j}", league="Busy",
-                                    country="Land", when=f"12.07.2026 {10 + j:02d}:00:00"))
+                                    country="Land", when=_when(24 + j)))
              for j in range(12)]
     groups, _ = group_by_league(items)
     q = _FakeQuery("fm_lg_0", uid)

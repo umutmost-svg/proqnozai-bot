@@ -2,12 +2,53 @@ from datetime import datetime, timezone, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from config import MOSTBET_SRC_TZ
+from config import MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR
 from db import db_lang
-from translations import T
+from security import sec_blocked, rate_check, record_viol
+from translations import T, tr
 
 
 SUPPORT_URL = "https://t.me/AIproqnoz_support"
+
+# ─── Expensive-callback gate ──────────────────────────────────────────────────
+# Users the bot is CURRENTLY generating a forecast/express for. One expensive
+# operation per user at a time, so rapid double-clicks can't start duplicate
+# Claude/enrichment work. In-memory like the rest of the rate-limit state.
+_cb_inflight: set = set()
+
+
+async def cb_guard(update) -> bool:
+    """Gate for callbacks that trigger Claude / external-API work.
+
+    Applies the SAME budget as text messages (sec_blocked + rate_check +
+    violation accounting) plus a per-user in-flight lock. On refusal it answers
+    the callback query itself with a short localized toast, so the client
+    spinner never hangs. On True the caller OWNS the in-flight slot and MUST
+    call cb_release(uid) in a finally block."""
+    q = update.callback_query
+    uid = q.from_user.id
+    blk, secs = sec_blocked(uid)
+    if blk:
+        await q.answer(tr(uid, "blocked", m=secs // 60, s=secs % 60), show_alert=True)
+        return False
+    if uid in _cb_inflight:
+        await q.answer("⏳")  # previous request still generating
+        return False
+    exceeded, wait = rate_check(uid)
+    if exceeded:
+        info = f"CB | id={uid} @{getattr(q.from_user, 'username', None) or '-'}"
+        if record_viol(uid, info):
+            await q.answer(tr(uid, "auto_blocked", min=SPAM_DUR // 60), show_alert=True)
+        else:
+            await q.answer(tr(uid, "rate_limit", w=wait, v=violations[uid], max=SPAM_AFTER))
+        return False
+    violations[uid] = 0
+    _cb_inflight.add(uid)
+    return True
+
+
+def cb_release(uid) -> None:
+    _cb_inflight.discard(uid)
 
 # Universal language button — same label in every language so one handler matches.
 LANG_BTN = "🌐 Dil · Язык · Lang"
