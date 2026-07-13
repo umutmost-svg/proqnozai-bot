@@ -7,7 +7,7 @@ from db import db_is_reg, db_get, db_lang
 from translations import T, tr, SPORTS_LABELS, EXP_LABELS
 from claude_client import _create_with_retry
 from mostbet import _mostbet_load_matches, _is_within_week, _is_virtual_match, _is_outright_market
-from handlers.utils import _fmt_dt
+from handlers.utils import _fmt_dt, cb_guard, cb_release
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,22 @@ async def express_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def express_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    uid = q.from_user.id; n = int(q.data.split("_")[1])
+    q = update.callback_query
+    uid = q.from_user.id
+    # Triggers a Claude (Haiku) call — same limits as text input, plus the
+    # per-user in-flight lock; cb_guard answers the query itself on refusal.
+    if not await cb_guard(update):
+        return
+    await q.answer()
+    try:
+        await _express_run(context, q, uid)
+    finally:
+        cb_release(uid)
+
+
+async def _express_run(context, q, uid: int) -> None:
+    """Expensive body of express_cb; the caller holds the in-flight slot."""
+    n = int(q.data.split("_")[1])
     lang = db_lang(uid)
     await q.edit_message_text("⏳")
     await context.bot.send_chat_action(chat_id=uid, action="typing")

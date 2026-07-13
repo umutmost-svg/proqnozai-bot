@@ -23,7 +23,7 @@ from mostbet import (
     _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
 )
-from handlers.utils import _sport_emoji, LANG_BTN, lang_kb
+from handlers.utils import _sport_emoji, LANG_BTN, lang_kb, cb_guard, cb_release
 from handlers.registration import handle_name
 
 logger = logging.getLogger(__name__)
@@ -314,8 +314,14 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
 
 async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stub kept for any old inline buttons still in user chats."""
-    q = update.callback_query; await q.answer()
-    await _generate_forecast(q.from_user.id, context, q.message)
+    q = update.callback_query
+    if not await cb_guard(update):  # triggers Claude → same limits as text
+        return
+    await q.answer()
+    try:
+        await _generate_forecast(q.from_user.id, context, q.message)
+    finally:
+        cb_release(q.from_user.id)
 
 
 async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
@@ -418,14 +424,29 @@ async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
+    q = update.callback_query
     uid = q.from_user.id; lang = db_lang(uid)
     matches = context.user_data.get("fm_matches")
     idx = int(q.data.split("_")[2])
     if not matches or idx >= len(matches):
+        # Stale/expired keyboard — cheap path, not charged against the limit.
+        await q.answer()
         await _expired_menu(q, uid); return
 
-    it = matches[idx]
+    # Everything below costs money (Mostbet odds + enrichment + Opus). Apply
+    # the same limits as text input plus a per-user in-flight lock; cb_guard
+    # answers the query itself on refusal so the spinner never hangs.
+    if not await cb_guard(update):
+        return
+    await q.answer()
+    try:
+        await _fm_match_run(context, q, uid, lang, matches[idx])
+    finally:
+        cb_release(uid)
+
+
+async def _fm_match_run(context, q, uid: int, lang: str, it) -> None:
+    """Expensive body of fm_match_cb; the caller holds the in-flight slot."""
     t1     = it.home
     t2     = it.away
     mid    = it.fixture_id            # authoritative provider fixture id
@@ -574,11 +595,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tr(uid, "choose_lang"), reply_markup=lang_kb())
         return
 
-    # Compare handler
-    if context.user_data.get("awaiting_compare"):
-        from handlers.express import handle_compare
-        if await handle_compare(uid, text, context): return
-
     # Security
     blk, secs = sec_blocked(uid)
     if blk:
@@ -610,6 +626,13 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(tr(uid, "injection"))
         return
+
+    # Compare handler — AFTER the full security gate above (blocked, rate,
+    # length, injection): compare text reaches Claude, so it must never bypass
+    # the same checks ordinary forecast text goes through.
+    if context.user_data.get("awaiting_compare"):
+        from handlers.express import handle_compare
+        if await handle_compare(uid, text, context): return
 
     if photo:
         # Photo analysis - send directly to Claude
