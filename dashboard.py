@@ -17,6 +17,16 @@ app = Flask(__name__)
 logger = logging.getLogger("dashboard")
 
 
+def _safe_err(e: Exception) -> str:
+    """A log-safe description of a backend error. httpx exception strings embed
+    the request URL, and that URL carries ?token=<DASHBOARD_TOKEN> — so we must
+    NEVER log the exception message (CLAUDE.md: never log token/key values).
+    Log only the exception type, or the HTTP status when one is available."""
+    resp = getattr(e, "response", None)
+    status = getattr(resp, "status_code", None)
+    return f"HTTP {status}" if status is not None else type(e).__name__
+
+
 def _backend_error_json() -> Response:
     """503 JSON for an unreachable/failed stats backend. The exception detail is
     logged server-side but NEVER returned — the response must not leak the
@@ -584,10 +594,14 @@ def index():
         resp = httpx.get(STATS_URL + token_param, timeout=10)
         resp.raise_for_status()
         raw = resp.json()
+        if not isinstance(raw, dict):
+            # A reachable-but-malformed 200 (valid JSON that isn't an object)
+            # must degrade to the safe page, not crash the render below.
+            raise ValueError("unexpected stats payload shape")
     except Exception as e:
         # Log the detail (server-side only); never leak the internal URL/token or
         # a stack trace to the browser. Degrade to a safe placeholder page.
-        logger.warning("stats backend unavailable for '/': %s", e)
+        logger.warning("stats backend unavailable for '/': %s", _safe_err(e))
         return _BACKEND_DOWN_PAGE, 503
 
     fb_total = raw.get("fb_total", 0)
@@ -641,7 +655,7 @@ def api_data():
         resp.raise_for_status()
         return Response(resp.text, mimetype="application/json")
     except Exception as e:
-        logger.warning("stats backend unavailable for API route: %s", e)
+        logger.warning("stats backend unavailable for API route: %s", _safe_err(e))
         return _backend_error_json()
 
 
@@ -652,7 +666,7 @@ def api_broadcast_status():
         resp = httpx.get(f"{_BOT_BASE}/broadcast/status" + _stats_param(), timeout=8)
         return Response(resp.text, mimetype="application/json", status=resp.status_code)
     except Exception as e:
-        logger.warning("stats backend unavailable for API route: %s", e)
+        logger.warning("stats backend unavailable for API route: %s", _safe_err(e))
         return _backend_error_json()
 
 
@@ -665,7 +679,7 @@ def api_users_search():
                          params={"token": STATS_TOKEN, "q": q}, timeout=8)
         return Response(resp.text, mimetype="application/json", status=resp.status_code)
     except Exception as e:
-        logger.warning("stats backend unavailable for API route: %s", e)
+        logger.warning("stats backend unavailable for API route: %s", _safe_err(e))
         return _backend_error_json()
 
 
@@ -681,7 +695,7 @@ def api_users_block():
         }, timeout=8)
         return Response(resp.text, mimetype="application/json", status=resp.status_code)
     except Exception as e:
-        logger.warning("stats backend unavailable for API route: %s", e)
+        logger.warning("stats backend unavailable for API route: %s", _safe_err(e))
         return _backend_error_json()
 
 
@@ -971,7 +985,7 @@ def broadcast():
                 else:
                     result = {"started": 0, "error": data.get("detail", f"HTTP {resp.status_code}")}
             except Exception as e:
-                logger.warning("broadcast backend unavailable: %s", e)
+                logger.warning("broadcast backend unavailable: %s", _safe_err(e))
                 result = {"started": 0, "error": "Сервис недоступен, попробуйте позже."}
 
     return render_template_string(BROADCAST_TEMPLATE, result=result, prefill=prefill)
@@ -987,7 +1001,7 @@ def _port() -> int:
     defaulting to 5000 for local runs."""
     try:
         return int(os.environ.get("PORT", "5000"))
-    except (TypeError, ValueError):
+    except ValueError:
         return 5000
 
 

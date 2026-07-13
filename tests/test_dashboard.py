@@ -103,6 +103,42 @@ def test_api_data_success(client, mock_backend):
     assert r.mimetype == "application/json"
 
 
+# ─── Token must never reach the response OR the logs ──────────────────────────
+def test_backend_http_error_does_not_log_token(client, monkeypatch, caplog):
+    """When the worker returns an HTTP error, httpx's HTTPStatusError string
+    contains '/stats?token=<TOKEN>'. Neither the response nor the LOGS may
+    contain the token (CLAUDE.md: never log token values)."""
+    class _ErrResp:
+        status_code = 503
+
+        def raise_for_status(self):
+            # httpx embeds the request URL (with the token) in this message.
+            raise httpx.HTTPStatusError(
+                f"Server error '503' for url "
+                f"'http://worker.railway.internal:8888/stats?token={TOKEN}'",
+                request=None, response=self)
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr(dashboard.httpx, "get", lambda *a, **k: _ErrResp())
+    with caplog.at_level("WARNING"):
+        r = client.get("/", headers=GOOD_AUTH)
+    assert r.status_code == 503
+    assert TOKEN not in r.get_data(as_text=True)      # not in response
+    assert TOKEN not in caplog.text                   # not in logs
+    assert "railway.internal" not in caplog.text      # internal URL not logged
+
+
+def test_malformed_200_degrades_safely(client, monkeypatch):
+    # Reachable backend returns valid JSON that is not an object → safe 503,
+    # not an unhandled 500 during render.
+    monkeypatch.setattr(dashboard.httpx, "get",
+                        lambda *a, **k: _FakeResp([1, 2, 3]))
+    r = client.get("/", headers=GOOD_AUTH)
+    assert r.status_code == 503
+
+
 # ─── Graceful failure & no secret leak ────────────────────────────────────────
 def test_root_backend_down_is_graceful(client, down_backend):
     r = client.get("/", headers=GOOD_AUTH)
