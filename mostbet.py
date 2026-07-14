@@ -389,6 +389,35 @@ async def mostbet_get_odds(line_id: int) -> dict:
     return result
 
 
+def format_odds_compact(odds: dict) -> str:
+    """One-line, language-neutral summary of a match's REAL odds for prompts
+    (express flow). Emits only markets actually present; "" when none are.
+    The model translates market names itself — values are passed as data."""
+    parts = []
+    if odds.get("w1"):
+        seg = f"1X2: {odds['w1']}"
+        if odds.get("x"):
+            seg += f"/{odds['x']}"
+        if odds.get("w2"):
+            seg += f"/{odds['w2']}"
+        parts.append(seg)
+    if odds.get("over25") and odds.get("under25"):
+        parts.append(f"O/U 2.5: {odds['over25']}/{odds['under25']}")
+    if odds.get("btts_yes") and odds.get("btts_no"):
+        parts.append(f"BTTS Y/N: {odds['btts_yes']}/{odds['btts_no']}")
+    if odds.get("dc_1x") or odds.get("dc_12") or odds.get("dc_x2"):
+        dc = "/".join(str(odds[k]) if odds.get(k) else "-"
+                      for k in ("dc_1x", "dc_12", "dc_x2"))
+        parts.append(f"DC 1X/12/X2: {dc}")
+    if odds.get("hcp_w1") and odds.get("hcp_val") is not None:
+        sign = "+" if odds["hcp_val"] > 0 else ""
+        seg = f"H1({sign}{odds['hcp_val']}): {odds['hcp_w1']}"
+        if odds.get("hcp_w2"):
+            seg += f" | H2({-odds['hcp_val']:g}): {odds['hcp_w2']}"
+        parts.append(seg)
+    return " · ".join(parts)
+
+
 def format_mostbet_odds(odds: dict, lang: str) -> str:
     """Format Mostbet odds as a clean string to inject into Claude prompt."""
     if not any(odds.get(k) for k in ("w1", "over25", "btts_yes", "dc_1x", "hcp_w1")):
