@@ -187,10 +187,19 @@ def _stub_express(monkeypatch, calls):
         return types.SimpleNamespace(content=[types.SimpleNamespace(text="EXPRESS")])
 
     async def _load():
-        return []
+        # Two priced matches: the express only calls the model when at least
+        # two matches carry REAL odds (odds-honesty rule).
+        return [{"id": i, "team1Title": f"H{i}", "team2Title": f"A{i}",
+                 "lineCategory": "Football", "lineSubCategory": "L",
+                 "lineSuperCategory": "C", "matchBeginAt": "", "isLive": True}
+                for i in (1, 2)]
+
+    async def _get_odds(mid):
+        return {"w1": 1.85, "x": 3.4, "w2": 4.1}
 
     monkeypatch.setattr(ex, "_create_with_retry", _create)
     monkeypatch.setattr(ex, "_mostbet_load_matches", _load)
+    monkeypatch.setattr(ex, "mostbet_get_odds", _get_odds)
 
 
 async def test_express_rate_limited_before_claude(temp_db, monkeypatch):

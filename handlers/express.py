@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -6,7 +7,8 @@ from telegram.ext import ContextTypes
 from db import db_is_reg, db_get, db_lang
 from translations import T, tr, SPORTS_LABELS, EXP_LABELS
 from claude_client import _create_with_retry
-from mostbet import _mostbet_load_matches, _is_within_week, _is_virtual_match, _is_outright_market
+from mostbet import (_mostbet_load_matches, _is_within_week, _is_virtual_match,
+                     _is_outright_market, mostbet_get_odds, format_odds_compact)
 from handlers.utils import _fmt_dt, cb_guard, cb_release
 
 logger = logging.getLogger(__name__)
@@ -52,38 +54,55 @@ async def _express_run(context, q, uid: int) -> None:
     exp    = EXP_LABELS.get(lang, EXP_LABELS["ru"]).get(u.get("experience", "beginner"), "Beginner")
 
     mb_matches = await _mostbet_load_matches()
-    real_matches_str = ""
-    if mb_matches:
-        week_matches = [m for m in mb_matches
-                        if not _is_virtual_match(m) and not _is_outright_market(m)
-                        and (m.get("isLive") or _is_within_week(m.get("matchBeginAt", "")))]
-        selected = week_matches[:n]
-        if selected:
-            _hdr = {
-                "ru": "Актуальные матчи:", "az": "Aktual matçlar:",
-                "en": "Current matches:", "tr": "Güncel maçlar:",
-                "kz": "Өзекті матчтар:", "uz": "Joriy o'yinlar:", "ar": "المباريات الحالية:",
-            }
-            _use = {
-                "ru": "Используй ИМЕННО эти матчи для экспресса.",
-                "az": "Ekspresdə MƏHZbu matçları istifadə et.",
-                "en": "Use ONLY these matches for the express.",
-                "tr": "Ekspres için YALNIZCA bu maçları kullan.",
-                "kz": "Экспресс үшін ТЕК осы матчтарды қолдан.",
-                "uz": "Ekspress uchun FAQAT shu o'yinlarni ishlat.",
-                "ar": "استخدم هذه المباريات فقط للرهان المركب.",
-            }
-            lines_mb = [_hdr.get(lang, _hdr["ru"])]
-            for m in selected:
-                t1 = m.get("team1Title", "?"); t2 = m.get("team2Title", "?")
-                league = m.get("lineSubCategory", "")
-                dt = _fmt_dt(m.get("matchBeginAt", ""))
-                lines_mb.append(f"- {t1} vs {t2} | {league} | {dt}")
-            real_matches_str = "\n".join(lines_mb) + "\n\n" + _use.get(lang, _use["ru"]) + "\n"
+    week_matches = [m for m in mb_matches
+                    if not _is_virtual_match(m) and not _is_outright_market(m)
+                    and (m.get("isLive") or _is_within_week(m.get("matchBeginAt", "")))]
+
+    # Fetch REAL odds for the first candidates (a few spares so a match whose
+    # line has no core 1X2 market yet can be skipped). The express never
+    # invents odds: only matches with a real price are eligible, and with
+    # fewer than two priced matches we answer honestly instead of asking the
+    # model to fabricate numbers (CLAUDE.md: real odds are passed as data).
+    candidates = week_matches[:n + 4]
+    odds_list = await asyncio.gather(
+        *(mostbet_get_odds(m["id"]) for m in candidates)) if candidates else []
+    priced = [(m, o) for m, o in zip(candidates, odds_list) if o.get("w1")]
+    selected = priced[:n]
+
+    if len(selected) < 2:
+        await q.edit_message_text(tr(uid, "express_no_odds"))
+        return
+    k = len(selected)  # may be < n when fewer priced matches exist
+
+    _hdr = {
+        "ru": "Актуальные матчи с РЕАЛЬНЫМИ коэффициентами Mostbet:",
+        "az": "Mostbet-in REAL əmsalları ilə aktual matçlar:",
+        "en": "Current matches with REAL Mostbet odds:",
+        "tr": "GERÇEK Mostbet oranlarıyla güncel maçlar:",
+        "kz": "Mostbet-тің НАҚТЫ коэффициенттері бар матчтар:",
+        "uz": "Mostbet-ning HAQIQIY koeffitsientlari bilan o'yinlar:",
+        "ar": "المباريات الحالية مع أرباح Mostbet الحقيقية:",
+    }
+    _use = {
+        "ru": "Используй ТОЛЬКО эти матчи и ТОЛЬКО указанные коэффициенты — они реальные.",
+        "az": "YALNIZ bu matçları və YALNIZ göstərilən əmsalları istifadə et — onlar realdır.",
+        "en": "Use ONLY these matches and ONLY the listed odds — they are real.",
+        "tr": "YALNIZCA bu maçları ve YALNIZCA listelenen oranları kullan — bunlar gerçek.",
+        "kz": "ТЕК осы матчтарды және ТЕК көрсетілген коэффициенттерді қолдан — олар нақты.",
+        "uz": "FAQAT shu o'yinlarni va FAQAT ko'rsatilgan koeffitsientlarni ishlat — ular haqiqiy.",
+        "ar": "استخدم هذه المباريات فقط والأرباح المذكورة فقط — إنها حقيقية.",
+    }
+    lines_mb = [_hdr.get(lang, _hdr["ru"])]
+    for m, o in selected:
+        t1 = m.get("team1Title", "?"); t2 = m.get("team2Title", "?")
+        league = m.get("lineSubCategory", "")
+        dt = _fmt_dt(m.get("matchBeginAt", ""))
+        lines_mb.append(f"- {t1} vs {t2} | {league} | {dt}\n  {format_odds_compact(o)}")
+    real_matches_str = "\n".join(lines_mb) + "\n\n" + _use.get(lang, _use["ru"]) + "\n"
 
     express_prompts = {
-        "ru": f"""{real_matches_str}Составь экспресс на {n} матчей. Правила:\n- Используй только матчи из списка выше (если есть)\n- Для каждого: команды, лучший тип ставки, реалистичный коэффициент\n- Коэффициенты: фаворит 1.20-1.60, равные 2.00-2.80, тотал 1.70-2.10\n- НЕ используй markdown ## ** — только чистый текст и emoji
-- В конце посчитай итоговый коэффициент
+        "ru": f"""{real_matches_str}Составь экспресс на {k} матчей. Правила:\n- Используй ТОЛЬКО матчи из списка выше\n- Для каждого выбери ставку ТОЛЬКО из указанных рынков и приведи её РЕАЛЬНЫЙ коэффициент из списка\n- НИКОГДА не выдумывай коэффициенты или рынки, которых нет в списке\n- НЕ используй markdown ## ** — только чистый текст и emoji
+- В конце посчитай итоговый коэффициент (произведение выбранных)
 
 Формат:
 ⚽ Матч 1: [Команда А] — [Команда Б]
@@ -95,19 +114,19 @@ async def _express_run(context, q, uid: int) -> None:
 💰 Итог: X.XX × X.XX × X.XX = X.XX
 
 ⚠️ Аналитический прогноз.""",
-        "az": f"""{real_matches_str}Bu matçlar üçün {n} oyunluq ekspress yarat. Qaydalar:\n- Yuxarıdakı matçları istifadə et (əgər varsa)\n- Hər matç üçün: komandalar, ən yaxşı mərc növü, real kef\n- Keflər: favorit 1.20-1.60, bərabər 2.00-2.80\n- markdown ## ** işlətmə — yalnız mətn və emoji
-- Sonunda ümumi kef hesabla
+        "az": f"""{real_matches_str}Bu matçlar üçün {k} oyunluq ekspress yarat. Qaydalar:\n- YALNIZ yuxarıdakı siyahıdakı matçları istifadə et\n- Hər matç üçün mərci YALNIZ göstərilən bazarlardan seç və onun siyahıdakı REAL əmsalını yaz\n- Siyahıda olmayan əmsal və ya bazar UYDURMA\n- markdown ## ** işlətmə — yalnız mətn və emoji
+- Sonunda ümumi əmsalı hesabla (seçilənlərin hasili)
 
 Format:
 ⚽ Matç 1: [Komanda A] — [Komanda B]
-Mərc: [növ] | Kef: X.XX
+Mərc: [növ] | Əmsal: X.XX
 Səbəb: [1 cümlə]
 
 💰 Nəticə: X.XX × X.XX = X.XX
 
 ⚠️ Analitik proqnozdur.""",
-        "en": f"""{real_matches_str}Build an express bet with {n} matches. Rules:\n- Use only matches from the list above (if available)\n- For each: teams, best bet type, realistic odds\n- Odds: favorite 1.20-1.60, even 2.00-2.80, total 1.70-2.10\n- NO markdown ## ** — plain text and emoji only
-- Calculate total express odds at the end
+        "en": f"""{real_matches_str}Build an express with {k} matches. Rules:\n- Use ONLY matches from the list above\n- For each, pick a bet ONLY from the listed markets and quote its REAL odds from the list\n- NEVER invent odds or markets that are not in the list\n- NO markdown ## ** — plain text and emoji only
+- Calculate the total odds at the end (product of the picks)
 
 Format:
 ⚽ Match 1: [Team A] — [Team B]
@@ -117,7 +136,7 @@ Reason: [1 sentence]
 💰 Total: X.XX × X.XX = X.XX
 
 ⚠️ Analytical forecast.""",
-        "tr": f"""{real_matches_str}{n} maçlık ekspres oluştur. Kurallar:\n- Yukarıdaki maçları kullan (varsa)\n- Her biri: takımlar, en iyi bahis türü, gerçekçi oran\n- markdown ## ** kullanma — sadece metin ve emoji\n- Sonunda toplam oranı hesapla
+        "tr": f"""{real_matches_str}{k} maçlık ekspres oluştur. Kurallar:\n- YALNIZCA yukarıdaki listedeki maçları kullan\n- Her maç için bahsi YALNIZCA listelenen marketlerden seç ve GERÇEK oranını listeden yaz\n- Listede olmayan oran veya market UYDURMA\n- markdown ## ** kullanma — sadece metin ve emoji\n- Sonunda toplam oranı hesapla (seçimlerin çarpımı)
 
 Format:
 ⚽ Maç 1: [Takım A] — [Takım B]
@@ -126,17 +145,17 @@ Bahis: [tür] | Oran: X.XX
 💰 Toplam: X.XX × X.XX = X.XX
 
 ⚠️ Analitik tahmin.""",
-        "kz": f"""{real_matches_str}{n} матчтық экспресс жаса. Ережелер:\n- Жоғарыдағы матчтарды қолдан (болса)\n- markdown ## ** жоқ — тек мәтін және emoji\n\nFormat:
+        "kz": f"""{real_matches_str}{k} матчтық экспресс жаса. Ережелер:\n- ТЕК жоғарыдағы тізімдегі матчтарды қолдан\n- Әр матч үшін ставканы ТЕК көрсетілген нарықтардан таңдап, тізімдегі НАҚТЫ коэффициентін жаз\n- Тізімде жоқ коэффициент немесе нарық ОЙДАН ШЫҒАРМА\n- markdown ## ** жоқ — тек мәтін және emoji\n\nFormat:
 ⚽ Матч 1: [А] — [Б]
 Ставка: [түрі] | Коэф: X.XX
 
 💰 Жалпы: X.XX × X.XX = X.XX""",
-        "uz": f"""{real_matches_str}{n} ta o'yin uchun ekspress tuzing. Qoidalar:\n- Yuqoridagi o'yinlarni ishlating (agar bor bo'lsa)\n- markdown ## ** yo'q — faqat matn va emoji\n\nFormat:
+        "uz": f"""{real_matches_str}{k} ta o'yin uchun ekspress tuzing. Qoidalar:\n- FAQAT yuqoridagi ro'yxatdagi o'yinlarni ishlating\n- Har bir o'yin uchun stavkani FAQAT ko'rsatilgan bozorlardan tanlang va ro'yxatdagi HAQIQIY koeffitsientini yozing\n- Ro'yxatda yo'q koeffitsient yoki bozorni O'YLAB TOPMANG\n- markdown ## ** yo'q — faqat matn va emoji\n\nFormat:
 ⚽ O'yin 1: [A] — [B]
 Stavka: [turi] | Koef: X.XX
 
 💰 Jami: X.XX × X.XX = X.XX""",
-        "ar": f"""{real_matches_str}أنشئ رهاناً مركباً من {n} مباريات. القواعد:\n- استخدم المباريات من القائمة أعلاه (إن وُجدت)\n- بدون markdown ## ** — نص وإيموجي فقط\n\nالصيغة:
+        "ar": f"""{real_matches_str}أنشئ رهاناً مركباً من {k} مباريات. القواعد:\n- استخدم فقط المباريات من القائمة أعلاه\n- لكل مباراة اختر الرهان فقط من الأسواق المذكورة واذكر ربحه الحقيقي من القائمة\n- لا تخترع أبداً أرباحاً أو أسواقاً غير موجودة في القائمة\n- بدون markdown ## ** — نص وإيموجي فقط\n\nالصيغة:
 ⚽ مباراة 1: [أ] — [ب]
 الرهان: [النوع] | الربح: X.XX
 
