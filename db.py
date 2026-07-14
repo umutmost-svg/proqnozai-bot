@@ -120,16 +120,33 @@ def db_flag_mark(key: str):
 
 _LANG_TZ = {"az": 4, "ru": 3, "tr": 3, "kz": 5, "uz": 5, "ar": 3, "en": 0}
 
+# Canonical language set (matches translations.T). ``ru`` is the safe default the
+# whole app falls back to; ``en`` is the secondary fallback inside tr(). These are
+# the ONLY values that may be stored in users.lang.
+DEFAULT_LANG = "ru"
+SUPPORTED_LANGS = frozenset({"az", "ru", "en", "tr", "kz", "uz", "ar"})
+
+
+def normalize_lang(lang) -> str:
+    """Coerce any language value to a supported code. Unknown / legacy / invalid
+    values (including None and junk stored by old clients) normalize to
+    DEFAULT_LANG instead of raising or leaking through the UI."""
+    if isinstance(lang, str):
+        low = lang.strip().lower()
+        if low in SUPPORTED_LANGS:
+            return low
+    return DEFAULT_LANG
+
 
 def detect_lang(tg_lang: str | None) -> str:
     if not tg_lang:
-        return "ru"
+        return DEFAULT_LANG
     mapping = {
         "az": "az", "ru": "ru", "uk": "ru", "be": "ru",
         "tr": "tr", "kk": "kz", "uz": "uz",
         "ar": "ar", "fa": "ar", "en": "en",
     }
-    return mapping.get(tg_lang.lower()[:2], "ru")
+    return mapping.get(tg_lang.lower()[:2], DEFAULT_LANG)
 
 
 def db_ensure(uid, uname, tg_lang=None):
@@ -168,7 +185,9 @@ def db_get(uid) -> dict | None:
 
 
 def db_lang(uid) -> str:
-    return _one("SELECT lang FROM users WHERE user_id=?", (uid,)) or "az"
+    """The user's UI language, always normalized to a supported code so a legacy
+    or corrupted stored value can never break rendering."""
+    return normalize_lang(_one("SELECT lang FROM users WHERE user_id=?", (uid,)))
 
 
 def db_is_reg(uid) -> bool:

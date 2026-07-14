@@ -460,7 +460,7 @@ async def _fm_match_run(context, q, uid: int, lang: str, it) -> None:
     dt_str = "🔴 LIVE" if it.is_live else _fmt_kickoff(it.kickoff_utc, uid)
 
     loading = {
-        "ru": "⏳ Загружаю коэффициенты...", "az": "⏳ Keflər yüklənir...",
+        "ru": "⏳ Загружаю коэффициенты...", "az": "⏳ Əmsallar yüklənir...",
         "en": "⏳ Loading odds...", "tr": "⏳ Oranlar yükleniyor...",
         "kz": "⏳ Коэффициенттер жүктелуде...", "uz": "⏳ Koeffitsientlar yuklanmoqda...",
         "ar": "⏳ جارٍ تحميل الأرباح...",
@@ -664,10 +664,10 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Text input - redirect to match menu
     use_menu = {
-        "ru": "📋 Выберите матч из списка для получения точного прогноза:",
-        "az": "📋 Dəqiq proqnoz üçün siyahıdan matç seçin:",
+        "ru": "📋 Выбери матч из списка — сделаю точный разбор:",
+        "az": "📋 Siyahıdan matç seçin — dəqiq təhlil verim:",
         "en": "📋 Select a match from the list for an accurate forecast:",
-        "tr": "📋 Doğru tahmin için listeden maç seçin:",
+        "tr": "📋 Listeden maç seç — net analiz vereyim:",
         "kz": "📋 Нақты болжам алу үшін тізімнен матч таңдаңыз:",
         "uz": "📋 Aniq bashorat olish uchun ro'yxatdan o'yin tanlang:",
         "ar": "📋 اختر مباراة من القائمة للحصول على توقع دقيق:",

@@ -3,22 +3,18 @@ T = {
 "az": {
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Xoş gəldiniz! Adınızı daxil edin:",
-"reg_done":      "Qeydiyyat tamamlandı! Salam, {name}!",
-"welcome_intro": """ProqnozAI-yə xoş gəldiniz!
+"reg_done":      "Hazırdır, {name}! Başlayaq 👇",
+"welcome_intro": """ProqnozAI 👋
 
-Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
+Mən futbol üzrə AI analitikəm.
+Matçı seçin — statistikanı, formanı və analizi göstərim.
 
-⚽ Matç proqnozları — idman növünü seçin, matçı tapın, dərhal analiz alın
-⚡ Ekspress — 2-5 matçdan ibarət ekspress kupon
-📸 Foto — cədvəl və ya afişanın şəklini göndərin
-📋 Tarixçə — əvvəlki proqnozlarınıza baxın
-
-İdman növünü seçin — başlayaq!""",
+Başlayaq 👇""",
 "post_onboarding": """Hazırdır! İndi nə etmək istəyirsiniz?
 
-⚽ Matç proqnozu üçün "Matç proqnozları" düyməsini basın
-⚡ Ekspress üçün "Ekspress" düyməsini basın
-📸 Cədvəl şəklini göndərə bilərsiniz""",
+⚽ Təhlil üçün "Proqnoz" düyməsini seçin
+⚡ Kupon üçün "Ekspress" düyməsini seçin
+📸 Cədvəl şəklini göndərin""",
 "already_reg":   "Siz artıq qeydiyyatdan keçmisiniz, {name}!",
 "need_reg":      "Əvvəlcə qeydiyyatdan keçin. /start yazın.",
 "db_blocked":    "Hesabınız bloklanıb. İnzibatçıya müraciət edin.",
@@ -33,7 +29,7 @@ Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
 "api_overload":  "Servis yüklənməsi. Bir az sonra yenidən cəhd edin.",
 "api_error":     "Xəta baş verdi. Bir az sonra yenidən cəhd edin.",
 "lang_set":      "Dil Azərbaycan dilinə təyin edildi.",
-"watch_btn":     "Oyunu izlə",
+"watch_btn":     "👁 İzləyin",
 "watch_started": "Oyun izlənilir: {match}",
 "watch_stopped": "Dayandırıldı: {match}",
 "no_subs":       "Heç bir oyun izləmirsiniz.",
@@ -44,14 +40,14 @@ Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
 "live_alert_goal":     "SİQNAL! {match} - Qol gözlənilir [{minute}. dəq]",
 "live_alert_value":    "LIVE VALUE! {match} - {team} üzərində dəyər var [{minute}. dəq]",
 "live_alert_pressure": "TƏZYİQ! {match} - {team} hücum təzyiqi [{minute}. dəq] {stat}",
-"menu_forecast": "⚽ Matç proqnozları",
+"menu_forecast": "⚽ Proqnoz",
 "menu_profile":  "👤 Profil",
 "menu_lang":     "Dil dəyiş",
 "profile_text":  "👤 PROFİL\n\nAd: {name}\nDil: {lang}\nSaat qurşağı: {tz}",
-"ob_sports":     "Hansı idman növünü sevirsiniz?",
-"ob_exp":        "Mərcdə təcrübəniz nə qədərdir?",
+"ob_sports":     "Ən çox nəyi izləyirsiniz?",
+"ob_exp":        "Matçları nə qədər dərin izləyirsiniz?",
 "ob_done":       "Hazırdır! Seçdiyiniz idman: {sports}. Artıq proqnoz ala bilərsiniz.",
-"match_too_far": "Bu matç 1 həftədən uzaqdadır. Yalnız növbəti 7 gün ərzindəki matçlar üçün proqnoz verirəm.",
+"match_too_far": "Bu matça hələ var — yalnız yaxın 7 günün matçlarını təhlil edirəm.",
 "ev_menu_expired":        "⚠️ Matç siyahısı köhnəlib. Zəhmət olmasa, siyahını yenidən açın.",
 "ev_provider_unavailable": "⚠️ Matç məlumatları müvəqqəti əlçatmazdır. Bir az sonra yenidən cəhd edin.",
 "ev_no_live":             "Canlı matç yoxdur.",
@@ -59,11 +55,11 @@ Mən AI-əsaslı idman analitikiyəm. Nə edə bilərəm:
 "ev_no_tomorrow":         "Sabah matç yoxdur.",
 "ev_more_leagues":        "ℹ️ Prioritet üzrə ilk 15 turnir göstərilir; başqaları da var.",
 "ev_more_matches":        "ℹ️ Ən erkən 10 matç göstərilir; başqaları da var.",
-"enr_football_unavailable": "ℹ️ Bu matç üçün doğrulanmış futbol məlumatı əlçatan deyil — proqnoz keflərə əsaslanır.",
+"enr_football_unavailable": "ℹ️ Bu matç üçün doğrulanmış futbol məlumatı yoxdur — proqnoz əmsallara əsaslanır.",
 "enr_standings_unavailable": "ℹ️ Turnir cədvəli əlçatan deyil.",
 "enr_lineups_unavailable": "ℹ️ Heyətlər hələ məlum deyil.",
 "enr_injuries_unavailable": "ℹ️ Zədə/diskvalifikasiya məlumatı əlçatan deyil.",
-"enr_unverified":         "ℹ️ Matç doğrulana bilmədi — yalnız keflər göstərilir.",
+"enr_unverified":         "ℹ️ Matç doğrulanmadı — yalnız əmsallar göstərilir.",
 "system_prompt": """Sən idman analitikisən. Qısa və aydın yaz. İstənilən idmanı analiz et.
 
 QAYDALAR:
@@ -91,9 +87,9 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "history_title":"Son proqnozlarınız:",
 "history_empty":"Hələ proqnoz almamısınız.",
 "history_item": "{n}. {query} — {date}",
-"feedback_ask": "Bu proqnoz oynadımı?",
-"feedback_yes": "Bəli, oynadı!",
-"feedback_no":  "Xeyr, oynamadı",
+"feedback_ask": "Proqnoz düz çıxdı?",
+"feedback_yes": "Bəli, düz çıxdı",
+"feedback_no":  "Xeyr, düz çıxmadı",
 "feedback_done":"Təşəkkürlər! Statistika yeniləndi.",
 "winrate":      "Proqnoz dəqiqliyi: {pct}% ({wins}/{total})",
 "express_ask":  "Neçə matç? (2-5)",
@@ -111,22 +107,18 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "ru": {
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Добро пожаловать! Введите ваше имя:",
-"reg_done":      "Регистрация завершена! Привет, {name}!",
-"welcome_intro": """Добро пожаловать в ProqnozAI!
+"reg_done":      "Готово, {name}! Погнали 👇",
+"welcome_intro": """ProqnozAI 👋
 
-Я — AI-аналитик спортивных событий. Что умею:
+Я — AI-аналитик по футболу.
+Выбери матч — покажу статистику, форму и разбор.
 
-⚽ Прогнозы матчей — выберите вид спорта, найдите матч, получите анализ
-⚡ Экспресс — купон из 2-5 матчей с расчётом коэффициента
-📸 Фото — отправьте фото расписания или афиши
-📋 История — ваши предыдущие прогнозы
+Погнали 👇""",
+"post_onboarding": """Готово! Что дальше?
 
-Выберите вид спорта и начнём!""",
-"post_onboarding": """Готово! Что хотите сделать?
-
-⚽ Для прогноза нажмите «Прогнозы матчей»
-⚡ Для купона нажмите «Экспресс»
-📸 Или отправьте фото расписания""",
+⚽ Для разбора нажми «Прогноз»
+⚡ Для купона нажми «Экспресс»
+📸 Или пришли фото расписания""",
 "already_reg":   "Вы уже зарегистрированы, {name}!",
 "need_reg":      "Сначала пройдите регистрацию. Напишите /start.",
 "db_blocked":    "Ваш аккаунт заблокирован. Обратитесь к администратору.",
@@ -141,7 +133,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "api_overload":  "Сервис перегружен. Попробуйте позже.",
 "api_error":     "Произошла ошибка. Попробуйте позже.",
 "lang_set":      "Язык установлен: Русский.",
-"watch_btn":     "Следить за матчем",
+"watch_btn":     "👁 Следить",
 "watch_started": "Слежу за матчем: {match}",
 "watch_stopped": "Слежение остановлено: {match}",
 "no_subs":       "Вы не следите ни за одним матчем.",
@@ -152,14 +144,14 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "live_alert_goal":     "СИГНАЛ! {match} - ожидается гол [{minute} мин]",
 "live_alert_value":    "LIVE VALUE! {match} - есть ценность на {team} [{minute} мин]",
 "live_alert_pressure": "ДАВЛЕНИЕ! {match} - {team} создаёт давление [{minute} мин] {stat}",
-"menu_forecast": "⚽ Прогнозы матчей",
+"menu_forecast": "⚽ Прогноз",
 "menu_profile":  "👤 Профиль",
 "menu_lang":     "Сменить язык",
 "profile_text":  "👤 ПРОФИЛЬ\n\nИмя: {name}\nЯзык: {lang}\nЧасовой пояс: {tz}",
-"ob_sports":     "Какой вид спорта вас интересует больше всего?",
-"ob_exp":        "Каков ваш опыт в ставках?",
+"ob_sports":     "Что смотришь чаще всего?",
+"ob_exp":        "Насколько глубоко разбираешь матчи?",
 "ob_done":       "Готово! Выбранный спорт: {sports}. Можете запрашивать прогнозы.",
-"match_too_far": "Этот матч слишком далеко. Я даю прогнозы только на матчи в ближайшие 7 дней.",
+"match_too_far": "До матча ещё далеко — разбираю только ближайшие 7 дней.",
 "ev_menu_expired":        "⚠️ Список матчей устарел. Пожалуйста, откройте его заново.",
 "ev_provider_unavailable": "⚠️ Данные матчей временно недоступны. Попробуйте позже.",
 "ev_no_live":             "Нет матчей вживую.",
@@ -199,9 +191,9 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "history_title": "Ваши последние прогнозы:",
 "history_empty": "У вас ещё нет прогнозов.",
 "history_item": "{n}. {query} — {date}",
-"feedback_ask": "Этот прогноз сыграл?",
-"feedback_yes": "Да, сыграло!",
-"feedback_no": "Нет, не сыграло",
+"feedback_ask": "Прогноз оказался верным?",
+"feedback_yes": "Да, верный",
+"feedback_no": "Нет, неверный",
 "feedback_done": "Спасибо! Статистика обновлена.",
 "winrate": "Точность прогнозов: {pct}% ({wins}/{total})",
 "express_ask": "Сколько матчей? (2-5)",
@@ -326,7 +318,7 @@ Draw — XX% | X.XX  (if applicable)
 "tr": {
 "choose_lang":   "Dil seçin / Выберите язык / Choose language:",
 "ask_name":      "Hoş geldiniz! Adınızı girin:",
-"reg_done":      "Kayıt tamamlandı! Merhaba, {name}!",
+"reg_done":      "Hazır, {name}! Başlayalım 👇",
 "already_reg":   "Zaten kayıtlısınız, {name}!",
 "need_reg":      "Önce kayıt olun. /start yazın.",
 "db_blocked":    "Hesabınız engellendi. Yöneticiye başvurun.",
@@ -341,7 +333,7 @@ Draw — XX% | X.XX  (if applicable)
 "api_overload":  "Servis aşırı yüklendi. Lütfen daha sonra tekrar deneyin.",
 "api_error":     "Bir hata oluştu. Lütfen daha sonra tekrar deneyin.",
 "lang_set":      "Dil Türkçe olarak ayarlandı.",
-"watch_btn":     "Maçı takip et",
+"watch_btn":     "👁 Takip et",
 "watch_started": "Maç takip ediliyor: {match}",
 "watch_stopped": "Takip durduruldu: {match}",
 "no_subs":       "Hiçbir maçı takip etmiyorsunuz.",
@@ -352,25 +344,21 @@ Draw — XX% | X.XX  (if applicable)
 "live_alert_goal":     "SİNYAL! {match} - Gol bekleniyor [{minute}. dk]",
 "live_alert_value":    "CANLI DEĞER! {match} - {team} üzerinde değer var [{minute}. dk]",
 "live_alert_pressure": "BASKI! {match} - {team} güçlü baskı yapıyor [{minute}. dk] {stat}",
-"menu_forecast": "⚽ Maç tahminleri",
+"menu_forecast": "⚽ Tahmin",
 "menu_profile":  "👤 Profil",
 "menu_lang":     "Dil değiştir",
 "profile_text":  "👤 PROFİL\n\nAd: {name}\nDil: {lang}\nSaat dilimi: {tz}",
-"ob_sports":     "En çok hangi sporu seviyorsunuz?",
-"ob_exp":        "Bahis deneyiminiz nedir?",
+"ob_sports":     "En çok neyi izliyorsun?",
+"ob_exp":        "Maçları ne kadar derin takip ediyorsun?",
 "ob_done":       "Hazır! Seçilen spor: {sports}. Artık tahmin alabilirsiniz.",
-"welcome_intro": """ProqnozAI'ye hoş geldiniz!
+"welcome_intro": """ProqnozAI 👋
 
-Ben bir AI spor analistiyim. Yapabileceklerim:
+Ben futbol için AI analistiyim.
+Maçı seç — istatistik, form ve analizi göstereyim.
 
-⚽ Maç tahminleri — sporu seçin, maçı bulun, anında analiz alın
-⚡ Ekspress — 2–5 maçlık kupon oluşturun
-📸 Fotoğraf — fikstür veya program fotoğrafı gönderin
-📋 Geçmiş — önceki tahminlerinizi görüntüleyin
-
-Spor seçin ve başlayalım!""",
-"post_onboarding": "Hazır! Ne yapmak istersiniz?\n\n⚽ Tahmin için «Maç tahminleri» tuşuna basın\n⚡ Kupon için «Ekspress» tuşuna basın\n📸 Ya da fikstür fotoğrafı gönderin",
-"match_too_far": "Bu maç çok uzakta. Yalnızca önümüzdeki 7 gün içindeki maçlar için tahmin yapıyorum.",
+Başlayalım 👇""",
+"post_onboarding": "Hazır! Sırada ne var?\n\n⚽ Analiz için «Tahmin» tuşuna bas\n⚡ Kupon için «Kombine» tuşuna bas\n📸 Ya da fikstür fotoğrafı gönder",
+"match_too_far": "Maça daha çok var — yalnızca yakın 7 günü analiz ediyorum.",
 "ev_menu_expired":        "⚠️ Maç listesi zaman aşımına uğradı. Lütfen yeniden açın.",
 "ev_provider_unavailable": "⚠️ Maç verileri geçici olarak kullanılamıyor. Lütfen daha sonra tekrar deneyin.",
 "ev_no_live":             "Canlı maç yok.",
@@ -410,16 +398,16 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "history_title": "Son tahminleriniz:",
 "history_empty": "Henüz tahmin yok.",
 "history_item": "{n}. {query} — {date}",
-"feedback_ask": "Bu tahmin tuttu mu?",
-"feedback_yes": "Evet, tuttu!",
-"feedback_no": "Hayır, tutmadı",
+"feedback_ask": "Tahmin doğru çıktı mı?",
+"feedback_yes": "Evet, doğru",
+"feedback_no": "Hayır, yanlış",
 "feedback_done": "Teşekkürler! İstatistik güncellendi.",
 "winrate": "Tahmin doğruluğu: {pct}% ({wins}/{total})",
 "express_ask": "Kaç maç? (2-5)",
 "express_title": "Günün ekspresi:",
 "compare_ask": "İki takım adı yazın. Örnek: Barcelona Real Madrid",
 "menu_history": "📋 Geçmiş",
-"menu_express": "⚡ Ekspres",
+"menu_express": "⚡ Kombine",
 "menu_support": "🆘 Destek",
 "support_text": "🆘 *Destek*\n\nSorularınız veya sorunlarınız varsa — bize yazın:",
 "support_btn":  "💬 Desteğe yaz",
@@ -801,7 +789,11 @@ def exp_label(uid, val):
 
 def tr(uid, key, **kw):
     from db import db_lang
-    lang = db_lang(uid)
-    # Fallback chain: current lang -> ru -> en -> empty string
-    txt = T.get(lang, {}).get(key) or T.get("ru", {}).get(key) or T.get("en", {}).get(key, "")
+    lang = db_lang(uid)  # already normalized to a supported code
+    # Fallback chain: requested language -> ru -> en -> the key itself (never
+    # empty), so a missing string degrades to a visible, debuggable token.
+    txt = (T.get(lang, {}).get(key)
+           or T.get("ru", {}).get(key)
+           or T.get("en", {}).get(key)
+           or key)
     return txt.format(**kw) if kw else txt
