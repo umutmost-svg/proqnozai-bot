@@ -72,6 +72,47 @@ def _is_outright_market(m: dict) -> bool:
     return t2 in ("", "?")
 
 
+# ─── Feed generation integrity ────────────────────────────────────────────────
+# A paginated fetch can break mid-stream (deadline, 429 budget, HTTP/JSON error,
+# network) — the collected head used to be cached as if it were the FULL list,
+# hiding every tournament in the unread tail for a whole TTL. Publication now
+# goes through an integrity gate: a partial head is merged with the previous
+# generation's tail, and a "complete"-looking result that sharply shrank vs the
+# previous generation is treated as a silent truncation and merged too.
+
+# A complete-looking generation smaller than this fraction of the previous one
+# is suspect (feeds shrink gradually, not by half between 15-min cycles).
+_SHRINK_SUSPECT = 0.6
+
+
+def _merge_generations(fresh: list, last_id, prev: list) -> list:
+    """Fresh head (ids ≤ last_id, just fetched) + previous generation's tail
+    (ids > last_id). Complete by construction; the tail is at most one cache
+    TTL older than the head. Relies on the feed's ascending-id ordering, so no
+    id can appear twice; downstream event_list dedup covers any deviation."""
+    return fresh + [m for m in prev if m.get("id", 0) > last_id]
+
+
+def _publish_generation(fresh: list, last_id, complete: bool, prev: list) -> list:
+    """Decide what the new cached generation is. Never lets a partial fetch
+    replace a fuller previous generation outright."""
+    if complete:
+        if prev and len(fresh) < len(prev) * _SHRINK_SUSPECT:
+            merged = _merge_generations(fresh, last_id, prev)
+            logger.warning(
+                f"Mostbet generation shrank {len(prev)}→{len(fresh)} — suspect "
+                f"silent truncation, keeping previous tail (total {len(merged)})")
+            return merged
+        return fresh
+    if prev:
+        merged = _merge_generations(fresh, last_id, prev)
+        logger.warning(
+            f"Mostbet partial fetch ({len(fresh)}) — merged tail of previous "
+            f"generation (total {len(merged)})")
+        return merged
+    return fresh  # partial, but nothing better exists
+
+
 # ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
 
 async def _mostbet_load_matches() -> list:
@@ -105,6 +146,7 @@ async def _mostbet_load_matches() -> list:
                 last_id = 0
                 page = 0
                 rate_hits = 0
+                complete = False
                 while True:
                     if asyncio.get_event_loop().time() > deadline:
                         logger.warning(f"Mostbet load deadline reached at page {page} "
@@ -145,12 +187,14 @@ async def _mostbet_load_matches() -> list:
                         logger.error(f"Mostbet invalid JSON on page {page}")
                         break
                     if not matches:
+                        complete = True  # natural end of the cursor
                         break
                     last_id = matches[-1]["id"]
                     all_matches.extend(matches)
                     logger.info(f"Mostbet page {page}: {len(matches)} matches "
                                 f"(total: {len(all_matches)})")
                     if len(matches) < _PAGE_LIMIT:
+                        complete = True  # short page = last page
                         break
         except Exception as e:
             logger.error(f"_mostbet_load_matches: {e}")
@@ -159,8 +203,12 @@ async def _mostbet_load_matches() -> list:
                 return stale
 
         if all_matches:
-            mostbet_cache[cache_key] = (time.time(), all_matches)
-            logger.info(f"Mostbet cache updated: {len(all_matches)} total matches")
+            _, prev = mostbet_cache.get(cache_key, (0, []))
+            published = _publish_generation(all_matches, last_id, complete, prev)
+            mostbet_cache[cache_key] = (time.time(), published)
+            logger.info(f"Mostbet cache updated: {len(published)} total matches "
+                        f"({'complete' if complete else 'merged/partial'})")
+            return published
         return all_matches
 
 
