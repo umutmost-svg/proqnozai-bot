@@ -28,7 +28,12 @@ MOSTBET_BASE    = "https://mostbet2.com"   # Odds Checker API (IP whitelisted)
 MOSTBET_SRC_TZ  = 3
 
 RATE_WINDOW = 60; RATE_MAX = 5; SPAM_AFTER = 3; SPAM_DUR = 600
-MOSTBET_CACHE_TTL = 900           # 15 minutes cache
+MOSTBET_CACHE_TTL = 900           # match LIST cache (15 min — list moves slowly)
+# Odds move much faster than the match list: a 15-min snapshot visibly diverges
+# from the live site. Keep odds fresh, and never pin a failed/empty fetch for
+# long — one network hiccup must not mean "no odds" until the next TTL.
+MOSTBET_ODDS_TTL = 120            # per-line odds cache (2 min)
+MOSTBET_ODDS_EMPTY_TTL = 45       # cache for a fetch that yielded no values
 
 # ─── In-memory ────────────────────────────────────────────────────────────────
 msg_times:     dict[int, deque] = defaultdict(deque)

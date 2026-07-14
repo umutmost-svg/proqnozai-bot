@@ -166,3 +166,118 @@ def test_format_partial_lines_are_omitted():
     out = format_mostbet_odds(odds, "en")
     assert "1X2" not in out
     assert "Total 2.5" in out
+
+
+# ── Side markets must not overwrite the main line ────────────────────────────
+
+_POISON_PAYLOAD = {
+    "lineMatchOutcomes": [
+        # Real main markets first…
+        {"groupTitle": "Total goals", "outcomeTitle": "over 2.5", "odd": "1.85"},
+        {"groupTitle": "Total goals", "outcomeTitle": "under 2.5", "odd": "1.95"},
+        {"groupTitle": "Both teams to score", "outcomeTitle": "yes", "odd": "1.72"},
+        {"groupTitle": "Double chance", "outcomeTitle": "1x", "odd": "1.30"},
+        {"groupTitle": "Match result", "outcomeTitle": "1", "odd": "2.10"},
+        # …then side markets sharing the same keywords, arriving LATER so they
+        # would overwrite the real values without the group exclusion.
+        {"groupTitle": "Total corners", "outcomeTitle": "over 2.5", "odd": "9.99"},
+        {"groupTitle": "Total cards", "outcomeTitle": "under 2.5", "odd": "8.88"},
+        {"groupTitle": "Individual total 1", "outcomeTitle": "over 2.5", "odd": "7.77"},
+        {"groupTitle": "Player shots total", "outcomeTitle": "over 2.5", "odd": "6.66"},
+        # Half-time variants of DC/BTTS must not pollute full-time fields.
+        {"groupTitle": "1st half double chance", "outcomeTitle": "1x", "odd": "5.55"},
+        {"groupTitle": "1st half both teams to score", "outcomeTitle": "yes", "odd": "4.44"},
+    ]
+}
+
+
+@pytest.fixture()
+def poisoned_odds(monkeypatch, clean_mostbet_cache):
+    fake = _FakeAsyncClient(_POISON_PAYLOAD)
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", fake)
+
+    async def run():
+        return await mostbet_get_odds(777002)
+
+    import asyncio
+    return asyncio.run(run())
+
+
+def test_side_totals_do_not_overwrite_goal_totals(poisoned_odds):
+    assert poisoned_odds["over25"] == 1.85       # goals, not corners 9.99
+    assert poisoned_odds["under25"] == 1.95      # goals, not cards 8.88
+
+
+def test_side_market_values_leak_nowhere(poisoned_odds):
+    values = [v for v in poisoned_odds.values() if v is not None]
+    for poison in (9.99, 8.88, 7.77, 6.66, 5.55, 4.44):
+        assert poison not in values, f"side-market value {poison} leaked"
+
+
+def test_half_time_dc_and_btts_do_not_pollute_full_time(poisoned_odds):
+    assert poisoned_odds["dc_1x"] == 1.30        # not 5.55 from 1st-half DC
+    assert poisoned_odds["btts_yes"] == 1.72     # not 4.44 from 1st-half BTTS
+
+
+# ── Odds cache freshness ──────────────────────────────────────────────────────
+
+class _ErrorAsyncClient:
+    """Every GET raises — simulates Mostbet being unreachable."""
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, **kwargs):
+        raise mostbet.httpx.ConnectError("down")
+
+
+def test_failed_fetch_not_pinned_for_full_ttl(monkeypatch, clean_mostbet_cache):
+    """One network hiccup caches an all-None line only for the short empty TTL;
+    after it passes, the next call refetches and gets the real values."""
+    import asyncio
+    from config import MOSTBET_ODDS_EMPTY_TTL
+
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", _ErrorAsyncClient())
+    empty = asyncio.run(mostbet_get_odds(777003))
+    assert all(v is None for v in empty.values())
+
+    # Within the empty TTL the cached failure is served (no refetch)…
+    good = _FakeAsyncClient(_load_fixture("outcomes_full.json"))
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", good)
+    still_empty = asyncio.run(mostbet_get_odds(777003))
+    assert all(v is None for v in still_empty.values())
+    assert good.requests == []
+
+    # …but once it expires, the line is refetched — not pinned for 15 minutes.
+    ts, data = clean_mostbet_cache["odds_777003"]
+    clean_mostbet_cache["odds_777003"] = (ts - MOSTBET_ODDS_EMPTY_TTL - 1, data)
+    fresh = asyncio.run(mostbet_get_odds(777003))
+    assert fresh["w1"] == 2.10
+    assert good.requests
+
+
+def test_real_odds_refresh_after_odds_ttl_not_list_ttl(monkeypatch, clean_mostbet_cache):
+    """Priced lines refresh on MOSTBET_ODDS_TTL (minutes), not the 15-minute
+    match-list TTL — the bot's odds must track the site closely."""
+    import asyncio
+    from config import MOSTBET_ODDS_TTL, MOSTBET_CACHE_TTL
+
+    assert MOSTBET_ODDS_TTL < MOSTBET_CACHE_TTL
+
+    good = _FakeAsyncClient(_load_fixture("outcomes_full.json"))
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", good)
+    first = asyncio.run(mostbet_get_odds(777004))
+    assert first["w1"] == 2.10
+    fetches_after_first = len(good.requests)
+
+    # Age the entry past the odds TTL but well inside the old 15-min window.
+    ts, data = clean_mostbet_cache["odds_777004"]
+    clean_mostbet_cache["odds_777004"] = (ts - MOSTBET_ODDS_TTL - 1, data)
+    asyncio.run(mostbet_get_odds(777004))
+    assert len(good.requests) > fetches_after_first   # refetched
