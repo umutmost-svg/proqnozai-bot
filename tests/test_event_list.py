@@ -75,7 +75,11 @@ def test_native_ids_used_when_present():
 def test_reject_missing_fixture_id_or_teams_or_league():
     assert normalize_fixture(_raw(fid=None)) is None
     assert normalize_fixture({**_raw(), "team2Title": ""}) is None
-    assert normalize_fixture({**_raw(), "lineSubCategory": ""}) is None
+    # An empty subcategory no longer drops the row — it falls back to the
+    # super category (World Cup regression, see below); only a row with NO
+    # league information at all is rejected.
+    assert normalize_fixture({**_raw(), "lineSubCategory": "",
+                              "lineSuperCategory": ""}) is None
 
 
 def test_reject_nonlive_without_valid_kickoff():
@@ -298,3 +302,38 @@ def test_every_visible_item_carries_identity_fields():
     for attr in ("fixture_id", "league_key", "home_team_key", "away_team_key",
                  "fixture_id_source", "team_identity_source", "league_identity_source"):
         assert getattr(it, attr), attr
+
+
+# ─── World Cup visibility regressions ─────────────────────────────────────────
+
+def test_empty_subcategory_falls_back_to_super_category():
+    """International feeds may carry the tournament only in lineSuperCategory
+    with an empty subcategory; such rows must become visible items, not be
+    silently dropped (an entire World Cup vanished this way)."""
+    it = normalize_fixture(_raw(league="", country="World Cup 2026"))
+    assert it is not None
+    assert it.league_name == "World Cup 2026"
+    assert it.country is None            # no duplicated label
+    # And the fallback name still ranks as a top tournament.
+    assert league_rank(it.league_name, it.country) < league_rank("Random Cup", None)
+
+
+def test_both_categories_empty_still_dropped():
+    assert normalize_fixture(_raw(league="", country="")) is None
+
+
+def test_later_window_capped_at_seven_days():
+    """include_later shows up to MAX_DAYS_AHEAD (the forecast policy window);
+    anything further stays hidden."""
+    at_edge = _item(kickoff_utc=NOW + timedelta(days=7))
+    beyond = _item(kickoff_utc=NOW + timedelta(days=8))
+    assert visible_bucket(at_edge, NOW, UTC, include_later=True) == el.LATER
+    assert visible_bucket(beyond, NOW, UTC, include_later=True) is None
+
+
+def test_select_visible_with_later_includes_midweek_final():
+    """A final five days ahead (the reported World Cup case) must be selectable
+    when the menu asks for the full window."""
+    it = _item(kickoff_utc=NOW + timedelta(days=5))
+    kept = select_visible([it], NOW, UTC, include_later=True)
+    assert kept and kept[0].bucket == el.LATER

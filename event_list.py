@@ -47,6 +47,12 @@ FINISHED_GRACE = timedelta(hours=3, minutes=30)
 # Buckets.
 LIVE, TODAY, TOMORROW, LATER = "LIVE", "TODAY", "TOMORROW", "LATER"
 
+# LATER window: matches further out are hidden even when include_later=True.
+# Keep in sync with the forecast policy (match_too_far: forecasts cover the
+# next 7 days) — the menu must not hide what the bot is willing to analyse
+# (a World Cup final 5 days ahead was invisible), nor offer what it refuses.
+MAX_DAYS_AHEAD = 7
+
 # ─── Status normalization ─────────────────────────────────────────────────────
 # The Mostbet feed's status vocabulary is not documented; we read any of a few
 # plausible status fields and map recognized tokens to canonical values. Unknown
@@ -168,6 +174,12 @@ def normalize_fixture(raw: dict) -> Optional[EventItem]:
     away = (raw.get("team2Title") or "").strip()
     league_name = (raw.get("lineSubCategory") or "").strip()
     country = (raw.get("lineSuperCategory") or "").strip() or None
+    if not league_name and country:
+        # International feeds sometimes carry the tournament only in the super
+        # category ("World Cup 2026") with an empty subcategory; dropping such
+        # rows silently hid entire tournaments. Use the super category as the
+        # league and clear the country to avoid a duplicated label.
+        league_name, country = country, None
     sport = (raw.get("lineCategory") or "").strip() or "Other"
     is_live = bool(raw.get("isLive"))
     status = parse_status(raw)
@@ -276,7 +288,7 @@ def visible_bucket(item: EventItem, now_utc: datetime, user_tz: timezone,
         return TODAY
     if d == 1:
         return TOMORROW
-    return LATER if include_later else None
+    return LATER if (include_later and d <= MAX_DAYS_AHEAD) else None
 
 
 def _dedup(items: list[EventItem]) -> list[EventItem]:
