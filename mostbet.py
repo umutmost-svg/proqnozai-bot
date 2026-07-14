@@ -6,7 +6,9 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from config import MOSTBET_BASE, MOSTBET_CACHE_TTL, MOSTBET_SRC_TZ, mostbet_cache, _mostbet_lock
+from config import (MOSTBET_BASE, MOSTBET_CACHE_TTL, MOSTBET_ODDS_TTL,
+                    MOSTBET_ODDS_EMPTY_TTL, MOSTBET_SRC_TZ, mostbet_cache,
+                    _mostbet_lock)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,16 @@ def _is_virtual_match(m: dict) -> bool:
         "team1Title", "team2Title", "matchTitle",
     )).lower()
     return any(kw in text for kw in _VIRTUAL_MATCH_KEYWORDS)
+
+
+# Market groups that must never feed the MAIN 1X2/totals/BTTS/DC fields: they
+# share keywords ("total", "winner", "both"…) with the main markets but price a
+# different thing entirely (corners, cards, individual/team totals, players…).
+_NON_MAIN_GROUPS = (
+    "corner", "card", "booking", "yellow", "individual", "team total",
+    "player", "penalt", "offside", "throw", "goal kick", "shot", "foul",
+    "substitut",
+)
 
 
 def _is_outright_market(m: dict) -> bool:
@@ -219,7 +231,13 @@ async def mostbet_get_odds(line_id: int) -> dict:
     now = time.time()
     if cache_key in mostbet_cache:
         ts, data = mostbet_cache[cache_key]
-        if now - ts < MOSTBET_CACHE_TTL:
+        # Freshness depends on content: real values live MOSTBET_ODDS_TTL (odds
+        # move much faster than the match list); an EMPTY result (failed fetch
+        # or no oddschecker outcomes) expires quickly, so one network hiccup
+        # can never pin "no odds" on a match for the full list TTL.
+        ttl = (MOSTBET_ODDS_TTL if any(v is not None for v in data.values())
+               else MOSTBET_ODDS_EMPTY_TTL)
+        if now - ts < ttl:
             return data
     result = {
         # 1X2
@@ -293,6 +311,13 @@ async def mostbet_get_odds(line_id: int) -> dict:
                 except Exception:
                     continue
 
+                # Non-goal side markets share keywords with the main ones
+                # ("Total corners" contains "total", "Individual total" too…)
+                # and used to OVERWRITE the real 1X2/totals fields — the bot
+                # then showed a line that differed from the site. Skip them.
+                if any(k in group for k in _NON_MAIN_GROUPS):
+                    continue
+
                 # Half-time markets must be detected first so the generic "result"
                 # / "1x2" keywords below don't swallow them into full-time fields.
                 is_half = any(k in group for k in ("1st half", "first half", "halftime",
@@ -318,7 +343,7 @@ async def mostbet_get_odds(line_id: int) -> dict:
                         result["w2"] = odd_f
 
                 # ── Double chance ─────────────────────────────────────────────
-                elif any(k in group for k in ("double chance", "double result")):
+                elif (not is_half) and any(k in group for k in ("double chance", "double result")):
                     if "1x" in title or "home or draw" in title:
                         result["dc_1x"] = odd_f
                     elif "12" in title or "home or away" in title:
@@ -327,7 +352,7 @@ async def mostbet_get_odds(line_id: int) -> dict:
                         result["dc_x2"] = odd_f
 
                 # ── Draw no bet ───────────────────────────────────────────────
-                elif any(k in group for k in ("draw no bet", "dnb", "moneyline")):
+                elif (not is_half) and any(k in group for k in ("draw no bet", "dnb", "moneyline")):
                     if title in ("1", "w1", "home"):
                         result["dnb_w1"] = odd_f
                     elif title in ("2", "w2", "away"):
@@ -365,7 +390,7 @@ async def mostbet_get_odds(line_id: int) -> dict:
                             break
 
                 # ── BTTS ──────────────────────────────────────────────────────
-                elif any(k in group for k in ("both", "btts", "gg", "обе", "goals both")):
+                elif (not is_half) and any(k in group for k in ("both", "btts", "gg", "обе", "goals both")):
                     if any(k in title for k in ("yes", "да", "gg")):
                         result["btts_yes"] = odd_f
                     elif any(k in title for k in ("no", "нет", "ng")):
