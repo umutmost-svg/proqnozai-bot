@@ -343,7 +343,7 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
     now_utc = datetime.now(timezone.utc)
     items = select_visible(
         [it for m in all_m if (it := normalize_fixture(m)) is not None],
-        now_utc, _user_tz(uid), include_later=False)
+        now_utc, _user_tz(uid), include_later=True)  # show the full 7-day window
 
     if not items:
         # Nothing LIVE / today / tomorrow — all three buckets are empty.

@@ -254,3 +254,27 @@ async def test_league_cb_flags_more_matches(temp_db):
     q = _FakeQuery("fm_lg_0", uid)
     await fc.fm_league_cb(_update(q), _ctx(fm_leagues=groups))
     assert T["en"]["ev_more_matches"] in q.edited
+
+
+async def test_menu_shows_match_five_days_ahead(temp_db, monkeypatch):
+    """Regression for the World Cup report: a fixture days ahead (e.g. the
+    final) must appear in the menu — the old today/tomorrow-only window hid it
+    while the bot happily forecasts 7 days out."""
+    uid = 811011
+    temp_db.db_ensure(uid, "u", "en")
+
+    async def _load():
+        return [_raw(1, "France", "Spain", league="Play-off",
+                     country="World Cup 2026", when=_when(5 * 24))]
+
+    monkeypatch.setattr(fc, "_mostbet_load_matches", _load)
+    ctx = _ctx()
+    msg = _FakeMsg()
+    update = types.SimpleNamespace(
+        effective_user=types.SimpleNamespace(id=uid),
+        message=types.SimpleNamespace(reply_text=lambda *a, **k: _async_msg(msg)))
+
+    await fc.forecast_menu_start(update, ctx)
+
+    sports = ctx.user_data["fm_sports"]
+    assert sports and sports[0][1][0].home == "France"
