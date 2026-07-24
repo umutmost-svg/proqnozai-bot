@@ -2,10 +2,12 @@ import os
 import sqlite3
 import json
 import logging
+from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime
 
 from config import live_subs
+from priority_config import normalize_participant_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -325,3 +327,34 @@ def db_save_conv(uid, messages: list):
 
 def db_clear_conv(uid):
     _run("DELETE FROM conversation WHERE user_id=?", (uid,))
+
+
+# ─── Match Priority Engine: internal demand aggregation ───────────────────────
+def db_match_demand(days: int = 14) -> dict[frozenset, int]:
+    """Unique-user demand per normalized (unordered) participant-pair, over the
+    trailing `days` window. Counts DISTINCT users per pair — NOT raw request
+    count — so repeated requests from a single user cannot alone inflate a
+    match's demand signal (see priority_engine.PriorityInput.demand_count).
+
+    Built from forecast_history.query (menu flow stores "{home} {away}" as the
+    query text) and live_subscriptions.match_name ("{home} vs {away}"). Both
+    are free text without a stored team/team delimiter, so events are keyed by
+    an unordered NORMALIZED TOKEN SET rather than a split (home, away) pair —
+    this also makes the key naturally order-independent.
+
+    No schema change: reads existing columns only.
+    """
+    cutoff = f"-{int(days)} days"
+    rows = _all(
+        "SELECT DISTINCT user_id, query FROM forecast_history "
+        "WHERE query != '' AND created_at >= datetime('now', ?)", (cutoff,))
+    rows += _all(
+        "SELECT DISTINCT user_id, match_name FROM live_subscriptions "
+        "WHERE match_name != '' AND created_at >= datetime('now', ?)", (cutoff,))
+
+    users_by_key: dict[frozenset, set] = defaultdict(set)
+    for uid, text in rows:
+        key = normalize_participant_tokens(text)
+        if key:
+            users_by_key[key].add(uid)
+    return {key: len(uids) for key, uids in users_by_key.items()}

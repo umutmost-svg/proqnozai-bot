@@ -267,8 +267,10 @@ def test_matches_sorted_by_kickoff_live_first():
 
 
 def test_leagues_sorted_by_priority():
+    # Neutral (non-popular, non-derby) team names on both sides: this test is
+    # about tournament prestige specifically, not team popularity/derby.
     raws = [
-        _raw(fid=1, league="Some Local League", country="Nowhere"),
+        _raw(fid=1, t1="P", t2="Q", league="Some Local League", country="Nowhere"),
         _raw(fid=2, t1="X", t2="Y", league="Champions League", country="Europe"),
     ]
     items = select_visible([normalize_fixture(r) for r in raws], NOW, UTC)
@@ -283,10 +285,14 @@ def test_pagination_caps_and_flags_truncation():
         raws.append(_raw(fid=1000 + i, t1=f"T{i}a", t2=f"T{i}b",
                          league=f"League {i:02d}", country=f"Country{i}"))
     for j in range(12):
-        # All later today (20:00–20:11 local = future vs NOW), 12 distinct kickoffs.
+        # Same kickoff moment as the other 16 leagues (only team names differ)
+        # so this test isolates pagination/truncation from priority ordering —
+        # a Busy League kicking off later would legitimately rank below
+        # leagues starting sooner under the priority engine's time_proximity
+        # component, which is not what this test is checking.
         raws.append(_raw(fid=2000 + j, t1=f"H{j}", t2=f"A{j}",
                          league="Busy League", country="Busyland",
-                         when=f"12.07.2026 20:{j:02d}:00"))
+                         when="12.07.2026 18:00:00"))
     items = select_visible([normalize_fixture(r) for r in raws], NOW, UTC)
     groups, leagues_truncated = group_by_league(items)
     assert leagues_truncated is True
@@ -337,3 +343,185 @@ def test_select_visible_with_later_includes_midweek_final():
     it = _item(kickoff_utc=NOW + timedelta(days=5))
     kept = select_visible([it], NOW, UTC, include_later=True)
     assert kept and kept[0].bucket == el.LATER
+
+
+# ─── Match Priority Engine integration ─────────────────────────────────────────
+
+def test_group_by_league_ranks_by_priority_not_alphabet():
+    """A big derby in an unlisted/obscure league must outrank an ordinary
+    match of a recognized top-5 league — the point of the priority engine is
+    that it is NOT just the old league whitelist + alphabet fallback."""
+    raws = [
+        _raw(fid=1, t1="Burnley", t2="Luton Town",
+             league="Premier League", country="England"),
+        _raw(fid=2, t1="Arsenal", t2="Tottenham",
+             league="Regional Super Cup", country="Nowhere"),
+    ]
+    items = [normalize_fixture(r) for r in raws]
+    groups, _ = group_by_league(items, now_utc=NOW)
+    assert groups[0].league_name == "Regional Super Cup"
+
+
+def test_matches_within_league_ordered_by_priority_then_kickoff():
+    raws = [
+        _raw(fid=1, t1="Burnley", t2="Luton Town", when="12.07.2026 18:00:00"),
+        _raw(fid=2, t1="Arsenal", t2="Tottenham", when="12.07.2026 20:00:00"),
+    ]
+    items = [normalize_fixture(r) for r in raws]
+    groups, _ = group_by_league(items, now_utc=NOW)
+    # Same league (Premier League/England default); the derby ranks first
+    # even though it kicks off later.
+    assert groups[0].items[0].home == "Arsenal"
+
+
+def test_live_shown_above_prematch_within_same_league():
+    raws = [
+        _raw(fid=1, t1="Burnley", t2="Luton Town", when="12.07.2026 13:00:00"),
+        _raw(fid=2, t1="X", t2="Y", when="", live=True),
+    ]
+    items = select_visible([normalize_fixture(r) for r in raws], NOW, UTC)
+    groups, _ = group_by_league(items, now_utc=NOW)
+    assert groups[0].items[0].is_live
+
+
+def test_priority_sort_is_stable_for_equal_scores():
+    """Two matches with identical priority components must still sort in a
+    fixed, reproducible order (by normalized league/home/away), never by
+    incidental input order."""
+    raws = [
+        _raw(fid=1, t1="Zeta", t2="Yankee", league="Regional Cup", country="Nowhere"),
+        _raw(fid=2, t1="Alpha", t2="Bravo", league="Regional Cup", country="Nowhere"),
+    ]
+    items_a = [normalize_fixture(r) for r in raws]
+    items_b = [normalize_fixture(r) for r in reversed(raws)]
+    groups_a, _ = group_by_league(items_a, now_utc=NOW)
+    groups_b, _ = group_by_league(items_b, now_utc=NOW)
+    assert [it.home for it in groups_a[0].items] == [it.home for it in groups_b[0].items]
+    # Deterministic: normalized home "alpha" sorts before "zeta".
+    assert groups_a[0].items[0].home == "Alpha"
+
+
+def test_build_top_matches_crosses_sports_and_leagues():
+    from event_list import build_top_matches
+    raws = [
+        _raw(fid=1, t1="Burnley", t2="Luton Town",
+             league="Premier League", country="England"),
+        _raw(fid=2, t1="Real Madrid", t2="Barcelona",
+             league="La Liga", country="Spain"),
+    ]
+    items = [normalize_fixture(r) for r in raws]
+    top = build_top_matches(items, now_utc=NOW, limit=15)
+    assert top[0].home == "Real Madrid"  # El Clasico outranks an ordinary PL match
+
+
+def test_priority_score_assigned_after_group_by_league():
+    raws = [_raw(fid=1)]
+    items = [normalize_fixture(r) for r in raws]
+    assert items[0].priority_score is None
+    groups, _ = group_by_league(items, now_utc=NOW)
+    assert groups[0].items[0].priority_score is not None
+    assert 0 <= groups[0].items[0].priority_score <= 100
+
+
+# ─── Competition / stage separation (post-validation-report fix) ──────────────
+
+def test_world_cup_playoff_splits_into_competition_and_stage():
+    """The confirmed real Mostbet shape: subcategory holds ONLY the round
+    ("Play-off"), supercategory holds the real competition name."""
+    it = normalize_fixture(_raw(league="Play-off", country="World Cup 2026"))
+    assert it.league_name == "World Cup 2026"
+    assert it.stage_raw == "Play-off"
+    assert it.country is None
+
+
+def test_stage_embedded_in_longer_name_is_not_split():
+    """A stage word embedded in a longer subcategory string is NOT parsed
+    apart — that heuristic is explicitly out of scope (unverified against a
+    live feed). The whole string stays the competition name; stage_raw is
+    empty (no false-positive stage points from an unverified pattern)."""
+    it = normalize_fixture(_raw(league="Champions League - Semi-final", country="Europe"))
+    assert it.league_name == "Champions League - Semi-final"
+    assert it.stage_raw == ""
+
+
+def test_one_tournament_id_different_rounds_group_as_one_competition():
+    """The primary fix for round-fragmentation: a stable tournamentId groups
+    all rounds of the same competition together regardless of subcategory
+    text drift across rounds."""
+    semi = normalize_fixture(_raw(fid=1, league="Semi-final", country="Champions League",
+                                  tournamentId=777))
+    group = normalize_fixture(_raw(fid=2, t1="X", t2="Y", league="Group Stage",
+                                   country="Champions League", tournamentId=777))
+    assert semi.league_key == group.league_key
+
+
+def test_different_tournament_ids_same_name_text_do_not_collapse():
+    """Two distinct tournaments that happen to share a display name (e.g. two
+    unrelated "Regional Cup"s) must not merge just because tournamentId is
+    trusted over the name when available."""
+    a = normalize_fixture(_raw(fid=1, league="Regional Cup", country="Nowhere",
+                               tournamentId=111))
+    b = normalize_fixture(_raw(fid=2, t1="X", t2="Y", league="Regional Cup", country="Nowhere",
+                               tournamentId=222))
+    assert a.league_key != b.league_key
+
+
+def test_stage_raw_never_participates_in_league_key():
+    with_stage = normalize_fixture(_raw(fid=1, league="Play-off", country="World Cup 2026"))
+    without_stage = normalize_fixture(_raw(fid=2, t1="X", t2="Y", league="World Cup 2026",
+                                           country=""))
+    assert with_stage.league_key == without_stage.league_key
+
+
+def test_stage_raw_affects_tournament_stage_not_league_key():
+    # Same neutral (non-popular, non-derby) teams on both sides, so the score
+    # difference can only come from the stage component being isolated.
+    from event_list import assign_priority_scores
+    final = normalize_fixture(_raw(fid=1, t1="X", t2="Y", league="Final",
+                                   country="Copa Libertadores"))
+    no_stage = normalize_fixture(_raw(fid=2, t1="X", t2="Y", league="Copa Libertadores",
+                                      country=""))
+    assign_priority_scores([final, no_stage], NOW)
+    assert final.league_key == no_stage.league_key
+    # The final-stage match must score higher (stage component), everything
+    # else being equal (same competition, same default kickoff/teams tier).
+    assert final.priority_score > no_stage.priority_score
+
+
+def test_competition_name_affects_prestige():
+    from priority_engine import compute_priority, PriorityInput
+    elite = compute_priority(PriorityInput(
+        league_name="Champions League", country="Europe", home="A", away="B",
+        is_live=False, kickoff_utc=NOW + timedelta(hours=3), now_utc=NOW, stage_hint=""))
+    obscure = compute_priority(PriorityInput(
+        league_name="Regional Cup", country="Nowhere", home="A", away="B",
+        is_live=False, kickoff_utc=NOW + timedelta(hours=3), now_utc=NOW, stage_hint=""))
+    assert elite.tournament_prestige > obscure.tournament_prestige
+
+
+def test_fully_identical_matches_stabilized_by_fixture_id():
+    """Two fixtures identical in every priority-relevant field (including
+    league/home/away) must still sort deterministically — the last-resort
+    fixture_id tie-break, independent of input order."""
+    from event_list import sort_matches
+    a = normalize_fixture(_raw(fid=5, t1="Zeta", t2="Yankee", league="Regional Cup", country="Nowhere"))
+    b = normalize_fixture(_raw(fid=3, t1="Zeta", t2="Yankee", league="Regional Cup", country="Nowhere"))
+    from event_list import assign_priority_scores
+    assign_priority_scores([a, b], NOW)
+    fwd = sort_matches([a, b])
+    rev = sort_matches([b, a])
+    assert [x.fixture_id for x in fwd] == [x.fixture_id for x in rev] == ["3", "5"]
+
+
+def test_shuffled_input_gives_identical_output():
+    from event_list import build_top_matches
+    raws = [
+        _raw(fid=1, t1="Real Madrid", t2="Barcelona", league="La Liga", country="Spain"),
+        _raw(fid=2, t1="Arsenal", t2="Tottenham", league="Premier League", country="England"),
+        _raw(fid=3, t1="P", t2="Q", league="Regional Cup", country="Nowhere"),
+        _raw(fid=4, t1="R", t2="S", league="Regional Cup", country="Nowhere"),
+    ]
+    items = [normalize_fixture(r) for r in raws]
+    fwd = build_top_matches(list(items), limit=len(items), now_utc=NOW)
+    rev = build_top_matches(list(reversed(items)), limit=len(items), now_utc=NOW)
+    assert [x.fixture_id for x in fwd] == [x.fixture_id for x in rev]
