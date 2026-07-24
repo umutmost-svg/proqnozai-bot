@@ -119,6 +119,17 @@ async def _expired_menu(q, uid: int) -> None:
     await q.edit_message_text(tr(uid, "ev_menu_expired"))
 
 
+def _parse_index(data: str) -> int | None:
+    """Parse the trailing integer from callback_data (e.g. "fm_day_3" -> 3).
+    Returns None on malformed data (a hand-crafted or replayed callback)
+    instead of raising, so callers can degrade to the same expired-menu path
+    used for an out-of-range index."""
+    try:
+        return int(data.split("_")[2])
+    except (IndexError, ValueError):
+        return None
+
+
 def _match_label(it, uid: int) -> str:
     """Button label: live state or localized day/time, then the teams."""
     if it.is_live or it.status == "live":
@@ -129,13 +140,20 @@ def _match_label(it, uid: int) -> str:
     return f"{prefix}  {it.home[:18]} — {it.away[:18]}".strip()
 
 
-def _build_sport_kb(sport_groups: list) -> InlineKeyboardMarkup:
-    """Top-level sport selector from the frozen ordered [(sport, items)] list."""
+def _build_sport_kb(sport_groups: list, page: int, uid: int) -> InlineKeyboardMarkup:
+    """Top-level sport selector, one page of the frozen ordered
+    [(sport, items)] list. Button indices are the ABSOLUTE position in the
+    full list, same rationale as _build_league_kb/_build_match_kb."""
+    page_groups, page, has_prev, has_next = paginate(sport_groups, page, PAGE_SIZE)
+    offset = page * PAGE_SIZE
     btns = []
-    for i, (cat, items) in enumerate(sport_groups[:8]):
+    for i, (cat, items) in enumerate(page_groups, start=offset):
         emoji = _sport_emoji(cat)
         btns.append([InlineKeyboardButton(f"{emoji} {cat} ({len(items)})",
                                           callback_data=f"fm_sp_{i}")])
+    nav = _pagination_row(uid, page, has_prev, has_next, "fm_sppg_")
+    if nav:
+        btns.append(nav)
     return InlineKeyboardMarkup(btns)
 
 
@@ -182,7 +200,7 @@ def _build_league_kb(groups: list, page: int, back_cb: str, uid: int) -> InlineK
     Names are shown as Mostbet supplies them; a country flag aids scanning.
     Button indices are the ABSOLUTE position in the full list — pagination
     only changes which slice is shown, never what an index resolves to."""
-    page_groups, has_prev, has_next = paginate(groups, page, PAGE_SIZE)
+    page_groups, page, has_prev, has_next = paginate(groups, page, PAGE_SIZE)
     offset = page * PAGE_SIZE
     btns = []
     for i, g in enumerate(page_groups, start=offset):
@@ -203,7 +221,7 @@ def _build_match_kb(matches: list, page: int, uid: int) -> InlineKeyboardMarkup:
     """Match selector, one page of the frozen ordered match list. Button
     indices are the ABSOLUTE position in the full list, same rationale as
     _build_league_kb."""
-    page_matches, has_prev, has_next = paginate(matches, page, PAGE_SIZE)
+    page_matches, page, has_prev, has_next = paginate(matches, page, PAGE_SIZE)
     offset = page * PAGE_SIZE
     btns = [[InlineKeyboardButton(_match_label(it, uid), callback_data=f"fm_mt_{i}")]
             for i, it in enumerate(page_matches, start=offset)]
@@ -239,7 +257,7 @@ def _build_country_kb(country_options: list, page: int, uid: int) -> InlineKeybo
     """Country/region filter selector, paginated. Index 0 is always the fixed
     "all countries" option (shown only on page 0); index i (1-based) is the
     ABSOLUTE position in the full country_options list."""
-    page_opts, has_prev, has_next = paginate(country_options, page, PAGE_SIZE)
+    page_opts, page, has_prev, has_next = paginate(country_options, page, PAGE_SIZE)
     offset = page * PAGE_SIZE
     btns = []
     if page == 0:
@@ -423,10 +441,12 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
     # newly-built list (it hits a missing snapshot → expired-menu message).
     context.user_data["ev_session"] = context.user_data.get("ev_session", 0) + 1
     context.user_data["fm_sports"] = sport_groups
+    context.user_data["fm_sport_page"] = 0
     context.user_data["fm_sport_items"] = None
     context.user_data["fm_day_options"] = None
     context.user_data["fm_day_filtered"] = None
     context.user_data["fm_country_options"] = None
+    context.user_data["fm_country_page"] = 0
     context.user_data["fm_leagues"] = None
     context.user_data["fm_league_page"] = 0
     context.user_data["fm_league_back"] = "fm_back_sport"
@@ -437,7 +457,7 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fm_now_utc"] = now_utc
     context.user_data["fm_demand"] = db_match_demand()
 
-    await msg.edit_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sport_groups))
+    await msg.edit_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sport_groups, 0, uid))
 
 
 def _tournaments_title(sport_name: str, lang: str) -> str:
@@ -452,8 +472,8 @@ async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid = q.from_user.id
     sport_groups = context.user_data.get("fm_sports")
-    idx = int(q.data.split("_")[2])
-    if not sport_groups or idx >= len(sport_groups):
+    idx = _parse_index(q.data)
+    if not sport_groups or idx is None or idx < 0 or idx >= len(sport_groups):
         await _expired_menu(q, uid); return
 
     sport_name, sport_items = sport_groups[idx]
@@ -466,13 +486,25 @@ async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(tr(uid, "ev_day_title"), reply_markup=_build_day_kb(day_options, uid))
 
 
+async def fm_sppg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id; lang = db_lang(uid)
+    sport_groups = context.user_data.get("fm_sports")
+    page = _parse_index(q.data)
+    if not sport_groups or page is None:
+        await _expired_menu(q, uid); return
+    context.user_data["fm_sport_page"] = page
+    await q.edit_message_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sport_groups, page, uid))
+
+
 async def fm_day_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = q.from_user.id
     day_options = context.user_data.get("fm_day_options")
     sport_items = context.user_data.get("fm_sport_items")
-    idx = int(q.data.split("_")[2])
-    if sport_items is None or day_options is None or (idx != 0 and idx - 1 >= len(day_options)):
+    idx = _parse_index(q.data)
+    if (idx is None or idx < 0 or sport_items is None or day_options is None
+            or (idx != 0 and idx - 1 >= len(day_options))):
         await q.answer(); await _expired_menu(q, uid); return
     await q.answer()
 
@@ -486,6 +518,7 @@ async def fm_day_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _show_league_list(q, context, uid, filtered, back_cb="fm_back_day")
         return
     context.user_data["fm_country_options"] = country_options
+    context.user_data["fm_country_page"] = 0
     await q.edit_message_text(tr(uid, "ev_country_title"),
                               reply_markup=_build_country_kb(country_options, 0, uid))
 
@@ -495,8 +528,9 @@ async def fm_ctry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id
     country_options = context.user_data.get("fm_country_options")
     filtered = context.user_data.get("fm_day_filtered")
-    idx = int(q.data.split("_")[2])
-    if filtered is None or country_options is None or (idx != 0 and idx - 1 >= len(country_options)):
+    idx = _parse_index(q.data)
+    if (idx is None or idx < 0 or filtered is None or country_options is None
+            or (idx != 0 and idx - 1 >= len(country_options))):
         await q.answer(); await _expired_menu(q, uid); return
     await q.answer()
 
@@ -511,9 +545,10 @@ async def fm_ctrypg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid = q.from_user.id
     country_options = context.user_data.get("fm_country_options")
-    if country_options is None:
+    page = _parse_index(q.data)
+    if country_options is None or page is None:
         await _expired_menu(q, uid); return
-    page = int(q.data.split("_")[2])
+    context.user_data["fm_country_page"] = page
     await q.edit_message_text(tr(uid, "ev_country_title"),
                               reply_markup=_build_country_kb(country_options, page, uid))
 
@@ -534,7 +569,9 @@ async def _show_league_list(q, context, uid: int, items: list, back_cb: str) -> 
     sport_name = sport_groups[idx][0] if idx < len(sport_groups) else ""
     title = _tournaments_title(sport_name, lang)
     if not groups:
-        await q.edit_message_text(title + "\n" + tr(uid, "ev_filter_empty"))
+        # Never leave the user on a dead-end screen with no way back.
+        back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data=back_cb)]])
+        await q.edit_message_text(title + "\n" + tr(uid, "ev_filter_empty"), reply_markup=back_kb)
         return
     await q.edit_message_text(title, reply_markup=_build_league_kb(groups, 0, back_cb, uid))
 
@@ -543,9 +580,9 @@ async def fm_lgpg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid = q.from_user.id; lang = db_lang(uid)
     groups = context.user_data.get("fm_leagues")
-    if not groups:
+    page = _parse_index(q.data)
+    if not groups or page is None:
         await _expired_menu(q, uid); return
-    page = int(q.data.split("_")[2])
     context.user_data["fm_league_page"] = page
     back_cb = context.user_data.get("fm_league_back", "fm_back_sport")
 
@@ -568,8 +605,8 @@ async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid = q.from_user.id; lang = db_lang(uid)
     groups = context.user_data.get("fm_leagues")
-    idx = int(q.data.split("_")[2])
-    if not groups or idx >= len(groups):
+    idx = _parse_index(q.data)
+    if not groups or idx is None or idx < 0 or idx >= len(groups):
         await _expired_menu(q, uid); return
 
     g = groups[idx]
@@ -588,9 +625,9 @@ async def fm_mtpg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid = q.from_user.id; lang = db_lang(uid)
     matches = context.user_data.get("fm_matches")
-    if not matches:
+    page = _parse_index(q.data)
+    if not matches or page is None:
         await _expired_menu(q, uid); return
-    page = int(q.data.split("_")[2])
     context.user_data["fm_match_page"] = page
 
     groups = context.user_data.get("fm_leagues") or []
@@ -604,8 +641,8 @@ async def fm_match_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = q.from_user.id; lang = db_lang(uid)
     matches = context.user_data.get("fm_matches")
-    idx = int(q.data.split("_")[2])
-    if not matches or idx >= len(matches):
+    idx = _parse_index(q.data)
+    if not matches or idx is None or idx < 0 or idx >= len(matches):
         # Stale/expired keyboard — cheap path, not charged against the limit.
         await q.answer()
         await _expired_menu(q, uid); return
@@ -722,7 +759,8 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sport_groups = context.user_data.get("fm_sports")
         if not sport_groups:
             await _expired_menu(q, uid); return
-        await q.edit_message_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sport_groups))
+        page = context.user_data.get("fm_sport_page", 0)
+        await q.edit_message_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sport_groups, page, uid))
 
     elif q.data == "fm_back_day":
         day_options = context.user_data.get("fm_day_options")
@@ -734,8 +772,9 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         country_options = context.user_data.get("fm_country_options")
         if country_options is None:
             await _expired_menu(q, uid); return
+        page = context.user_data.get("fm_country_page", 0)
         await q.edit_message_text(tr(uid, "ev_country_title"),
-                                  reply_markup=_build_country_kb(country_options, 0, uid))
+                                  reply_markup=_build_country_kb(country_options, page, uid))
 
     elif q.data == "fm_back_league":
         groups = context.user_data.get("fm_leagues")

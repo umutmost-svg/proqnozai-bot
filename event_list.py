@@ -434,8 +434,6 @@ class LeagueGroup:
     league_key: str
     league_name: str
     country: Optional[str]
-    rank: int   # legacy league_rank() value — kept for introspection only,
-                # no longer drives sort order (see _group_sort_key below).
     items: list[EventItem] = field(default_factory=list)
 
 
@@ -473,8 +471,7 @@ def group_by_league(items: list[EventItem], *, now_utc: Optional[datetime] = Non
     for it in items:
         g = by.get(it.league_key)
         if g is None:
-            g = LeagueGroup(it.league_key, it.league_name, it.country,
-                            league_rank(it.league_name, it.country))
+            g = LeagueGroup(it.league_key, it.league_name, it.country)
             by[it.league_key] = g
         g.items.append(it)
 
@@ -488,17 +485,23 @@ def group_by_league(items: list[EventItem], *, now_utc: Optional[datetime] = Non
 PAGE_SIZE = 10
 
 
-def paginate(seq: list, page: int, page_size: int = PAGE_SIZE) -> tuple[list, bool, bool]:
-    """Slice `seq` at `page` (0-indexed). Returns (page_items, has_prev, has_next).
+def paginate(seq: list, page: int, page_size: int = PAGE_SIZE) -> tuple[list, int, bool, bool]:
+    """Slice `seq` at `page` (0-indexed). Returns
+    (page_items, clamped_page, has_prev, has_next).
+
     An out-of-range page clamps to the last valid page rather than raising or
     returning an empty screen — a stale/late "next page" tap can never land on
-    nothing."""
+    nothing. Callers MUST use the returned `clamped_page` (not the `page` they
+    passed in) for any absolute-index math (offsets) or further pagination
+    callbacks — otherwise a stale/out-of-range page number renders a page's
+    worth of items with the WRONG absolute indices/callback_data, since only
+    the slice itself was clamped, not the caller's own arithmetic."""
     if not seq:
-        return [], False, False
+        return [], 0, False, False
     total_pages = max(1, (len(seq) + page_size - 1) // page_size)
-    page = max(0, min(page, total_pages - 1))
-    start = page * page_size
-    return seq[start:start + page_size], page > 0, (page + 1) < total_pages
+    clamped = max(0, min(page, total_pages - 1))
+    start = clamped * page_size
+    return seq[start:start + page_size], clamped, clamped > 0, (clamped + 1) < total_pages
 
 
 # ─── Day filter ─────────────────────────────────────────────────────────────
