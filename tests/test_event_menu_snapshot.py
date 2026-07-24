@@ -38,12 +38,19 @@ class _FakeQuery:
         self.from_user = types.SimpleNamespace(id=uid)
         self.message = types.SimpleNamespace(text="header")
         self.edited = None
+        self.markup = None
 
     async def answer(self):
         pass
 
     async def edit_message_text(self, text, **kw):
         self.edited = text
+        self.markup = kw.get("reply_markup")
+
+    def button_callbacks(self) -> list[str]:
+        if self.markup is None:
+            return []
+        return [btn.callback_data for row in self.markup.inline_keyboard for btn in row]
 
 
 class _FakeMsg:
@@ -230,9 +237,11 @@ def test_fmt_kickoff_uses_user_timezone(temp_db):
     assert "UTC+5" in out
 
 
-# ─── Truncation visible to the user ───────────────────────────────────────────
+# ─── Pagination visible to the user (replaces the old hard truncation) ───────
 
-async def test_sport_cb_flags_more_leagues(temp_db):
+async def test_sport_cb_shows_day_filter_screen(temp_db):
+    """fm_sport_cb now leads to the day-filter screen, not straight to the
+    league list — the league list itself is reached via fm_day_cb/fm_ctry_cb."""
     uid = 811006
     temp_db.db_ensure(uid, "u", "en")
     items = [normalize_fixture(_raw(1000 + i, f"T{i}a", f"T{i}b",
@@ -240,20 +249,135 @@ async def test_sport_cb_flags_more_leagues(temp_db):
              for i in range(16)]
     q = _FakeQuery("fm_sp_0", uid)
     await fc.fm_sport_cb(_update(q), _ctx(fm_sports=[("Football", items)]))
-    assert T["en"]["ev_more_leagues"] in q.edited
+    assert q.edited == T["en"]["ev_day_title"]
 
 
-async def test_league_cb_flags_more_matches(temp_db):
+async def test_league_list_paginates_beyond_one_page(temp_db):
+    uid = 811006
+    temp_db.db_ensure(uid, "u", "en")
+    # Same country on every item so the country-filter screen auto-skips
+    # (nothing to narrow by country) — this test is about LEAGUE pagination.
+    items = [normalize_fixture(_raw(1000 + i, f"T{i}a", f"T{i}b",
+                                    league=f"League {i:02d}", country="Same"))
+             for i in range(16)]
+    q = _FakeQuery("fm_day_0", uid)
+    await fc.fm_day_cb(_update(q), _ctx(fm_sport_items=items, fm_day_options=[],
+                                        fm_sports=[("Football", items)]))
+    # 16 leagues > PAGE_SIZE(10) → a "show more" pagination button, not a cap.
+    assert any(cb and cb.startswith("fm_lgpg_") for cb in q.button_callbacks())
+
+
+async def test_league_cb_shows_pagination_button_for_many_matches(temp_db):
     uid = 811007
     temp_db.db_ensure(uid, "u", "en")
     from event_list import group_by_league
     items = [normalize_fixture(_raw(2000 + j, f"H{j}", f"A{j}", league="Busy",
                                     country="Land", when=_when(24 + j)))
              for j in range(12)]
-    groups, _ = group_by_league(items)
+    groups = group_by_league(items)
     q = _FakeQuery("fm_lg_0", uid)
     await fc.fm_league_cb(_update(q), _ctx(fm_leagues=groups))
-    assert T["en"]["ev_more_matches"] in q.edited
+    # 12 matches > PAGE_SIZE(10) → a "show more" pagination button, not a cap.
+    assert any(cb and cb.startswith("fm_mtpg_") for cb in q.button_callbacks())
+    # And ALL 12 matches are reachable (via the frozen full list), never capped.
+    assert len(groups[0].items) == 12
+
+
+# ─── Full day → country → league → match flow, with back navigation ─────────
+
+async def test_full_filter_flow_and_back_navigation(temp_db, monkeypatch):
+    uid = 811012
+    temp_db.db_ensure(uid, "u", "en")
+
+    async def _noop_odds(mid):
+        return {}
+
+    async def _noop_real(t1, t2, hint):
+        return ""
+
+    async def _forecast(uid_, content, sys, tok):
+        return "OK"
+
+    monkeypatch.setattr(fc, "mostbet_get_odds", _noop_odds)
+    monkeypatch.setattr(fc, "fetch_real_data", _noop_real)
+    monkeypatch.setattr(fc, "format_mostbet_odds", lambda o, l: "")
+    monkeypatch.setattr(fc, "claude_forecast", _forecast)
+
+    items = [
+        normalize_fixture(_raw(1, "Arsenal", "Chelsea", league="Premier League", country="England")),
+        normalize_fixture(_raw(2, "Liverpool", "Everton", league="Premier League", country="England")),
+        normalize_fixture(_raw(3, "Real Madrid", "Barcelona", league="La Liga", country="Spain")),
+    ]
+    ctx = _ctx(fm_sports=[("Football", items)])
+
+    # 1. Sport → day filter screen.
+    q1 = _FakeQuery("fm_sp_0", uid)
+    await fc.fm_sport_cb(_update(q1), ctx)
+    assert q1.edited == T["en"]["ev_day_title"]
+    assert ctx.user_data["fm_sport_items"] == items
+
+    # 2. Day "All" → two countries present → country screen (not skipped).
+    q2 = _FakeQuery("fm_day_0", uid)
+    await fc.fm_day_cb(_update(q2), ctx)
+    assert q2.edited == T["en"]["ev_country_title"]
+    assert dict(ctx.user_data["fm_country_options"]) == {"England": 2, "Spain": 1}
+
+    # 3. Country "England" (index 1: first real option after the fixed "All"
+    #    at index 0) → league list, scoped to England only.
+    q3 = _FakeQuery("fm_ctry_1", uid)
+    await fc.fm_ctry_cb(_update(q3), ctx)
+    groups = ctx.user_data["fm_leagues"]
+    assert [g.league_name for g in groups] == ["Premier League"]
+    assert ctx.user_data["fm_league_back"] == "fm_back_country"
+
+    # 4. League → match list (both England matches, Chelsea/Everton fixtures).
+    q4 = _FakeQuery("fm_lg_0", uid)
+    await fc.fm_league_cb(_update(q4), ctx)
+    matches = ctx.user_data["fm_matches"]
+    assert {m.fixture_id for m in matches} == {"1", "2"}
+
+    # 5. Match → resolves by absolute index against the frozen snapshot.
+    q5 = _FakeQuery("fm_mt_1", uid)
+    await fc.fm_match_cb(_update(q5), ctx)
+    assert ctx.user_data["match_ref"]["home"] == "Liverpool"
+
+    # 6. Back from the match screen → league list, with the RIGHT back target
+    #    (country, since the country screen was actually shown for this sport).
+    q6 = _FakeQuery("fm_back_league", uid)
+    await fc.fm_back_cb(_update(q6), ctx)
+    assert "fm_back_country" in q6.button_callbacks()
+
+    # 7. Back from the league list → country screen.
+    q7 = _FakeQuery("fm_back_country", uid)
+    await fc.fm_back_cb(_update(q7), ctx)
+    assert q7.edited == T["en"]["ev_country_title"]
+
+    # 8. Back from the country screen → day screen.
+    q8 = _FakeQuery("fm_back_day", uid)
+    await fc.fm_back_cb(_update(q8), ctx)
+    assert q8.edited == T["en"]["ev_day_title"]
+
+    # 9. Back from the day screen → sport screen.
+    q9 = _FakeQuery("fm_back_sport", uid)
+    await fc.fm_back_cb(_update(q9), ctx)
+    assert q9.edited == fc._SPORT_TITLE["en"]
+
+
+async def test_single_country_skips_country_screen(temp_db):
+    """When every match in the (sport, day) scope shares one country, the
+    country screen must be skipped entirely — nothing to choose."""
+    uid = 811013
+    temp_db.db_ensure(uid, "u", "en")
+    items = [
+        normalize_fixture(_raw(1, "Arsenal", "Chelsea", league="Premier League", country="England")),
+        normalize_fixture(_raw(2, "Liverpool", "Everton", league="Championship", country="England")),
+    ]
+    ctx = _ctx(fm_sport_items=items, fm_day_options=[], fm_sports=[("Football", items)])
+    q = _FakeQuery("fm_day_0", uid)
+    await fc.fm_day_cb(_update(q), ctx)
+    # Straight to the league list — never the country title.
+    assert q.edited != T["en"]["ev_country_title"]
+    assert ctx.user_data["fm_league_back"] == "fm_back_day"
 
 
 async def test_menu_shows_match_five_days_ahead(temp_db, monkeypatch):

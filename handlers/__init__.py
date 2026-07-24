@@ -10,7 +10,8 @@ from config import ADMIN_ID
 from handlers.registration import start, lang_cb, lang_cmd, ob_cb, profile_cmd, tz_cmd, handle_tz_input
 from handlers.forecast import (
     forecast_cb, forecast_menu_start,
-    fm_sport_cb, fm_league_cb, fm_match_cb, fm_back_cb,
+    fm_sport_cb, fm_day_cb, fm_ctry_cb, fm_ctrypg_cb,
+    fm_league_cb, fm_lgpg_cb, fm_match_cb, fm_mtpg_cb, fm_back_cb,
     handle_msg,
 )
 from handlers.live import watch_cb, matches_cmd
@@ -51,7 +52,12 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(ob_cb,         pattern=r"^ob_"))
     app.add_handler(CallbackQueryHandler(forecast_cb,   pattern=r"^forecast_"))
     app.add_handler(CallbackQueryHandler(fm_sport_cb,   pattern=r"^fm_sp_"))
+    app.add_handler(CallbackQueryHandler(fm_day_cb,     pattern=r"^fm_day_"))
+    app.add_handler(CallbackQueryHandler(fm_ctrypg_cb,  pattern=r"^fm_ctrypg_"))
+    app.add_handler(CallbackQueryHandler(fm_ctry_cb,    pattern=r"^fm_ctry_"))
+    app.add_handler(CallbackQueryHandler(fm_lgpg_cb,    pattern=r"^fm_lgpg_"))
     app.add_handler(CallbackQueryHandler(fm_league_cb,  pattern=r"^fm_lg_"))
+    app.add_handler(CallbackQueryHandler(fm_mtpg_cb,    pattern=r"^fm_mtpg_"))
     app.add_handler(CallbackQueryHandler(fm_match_cb,   pattern=r"^fm_mt_"))
     app.add_handler(CallbackQueryHandler(fm_back_cb,    pattern=r"^fm_back_"))
     app.add_handler(CallbackQueryHandler(watch_cb,      pattern=r"^(watch|unwatch)_"))
