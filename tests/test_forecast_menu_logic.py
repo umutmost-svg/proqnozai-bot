@@ -50,7 +50,7 @@ def test_group_by_league_orders_by_priority():
         _raw(4, "Premier League", "England", t1="M", t2="N"),
     ]
     items = [normalize_fixture(r) for r in raws]
-    groups, _ = group_by_league(items)
+    groups = group_by_league(items)
     names = [g.league_name for g in groups]
     assert names[:3] == ["Champions League", "Premier League", "Serie A"]
     assert names[-1] == "Random League"
@@ -63,7 +63,7 @@ def test_group_by_league_is_deterministic():
         _raw(4, "Euro 2028", "Europe", t1="G", t2="H"),
     ]
     items = [normalize_fixture(r) for r in raws]
-    first = [g.league_key for g in group_by_league(items)[0]]
+    first = [g.league_key for g in group_by_league(items)]
     for _ in range(5):
-        again = [g.league_key for g in group_by_league(list(items))[0]]
+        again = [g.league_key for g in group_by_league(list(items))]
         assert again == first

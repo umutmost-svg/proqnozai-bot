@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from config import MOSTBET_SRC_TZ
@@ -34,10 +34,6 @@ from priority_config import is_pure_stage_label, normalize_participant_tokens
 from priority_engine import PriorityInput, compute_priority
 
 PROVIDER = "mostbet"
-
-# Pagination caps (approved).
-MAX_LEAGUES = 15
-MAX_MATCHES_PER_LEAGUE = 10
 
 # Grace fallback ONLY used when the provider gives no explicit status: a
 # non-live fixture whose kickoff is more than this far in the past is treated as
@@ -441,7 +437,6 @@ class LeagueGroup:
     rank: int   # legacy league_rank() value — kept for introspection only,
                 # no longer drives sort order (see _group_sort_key below).
     items: list[EventItem] = field(default_factory=list)
-    truncated: bool = False   # were there more than MAX_MATCHES_PER_LEAGUE?
 
 
 def group_by_sport(items: list[EventItem]) -> list[tuple[str, list[EventItem]]]:
@@ -459,19 +454,18 @@ def _group_sort_key(g: "LeagueGroup"):
     return (-best_score, _norm(g.league_name))
 
 
-def group_by_league(items: list[EventItem], *, max_leagues: int = MAX_LEAGUES,
-                    max_matches: int = MAX_MATCHES_PER_LEAGUE,
-                    now_utc: Optional[datetime] = None,
-                    demand: Optional[dict] = None) -> tuple[list[LeagueGroup], bool]:
+def group_by_league(items: list[EventItem], *, now_utc: Optional[datetime] = None,
+                    demand: Optional[dict] = None) -> list[LeagueGroup]:
     """Group items into leagues ranked by the Match Priority Engine (each
     league ranked by its most important contained match); matches within a
-    league sorted by the same priority order. Applies pagination caps and
-    reports truncation.
+    league sorted by the same priority order.
+
+    Returns ALL leagues and ALL matches within each — no cap. The Telegram UI
+    paginates ("show more") in the handler layer instead of a hard cutoff; see
+    `paginate` below.
 
     `now_utc`/`demand` are forwarded to assign_priority_scores; see its
     docstring for the now_utc default-to-real-clock convenience.
-
-    Returns (groups, leagues_truncated).
     """
     assign_priority_scores(items, now_utc, demand)
 
@@ -485,11 +479,104 @@ def group_by_league(items: list[EventItem], *, max_leagues: int = MAX_LEAGUES,
         g.items.append(it)
 
     groups = sorted(by.values(), key=_group_sort_key)
-    leagues_truncated = len(groups) > max_leagues
-    groups = groups[:max_leagues]
-
     for g in groups:
-        ordered = sort_matches(g.items)
-        g.truncated = len(ordered) > max_matches
-        g.items = ordered[:max_matches]
-    return groups, leagues_truncated
+        g.items = sort_matches(g.items)
+    return groups
+
+
+# ─── Pagination ("show more" instead of a hard cutoff) ─────────────────────────
+PAGE_SIZE = 10
+
+
+def paginate(seq: list, page: int, page_size: int = PAGE_SIZE) -> tuple[list, bool, bool]:
+    """Slice `seq` at `page` (0-indexed). Returns (page_items, has_prev, has_next).
+    An out-of-range page clamps to the last valid page rather than raising or
+    returning an empty screen — a stale/late "next page" tap can never land on
+    nothing."""
+    if not seq:
+        return [], False, False
+    total_pages = max(1, (len(seq) + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    start = page * page_size
+    return seq[start:start + page_size], page > 0, (page + 1) < total_pages
+
+
+# ─── Day filter ─────────────────────────────────────────────────────────────
+DAY_ALL = "ALL"
+DAY_LIVE = "LIVE"
+DAY_TODAY = "TODAY"
+DAY_TOMORROW = "TOMORROW"
+
+
+def _item_local_date(it: EventItem, user_tz: timezone) -> Optional[date]:
+    if it.kickoff_utc is None:
+        return None
+    return it.kickoff_utc.astimezone(user_tz).date()
+
+
+def available_day_options(items: list[EventItem], user_tz: timezone) -> list[tuple[str, int]]:
+    """Ordered (day_key, count) options actually present in `items`: LIVE,
+    TODAY, TOMORROW, then specific ISO dates for anything further out (the
+    LATER bucket) — each included only when at least one item falls in it.
+    Does NOT include DAY_ALL; the caller adds that as a fixed "show everything"
+    option."""
+    bucket_counts: dict[str, int] = {}
+    dated_counts: dict[str, int] = {}
+    for it in items:
+        if it.bucket == LIVE:
+            bucket_counts[DAY_LIVE] = bucket_counts.get(DAY_LIVE, 0) + 1
+        elif it.bucket == TODAY:
+            bucket_counts[DAY_TODAY] = bucket_counts.get(DAY_TODAY, 0) + 1
+        elif it.bucket == TOMORROW:
+            bucket_counts[DAY_TOMORROW] = bucket_counts.get(DAY_TOMORROW, 0) + 1
+        else:
+            d = _item_local_date(it, user_tz)
+            if d is not None:
+                key = d.isoformat()
+                dated_counts[key] = dated_counts.get(key, 0) + 1
+
+    options = [(key, bucket_counts[key]) for key in (DAY_LIVE, DAY_TODAY, DAY_TOMORROW)
+               if bucket_counts.get(key)]
+    options.extend((key, dated_counts[key]) for key in sorted(dated_counts))
+    return options
+
+
+def filter_by_day(items: list[EventItem], day_key: str, user_tz: timezone) -> list[EventItem]:
+    """Restrict `items` to one day option from available_day_options, or
+    return all items unchanged for DAY_ALL / an unrecognized key."""
+    if day_key == DAY_LIVE:
+        return [it for it in items if it.bucket == LIVE]
+    if day_key == DAY_TODAY:
+        return [it for it in items if it.bucket == TODAY]
+    if day_key == DAY_TOMORROW:
+        return [it for it in items if it.bucket == TOMORROW]
+    try:
+        target = datetime.fromisoformat(day_key).date()
+    except ValueError:
+        return list(items)
+    return [it for it in items if it.bucket not in (LIVE, TODAY, TOMORROW)
+            and _item_local_date(it, user_tz) == target]
+
+
+# ─── Country/region filter ──────────────────────────────────────────────────
+COUNTRY_ALL = "ALL"
+COUNTRY_INTERNATIONAL = "International"
+
+
+def available_countries(items: list[EventItem]) -> list[tuple[str, int]]:
+    """(country, count) — country is COUNTRY_INTERNATIONAL when the item has
+    none — sorted by count desc then name asc. Does NOT include COUNTRY_ALL;
+    the caller adds that as a fixed "show everything" option."""
+    counts: dict[str, int] = {}
+    for it in items:
+        key = it.country or COUNTRY_INTERNATIONAL
+        counts[key] = counts.get(key, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def filter_by_country(items: list[EventItem], country_key: str) -> list[EventItem]:
+    if country_key == COUNTRY_ALL:
+        return list(items)
+    if country_key == COUNTRY_INTERNATIONAL:
+        return [it for it in items if not it.country]
+    return [it for it in items if it.country == country_key]

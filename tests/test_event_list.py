@@ -5,9 +5,11 @@ from datetime import datetime, timedelta, timezone
 
 import event_list as el
 from event_list import (
-    EventItem, FINISHED_GRACE, MAX_LEAGUES, MAX_MATCHES_PER_LEAGUE,
+    EventItem, FINISHED_GRACE,
     group_by_league, league_rank, normalize_fixture, parse_kickoff_utc,
     select_visible, visible_bucket,
+    paginate, available_day_options, filter_by_day, DAY_LIVE, DAY_TODAY, DAY_TOMORROW, DAY_ALL,
+    available_countries, filter_by_country, COUNTRY_ALL, COUNTRY_INTERNATIONAL,
 )
 
 UTC = timezone.utc
@@ -260,7 +262,7 @@ def test_matches_sorted_by_kickoff_live_first():
         _raw(fid=3, t1="G", t2="H", when="", live=True),
     ]
     items = select_visible([normalize_fixture(r) for r in raws], NOW, UTC)
-    groups, _ = group_by_league(items)
+    groups = group_by_league(items)
     ordered = groups[0].items
     assert ordered[0].is_live                       # live first
     assert ordered[1].kickoff_utc < ordered[2].kickoff_utc  # then ascending
@@ -274,32 +276,120 @@ def test_leagues_sorted_by_priority():
         _raw(fid=2, t1="X", t2="Y", league="Champions League", country="Europe"),
     ]
     items = select_visible([normalize_fixture(r) for r in raws], NOW, UTC)
-    groups, _ = group_by_league(items)
+    groups = group_by_league(items)
     assert groups[0].league_name == "Champions League"
 
 
-def test_pagination_caps_and_flags_truncation():
-    # 16 leagues, and one league with 12 matches → both truncated + flagged.
+def test_group_by_league_returns_all_leagues_and_matches_uncapped():
+    """group_by_league no longer hard-truncates — pagination for the Telegram
+    UI happens in the handler layer via `paginate`, not here."""
     raws = []
     for i in range(16):
         raws.append(_raw(fid=1000 + i, t1=f"T{i}a", t2=f"T{i}b",
                          league=f"League {i:02d}", country=f"Country{i}"))
     for j in range(12):
-        # Same kickoff moment as the other 16 leagues (only team names differ)
-        # so this test isolates pagination/truncation from priority ordering —
-        # a Busy League kicking off later would legitimately rank below
-        # leagues starting sooner under the priority engine's time_proximity
-        # component, which is not what this test is checking.
         raws.append(_raw(fid=2000 + j, t1=f"H{j}", t2=f"A{j}",
                          league="Busy League", country="Busyland",
                          when="12.07.2026 18:00:00"))
     items = select_visible([normalize_fixture(r) for r in raws], NOW, UTC)
-    groups, leagues_truncated = group_by_league(items)
-    assert leagues_truncated is True
-    assert len(groups) == MAX_LEAGUES
+    groups = group_by_league(items)
+    assert len(groups) == 17
     busy = next(g for g in groups if g.league_name == "Busy League")
-    assert len(busy.items) == MAX_MATCHES_PER_LEAGUE
-    assert busy.truncated is True
+    assert len(busy.items) == 12
+
+
+# ─── Pagination ("show more") ───────────────────────────────────────────────
+
+def test_paginate_slices_and_reports_prev_next():
+    seq = list(range(25))
+    page0, has_prev0, has_next0 = paginate(seq, 0, page_size=10)
+    assert page0 == list(range(10))
+    assert has_prev0 is False and has_next0 is True
+
+    page1, has_prev1, has_next1 = paginate(seq, 1, page_size=10)
+    assert page1 == list(range(10, 20))
+    assert has_prev1 is True and has_next1 is True
+
+    page2, has_prev2, has_next2 = paginate(seq, 2, page_size=10)
+    assert page2 == list(range(20, 25))
+    assert has_prev2 is True and has_next2 is False
+
+
+def test_paginate_clamps_out_of_range_page():
+    seq = list(range(5))
+    page, has_prev, has_next = paginate(seq, 99, page_size=10)
+    assert page == seq
+    assert has_prev is False and has_next is False
+
+
+def test_paginate_empty_sequence():
+    assert paginate([], 0) == ([], False, False)
+
+
+# ─── Day filter ─────────────────────────────────────────────────────────────
+
+def test_available_day_options_reflects_present_buckets():
+    raws = [
+        _raw(fid=1, when="", live=True),
+        _raw(fid=2, when="12.07.2026 18:00:00"),           # TODAY
+        _raw(fid=3, when="13.07.2026 12:00:00"),            # TOMORROW
+        _raw(fid=4, t1="X", t2="Y", when="16.07.2026 12:00:00"),  # LATER, specific date
+    ]
+    items = select_visible([normalize_fixture(r) for r in raws], NOW, UTC, include_later=True)
+    options = available_day_options(items, UTC)
+    keys = [k for k, _ in options]
+    assert keys[0] == DAY_LIVE
+    assert DAY_TODAY in keys and DAY_TOMORROW in keys
+    assert "2026-07-16" in keys
+
+
+def test_filter_by_day_restricts_to_one_bucket():
+    raws = [
+        _raw(fid=1, when="", live=True),
+        _raw(fid=2, when="12.07.2026 18:00:00"),
+        _raw(fid=3, when="13.07.2026 12:00:00"),
+    ]
+    items = select_visible([normalize_fixture(r) for r in raws], NOW, UTC, include_later=True)
+    today_only = filter_by_day(items, DAY_TODAY, UTC)
+    assert len(today_only) == 1 and today_only[0].fixture_id == "2"
+    assert filter_by_day(items, DAY_ALL, UTC) == items
+
+
+def test_filter_by_day_specific_date():
+    raws = [
+        _raw(fid=1, t1="X", t2="Y", when="16.07.2026 12:00:00"),
+        _raw(fid=2, t1="P", t2="Q", when="17.07.2026 12:00:00"),
+    ]
+    items = select_visible([normalize_fixture(r) for r in raws], NOW, UTC, include_later=True)
+    day16 = filter_by_day(items, "2026-07-16", UTC)
+    assert len(day16) == 1 and day16[0].fixture_id == "1"
+
+
+# ─── Country filter ─────────────────────────────────────────────────────────
+
+def test_available_countries_counts_and_international_fallback():
+    raws = [
+        _raw(fid=1, league="Premier League", country="England"),
+        _raw(fid=2, t1="X", t2="Y", league="La Liga", country="Spain"),
+        _raw(fid=3, t1="P", t2="Q", league="World Cup 2026", country=""),
+    ]
+    items = [normalize_fixture(r) for r in raws]
+    countries = dict(available_countries(items))
+    assert countries["England"] == 1
+    assert countries["Spain"] == 1
+    assert countries[COUNTRY_INTERNATIONAL] == 1
+
+
+def test_filter_by_country_and_international():
+    raws = [
+        _raw(fid=1, league="Premier League", country="England"),
+        _raw(fid=2, t1="X", t2="Y", league="La Liga", country="Spain"),
+        _raw(fid=3, t1="P", t2="Q", league="World Cup 2026", country=""),
+    ]
+    items = [normalize_fixture(r) for r in raws]
+    assert [it.fixture_id for it in filter_by_country(items, "England")] == ["1"]
+    assert [it.fixture_id for it in filter_by_country(items, COUNTRY_INTERNATIONAL)] == ["3"]
+    assert filter_by_country(items, COUNTRY_ALL) == items
 
 
 def test_every_visible_item_carries_identity_fields():
@@ -358,7 +448,7 @@ def test_group_by_league_ranks_by_priority_not_alphabet():
              league="Regional Super Cup", country="Nowhere"),
     ]
     items = [normalize_fixture(r) for r in raws]
-    groups, _ = group_by_league(items, now_utc=NOW)
+    groups = group_by_league(items, now_utc=NOW)
     assert groups[0].league_name == "Regional Super Cup"
 
 
@@ -368,7 +458,7 @@ def test_matches_within_league_ordered_by_priority_then_kickoff():
         _raw(fid=2, t1="Arsenal", t2="Tottenham", when="12.07.2026 20:00:00"),
     ]
     items = [normalize_fixture(r) for r in raws]
-    groups, _ = group_by_league(items, now_utc=NOW)
+    groups = group_by_league(items, now_utc=NOW)
     # Same league (Premier League/England default); the derby ranks first
     # even though it kicks off later.
     assert groups[0].items[0].home == "Arsenal"
@@ -380,7 +470,7 @@ def test_live_shown_above_prematch_within_same_league():
         _raw(fid=2, t1="X", t2="Y", when="", live=True),
     ]
     items = select_visible([normalize_fixture(r) for r in raws], NOW, UTC)
-    groups, _ = group_by_league(items, now_utc=NOW)
+    groups = group_by_league(items, now_utc=NOW)
     assert groups[0].items[0].is_live
 
 
@@ -394,8 +484,8 @@ def test_priority_sort_is_stable_for_equal_scores():
     ]
     items_a = [normalize_fixture(r) for r in raws]
     items_b = [normalize_fixture(r) for r in reversed(raws)]
-    groups_a, _ = group_by_league(items_a, now_utc=NOW)
-    groups_b, _ = group_by_league(items_b, now_utc=NOW)
+    groups_a = group_by_league(items_a, now_utc=NOW)
+    groups_b = group_by_league(items_b, now_utc=NOW)
     assert [it.home for it in groups_a[0].items] == [it.home for it in groups_b[0].items]
     # Deterministic: normalized home "alpha" sorts before "zeta".
     assert groups_a[0].items[0].home == "Alpha"
@@ -405,7 +495,7 @@ def test_priority_score_assigned_after_group_by_league():
     raws = [_raw(fid=1)]
     items = [normalize_fixture(r) for r in raws]
     assert items[0].priority_score is None
-    groups, _ = group_by_league(items, now_utc=NOW)
+    groups = group_by_league(items, now_utc=NOW)
     assert groups[0].items[0].priority_score is not None
     assert 0 <= groups[0].items[0].priority_score <= 100
 
