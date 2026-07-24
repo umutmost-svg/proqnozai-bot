@@ -165,3 +165,69 @@ def test_search_wildcards_are_literal(temp_db):
     ids = {u["user_id"] for u in results}
     assert 830040 in ids
     assert 830041 not in ids  # '%' must not act as a wildcard
+
+
+# ── Match Priority Engine: demand aggregation ─────────────────────────────────
+# NOTE: `temp_db` is a SHARED session-wide sqlite file (see conftest), never
+# reset between tests. Each test below therefore uses match names unique to
+# ITSELF (embedding the test's own uid range) so its assertions can never be
+# polluted by rows another test happened to insert — the same convention this
+# file already uses for uids.
+
+def test_match_demand_counts_unique_users_not_requests(temp_db):
+    from priority_config import normalize_participant_tokens
+    key = normalize_participant_tokens("Testklub830050 Rivalklub830050")
+
+    temp_db.db_ensure(830050, "u1", "en")
+    temp_db.db_ensure(830051, "u2", "en")
+    # User 830050 requests the same match twice — must count as ONE user.
+    temp_db.db_save_history(830050, "Testklub830050 Rivalklub830050", "forecast text")
+    temp_db.db_save_history(830050, "Testklub830050 Rivalklub830050", "forecast text again")
+    temp_db.db_save_history(830051, "Testklub830050 Rivalklub830050", "forecast text")
+
+    demand = temp_db.db_match_demand()
+    assert demand.get(key) == 2
+
+
+def test_match_demand_merges_live_subscriptions(temp_db):
+    from priority_config import normalize_participant_tokens
+    key = normalize_participant_tokens("Testklub830052 Rivalklub830052")
+
+    temp_db.db_ensure(830052, "u3", "en")
+    temp_db.db_add_lsub(830052, "mid-1", "Testklub830052 vs Rivalklub830052")
+
+    demand = temp_db.db_match_demand()
+    assert demand.get(key) == 1
+
+
+def test_match_demand_key_is_order_independent(temp_db):
+    from priority_config import normalize_participant_tokens
+    temp_db.db_ensure(830053, "u4", "en")
+    temp_db.db_ensure(830054, "u5", "en")
+    temp_db.db_save_history(830053, "Testklub830053 Rivalklub830053", "x")
+    temp_db.db_save_history(830054, "Rivalklub830053 Testklub830053", "x")  # reversed order
+
+    demand = temp_db.db_match_demand()
+    key = normalize_participant_tokens("Testklub830053 Rivalklub830053")
+    assert demand.get(key) == 2  # both requests merge into the same key
+
+
+def test_match_demand_excludes_rows_outside_window(temp_db):
+    from priority_config import normalize_participant_tokens
+    temp_db.db_ensure(830055, "u6", "en")
+    with temp_db.con() as c:
+        c.execute(
+            "INSERT INTO forecast_history (user_id, query, forecast, created_at) "
+            "VALUES (?, ?, ?, datetime('now', '-30 days'))",
+            (830055, "Stale830055 OldMatch830055", "text"))
+
+    demand = temp_db.db_match_demand(days=14)
+    key = normalize_participant_tokens("Stale830055 OldMatch830055")
+    assert demand.get(key, 0) == 0
+
+
+def test_match_demand_ignores_empty_query(temp_db):
+    temp_db.db_ensure(830056, "u7", "en")
+    temp_db.db_save_history(830056, "", "text")  # photo-flow forecasts have no query
+    demand = temp_db.db_match_demand()
+    assert frozenset() not in demand  # empty/no-token text never becomes a key

@@ -30,8 +30,13 @@ from typing import Optional
 
 from config import MOSTBET_SRC_TZ
 from mostbet import _is_outright_market, _is_virtual_match
+from priority_config import is_pure_stage_label, normalize_participant_tokens
+from priority_engine import PriorityInput, compute_priority
 
 PROVIDER = "mostbet"
+
+# Top-N cross-sport "Главные матчи" section (see build_top_matches).
+TOP_MATCHES_LIMIT = 15
 
 # Pagination caps (approved).
 MAX_LEAGUES = 15
@@ -134,6 +139,11 @@ class EventItem:
     is_live: bool
     status: Optional[str]
     sport: str
+    # Stage/round text (e.g. "Play-off", "Semi-final"), separated from
+    # league_name so grouping/prestige never mixes with stage detection — see
+    # _resolve_competition. Empty when Mostbet gave no round information
+    # (the common case for domestic leagues).
+    stage_raw: str = ""
     # Provider-native identity (None when the feed doesn't supply it).
     league_id: Optional[str] = None
     home_team_id: Optional[str] = None
@@ -148,19 +158,52 @@ class EventItem:
     league_identity_source: str = "derived_name_key"
     # Set during build_event_list.
     bucket: Optional[str] = None
+    # Match Priority Engine output (0-100), assigned by assign_priority_scores.
+    # None until assigned; every function that sorts/groups by priority
+    # assigns it first, so a caller can also compute it directly if needed.
+    priority_score: Optional[int] = None
 
     @property
     def postponed(self) -> bool:
         return self.status == "postponed"
 
 
+def _resolve_competition(sub: str, sup: str) -> tuple[str, str, Optional[str]]:
+    """Split Mostbet's two free-text category fields into
+    (competition_name, stage_raw, display_country).
+
+    Mostbet has no dedicated round/stage field. Normally
+    (subcategory=competition, supercategory=country/region) — e.g.
+    sub="Premier League", sup="England". But some international fixtures
+    instead put ONLY the round/stage label in the subcategory ("Play-off")
+    while the supercategory holds the real competition name ("World Cup
+    2026"); is_pure_stage_label distinguishes that shape from a subcategory
+    that is genuinely the competition name, so grouping never fragments one
+    tournament by round. A stage word embedded INSIDE a longer subcategory
+    string (e.g. a hypothetical "Champions League - Semi-final") is
+    deliberately not parsed apart here — unverified heuristic, out of scope.
+    """
+    sub = (sub or "").strip()
+    sup = (sup or "").strip()
+    if not sub and sup:
+        # International feeds sometimes carry the tournament only in the
+        # super category with an empty subcategory; dropping such rows
+        # silently hid entire tournaments.
+        return sup, "", None
+    if sub:
+        stage = is_pure_stage_label(sub)
+        if stage and sup:
+            return sup, sub, None
+    return sub, "", (sup or None)
+
+
 def normalize_fixture(raw: dict) -> Optional[EventItem]:
     """Map a raw Mostbet match to an EventItem, or None if it must not be shown.
 
     Rejects malformed, virtual/esports and outright fixtures. Requires an
-    authoritative fixture_id, both team names and a league name always; requires
-    a tz-aware kickoff too, EXCEPT live fixtures (provider live flag/status) which
-    may legitimately arrive without a scheduled kickoff.
+    authoritative fixture_id, both team names and a competition name always;
+    requires a tz-aware kickoff too, EXCEPT live fixtures (provider live
+    flag/status) which may legitimately arrive without a scheduled kickoff.
     """
     if _is_virtual_match(raw) or _is_outright_market(raw):
         return None
@@ -172,14 +215,8 @@ def normalize_fixture(raw: dict) -> Optional[EventItem]:
 
     home = (raw.get("team1Title") or "").strip()
     away = (raw.get("team2Title") or "").strip()
-    league_name = (raw.get("lineSubCategory") or "").strip()
-    country = (raw.get("lineSuperCategory") or "").strip() or None
-    if not league_name and country:
-        # International feeds sometimes carry the tournament only in the super
-        # category ("World Cup 2026") with an empty subcategory; dropping such
-        # rows silently hid entire tournaments. Use the super category as the
-        # league and clear the country to avoid a duplicated label.
-        league_name, country = country, None
+    league_name, stage_raw, country = _resolve_competition(
+        raw.get("lineSubCategory") or "", raw.get("lineSuperCategory") or "")
     sport = (raw.get("lineCategory") or "").strip() or "Other"
     is_live = bool(raw.get("isLive"))
     status = parse_status(raw)
@@ -201,6 +238,16 @@ def normalize_fixture(raw: dict) -> Optional[EventItem]:
     home_team_id = _opt_str(raw.get("team1Id"))
     away_team_id = _opt_str(raw.get("team2Id"))
 
+    # Grouping identity: a stable provider tournamentId is authoritative and
+    # never drifts across rounds, so it takes priority over the free-text
+    # competition name (which two different tournaments could coincidentally
+    # share). stage_raw NEVER participates in this key — that is the whole
+    # point of separating it from league_name.
+    if league_id:
+        league_key = _slug(f"{sport}-{league_id}") or "unknown"
+    else:
+        league_key = _slug(f"{sport}-{country or ''}-{league_name}") or "unknown"
+
     return EventItem(
         fixture_id=fixture_id,
         provider=PROVIDER,
@@ -212,10 +259,11 @@ def normalize_fixture(raw: dict) -> Optional[EventItem]:
         is_live=is_live,
         status=status,
         sport=sport,
+        stage_raw=stage_raw,
         league_id=league_id,
         home_team_id=home_team_id,
         away_team_id=away_team_id,
-        league_key=_slug(f"{country or ''}-{league_name}") or "unknown",
+        league_key=league_key,
         home_team_key=_slug(home) or "unknown",
         away_team_key=_slug(away) or "unknown",
         team_identity_source="provider" if (home_team_id and away_team_id) else "derived_name_key",
@@ -325,12 +373,63 @@ def select_visible(items: list[EventItem], now_utc: datetime, user_tz: timezone,
     return _dedup(kept)
 
 
+# ─── Match Priority Engine integration ────────────────────────────────────────
+def _priority_input(it: EventItem, now_utc: datetime, demand: Optional[dict]) -> PriorityInput:
+    demand_count = 0
+    if demand:
+        key = normalize_participant_tokens(f"{it.home} {it.away}")
+        demand_count = demand.get(key, 0)
+    return PriorityInput(
+        league_name=it.league_name,
+        country=it.country,
+        home=it.home,
+        away=it.away,
+        is_live=it.is_live,
+        kickoff_utc=it.kickoff_utc,
+        now_utc=now_utc,
+        stage_hint=it.stage_raw,
+        demand_count=demand_count,
+    )
+
+
+def assign_priority_scores(items: list[EventItem], now_utc: Optional[datetime] = None,
+                           demand: Optional[dict] = None) -> None:
+    """Compute and attach `priority_score` to each item IN PLACE (same style as
+    the `bucket` assignment in select_visible). Idempotent — safe to call more
+    than once on the same items.
+
+    `now_utc` defaults to the real current time so callers that only care about
+    tournament/team-derived priority (not time-sensitivity) don't have to pass
+    it — this is the ONLY place in this otherwise clock-free module that may
+    read the real clock, and only on that default path. Production call sites
+    (handlers/forecast.py) always pass the already-computed now_utc explicitly.
+    """
+    now = now_utc or datetime.now(timezone.utc)
+    for it in items:
+        it.priority_score = compute_priority(_priority_input(it, now, demand)).total
+
+
 # ─── Grouping / sorting / pagination ──────────────────────────────────────────
 def _match_sort_key(it: EventItem):
-    # Live first, then by kickoff ascending. Live/no-kickoff sort before timed.
-    if it.is_live or it.kickoff_utc is None:
-        return (0, datetime.min.replace(tzinfo=timezone.utc))
-    return (1, it.kickoff_utc)
+    """Deterministic order: priority_score DESC, is_live DESC, kickoff_utc ASC,
+    normalized competition_name/home/away ASC, and finally the provider
+    fixture_id ASC as an absolute last resort — so items with equal priority
+    (including two fully identical fixtures) never depend on input/iteration
+    order, regardless of the order Mostbet's feed happened to return them in."""
+    score = it.priority_score if it.priority_score is not None else 0
+    live_rank = 0 if it.is_live else 1
+    kickoff = it.kickoff_utc if it.kickoff_utc is not None else datetime.max.replace(tzinfo=timezone.utc)
+    return (-score, live_rank, kickoff, _norm(it.league_name), it.home_team_key,
+            it.away_team_key, _fixture_id_sort_key(it.fixture_id))
+
+
+def _fixture_id_sort_key(fixture_id: str) -> tuple[int, object]:
+    """Numeric fixture ids sort numerically (so "9" < "10"); any non-numeric
+    canonical event key still sorts deterministically as a string."""
+    try:
+        return (0, int(fixture_id))
+    except (TypeError, ValueError):
+        return (1, fixture_id)
 
 
 def sort_matches(items: list[EventItem]) -> list[EventItem]:
@@ -342,7 +441,8 @@ class LeagueGroup:
     league_key: str
     league_name: str
     country: Optional[str]
-    rank: int
+    rank: int   # legacy league_rank() value — kept for introspection only,
+                # no longer drives sort order (see _group_sort_key below).
     items: list[EventItem] = field(default_factory=list)
     truncated: bool = False   # were there more than MAX_MATCHES_PER_LEAGUE?
 
@@ -355,13 +455,29 @@ def group_by_sport(items: list[EventItem]) -> list[tuple[str, list[EventItem]]]:
     return sorted(by.items(), key=lambda kv: (-len(kv[1]), kv[0]))
 
 
+def _group_sort_key(g: "LeagueGroup"):
+    # A league ranks by its single most important match; ties break on the
+    # normalized league name so order never depends on dict iteration order.
+    best_score = max((it.priority_score or 0) for it in g.items)
+    return (-best_score, _norm(g.league_name))
+
+
 def group_by_league(items: list[EventItem], *, max_leagues: int = MAX_LEAGUES,
-                    max_matches: int = MAX_MATCHES_PER_LEAGUE) -> tuple[list[LeagueGroup], bool]:
-    """Group items into leagues sorted by priority then name; matches sorted by
-    kickoff. Applies pagination caps and reports truncation.
+                    max_matches: int = MAX_MATCHES_PER_LEAGUE,
+                    now_utc: Optional[datetime] = None,
+                    demand: Optional[dict] = None) -> tuple[list[LeagueGroup], bool]:
+    """Group items into leagues ranked by the Match Priority Engine (each
+    league ranked by its most important contained match); matches within a
+    league sorted by the same priority order. Applies pagination caps and
+    reports truncation.
+
+    `now_utc`/`demand` are forwarded to assign_priority_scores; see its
+    docstring for the now_utc default-to-real-clock convenience.
 
     Returns (groups, leagues_truncated).
     """
+    assign_priority_scores(items, now_utc, demand)
+
     by: dict[str, LeagueGroup] = {}
     for it in items:
         g = by.get(it.league_key)
@@ -371,7 +487,7 @@ def group_by_league(items: list[EventItem], *, max_leagues: int = MAX_LEAGUES,
             by[it.league_key] = g
         g.items.append(it)
 
-    groups = sorted(by.values(), key=lambda g: (g.rank, _norm(g.league_name)))
+    groups = sorted(by.values(), key=_group_sort_key)
     leagues_truncated = len(groups) > max_leagues
     groups = groups[:max_leagues]
 
@@ -380,3 +496,14 @@ def group_by_league(items: list[EventItem], *, max_leagues: int = MAX_LEAGUES,
         g.truncated = len(ordered) > max_matches
         g.items = ordered[:max_matches]
     return groups, leagues_truncated
+
+
+def build_top_matches(items: list[EventItem], *, limit: int = TOP_MATCHES_LIMIT,
+                      now_utc: Optional[datetime] = None,
+                      demand: Optional[dict] = None) -> list[EventItem]:
+    """Cross-sport, cross-league "Главные матчи": the top `limit` events from
+    an already visible/deduped pool (typically select_visible's output),
+    ranked by the same deterministic priority order as within-league sorting.
+    """
+    assign_priority_scores(items, now_utc, demand)
+    return sort_matches(items)[:limit]
