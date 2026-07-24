@@ -35,9 +35,6 @@ from priority_engine import PriorityInput, compute_priority
 
 PROVIDER = "mostbet"
 
-# Top-N cross-sport "Главные матчи" section (see build_top_matches).
-TOP_MATCHES_LIMIT = 15
-
 # Pagination caps (approved).
 MAX_LEAGUES = 15
 MAX_MATCHES_PER_LEAGUE = 10
@@ -496,14 +493,3 @@ def group_by_league(items: list[EventItem], *, max_leagues: int = MAX_LEAGUES,
         g.truncated = len(ordered) > max_matches
         g.items = ordered[:max_matches]
     return groups, leagues_truncated
-
-
-def build_top_matches(items: list[EventItem], *, limit: int = TOP_MATCHES_LIMIT,
-                      now_utc: Optional[datetime] = None,
-                      demand: Optional[dict] = None) -> list[EventItem]:
-    """Cross-sport, cross-league "Главные матчи": the top `limit` events from
-    an already visible/deduped pool (typically select_visible's output),
-    ranked by the same deterministic priority order as within-league sorting.
-    """
-    assign_priority_scores(items, now_utc, demand)
-    return sort_matches(items)[:limit]
