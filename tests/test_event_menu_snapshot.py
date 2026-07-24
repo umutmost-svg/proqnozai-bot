@@ -380,6 +380,213 @@ async def test_single_country_skips_country_screen(temp_db):
     assert ctx.user_data["fm_league_back"] == "fm_back_day"
 
 
+# ─── Block A fixes: dead-end screen, malformed callbacks, sport pagination,
+# country back-navigation page ────────────────────────────────────────────────
+
+async def test_empty_filter_result_still_has_a_back_button(temp_db):
+    """A day+country combination that yields zero matches must never leave
+    the user on a screen with no buttons at all."""
+    uid = 811014
+    temp_db.db_ensure(uid, "u", "en")
+    ctx = _ctx(fm_sports=[("Football", [])], fm_sport_idx=0,
+               fm_now_utc=None, fm_demand=None)
+    q = _FakeQuery("x", uid)
+    await fc._show_league_list(q, ctx, uid, [], back_cb="fm_back_day")
+    assert T["en"]["ev_filter_empty"] in q.edited
+    assert "fm_back_day" in q.button_callbacks()
+
+
+async def test_malformed_callback_data_degrades_to_expired_menu(temp_db):
+    """A hand-crafted/replayed callback_data with a non-numeric index must
+    never crash the handler — it degrades like an out-of-range index."""
+    uid = 811015
+    temp_db.db_ensure(uid, "u", "en")
+
+    q1 = _FakeQuery("fm_day_x", uid)
+    await fc.fm_day_cb(_update(q1), _ctx(fm_sport_items=[1], fm_day_options=[]))
+    assert q1.edited == T["en"]["ev_menu_expired"]
+
+    q2 = _FakeQuery("fm_ctry_x", uid)
+    await fc.fm_ctry_cb(_update(q2), _ctx(fm_day_filtered=[1], fm_country_options=[]))
+    assert q2.edited == T["en"]["ev_menu_expired"]
+
+    q3 = _FakeQuery("fm_ctrypg_x", uid)
+    await fc.fm_ctrypg_cb(_update(q3), _ctx(fm_country_options=[("England", 1)]))
+    assert q3.edited == T["en"]["ev_menu_expired"]
+
+    q4 = _FakeQuery("fm_lgpg_x", uid)
+    await fc.fm_lgpg_cb(_update(q4), _ctx(fm_leagues=["x"]))
+    assert q4.edited == T["en"]["ev_menu_expired"]
+
+    q5 = _FakeQuery("fm_mtpg_x", uid)
+    await fc.fm_mtpg_cb(_update(q5), _ctx(fm_matches=["x"]))
+    assert q5.edited == T["en"]["ev_menu_expired"]
+
+    q6 = _FakeQuery("fm_sppg_x", uid)
+    await fc.fm_sppg_cb(_update(q6), _ctx(fm_sports=[("Football", [])]))
+    assert q6.edited == T["en"]["ev_menu_expired"]
+
+    # The three ORIGINAL (pre-existing) handlers must degrade the same way —
+    # found by the Codex audit: they parsed the index with a bare int() and
+    # had no guard at all for malformed callback_data.
+    q7 = _FakeQuery("fm_sp_x", uid)
+    await fc.fm_sport_cb(_update(q7), _ctx(fm_sports=[("Football", [1])]))
+    assert q7.edited == T["en"]["ev_menu_expired"]
+
+    q8 = _FakeQuery("fm_lg_x", uid)
+    await fc.fm_league_cb(_update(q8), _ctx(fm_leagues=["x"]))
+    assert q8.edited == T["en"]["ev_menu_expired"]
+
+    q9 = _FakeQuery("fm_mt_x", uid)
+    await fc.fm_match_cb(_update(q9), _ctx(fm_matches=["x"]))
+    assert q9.edited == T["en"]["ev_menu_expired"]
+
+
+async def test_negative_index_never_resolves_via_python_wraparound(temp_db):
+    """A negative index (e.g. from a hand-crafted callback) must degrade to
+    the expired-menu path, never silently resolve to the LAST item via
+    Python's negative-indexing semantics — found by the Codex audit."""
+    uid = 811018
+    temp_db.db_ensure(uid, "u", "en")
+    items = [normalize_fixture(_raw(1, "Arsenal", "Chelsea")),
+             normalize_fixture(_raw(2, "Liverpool", "Everton"))]
+
+    q1 = _FakeQuery("fm_sp_-1", uid)
+    await fc.fm_sport_cb(_update(q1), _ctx(fm_sports=[("Football", items)]))
+    assert q1.edited == T["en"]["ev_menu_expired"]
+
+    q2 = _FakeQuery("fm_mt_-1", uid)
+    await fc.fm_match_cb(_update(q2), _ctx(fm_matches=items))
+    assert q2.edited == T["en"]["ev_menu_expired"]
+
+    day_options = [(fc.DAY_TODAY, 1)]
+    q3 = _FakeQuery("fm_day_-1", uid)
+    await fc.fm_day_cb(_update(q3), _ctx(fm_sport_items=items, fm_day_options=day_options))
+    assert q3.edited == T["en"]["ev_menu_expired"]
+
+    country_options = [("England", 2)]
+    q4 = _FakeQuery("fm_ctry_-1", uid)
+    await fc.fm_ctry_cb(_update(q4), _ctx(fm_day_filtered=items, fm_country_options=country_options))
+    assert q4.edited == T["en"]["ev_menu_expired"]
+
+    q5 = _FakeQuery("fm_lg_-1", uid)
+    await fc.fm_league_cb(_update(q5), _ctx(fm_leagues=["x", "y"]))
+    assert q5.edited == T["en"]["ev_menu_expired"]
+
+
+async def test_stale_pagination_page_renders_consistent_absolute_indices(temp_db):
+    """A stale/out-of-range page number (e.g. fm_sppg_99 sent after the list
+    shrank) must clamp to the last real page AND use that clamped page for
+    the rendered buttons' absolute indices — not the raw stale page number
+    (the offset/nav bug found by the Codex audit)."""
+    uid = 811019
+    temp_db.db_ensure(uid, "u", "en")
+    sport_groups = [(f"Sport{i}", [1]) for i in range(12)]  # 2 pages at size 10
+    ctx = _ctx(fm_sports=sport_groups)
+
+    q = _FakeQuery("fm_sppg_99", uid)
+    await fc.fm_sppg_cb(_update(q), ctx)
+    # Clamps to the real last page (page 1: absolute indices 10..11).
+    assert ctx.user_data["fm_sport_page"] == 99  # raw value stored as-is…
+    callbacks = [cb for cb in q.button_callbacks() if cb and cb.startswith("fm_sp_")]
+    # …but the rendered buttons must reference REAL, in-range absolute
+    # indices (10, 11), never fm_sp_990/fm_sp_991-style garbage.
+    assert callbacks == ["fm_sp_10", "fm_sp_11"]
+    for cb in callbacks:
+        idx = int(cb.split("_")[2])
+        assert 0 <= idx < len(sport_groups)
+
+
+async def test_stale_pagination_page_renders_consistent_indices_leagues(temp_db):
+    """Same offset/nav-clamping guarantee as the sport list, for the league
+    keyboard — the Codex audit noted this was only exercised for sports."""
+    from event_list import LeagueGroup
+
+    uid = 811020
+    temp_db.db_ensure(uid, "u", "en")
+    groups = [LeagueGroup(f"key{i}", f"League{i}", "England") for i in range(12)]
+
+    q = _FakeQuery("fm_lgpg_99", uid)
+    await fc.fm_lgpg_cb(_update(q), _ctx(fm_sports=[("Football", [])], fm_leagues=groups))
+    callbacks = [cb for cb in q.button_callbacks() if cb and cb.startswith("fm_lg_")]
+    assert callbacks == ["fm_lg_10", "fm_lg_11"]
+    for cb in callbacks:
+        idx = int(cb.split("_")[2])
+        assert 0 <= idx < len(groups)
+
+
+async def test_stale_pagination_page_renders_consistent_indices_matches(temp_db):
+    """Same guarantee for the match keyboard."""
+    uid = 811021
+    temp_db.db_ensure(uid, "u", "en")
+    matches = [normalize_fixture(_raw(i, f"H{i}", f"A{i}")) for i in range(12)]
+
+    q = _FakeQuery("fm_mtpg_99", uid)
+    await fc.fm_mtpg_cb(_update(q), _ctx(fm_matches=matches, fm_leagues=[]))
+    callbacks = [cb for cb in q.button_callbacks() if cb and cb.startswith("fm_mt_")]
+    assert callbacks == ["fm_mt_10", "fm_mt_11"]
+    for cb in callbacks:
+        idx = int(cb.split("_")[2])
+        assert 0 <= idx < len(matches)
+
+
+async def test_stale_pagination_page_country_all_button_and_indices(temp_db):
+    """The country keyboard's "All" shortcut must only appear on the REAL
+    (clamped) first page — a stale fm_ctrypg_99 must not resurrect it, and
+    the option buttons must carry real, in-range absolute indices."""
+    uid = 811022
+    temp_db.db_ensure(uid, "u", "en")
+    country_options = [(f"Country{i}", 1) for i in range(12)]
+
+    q = _FakeQuery("fm_ctrypg_99", uid)
+    await fc.fm_ctrypg_cb(_update(q), _ctx(fm_country_options=country_options))
+    callbacks = [cb for cb in q.button_callbacks() if cb]
+    # Clamped to the real last page (index 1) — no "All" shortcut (fm_ctry_0)
+    # since that only belongs on page 0.
+    assert "fm_ctry_0" not in callbacks
+    opt_callbacks = [cb for cb in callbacks if cb.startswith("fm_ctry_")]
+    assert opt_callbacks == ["fm_ctry_11", "fm_ctry_12"]
+    for cb in opt_callbacks:
+        idx = int(cb.split("_")[2])
+        assert 1 <= idx <= len(country_options)
+
+
+async def test_sport_list_paginates_beyond_one_page(temp_db):
+    uid = 811016
+    temp_db.db_ensure(uid, "u", "en")
+    sport_groups = [(f"Sport{i}", [1]) for i in range(12)]
+    ctx = _ctx(fm_sports=sport_groups)
+    # Rendering the sport keyboard directly (as forecast_menu_start would).
+    kb = fc._build_sport_kb(sport_groups, 0, uid)
+    callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    assert any(cb.startswith("fm_sppg_") for cb in callbacks)
+
+    q2 = _FakeQuery("fm_sppg_1", uid)
+    await fc.fm_sppg_cb(_update(q2), ctx)
+    assert ctx.user_data["fm_sport_page"] == 1
+    assert any(cb and cb.startswith("fm_sp_1") for cb in q2.button_callbacks())
+
+
+async def test_back_to_country_preserves_pagination_page(temp_db):
+    uid = 811017
+    temp_db.db_ensure(uid, "u", "en")
+    country_options = [(f"Country{i}", 1) for i in range(15)]
+    ctx = _ctx(fm_country_options=country_options)
+
+    # Paginate to page 1 first.
+    q1 = _FakeQuery("fm_ctrypg_1", uid)
+    await fc.fm_ctrypg_cb(_update(q1), ctx)
+    assert ctx.user_data["fm_country_page"] == 1
+
+    # Back from a deeper screen must return to the SAME page, not page 0.
+    q2 = _FakeQuery("fm_back_country", uid)
+    await fc.fm_back_cb(_update(q2), ctx)
+    assert q2.edited == T["en"]["ev_country_title"]
+    assert any(cb and cb.startswith("fm_ctrypg_") for cb in q2.button_callbacks())
+    # Page-1 content: Country10.. shown, not Country0.
+    assert any("Country10" in getattr(btn, "text", "") for row in q2.markup.inline_keyboard for btn in row)
+
+
 async def test_menu_shows_match_five_days_ahead(temp_db, monkeypatch):
     """Regression for the World Cup report: a fixture days ahead (e.g. the
     final) must appear in the menu — the old today/tomorrow-only window hid it

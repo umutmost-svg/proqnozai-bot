@@ -302,28 +302,43 @@ def test_group_by_league_returns_all_leagues_and_matches_uncapped():
 
 def test_paginate_slices_and_reports_prev_next():
     seq = list(range(25))
-    page0, has_prev0, has_next0 = paginate(seq, 0, page_size=10)
+    page0, clamped0, has_prev0, has_next0 = paginate(seq, 0, page_size=10)
     assert page0 == list(range(10))
+    assert clamped0 == 0
     assert has_prev0 is False and has_next0 is True
 
-    page1, has_prev1, has_next1 = paginate(seq, 1, page_size=10)
+    page1, clamped1, has_prev1, has_next1 = paginate(seq, 1, page_size=10)
     assert page1 == list(range(10, 20))
+    assert clamped1 == 1
     assert has_prev1 is True and has_next1 is True
 
-    page2, has_prev2, has_next2 = paginate(seq, 2, page_size=10)
+    page2, clamped2, has_prev2, has_next2 = paginate(seq, 2, page_size=10)
     assert page2 == list(range(20, 25))
+    assert clamped2 == 2
     assert has_prev2 is True and has_next2 is False
 
 
 def test_paginate_clamps_out_of_range_page():
+    """The returned clamped page must be usable by the caller for offset/nav
+    math — the whole point of returning it is that an out-of-range `page`
+    (e.g. a stale/replayed callback) never leaks into absolute-index math."""
     seq = list(range(5))
-    page, has_prev, has_next = paginate(seq, 99, page_size=10)
+    page, clamped, has_prev, has_next = paginate(seq, 99, page_size=10)
     assert page == seq
+    assert clamped == 0  # only one page exists — 99 clamps down to it
     assert has_prev is False and has_next is False
 
 
+def test_paginate_negative_page_clamps_to_zero():
+    seq = list(range(25))
+    page, clamped, has_prev, has_next = paginate(seq, -5, page_size=10)
+    assert page == list(range(10))
+    assert clamped == 0
+    assert has_prev is False and has_next is True
+
+
 def test_paginate_empty_sequence():
-    assert paginate([], 0) == ([], False, False)
+    assert paginate([], 0) == ([], 0, False, False)
 
 
 # ─── Day filter ─────────────────────────────────────────────────────────────
