@@ -401,19 +401,6 @@ def test_priority_sort_is_stable_for_equal_scores():
     assert groups_a[0].items[0].home == "Alpha"
 
 
-def test_build_top_matches_crosses_sports_and_leagues():
-    from event_list import build_top_matches
-    raws = [
-        _raw(fid=1, t1="Burnley", t2="Luton Town",
-             league="Premier League", country="England"),
-        _raw(fid=2, t1="Real Madrid", t2="Barcelona",
-             league="La Liga", country="Spain"),
-    ]
-    items = [normalize_fixture(r) for r in raws]
-    top = build_top_matches(items, now_utc=NOW, limit=15)
-    assert top[0].home == "Real Madrid"  # El Clasico outranks an ordinary PL match
-
-
 def test_priority_score_assigned_after_group_by_league():
     raws = [_raw(fid=1)]
     items = [normalize_fixture(r) for r in raws]
@@ -514,7 +501,7 @@ def test_fully_identical_matches_stabilized_by_fixture_id():
 
 
 def test_shuffled_input_gives_identical_output():
-    from event_list import build_top_matches
+    from event_list import assign_priority_scores, sort_matches
     raws = [
         _raw(fid=1, t1="Real Madrid", t2="Barcelona", league="La Liga", country="Spain"),
         _raw(fid=2, t1="Arsenal", t2="Tottenham", league="Premier League", country="England"),
@@ -522,6 +509,7 @@ def test_shuffled_input_gives_identical_output():
         _raw(fid=4, t1="R", t2="S", league="Regional Cup", country="Nowhere"),
     ]
     items = [normalize_fixture(r) for r in raws]
-    fwd = build_top_matches(list(items), limit=len(items), now_utc=NOW)
-    rev = build_top_matches(list(reversed(items)), limit=len(items), now_utc=NOW)
+    assign_priority_scores(items, NOW)
+    fwd = sort_matches(list(items))
+    rev = sort_matches(list(reversed(items)))
     assert [x.fixture_id for x in fwd] == [x.fixture_id for x in rev]

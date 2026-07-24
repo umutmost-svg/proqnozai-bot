@@ -17,7 +17,7 @@ from enrichment import enrich_football_match
 from match_validation import MatchRef, validate_match
 from event_list import (
     normalize_fixture, select_visible, group_by_sport, group_by_league,
-    build_top_matches, MAX_LEAGUES, MAX_MATCHES_PER_LEAGUE, TOP_MATCHES_LIMIT,
+    MAX_LEAGUES, MAX_MATCHES_PER_LEAGUE,
 )
 from mostbet import (
     _mostbet_load_matches, _is_within_week,
@@ -359,7 +359,6 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fm_sports"] = sport_groups
     context.user_data["fm_leagues"] = None
     context.user_data["fm_matches"] = None
-    context.user_data["fm_top"] = None
     # Cached for this session's group_by_league calls (fm_sport_cb) so the
     # demand aggregate isn't recomputed on every sport click.
     context.user_data["fm_now_utc"] = now_utc
@@ -565,72 +564,6 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(title, reply_markup=_build_league_kb(groups))
 
 
-# ─── "Главные матчи" — cross-sport top-N by priority_score ────────────────────
-_TOP_LOADING = {
-    "ru": "⏳ Загружаю главные матчи...", "az": "⏳ Əsas matçlar yüklənir...",
-    "en": "⏳ Loading top matches...", "tr": "⏳ Öne çıkan maçlar yükleniyor...",
-    "kz": "⏳ Басты матчтар жүктелуде...", "uz": "⏳ Asosiy o'yinlar yuklanmoqda...",
-    "ar": "⏳ جارٍ تحميل أهم المباريات...",
-}
-_TOP_EMPTY = {
-    "ru": "Сейчас нет матчей для показа.", "az": "Hazırda göstəriləcək matç yoxdur.",
-    "en": "No matches to show right now.", "tr": "Şu anda gösterilecek maç yok.",
-    "kz": "Қазір көрсетуге матч жоқ.", "uz": "Hozircha ko'rsatadigan o'yin yo'q.",
-    "ar": "لا توجد مباريات لعرضها حالياً.",
-}
-
-
-async def top_matches_start(update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    lang = db_lang(uid)
-    msg = await update.message.reply_text(_loc(_TOP_LOADING, lang))
-
-    all_m = await _mostbet_load_matches()
-    if not all_m:
-        await msg.edit_text(tr(uid, "ev_provider_unavailable")); return
-
-    now_utc = datetime.now(timezone.utc)
-    items = select_visible(
-        [it for m in all_m if (it := normalize_fixture(m)) is not None],
-        now_utc, _user_tz(uid), include_later=True)
-    if not items:
-        await msg.edit_text(_loc(_TOP_EMPTY, lang)); return
-
-    demand = db_match_demand()
-    top = build_top_matches(items, limit=TOP_MATCHES_LIMIT, now_utc=now_utc, demand=demand)
-
-    # New event-list session: this screen has its own frozen snapshot, and any
-    # deeper sport→league→match snapshot from a previous session must expire.
-    context.user_data["ev_session"] = context.user_data.get("ev_session", 0) + 1
-    context.user_data["fm_sports"] = None
-    context.user_data["fm_leagues"] = None
-    context.user_data["fm_matches"] = None
-    context.user_data["fm_top"] = top
-
-    btns = [[InlineKeyboardButton(
-        _match_label(it, uid) + f"  ·  {it.league_name}", callback_data=f"fm_top_{i}")]
-        for i, it in enumerate(top)]
-    await msg.edit_text(tr(uid, "top_matches_title"), reply_markup=InlineKeyboardMarkup(btns))
-
-
-async def fm_top_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    uid = q.from_user.id; lang = db_lang(uid)
-    top = context.user_data.get("fm_top")
-    idx = int(q.data.split("_")[2])
-    if not top or idx >= len(top):
-        await q.answer()
-        await _expired_menu(q, uid); return
-
-    if not await cb_guard(update):
-        return
-    await q.answer()
-    try:
-        await _fm_match_run(context, q, uid, lang, top[idx])
-    finally:
-        cb_release(uid)
-
-
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user; uid = user.id; info = uinfo(update)
     db_ensure(uid, user.username or "", user.language_code)
@@ -664,8 +597,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await express_cmd(update, context); return
     if text == tl["menu_forecast"]:
         await forecast_menu_start(update, context); return
-    if text == tl["menu_top"]:
-        await top_matches_start(update, context); return
     if text == LANG_BTN:
         await update.message.reply_text(tr(uid, "choose_lang"), reply_markup=lang_kb())
         return
