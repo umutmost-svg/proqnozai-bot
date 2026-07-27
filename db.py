@@ -2,10 +2,11 @@ import os
 import sqlite3
 import json
 import logging
+import time
 from collections import defaultdict
 from contextlib import contextmanager
 
-from config import live_subs
+from config import live_subs, demand_cache
 from priority_config import normalize_participant_tokens
 
 logger = logging.getLogger(__name__)
@@ -335,6 +336,14 @@ def db_clear_conv(uid):
 
 
 # ─── Match Priority Engine: internal demand aggregation ───────────────────────
+# A full two-table scan on every menu open doesn't scale with DAU, and the
+# signal itself is coarse and log-scaled (priority_engine caps its
+# contribution at 5 points) — a few minutes of staleness never changes the
+# resulting demand_bonus in any way a user would notice. Cached in-memory like
+# mostbet_cache, keyed by `days` so different windows don't collide.
+DEMAND_CACHE_TTL = 300  # 5 min
+
+
 def db_match_demand(days: int = 14) -> dict[frozenset, int]:
     """Unique-user demand per normalized (unordered) participant-pair, over the
     trailing `days` window. Counts DISTINCT users per pair — NOT raw request
@@ -349,6 +358,11 @@ def db_match_demand(days: int = 14) -> dict[frozenset, int]:
 
     No schema change: reads existing columns only.
     """
+    now = time.time()
+    cached = demand_cache.get(days)
+    if cached and now - cached[0] < DEMAND_CACHE_TTL:
+        return cached[1]
+
     cutoff = f"-{int(days)} days"
     rows = _all(
         "SELECT DISTINCT user_id, query FROM forecast_history "
@@ -362,4 +376,6 @@ def db_match_demand(days: int = 14) -> dict[frozenset, int]:
         key = normalize_participant_tokens(text)
         if key:
             users_by_key[key].add(uid)
-    return {key: len(uids) for key, uids in users_by_key.items()}
+    result = {key: len(uids) for key, uids in users_by_key.items()}
+    demand_cache[days] = (now, result)
+    return result

@@ -261,3 +261,58 @@ def test_log_req_last_active_matches_sqlite_utc_now(temp_db):
             "SELECT date(last_active) = date('now') FROM users WHERE user_id=?",
             (uid,)).fetchone()[0]
     assert same_day == 1
+
+
+# ─── db_match_demand: cached, coarse-TTL (not per-request) ───────────────────
+
+def test_match_demand_is_cached_within_ttl(temp_db):
+    """A second call within DEMAND_CACHE_TTL must return the cached snapshot
+    — new data inserted after the first call must NOT appear until expiry.
+    This is the fix for 'full two-table scan on every menu open'."""
+    from priority_config import normalize_participant_tokens
+    key = normalize_participant_tokens("CacheTeamA830070 CacheTeamB830070")
+
+    temp_db.db_ensure(830070, "u10", "en")
+    temp_db.db_save_history(830070, "CacheTeamA830070 CacheTeamB830070", "x")
+    first = temp_db.db_match_demand()
+    assert first.get(key) == 1
+
+    # A second user for the SAME match, inserted AFTER the first (now cached) call.
+    temp_db.db_ensure(830071, "u11", "en")
+    temp_db.db_save_history(830071, "CacheTeamA830070 CacheTeamB830070", "x")
+    still_cached = temp_db.db_match_demand()
+    assert still_cached.get(key) == 1  # unchanged — served from cache, not re-scanned
+
+
+def test_match_demand_recomputes_after_ttl_expires(temp_db, monkeypatch):
+    from priority_config import normalize_participant_tokens
+    key = normalize_participant_tokens("CacheTeamC830072 CacheTeamD830072")
+
+    temp_db.db_ensure(830072, "u12", "en")
+    temp_db.db_save_history(830072, "CacheTeamC830072 CacheTeamD830072", "x")
+    first = temp_db.db_match_demand()
+    assert first.get(key) == 1
+
+    temp_db.db_ensure(830073, "u13", "en")
+    temp_db.db_save_history(830073, "CacheTeamC830072 CacheTeamD830072", "x")
+
+    # Simulate TTL expiry by advancing the clock db.py's cache checks against.
+    real_time = temp_db.time.time
+    monkeypatch.setattr(temp_db.time, "time", lambda: real_time() + temp_db.DEMAND_CACHE_TTL + 1)
+    refreshed = temp_db.db_match_demand()
+    assert refreshed.get(key) == 2
+
+
+def test_match_demand_cache_keyed_by_days_window(temp_db):
+    """Different `days` windows must not share a cache slot — a 7-day query
+    right after a 14-day query for the same key must not return the 14-day
+    (potentially different) result."""
+    from priority_config import normalize_participant_tokens
+    key = normalize_participant_tokens("CacheTeamE830074 CacheTeamF830074")
+
+    temp_db.db_ensure(830074, "u14", "en")
+    temp_db.db_save_history(830074, "CacheTeamE830074 CacheTeamF830074", "x")
+    demand_14 = temp_db.db_match_demand(days=14)
+    demand_7 = temp_db.db_match_demand(days=7)
+    assert demand_14.get(key) == 1
+    assert demand_7.get(key) == 1

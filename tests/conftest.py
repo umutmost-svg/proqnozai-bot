@@ -33,9 +33,14 @@ import pytest  # noqa: E402
 @pytest.fixture()
 def temp_db():
     """Initialised schema in the session temp DB; unique uids per test keep
-    tests independent without recreating the file."""
+    tests independent without recreating the file. Also clears
+    config.demand_cache — it's in-memory state derived from the DB, keyed
+    only by the `days` window (not by uid), so it would otherwise leak a
+    stale demand snapshot across tests that share the same window."""
     import db
+    from config import demand_cache
     db.db_init()
+    demand_cache.clear()
     return db
 
 
