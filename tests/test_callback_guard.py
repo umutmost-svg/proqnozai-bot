@@ -1,10 +1,13 @@
-"""Offline tests for the expensive-callback gate and the compare security gate.
+"""Offline tests for the expensive-callback gate, the lighter navigation gate,
+and the compare security gate.
 
-Covers: rate limiting before enrichment/Claude on fm_mt_* and expr_*, the
-per-user in-flight lock against double-clicks, callback answers on refusal,
-navigation staying uncharged, /compare passing the full text security gate,
-and a tripwire that callback_data patterns/regexes stay unchanged. No network:
-every Claude/Mostbet/API call is stubbed.
+Covers: rate limiting before enrichment/Claude on fm_mt_*/expr_* (cb_guard,
+with the in-flight lock against double-clicks); rate limiting on pure menu
+navigation — day/country/tournament/pagination/back (nav_guard, no in-flight
+lock); callback answers on refusal; a stale/invalid index staying a free,
+uncharged path on both gates; /compare passing the full text security gate;
+and a tripwire that callback_data patterns/regexes stay unchanged. No
+network: every Claude/Mostbet/API call is stubbed.
 """
 import inspect
 import time
@@ -169,15 +172,59 @@ async def test_expired_keyboard_not_charged(temp_db):
     assert uid not in hu._cb_inflight
 
 
-async def test_navigation_back_not_charged(temp_db):
+async def test_navigation_now_rate_limited(temp_db):
+    """Menu navigation (day/country/tournament/pagination/back) is now gated
+    by nav_guard — the SAME rate budget as text messages. This closes the
+    previously-documented gap where callback buttons bypassed rate-limiting
+    entirely (see ARCHITECTURE.md known risks)."""
     uid = 820006
     temp_db.db_ensure(uid, "u", "en")
     _fill_rate(uid)                               # user is at the limit
 
     q = _Query("fm_back_sport", uid)
-    await fc.fm_back_cb(_cb_update(q), _ctx())    # missing snapshot → expired
+    await fc.fm_back_cb(_cb_update(q), _ctx())
 
-    assert q.edited == T["en"]["ev_menu_expired"]  # handler ran, not refused
+    assert q.edited is None                        # handler body never ran
+    assert q.answers and q.answers[-1]              # refused with a toast
+
+
+async def test_fm_sport_cb_rate_limited_before_rendering(temp_db):
+    uid = 820020
+    temp_db.db_ensure(uid, "u", "en")
+    _fill_rate(uid)
+
+    q = _Query("fm_sp_0", uid)
+    await fc.fm_sport_cb(_cb_update(q), _ctx(fm_sports=[("Football", [1])]))
+
+    assert q.edited is None
+    assert q.answers and q.answers[-1]
+
+
+async def test_fm_lgpg_cb_rate_limited_before_rendering(temp_db):
+    uid = 820021
+    temp_db.db_ensure(uid, "u", "en")
+    _fill_rate(uid)
+
+    q = _Query("fm_lgpg_1", uid)
+    await fc.fm_lgpg_cb(_cb_update(q), _ctx(fm_leagues=["x", "y"]))
+
+    assert q.edited is None
+    assert q.answers and q.answers[-1]
+
+
+async def test_navigation_stale_snapshot_still_free_before_rate_check(temp_db):
+    """An invalid/stale index is the cheap path — it must resolve to the
+    expired-menu message WITHOUT being charged against the rate budget,
+    exactly like fm_mt_* already does (test_fm_match_stale_index_free_but_expired)."""
+    uid = 820022
+    temp_db.db_ensure(uid, "u", "en")
+    before = len(msg_times[uid])
+
+    q = _Query("fm_sp_0", uid)
+    await fc.fm_sport_cb(_cb_update(q), _ctx())   # no fm_sports at all
+
+    assert q.edited == T["en"]["ev_menu_expired"]
+    assert len(msg_times[uid]) == before           # budget untouched
 
 
 # ─── expr_* is rate-limited before Claude ─────────────────────────────────────

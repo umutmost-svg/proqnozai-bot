@@ -12,20 +12,34 @@ proqnozai-bot/
 ├── config.py                # ⚙️  Фундамент: env-переменные, in-memory state, логирование
 ├── translations.py          # 🌍 i18n: тексты на 7 языках + system-промпты Claude
 │
-├── db.py                    # 💾 SQLite: пользователи, история, подписки, разговоры
+├── db.py                    # 💾 SQLite: пользователи, история, подписки, разговоры,
+│                            #     db_match_demand() — агрегат спроса для Priority Engine
 ├── security.py              # 🛡️  Rate-limit, анти-спам, блокировки
 ├── claude_client.py         # 🧠 Anthropic API: прогнозы (Opus), live-советы (Haiku)
 ├── mostbet.py               # 💰 Mostbet Odds API: матчи, коэффициенты, фильтры виртуалов
 ├── football_api.py          # ⚽ api-sports.io + football-data.org: форма, H2H, ср. голы
+├── enrichment.py            # ✅ Верифицированное обогащение футбола (HIGH-confidence)
+├── match_validation.py      # 🔎 Детерминированное сопоставление матчей между источниками
+├── metrics.py               # 📐 Детерминированные вычисления (ср. голы и т.д.)
+├── provenance.py            # 🏷️  Маркировка происхождения данных (реальные/оценочные)
+├── priority_config.py       # 🎯 Match Priority Engine: тиры турниров/команд, дерби,
+│                            #     паттерны стадий — статические конфиг-константы
+├── priority_engine.py       # 🎯 Match Priority Engine: compute_priority() — детерми-
+│                            #     нированный priority_score (0-100) для ранжирования
+├── event_list.py            # 📋 Нормализация фида Mostbet, разделение турнир/стадия,
+│                            #     фильтры по дню/стране, приоритетная сортировка,
+│                            #     пагинация (paginate()) — чистый, offline-тестируемый
 │
 ├── stats_server.py          # 📊 HTTP-сервер статистики внутри worker-процесса
 ├── dashboard.py             # 🖥  Flask-дашборд (отдельный web-процесс Railway)
 │
 ├── handlers/                # 🎮 Telegram-хендлеры (по доменам)
 │   ├── __init__.py          #     register_handlers() — регистрация всех обработчиков
-│   ├── utils.py             #     Клавиатуры (main_menu, lang_kb), форматирование дат
+│   ├── utils.py             #     Клавиатуры, cb_guard (дорогие колбэки) / nav_guard
+│   │                        #     (навигация меню) — rate-limit на ВСЕ callback-кнопки
 │   ├── registration.py      #     /start, выбор языка, онбординг, профиль, таймзона
-│   ├── forecast.py          #     Главный флоу прогноза: спорт→турнир→матч→анализ
+│   ├── forecast.py          #     Флоу прогноза: спорт→день→страна→турнир→матч→анализ,
+│   │                        #     постраничный вывод (без жёсткой обрезки)
 │   ├── live.py              #     Live-трекинг: poller, голы, изменения кэфов, daily_push
 │   ├── express.py           #     Экспресс-купоны (2–5 матчей)
 │   ├── history.py           #     История прогнозов + фидбэк (зашло/не зашло)
@@ -72,6 +86,9 @@ Railway (`BOT_API_URL`). Эндпоинты stats-сервера (`/stats`, `/br
 ┌───────────────────────────▼─────────────────────────────────┐
 │  L3  СЕРВИСЫ (внешние интеграции и логика)                   │
 │      claude_client   mostbet   football_api   security      │
+│      enrichment   match_validation   metrics   provenance    │
+│      priority_engine   event_list (priority_config — leaf,   │
+│      как config/translations, без внутренних зависимостей)   │
 └───────────────────────────┬─────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
@@ -92,14 +109,19 @@ Railway (`BOT_API_URL`). Эндпоинты stats-сервера (`/stats`, `/br
 |-----------------------|-------------------------------------------------------------------|
 | `config`              | — (только stdlib)                                                  |
 | `translations`        | — (чистые данные)                                                  |
+| `priority_config`     | — (чистые данные/константы, leaf-модуль)                          |
 | `security`            | `config`                                                          |
-| `db`                  | `config`                                                          |
+| `db`                  | `config`, `priority_config` (нормализация ключа спроса)           |
 | `mostbet`             | `config`                                                          |
 | `football_api`        | `config` (+ `claude_client` лениво для оценки формы)             |
+| `enrichment`          | `config`, `match_validation`, `metrics`, `provenance`             |
+| `match_validation`    | — (чистая логика, без внутренних зависимостей)                    |
+| `priority_engine`     | `priority_config`                                                 |
+| `event_list`          | `config`, `mostbet`, `priority_config`, `priority_engine`         |
 | `claude_client`       | `config`, `db`                                                    |
-| `handlers/utils`      | `db`, `translations`                                             |
+| `handlers/utils`      | `config`, `db`, `security`, `translations` (`cb_guard`/`nav_guard`) |
 | `handlers/registration`| `config`, `db`, `translations`, `utils`                         |
-| `handlers/forecast`   | `config`, `db`, `translations`, `security`, `claude_client`, `mostbet`, `football_api`, `utils`, `registration` |
+| `handlers/forecast`   | `config`, `db`, `translations`, `security`, `claude_client`, `mostbet`, `football_api`, `enrichment`, `match_validation`, `event_list`, `utils`, `registration` |
 | `handlers/live`       | `config`, `db`, `translations`, `football_api`, `mostbet`, `claude_client` |
 | `handlers/express`    | `db`, `translations`, `claude_client`, `mostbet`                 |
 | `handlers/history`    | `db`, `translations`                                            |
@@ -111,20 +133,31 @@ Railway (`BOT_API_URL`). Эндпоинты stats-сервера (`/stats`, `/br
 ## Основной флоу прогноза
 
 ```
-Пользователь жмёт «⚽ Прогнозы»
+Пользователь жмёт «⚽ Прогноз»
         │
         ▼
 forecast_menu_start ──► _mostbet_load_matches()        [mostbet]
         │                загружает матчи (кеш 15 мин)
+        │                normalize_fixture/_resolve_competition
+        │                разделяют турнир и стадию                [event_list]
         ▼
-fm_sport_cb      выбор вида спорта (lineCategory)
+fm_sport_cb      выбор вида спорта (lineCategory)               [nav_guard]
         ▼
-fm_league_cb     выбор турнира (lineSubCategory,
-        │         сортировка _sorted_leagues: major-турниры сверху)
+fm_day_cb        выбор дня: Live/Сегодня/Завтра/дата/«Все»       [nav_guard]
         ▼
-fm_match_cb      выбор матча
+fm_ctry_cb       выбор страны/региона — пропускается,            [nav_guard]
+        │        если она одна (available_countries)
+        ▼
+fm_league_cb     выбор турнира — group_by_league сортирует по
+        │        priority_score (Match Priority Engine: престиж,  [nav_guard]
+        │        стадия, дерби, популярность команд, время,
+        │        спрос db_match_demand()); список постраничный
+        │        (paginate(), «Показать ещё», без обрезки)
+        ▼
+fm_match_cb      выбор матча                                     [cb_guard]
         │  ├─ mostbet_get_odds()        реальные кэфы   [mostbet]
-        │  └─ fetch_real_data()         форма+H2H+голы  [football_api]
+        │  └─ fetch_real_data() / enrich_football_match()
+        │      форма+H2H+голы, HIGH-confidence         [football_api/enrichment]
         ▼
 _generate_forecast
         │  собирает system_prompt (язык + профиль + данные)
@@ -134,6 +167,12 @@ claude_forecast()  ──► Claude Opus 4.8                  [claude_client]
         ▼
 db_save_history()  ──► отправка прогноза пользователю
 ```
+
+Каждый шаг меню (спорт/день/страна/турнир/пагинация/назад) защищён `nav_guard`
+(тот же rate-limit, что у текстовых сообщений, без in-flight lock);
+`fm_match_cb` — единственный шаг, который тратит деньги (Mostbet + Opus),
+защищён более строгим `cb_guard` (rate-limit + per-user in-flight lock,
+чтобы двойной клик не запустил два параллельных вызова Opus).
 
 ## Фоновые задачи (post_init в main.py)
 
@@ -193,9 +232,10 @@ SQLite-файл `bot.db` создаётся в `BOT_DB_DIR` — на Railway э�
 
 ## Известные архитектурные риски (зафиксированы, не исправлены)
 
-1. **Rate-limit не покрывает callback-кнопки.** `rate_check` вызывается
-   только в `handle_msg` (текст/фото). Прогноз через меню (`fm_mt_*`) и
-   экспресс (`expr_*`) — вызовы Opus без лимита частоты.
+1. ~~Rate-limit не покрывает callback-кнопки.~~ **Исправлено.** Все
+   callback-кнопки меню (спорт/день/страна/турнир/пагинация/назад) теперь
+   защищены `nav_guard` (тот же бюджет, что у текста), выбор матча — `cb_guard`
+   (то же + in-flight lock). См. `handlers/utils.py`.
 2. **Персистентность SQLite** зависит от volume на Railway (`BOT_DB_DIR`).
 3. **Частичный фид Mostbet кэшируется на полный TTL** (15 мин), если
    пагинация оборвалась по 429/дедлайну — турниры могут «пропасть» до
@@ -209,3 +249,13 @@ SQLite-файл `bot.db` создаётся в `BOT_DB_DIR` — на Railway э�
 6. **Синхронные вызовы SQLite внутри async-хендлеров** — при большой
    нагрузке могут подтормаживать event loop (сейчас запросы короткие, WAL).
 7. **In-memory rate-limit/блокировки** сбрасываются при каждом рестарте.
+8. **`priority_score` пересчитывается на каждый запрос меню**, а не раз за
+   цикл обновления фида (каждые 15 мин, как `_preload_mostbet`) — дёшево при
+   текущих объёмах, но не масштабируется линейно с ростом DAU.
+9. **`db_match_demand()` — полный скан двух таблиц на каждое открытие меню**
+   (не кэшируется между пользователями) — при росте DAU может стать
+   узким местом раньше, чем сам расчёт приоритета.
+10. **Тиры престижа/популярности в `priority_config.py` — статический
+    список только для футбола.** Другие виды спорта (теннис, баскетбол,
+    UFC/MMA) не различаются по значимости турнира/команды, только по
+    близости ко времени начала.

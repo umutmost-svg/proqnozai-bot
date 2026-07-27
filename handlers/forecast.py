@@ -25,7 +25,7 @@ from mostbet import (
     _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
 )
-from handlers.utils import _sport_emoji, LANG_BTN, lang_kb, cb_guard, cb_release
+from handlers.utils import _sport_emoji, LANG_BTN, lang_kb, cb_guard, cb_release, nav_guard
 from handlers.registration import handle_name
 
 logger = logging.getLogger(__name__)
@@ -469,12 +469,17 @@ def _tournaments_title(sport_name: str, lang: str) -> str:
 
 
 async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
+    q = update.callback_query
     uid = q.from_user.id
     sport_groups = context.user_data.get("fm_sports")
     idx = _parse_index(q.data)
     if not sport_groups or idx is None or idx < 0 or idx >= len(sport_groups):
+        # Stale/expired keyboard — cheap path, not charged against the limit.
+        await q.answer()
         await _expired_menu(q, uid); return
+    if not await nav_guard(update):
+        return
+    await q.answer()
 
     sport_name, sport_items = sport_groups[idx]
     context.user_data["fm_sport_idx"] = idx
@@ -487,12 +492,16 @@ async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def fm_sppg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
+    q = update.callback_query
     uid = q.from_user.id; lang = db_lang(uid)
     sport_groups = context.user_data.get("fm_sports")
     page = _parse_index(q.data)
     if not sport_groups or page is None:
+        await q.answer()
         await _expired_menu(q, uid); return
+    if not await nav_guard(update):
+        return
+    await q.answer()
     context.user_data["fm_sport_page"] = page
     await q.edit_message_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sport_groups, page, uid))
 
@@ -506,6 +515,8 @@ async def fm_day_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if (idx is None or idx < 0 or sport_items is None or day_options is None
             or (idx != 0 and idx - 1 >= len(day_options))):
         await q.answer(); await _expired_menu(q, uid); return
+    if not await nav_guard(update):
+        return
     await q.answer()
 
     day_key = DAY_ALL if idx == 0 else day_options[idx - 1][0]
@@ -532,6 +543,8 @@ async def fm_ctry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if (idx is None or idx < 0 or filtered is None or country_options is None
             or (idx != 0 and idx - 1 >= len(country_options))):
         await q.answer(); await _expired_menu(q, uid); return
+    if not await nav_guard(update):
+        return
     await q.answer()
 
     scoped = filtered
@@ -542,12 +555,16 @@ async def fm_ctry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def fm_ctrypg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
+    q = update.callback_query
     uid = q.from_user.id
     country_options = context.user_data.get("fm_country_options")
     page = _parse_index(q.data)
     if country_options is None or page is None:
+        await q.answer()
         await _expired_menu(q, uid); return
+    if not await nav_guard(update):
+        return
+    await q.answer()
     context.user_data["fm_country_page"] = page
     await q.edit_message_text(tr(uid, "ev_country_title"),
                               reply_markup=_build_country_kb(country_options, page, uid))
@@ -577,12 +594,16 @@ async def _show_league_list(q, context, uid: int, items: list, back_cb: str) -> 
 
 
 async def fm_lgpg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
+    q = update.callback_query
     uid = q.from_user.id; lang = db_lang(uid)
     groups = context.user_data.get("fm_leagues")
     page = _parse_index(q.data)
     if not groups or page is None:
+        await q.answer()
         await _expired_menu(q, uid); return
+    if not await nav_guard(update):
+        return
+    await q.answer()
     context.user_data["fm_league_page"] = page
     back_cb = context.user_data.get("fm_league_back", "fm_back_sport")
 
@@ -602,12 +623,16 @@ def _matches_title(league_name: str, lang: str) -> str:
 
 
 async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
+    q = update.callback_query
     uid = q.from_user.id; lang = db_lang(uid)
     groups = context.user_data.get("fm_leagues")
     idx = _parse_index(q.data)
     if not groups or idx is None or idx < 0 or idx >= len(groups):
+        await q.answer()
         await _expired_menu(q, uid); return
+    if not await nav_guard(update):
+        return
+    await q.answer()
 
     g = groups[idx]
     context.user_data["fm_league_idx"] = idx
@@ -622,12 +647,16 @@ async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def fm_mtpg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
+    q = update.callback_query
     uid = q.from_user.id; lang = db_lang(uid)
     matches = context.user_data.get("fm_matches")
     page = _parse_index(q.data)
     if not matches or page is None:
+        await q.answer()
         await _expired_menu(q, uid); return
+    if not await nav_guard(update):
+        return
+    await q.answer()
     context.user_data["fm_match_page"] = page
 
     groups = context.user_data.get("fm_leagues") or []
@@ -752,8 +781,11 @@ async def _fm_match_run(context, q, uid: int, lang: str, it) -> None:
 
 
 async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
+    q = update.callback_query
     uid = q.from_user.id; lang = db_lang(uid)
+    if not await nav_guard(update):
+        return
+    await q.answer()
 
     if q.data == "fm_back_sport":
         sport_groups = context.user_data.get("fm_sports")

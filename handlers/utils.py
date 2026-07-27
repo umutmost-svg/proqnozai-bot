@@ -10,11 +10,40 @@ from translations import T, tr
 
 SUPPORT_URL = "https://t.me/AIproqnoz_support"
 
-# ─── Expensive-callback gate ──────────────────────────────────────────────────
+# ─── Callback rate-limit gates ─────────────────────────────────────────────────
 # Users the bot is CURRENTLY generating a forecast/express for. One expensive
 # operation per user at a time, so rapid double-clicks can't start duplicate
 # Claude/enrichment work. In-memory like the rest of the rate-limit state.
 _cb_inflight: set = set()
+
+
+async def _blocked_gate(update) -> bool:
+    """True if the user is currently temp-blocked (spam auto-block). Answers
+    the callback query itself with a localized toast on refusal."""
+    q = update.callback_query
+    uid = q.from_user.id
+    blk, secs = sec_blocked(uid)
+    if blk:
+        await q.answer(tr(uid, "blocked", m=secs // 60, s=secs % 60), show_alert=True)
+    return blk
+
+
+async def _rate_limited(update) -> bool:
+    """True if this callback exceeds the SAME rate budget as text messages
+    (records a violation and answers the query itself with a toast on
+    refusal); resets the violation counter and returns False otherwise."""
+    q = update.callback_query
+    uid = q.from_user.id
+    exceeded, wait = rate_check(uid)
+    if not exceeded:
+        violations[uid] = 0
+        return False
+    info = f"CB | id={uid} @{getattr(q.from_user, 'username', None) or '-'}"
+    if record_viol(uid, info):
+        await q.answer(tr(uid, "auto_blocked", min=SPAM_DUR // 60), show_alert=True)
+    else:
+        await q.answer(tr(uid, "rate_limit", w=wait, v=violations[uid], max=SPAM_AFTER))
+    return True
 
 
 async def cb_guard(update) -> bool:
@@ -27,28 +56,33 @@ async def cb_guard(update) -> bool:
     call cb_release(uid) in a finally block."""
     q = update.callback_query
     uid = q.from_user.id
-    blk, secs = sec_blocked(uid)
-    if blk:
-        await q.answer(tr(uid, "blocked", m=secs // 60, s=secs % 60), show_alert=True)
+    if await _blocked_gate(update):
         return False
     if uid in _cb_inflight:
         await q.answer("⏳")  # previous request still generating
         return False
-    exceeded, wait = rate_check(uid)
-    if exceeded:
-        info = f"CB | id={uid} @{getattr(q.from_user, 'username', None) or '-'}"
-        if record_viol(uid, info):
-            await q.answer(tr(uid, "auto_blocked", min=SPAM_DUR // 60), show_alert=True)
-        else:
-            await q.answer(tr(uid, "rate_limit", w=wait, v=violations[uid], max=SPAM_AFTER))
+    if await _rate_limited(update):
         return False
-    violations[uid] = 0
     _cb_inflight.add(uid)
     return True
 
 
 def cb_release(uid) -> None:
     _cb_inflight.discard(uid)
+
+
+async def nav_guard(update) -> bool:
+    """Gate for pure menu-navigation callbacks (sport/day/country/tournament
+    selection, "show more" pagination) that never call Claude or any external
+    API. Applies the SAME rate budget as text messages/cb_guard (sec_blocked +
+    rate_check + violation accounting) — but, unlike cb_guard, WITHOUT the
+    in-flight lock: navigation has no concurrent-duplicate-expensive-call risk
+    to guard against, only request volume. On refusal it answers the callback
+    query itself with a short localized toast, so the client spinner never
+    hangs; the caller does not need to release anything."""
+    if await _blocked_gate(update):
+        return False
+    return not await _rate_limited(update)
 
 # Universal language button — same label in every language so one handler matches.
 LANG_BTN = "🌐 Dil · Язык · Lang"
