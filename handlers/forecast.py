@@ -460,14 +460,6 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sport_groups, 0, uid))
 
 
-def _tournaments_title(sport_name: str, lang: str) -> str:
-    title = {
-        "ru": f"Турниры — {sport_name}:", "az": f"Turnirler — {sport_name}:",
-        "en": f"Tournaments — {sport_name}:", "tr": f"Turnuvalar — {sport_name}:",
-    }
-    return title.get(lang, title["ru"])
-
-
 async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = q.from_user.id
@@ -502,6 +494,7 @@ async def fm_sppg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await nav_guard(update):
         return
     await q.answer()
+    _, page, _, _ = paginate(sport_groups, page, PAGE_SIZE)
     context.user_data["fm_sport_page"] = page
     await q.edit_message_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sport_groups, page, uid))
 
@@ -565,6 +558,7 @@ async def fm_ctrypg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await nav_guard(update):
         return
     await q.answer()
+    _, page, _, _ = paginate(country_options, page, PAGE_SIZE)
     context.user_data["fm_country_page"] = page
     await q.edit_message_text(tr(uid, "ev_country_title"),
                               reply_markup=_build_country_kb(country_options, page, uid))
@@ -573,7 +567,6 @@ async def fm_ctrypg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _show_league_list(q, context, uid: int, items: list, back_cb: str) -> None:
     """Shared tail of the day/country filter steps: group the filtered items
     by league (full list, no cap) and show page 0."""
-    lang = db_lang(uid)
     groups = group_by_league(items, now_utc=context.user_data.get("fm_now_utc"),
                              demand=context.user_data.get("fm_demand"))
     context.user_data["fm_leagues"] = groups
@@ -584,7 +577,7 @@ async def _show_league_list(q, context, uid: int, items: list, back_cb: str) -> 
     idx = context.user_data.get("fm_sport_idx", 0)
     sport_groups = context.user_data.get("fm_sports") or []
     sport_name = sport_groups[idx][0] if idx < len(sport_groups) else ""
-    title = _tournaments_title(sport_name, lang)
+    title = tr(uid, "ev_tournaments_title", name=sport_name)
     if not groups:
         # Never leave the user on a dead-end screen with no way back.
         back_kb = InlineKeyboardMarkup([[InlineKeyboardButton(tr(uid, "ev_back"), callback_data=back_cb)]])
@@ -595,7 +588,7 @@ async def _show_league_list(q, context, uid: int, items: list, back_cb: str) -> 
 
 async def fm_lgpg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    uid = q.from_user.id; lang = db_lang(uid)
+    uid = q.from_user.id
     groups = context.user_data.get("fm_leagues")
     page = _parse_index(q.data)
     if not groups or page is None:
@@ -604,27 +597,20 @@ async def fm_lgpg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await nav_guard(update):
         return
     await q.answer()
+    _, page, _, _ = paginate(groups, page, PAGE_SIZE)
     context.user_data["fm_league_page"] = page
     back_cb = context.user_data.get("fm_league_back", "fm_back_sport")
 
     idx = context.user_data.get("fm_sport_idx", 0)
     sport_groups = context.user_data.get("fm_sports") or []
     sport_name = sport_groups[idx][0] if idx < len(sport_groups) else ""
-    title = _tournaments_title(sport_name, lang)
+    title = tr(uid, "ev_tournaments_title", name=sport_name)
     await q.edit_message_text(title, reply_markup=_build_league_kb(groups, page, back_cb, uid))
-
-
-def _matches_title(league_name: str, lang: str) -> str:
-    title = {
-        "ru": f"Матчи — {league_name}:", "az": f"Matçlar — {league_name}:",
-        "en": f"Matches — {league_name}:", "tr": f"Maçlar — {league_name}:",
-    }.get(lang)
-    return title or f"Матчи — {league_name}:"
 
 
 async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    uid = q.from_user.id; lang = db_lang(uid)
+    uid = q.from_user.id
     groups = context.user_data.get("fm_leagues")
     idx = _parse_index(q.data)
     if not groups or idx is None or idx < 0 or idx >= len(groups):
@@ -642,13 +628,13 @@ async def fm_league_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fm_matches"] = g.items
     context.user_data["fm_match_page"] = 0
 
-    title = _matches_title(g.league_name, lang)
+    title = tr(uid, "ev_matches_title", name=g.league_name)
     await q.edit_message_text(title, reply_markup=_build_match_kb(g.items, 0, uid))
 
 
 async def fm_mtpg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    uid = q.from_user.id; lang = db_lang(uid)
+    uid = q.from_user.id
     matches = context.user_data.get("fm_matches")
     page = _parse_index(q.data)
     if not matches or page is None:
@@ -657,12 +643,13 @@ async def fm_mtpg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await nav_guard(update):
         return
     await q.answer()
+    _, page, _, _ = paginate(matches, page, PAGE_SIZE)
     context.user_data["fm_match_page"] = page
 
     groups = context.user_data.get("fm_leagues") or []
     lidx = context.user_data.get("fm_league_idx", 0)
     league_name = groups[lidx].league_name if lidx < len(groups) else ""
-    title = _matches_title(league_name, lang)
+    title = tr(uid, "ev_matches_title", name=league_name)
     await q.edit_message_text(title, reply_markup=_build_match_kb(matches, page, uid))
 
 
@@ -817,7 +804,7 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         idx = context.user_data.get("fm_sport_idx", 0)
         sport_groups = context.user_data.get("fm_sports") or []
         sport_name = sport_groups[idx][0] if idx < len(sport_groups) else ""
-        title = _tournaments_title(sport_name, lang)
+        title = tr(uid, "ev_tournaments_title", name=sport_name)
         await q.edit_message_text(title, reply_markup=_build_league_kb(groups, page, back_cb, uid))
 
 
