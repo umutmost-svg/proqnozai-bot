@@ -6,7 +6,7 @@ import types
 from datetime import datetime, timedelta, timezone
 
 import handlers.forecast as fc
-from config import MOSTBET_SRC_TZ
+from config import MOSTBET_SRC_TZ, msg_times
 from event_list import normalize_fixture
 from translations import T
 
@@ -40,7 +40,7 @@ class _FakeQuery:
         self.edited = None
         self.markup = None
 
-    async def answer(self):
+    async def answer(self, text=None, show_alert=False):
         pass
 
     async def edit_message_text(self, text, **kw):
@@ -310,13 +310,22 @@ async def test_full_filter_flow_and_back_navigation(temp_db, monkeypatch):
     ]
     ctx = _ctx(fm_sports=[("Football", items)])
 
+    # Every step below is now gated by nav_guard/cb_guard (same rate budget as
+    # text). This test exercises FLOW correctness, not rate-limiting (that has
+    # its own coverage in test_callback_guard.py) — reset the shared counter
+    # before each step so 9 rapid calls for one uid can't trip RATE_MAX.
+    def _reset_rate():
+        msg_times[uid].clear()
+
     # 1. Sport → day filter screen.
+    _reset_rate()
     q1 = _FakeQuery("fm_sp_0", uid)
     await fc.fm_sport_cb(_update(q1), ctx)
     assert q1.edited == T["en"]["ev_day_title"]
     assert ctx.user_data["fm_sport_items"] == items
 
     # 2. Day "All" → two countries present → country screen (not skipped).
+    _reset_rate()
     q2 = _FakeQuery("fm_day_0", uid)
     await fc.fm_day_cb(_update(q2), ctx)
     assert q2.edited == T["en"]["ev_country_title"]
@@ -324,6 +333,7 @@ async def test_full_filter_flow_and_back_navigation(temp_db, monkeypatch):
 
     # 3. Country "England" (index 1: first real option after the fixed "All"
     #    at index 0) → league list, scoped to England only.
+    _reset_rate()
     q3 = _FakeQuery("fm_ctry_1", uid)
     await fc.fm_ctry_cb(_update(q3), ctx)
     groups = ctx.user_data["fm_leagues"]
@@ -331,33 +341,39 @@ async def test_full_filter_flow_and_back_navigation(temp_db, monkeypatch):
     assert ctx.user_data["fm_league_back"] == "fm_back_country"
 
     # 4. League → match list (both England matches, Chelsea/Everton fixtures).
+    _reset_rate()
     q4 = _FakeQuery("fm_lg_0", uid)
     await fc.fm_league_cb(_update(q4), ctx)
     matches = ctx.user_data["fm_matches"]
     assert {m.fixture_id for m in matches} == {"1", "2"}
 
     # 5. Match → resolves by absolute index against the frozen snapshot.
+    _reset_rate()
     q5 = _FakeQuery("fm_mt_1", uid)
     await fc.fm_match_cb(_update(q5), ctx)
     assert ctx.user_data["match_ref"]["home"] == "Liverpool"
 
     # 6. Back from the match screen → league list, with the RIGHT back target
     #    (country, since the country screen was actually shown for this sport).
+    _reset_rate()
     q6 = _FakeQuery("fm_back_league", uid)
     await fc.fm_back_cb(_update(q6), ctx)
     assert "fm_back_country" in q6.button_callbacks()
 
     # 7. Back from the league list → country screen.
+    _reset_rate()
     q7 = _FakeQuery("fm_back_country", uid)
     await fc.fm_back_cb(_update(q7), ctx)
     assert q7.edited == T["en"]["ev_country_title"]
 
     # 8. Back from the country screen → day screen.
+    _reset_rate()
     q8 = _FakeQuery("fm_back_day", uid)
     await fc.fm_back_cb(_update(q8), ctx)
     assert q8.edited == T["en"]["ev_day_title"]
 
     # 9. Back from the day screen → sport screen.
+    _reset_rate()
     q9 = _FakeQuery("fm_back_sport", uid)
     await fc.fm_back_cb(_update(q9), ctx)
     assert q9.edited == fc._SPORT_TITLE["en"]
