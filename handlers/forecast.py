@@ -272,6 +272,104 @@ def _build_country_kb(country_options: list, page: int, uid: int) -> InlineKeybo
     return InlineKeyboardMarkup(btns)
 
 
+_LANG_NAME = {
+    "ru": "Russian", "az": "Azerbaijani", "en": "English", "tr": "Turkish",
+    "kz": "Kazakh", "uz": "Uzbek", "ar": "Arabic",
+}
+
+# Experience profile hint — LLM-facing prompt text (not user UI), ru fallback is fine.
+_EXP_HINTS = {
+    "ru": {"expert": " Profil: ekspert — xG, aziatskie linii.", "mid": " Profil: sredniy — kratko.", "beginner": " Profil: novichok — prosto."},
+    "en": {"expert": " Profile: expert — xG, Asian lines.", "mid": " Profile: intermediate — brief.", "beginner": " Profile: beginner — simple."},
+    "az": {"expert": " Profil: tecrubell — xG, Asiya xetleri.", "mid": " Profil: orta — qisa.", "beginner": " Profil: yeni — sade."},
+}
+
+_DATA_NOTE = {
+    "ru": "\n\nВАЖНО: В запросе есть РЕАЛЬНЫЕ ДАННЫЕ матчей. Используй ТОЛЬКО их для анализа формы и H2H. Не придумывай результаты.",
+    "az": "\n\nVACİB: Sorğuda REAL MATÇ VERİLƏRİ var. Formanı YALNIZ bu verilerə əsasən analiz et. Olmayan nəticələri UYDURMA.",
+    "en": "\n\nIMPORTANT: REAL MATCH DATA is provided. Use ONLY it for form and H2H. Do not invent results.",
+    "tr": "\n\nÖNEMLİ: Gerçek maç verileri sağlandı. Form ve H2H için YALNIZCA bunları kullan. Sonuçları uydurma.",
+    "kz": "\n\nМАНЫЗДЫ: Нақты матч деректері бар. Форма мен H2H үшін тек осыларды қолдан. Нәтижелерді ойдан шығарма.",
+    "uz": "\n\nMUHIM: Haqiqiy o'yin ma'lumotlari mavjud. Faqat shular asosida forma va H2H tahlili. Natijalarni o'ylab topma.",
+    "ar": "\n\nمهم: بيانات المباريات الحقيقية متوفرة. استخدمها فقط لتحليل الشكل والمواجهات. لا تخترع نتائج.",
+}
+
+
+def _build_system_prompt(lang: str, exp: str, has_real_data: bool) -> str:
+    """Assemble the forecast system prompt. Pure (reads only the static
+    translations/hint tables), so it is unit-testable across languages and both
+    data modes without touching the network or DB.
+
+    The rich, multi-section format (recent matches / injuries / form breakdown)
+    is requested ONLY when real enrichment data is actually attached. Without
+    it, requesting those sections merely made the model emit a "data
+    unavailable" placeholder per section — several near-identical lines of
+    noise. The no-data branch instead asks for a lean, odds-only forecast plus a
+    SINGLE estimative marker, while keeping every anti-fabrication directive
+    (never invent form/injuries/lineups/results) fully intact.
+    """
+    base = (T.get(lang) or T["ru"]).get("system_prompt") or T["ru"]["system_prompt"]
+    hint = _EXP_HINTS.get(lang, _EXP_HINTS["ru"]).get(exp, "")
+    lang_name = _LANG_NAME.get(lang, "Russian")
+    sys_prompt = base + hint
+
+    if has_real_data:
+        # Quality directive (English — followed regardless of output language).
+        # Overrides the base "12 lines max" rule: produce a richer, well-structured
+        # analysis using the real data we now provide. Write in the user's language.
+        sys_prompt += (
+            f"\n\n### OUTPUT LANGUAGE = {lang_name}. The ENTIRE reply — section labels "
+            f"AND every team / country / player name — MUST be written in {lang_name}. "
+            f"Translate names too: e.g. Germany→(Almaniya/Германия), Norway→(Norveç/Норвегия), "
+            f"Ivory Coast→(Fil Dişi Sahili/Кот-д'Ивуар). NEVER output an English word if "
+            f"{lang_name} is not English. The labels below are written in English ONLY to "
+            f"tell you what to include — you MUST translate each label into {lang_name}.\n"
+            "Extend the format with these sections (emojis stay, no markdown except the bet line):\n"
+            "[📋 recent matches] — when REAL DATA is provided, list each team's last 5 "
+            "results (date, teams, score) under the localized team name; skip if no real data.\n"
+            "[🔑 key factor] — 1–2 sentences on the single biggest factor.\n"
+            "[🩹 injuries/absences] — list key missing players ONLY if they appear in the "
+            "provided data. If the data marks injuries as unavailable or does not include "
+            "them, write that injury data is unavailable — NEVER claim a team has no "
+            "injuries/absences when the feed provided no information.\n"
+            "[📈 form] — one line per team: trend + avg total goals/match, using ONLY the "
+            "provided computed metrics; if no data, write that form data is unavailable.\n"
+            "[💎 value verdict] — compare your probability vs odds-implied (1/odd); is there value?\n"
+            "[🔢 exact score] — most likely final score + one alternative.\n"
+            "TONE: write in a formal, professional analytical register — like a serious "
+            "betting-analyst report. No slang, no casual or chatty phrasing, no emojis "
+            "inside sentences (only the section-label emojis). Use complete, precise, "
+            "neutral sentences.\n"
+            "Think carefully, ground everything in the provided data, ~18-24 lines."
+        )
+        sys_prompt += _DATA_NOTE.get(lang, _DATA_NOTE["ru"])
+    else:
+        # No real data: lean, odds-only format. Omit every data-dependent section
+        # instead of printing a "data unavailable" placeholder per section, but
+        # keep the honesty guarantee — no invented facts and one estimative marker.
+        sys_prompt += (
+            f"\n\n### OUTPUT LANGUAGE = {lang_name}. Write the ENTIRE reply in {lang_name} — "
+            f"section labels AND every team / country / player name; translate names too, and "
+            f"NEVER output an English word unless {lang_name} is English.\n"
+            "NO real data (form, H2H, injuries, lineups, statistics) is available for this "
+            "match. Do NOT invent any of it. OVERRIDE the base format's 'all lines mandatory' "
+            "rule: OMIT the per-team 📊 form lines and any recent-matches / injuries / form "
+            "sections ENTIRELY — do NOT print a 'data unavailable' placeholder line per "
+            "section. Output ONLY these lines, nothing else:\n"
+            "🏆 [team A] — [team B]\n"
+            "📍 [tournament | date]\n"
+            "🔑 [key factor — 1–2 sentences grounded ONLY in the odds]\n"
+            "🎯 [team A] — XX% | X.XX / draw — XX% | X.XX (if applicable) / [team B] — XX% | X.XX\n"
+            "💎 [value verdict — your probability vs odds-implied 1/odd]\n"
+            "🔢 [most likely score + one alternative]\n"
+            "⚡ **[bet: type @ X.XX]** — [reason, 1 sentence]\n"
+            "⚠️ [ONE closing line: the analysis is estimative because real data is "
+            "unavailable — the localized equivalent of \"(оценочно)\"]\n"
+            "Formal analytical tone, ~8–10 lines total."
+        )
+    return sys_prompt
+
+
 async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, status_msg):
     """Build prompt, call Claude, send reply. status_msg is the '⏳' message to edit."""
     lang = db_lang(uid)
@@ -282,68 +380,7 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
 
     u = db_get(uid) or {}
     exp = u.get("experience", "beginner")
-    extra_hints = {
-        "ru": {"expert": " Profil: ekspert — xG, aziatskie linii.", "mid": " Profil: sredniy — kratko.", "beginner": " Profil: novichok — prosto."},
-        "en": {"expert": " Profile: expert — xG, Asian lines.", "mid": " Profile: intermediate — brief.", "beginner": " Profile: beginner — simple."},
-        "az": {"expert": " Profil: tecrubell — xG, Asiya xetleri.", "mid": " Profil: orta — qisa.", "beginner": " Profil: yeni — sade."},
-    }
-    hint = extra_hints.get(lang, extra_hints["ru"]).get(exp, "")
-    sys_prompt = tr(uid, "system_prompt") + hint
-    # Quality directive (English — followed regardless of output language).
-    # Overrides the base "12 lines max" rule: produce a richer, well-structured
-    # analysis using the real data we now provide. Write in the user's language.
-    lang_name = {
-        "ru": "Russian", "az": "Azerbaijani", "en": "English", "tr": "Turkish",
-        "kz": "Kazakh", "uz": "Uzbek", "ar": "Arabic",
-    }.get(lang, "Russian")
-    sys_prompt += (
-        f"\n\n### OUTPUT LANGUAGE = {lang_name}. The ENTIRE reply — section labels "
-        f"AND every team / country / player name — MUST be written in {lang_name}. "
-        f"Translate names too: e.g. Germany→(Almaniya/Германия), Norway→(Norveç/Норвегия), "
-        f"Ivory Coast→(Fil Dişi Sahili/Кот-д'Ивуар). NEVER output an English word if "
-        f"{lang_name} is not English. The labels below are written in English ONLY to "
-        f"tell you what to include — you MUST translate each label into {lang_name}.\n"
-        "Extend the format with these sections (emojis stay, no markdown except the bet line):\n"
-        "[📋 recent matches] — when REAL DATA is provided, list each team's last 5 "
-        "results (date, teams, score) under the localized team name; skip if no real data.\n"
-        "[🔑 key factor] — 1–2 sentences on the single biggest factor.\n"
-        "[🩹 injuries/absences] — list key missing players ONLY if they appear in the "
-        "provided data. If the data marks injuries as unavailable or does not include "
-        "them, write that injury data is unavailable — NEVER claim a team has no "
-        "injuries/absences when the feed provided no information.\n"
-        "[📈 form] — one line per team: trend + avg total goals/match, using ONLY the "
-        "provided computed metrics; if no data, write that form data is unavailable.\n"
-        "[💎 value verdict] — compare your probability vs odds-implied (1/odd); is there value?\n"
-        "[🔢 exact score] — most likely final score + one alternative.\n"
-        "TONE: write in a formal, professional analytical register — like a serious "
-        "betting-analyst report. No slang, no casual or chatty phrasing, no emojis "
-        "inside sentences (only the section-label emojis). Use complete, precise, "
-        "neutral sentences.\n"
-        "Think carefully, ground everything in the provided data, ~18-24 lines."
-    )
-
-    if context.user_data.get("has_real_data"):
-        data_note = {
-            "ru": "\n\nВАЖНО: В запросе есть РЕАЛЬНЫЕ ДАННЫЕ матчей. Используй ТОЛЬКО их для анализа формы и H2H. Не придумывай результаты.",
-            "az": "\n\nVACİB: Sorğuda REAL MATÇ VERİLƏRİ var. Formanı YALNIZ bu verilerə əsasən analiz et. Olmayan nəticələri UYDURMA.",
-            "en": "\n\nIMPORTANT: REAL MATCH DATA is provided. Use ONLY it for form and H2H. Do not invent results.",
-            "tr": "\n\nÖNEMLİ: Gerçek maç verileri sağlandı. Form ve H2H için YALNIZCA bunları kullan. Sonuçları uydurma.",
-            "kz": "\n\nМАНЫЗДЫ: Нақты матч деректері бар. Форма мен H2H үшін тек осыларды қолдан. Нәтижелерді ойдан шығарма.",
-            "uz": "\n\nMUHIM: Haqiqiy o'yin ma'lumotlari mavjud. Faqat shular asosida forma va H2H tahlili. Natijalarni o'ylab topma.",
-            "ar": "\n\nمهم: بيانات المباريات الحقيقية متوفرة. استخدمها فقط لتحليل الشكل والمواجهات. لا تخترع نتائج.",
-        }
-        sys_prompt += data_note.get(lang, data_note["ru"])
-    else:
-        no_data_note = {
-            "ru": "\n\nДАННЫЕ: Реальные данные о матчах, форме, травмах и статистике НЕ предоставлены. НЕ придумывай результаты, форму, травмы, составы или статистику. Честно укажи, что данные недоступны, и строй анализ только на коэффициентах (если они есть) и общих тактических соображениях, без конкретных вымышленных фактов.",
-            "az": "\n\nMƏLUMAT: Matç, forma, zədə və statistika üzrə real məlumat VERİLMƏYİB. Nəticələri, formanı, zədələri, heyəti və ya statistikanı UYDURMA. Məlumatın mövcud olmadığını açıq yaz və analizi yalnız keflərə (varsa) və ümumi taktiki mülahizələrə əsaslandır.",
-            "en": "\n\nDATA: No real data on matches, form, injuries or statistics was provided. Do NOT invent results, form, injuries, lineups or statistics. State honestly that the data is unavailable and base the analysis only on the odds (if any) and general tactical reasoning — no specific fabricated facts.",
-            "tr": "\n\nVERİ: Maç, form, sakatlık ve istatistik hakkında gerçek veri SAĞLANMADI. Sonuçları, formu, sakatlıkları, kadroyu veya istatistiği UYDURMA. Verinin mevcut olmadığını dürüstçe belirt ve analizi yalnızca oranlara (varsa) ve genel taktik değerlendirmeye dayandır.",
-            "kz": "\n\nДЕРЕК: Матч, форма, жарақат және статистика бойынша нақты дерек БЕРІЛМЕДІ. Нәтижелерді, форманы, жарақаттарды, құрамды немесе статистиканы ОЙДАН ШЫҒАРМА. Деректің қолжетімсіз екенін шыншыл көрсет және талдауды тек коэффициенттерге (болса) және жалпы тактикалық пайымдауға негізде.",
-            "uz": "\n\nMA'LUMOT: O'yin, forma, jarohat va statistika bo'yicha haqiqiy ma'lumot BERILMAGAN. Natijalar, forma, jarohatlar, tarkib yoki statistikani O'YLAB TOPMA. Ma'lumot mavjud emasligini rostini yoz va tahlilni faqat koeffitsientlar (bo'lsa) va umumiy taktik mulohazaga asosla.",
-            "ar": "\n\nالبيانات: لم تُقدَّم بيانات حقيقية عن المباريات أو الشكل أو الإصابات أو الإحصائيات. لا تختلق نتائج أو شكلاً أو إصابات أو تشكيلات أو إحصائيات. اذكر بصدق أن البيانات غير متوفرة وابنِ التحليل فقط على الأرباح (إن وُجدت) والاعتبارات التكتيكية العامة دون وقائع مُختلقة.",
-        }
-        sys_prompt += no_data_note.get(lang, no_data_note["ru"])
+    sys_prompt = _build_system_prompt(lang, exp, bool(context.user_data.get("has_real_data")))
 
     # Fetch Mostbet odds for text-based queries. In the menu flow fm_match_cb has
     # already attached odds for this exact match, so guard against a second
