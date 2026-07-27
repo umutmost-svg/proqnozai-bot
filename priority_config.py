@@ -69,9 +69,13 @@ TOURNAMENT_TIERS: tuple[tuple[str, str | None, int], ...] = (
     ("bellator", None, 2),
     ("champions league", None, 1),
     ("world cup", None, 1),
-    ("euro", None, 1),               # European Championship / Euros
+    # Europa (Conference) League must be checked before the bare "euro"
+    # keyword below: "euro" is a substring of "europa", so "UEFA Europa
+    # League" / "UEFA Europa Conference League" would otherwise match the
+    # generic Euro-Championship keyword first and be scored as tier 1.
     ("europa league", None, 2),
     ("conference league", None, 2),
+    ("euro", None, 1),               # European Championship / Euros
     ("premier league", "england", 2),
     ("la liga", "spain", 2),
     ("serie a", "italy", 2),

@@ -447,9 +447,11 @@ def group_by_sport(items: list[EventItem]) -> list[tuple[str, list[EventItem]]]:
 
 def _group_sort_key(g: "LeagueGroup"):
     # A league ranks by its single most important match; ties break on the
-    # normalized league name so order never depends on dict iteration order.
+    # normalized league name, then on the absolute league_key, so order never
+    # depends on dict iteration order (e.g. Mostbet feed order) even when two
+    # distinct provider tournaments share an identical display name.
     best_score = max((it.priority_score or 0) for it in g.items)
-    return (-best_score, _norm(g.league_name))
+    return (-best_score, _norm(g.league_name), g.league_key)
 
 
 def group_by_league(items: list[EventItem], *, now_utc: Optional[datetime] = None,

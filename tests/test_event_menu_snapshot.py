@@ -502,8 +502,9 @@ async def test_stale_pagination_page_renders_consistent_absolute_indices(temp_db
 
     q = _FakeQuery("fm_sppg_99", uid)
     await fc.fm_sppg_cb(_update(q), ctx)
-    # Clamps to the real last page (page 1: absolute indices 10..11).
-    assert ctx.user_data["fm_sport_page"] == 99  # raw value stored as-is…
+    # Clamps to the real last page (page 1: absolute indices 10..11) and the
+    # STORED page must match — never the raw stale 99.
+    assert ctx.user_data["fm_sport_page"] == 1
     callbacks = [cb for cb in q.button_callbacks() if cb and cb.startswith("fm_sp_")]
     # …but the rendered buttons must reference REAL, in-range absolute
     # indices (10, 11), never fm_sp_990/fm_sp_991-style garbage.
@@ -522,8 +523,10 @@ async def test_stale_pagination_page_renders_consistent_indices_leagues(temp_db)
     temp_db.db_ensure(uid, "u", "en")
     groups = [LeagueGroup(f"key{i}", f"League{i}", "England") for i in range(12)]
 
+    ctx = _ctx(fm_sports=[("Football", [])], fm_leagues=groups)
     q = _FakeQuery("fm_lgpg_99", uid)
-    await fc.fm_lgpg_cb(_update(q), _ctx(fm_sports=[("Football", [])], fm_leagues=groups))
+    await fc.fm_lgpg_cb(_update(q), ctx)
+    assert ctx.user_data["fm_league_page"] == 1
     callbacks = [cb for cb in q.button_callbacks() if cb and cb.startswith("fm_lg_")]
     assert callbacks == ["fm_lg_10", "fm_lg_11"]
     for cb in callbacks:
@@ -537,8 +540,10 @@ async def test_stale_pagination_page_renders_consistent_indices_matches(temp_db)
     temp_db.db_ensure(uid, "u", "en")
     matches = [normalize_fixture(_raw(i, f"H{i}", f"A{i}")) for i in range(12)]
 
+    ctx = _ctx(fm_matches=matches, fm_leagues=[])
     q = _FakeQuery("fm_mtpg_99", uid)
-    await fc.fm_mtpg_cb(_update(q), _ctx(fm_matches=matches, fm_leagues=[]))
+    await fc.fm_mtpg_cb(_update(q), ctx)
+    assert ctx.user_data["fm_match_page"] == 1
     callbacks = [cb for cb in q.button_callbacks() if cb and cb.startswith("fm_mt_")]
     assert callbacks == ["fm_mt_10", "fm_mt_11"]
     for cb in callbacks:
@@ -554,8 +559,10 @@ async def test_stale_pagination_page_country_all_button_and_indices(temp_db):
     temp_db.db_ensure(uid, "u", "en")
     country_options = [(f"Country{i}", 1) for i in range(12)]
 
+    ctx = _ctx(fm_country_options=country_options)
     q = _FakeQuery("fm_ctrypg_99", uid)
-    await fc.fm_ctrypg_cb(_update(q), _ctx(fm_country_options=country_options))
+    await fc.fm_ctrypg_cb(_update(q), ctx)
+    assert ctx.user_data["fm_country_page"] == 1
     callbacks = [cb for cb in q.button_callbacks() if cb]
     # Clamped to the real last page (index 1) — no "All" shortcut (fm_ctry_0)
     # since that only belongs on page 0.

@@ -506,6 +506,26 @@ def test_priority_sort_is_stable_for_equal_scores():
     assert groups_a[0].items[0].home == "Alpha"
 
 
+def test_group_order_deterministic_for_same_name_distinct_tournaments():
+    """Two distinct provider tournaments can share an identical display name
+    (league_name) while having different tournamentIds, hence different
+    league_key. When their best priority score AND normalized league_name
+    are equal, the final tie-break must be the absolute league_key — never
+    incidental Mostbet feed/dict-insertion order."""
+    raws_a = [
+        _raw(fid=1, league="Regional Cup", country="Nowhere", tournamentId="200"),
+        _raw(fid=2, league="Regional Cup", country="Nowhere", tournamentId="100"),
+    ]
+    raws_b = list(reversed(raws_a))
+    items_a = [normalize_fixture(r) for r in raws_a]
+    items_b = [normalize_fixture(r) for r in raws_b]
+    groups_a = group_by_league(items_a, now_utc=NOW)
+    groups_b = group_by_league(items_b, now_utc=NOW)
+    assert [g.league_key for g in groups_a] == [g.league_key for g in groups_b]
+    # Deterministic: the lexicographically smaller league_key sorts first.
+    assert groups_a[0].league_key < groups_a[1].league_key
+
+
 def test_priority_score_assigned_after_group_by_league():
     raws = [_raw(fid=1)]
     items = [normalize_fixture(r) for r in raws]
