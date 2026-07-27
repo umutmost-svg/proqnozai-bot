@@ -4,7 +4,6 @@ import json
 import logging
 from collections import defaultdict
 from contextlib import contextmanager
-from datetime import datetime
 
 from config import live_subs
 from priority_config import normalize_participant_tokens
@@ -213,8 +212,14 @@ def db_log_req(uid, mtype):
     try:
         with con() as c:
             c.execute("INSERT INTO requests (user_id,msg_type) VALUES (?,?)", (uid, mtype))
-            c.execute("UPDATE users SET total_requests=total_requests+1, last_active=? WHERE user_id=?",
-                      (datetime.now().isoformat(), uid))
+            # datetime('now') (SQLite, UTC) — NOT Python's datetime.now() (local
+            # process time) — so last_active stays in the same UTC clock as
+            # every date('now')/datetime('now') comparison elsewhere (joined_at,
+            # requests.created_at, the dashboard's activity-segment queries in
+            # stats_server.py). Mixing local time here used to let activity
+            # segments drift by up to a day depending on the server's timezone.
+            c.execute("UPDATE users SET total_requests=total_requests+1, last_active=datetime('now') WHERE user_id=?",
+                      (uid,))
     except Exception as e:
         logger.error(f"db_log_req uid={uid}: {e}")
 
