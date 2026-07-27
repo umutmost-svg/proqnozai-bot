@@ -47,6 +47,26 @@ def _keys(names: frozenset[str]) -> frozenset[frozenset[str]]:
 # domestic "Premier League"s (England vs Azerbaijan). First matching entry
 # wins; unlisted tournaments fall back to DEFAULT_TOURNAMENT_TIER.
 TOURNAMENT_TIERS: tuple[tuple[str, str | None, int], ...] = (
+    # Tennis, basketball and MMA entries are checked before the generic
+    # football "euro"/"league" keywords below, since e.g. "EuroLeague"
+    # would otherwise match the broader "euro" substring first.
+    # Tennis: the four majors are the sport's undisputed top tier; Masters
+    # 1000 / WTA 1000 and the season-ending Finals are a clear step below.
+    ("wimbledon", None, 1),
+    ("us open", None, 1),
+    ("roland garros", None, 1),
+    ("french open", None, 1),
+    ("australian open", None, 1),
+    ("atp finals", None, 2),
+    ("wta finals", None, 2),
+    ("masters 1000", None, 2),
+    # Basketball: NBA is the globally dominant league; EuroLeague is the
+    # top continental club competition, a step below.
+    ("nba", None, 1),
+    ("euroleague", None, 2),
+    # MMA: UFC is the sport's premier promotion by a wide margin.
+    ("ufc", None, 1),
+    ("bellator", None, 2),
     ("champions league", None, 1),
     ("world cup", None, 1),
     ("euro", None, 1),               # European Championship / Euros
@@ -175,11 +195,24 @@ TEAM_POPULARITY_TIER1: frozenset[str] = frozenset({
     "real madrid", "barcelona", "manchester united", "manchester city",
     "liverpool", "chelsea", "arsenal", "bayern munich", "psg",
     "juventus", "inter", "ac milan",
+    # Tennis (players stand in for "teams" — same two-participant scoring)
+    "novak djokovic", "rafael nadal", "roger federer", "carlos alcaraz",
+    "iga swiatek", "serena williams",
+    # Basketball (NBA franchises with the widest global following)
+    "los angeles lakers", "golden state warriors", "boston celtics", "chicago bulls",
+    # MMA (UFC's most globally recognized names)
+    "conor mcgregor", "khabib nurmagomedov", "jon jones", "israel adesanya",
 })
 TEAM_POPULARITY_TIER2: frozenset[str] = frozenset({
     "tottenham", "atletico madrid", "borussia dortmund", "napoli",
     "roma", "sevilla", "ajax", "porto", "benfica", "galatasaray",
     "fenerbahce", "besiktas", "marseille", "lyon", "leipzig",
+    # Tennis
+    "daniil medvedev", "jannik sinner", "andy murray", "naomi osaka", "coco gauff",
+    # Basketball
+    "brooklyn nets", "miami heat", "milwaukee bucks", "denver nuggets",
+    # MMA
+    "charles oliveira", "alexander volkanovski", "francis ngannou",
 })
 TEAM_POPULARITY_TIER3: frozenset[str] = frozenset()
 

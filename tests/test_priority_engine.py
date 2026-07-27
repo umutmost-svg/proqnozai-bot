@@ -102,6 +102,40 @@ def test_even_matchup_not_scored_differently_without_competitiveness_signal():
     assert a.total == b.total
 
 
+# ─── Non-football sports: tournament + player/team tiers ──────────────────────
+
+def test_tennis_grand_slam_recognized_as_tier_1():
+    slam = compute_priority(_inp(
+        league_name="Wimbledon", country=None,
+        home="Unseeded Player", away="Qualifier"))
+    ordinary = compute_priority(_inp(
+        league_name="ATP Challenger Tour", country=None,
+        home="Unseeded Player", away="Qualifier"))
+    assert slam.tournament_prestige > ordinary.tournament_prestige
+
+
+def test_tennis_star_player_popularity_recognized():
+    b = compute_priority(_inp(home="Novak Djokovic", away="Qualifier"))
+    ordinary = compute_priority(_inp(home="Unseeded Player", away="Qualifier"))
+    assert b.team_popularity > ordinary.team_popularity
+
+
+def test_nba_recognized_as_tier_1_above_euroleague():
+    nba = compute_priority(_inp(
+        league_name="NBA", country=None, home="Team A", away="Team B"))
+    euroleague = compute_priority(_inp(
+        league_name="EuroLeague", country=None, home="Team A", away="Team B"))
+    assert nba.tournament_prestige > euroleague.tournament_prestige
+
+
+def test_ufc_recognized_as_tier_1_above_bellator():
+    ufc = compute_priority(_inp(
+        league_name="UFC", country=None, home="Fighter A", away="Fighter B"))
+    bellator = compute_priority(_inp(
+        league_name="Bellator", country=None, home="Fighter A", away="Fighter B"))
+    assert ufc.tournament_prestige > bellator.tournament_prestige
+
+
 # ─── Live vs pre-match ──────────────────────────────────────────────────────────
 
 def test_live_outranks_prematch_same_tournament():
