@@ -213,7 +213,7 @@ def _build_league_kb(groups: list, page: int, back_cb: str, uid: int) -> InlineK
     nav = _pagination_row(uid, page, has_prev, has_next, "fm_lgpg_")
     if nav:
         btns.append(nav)
-    btns.append([InlineKeyboardButton("◀️ Назад", callback_data=back_cb)])
+    btns.append([InlineKeyboardButton(tr(uid, "ev_back"), callback_data=back_cb)])
     return InlineKeyboardMarkup(btns)
 
 
@@ -228,7 +228,7 @@ def _build_match_kb(matches: list, page: int, uid: int) -> InlineKeyboardMarkup:
     nav = _pagination_row(uid, page, has_prev, has_next, "fm_mtpg_")
     if nav:
         btns.append(nav)
-    btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_league")])
+    btns.append([InlineKeyboardButton(tr(uid, "ev_back"), callback_data="fm_back_league")])
     return InlineKeyboardMarkup(btns)
 
 
@@ -249,7 +249,7 @@ def _build_day_kb(day_options: list, uid: int) -> InlineKeyboardMarkup:
     btns = [[InlineKeyboardButton(tr(uid, "ev_day_all"), callback_data="fm_day_0")]]
     for i, (key, count) in enumerate(day_options, start=1):
         btns.append([InlineKeyboardButton(_day_label(key, count, uid), callback_data=f"fm_day_{i}")])
-    btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_sport")])
+    btns.append([InlineKeyboardButton(tr(uid, "ev_back"), callback_data="fm_back_sport")])
     return InlineKeyboardMarkup(btns)
 
 
@@ -268,7 +268,7 @@ def _build_country_kb(country_options: list, page: int, uid: int) -> InlineKeybo
     nav = _pagination_row(uid, page, has_prev, has_next, "fm_ctrypg_")
     if nav:
         btns.append(nav)
-    btns.append([InlineKeyboardButton("◀️ Назад", callback_data="fm_back_day")])
+    btns.append([InlineKeyboardButton(tr(uid, "ev_back"), callback_data="fm_back_day")])
     return InlineKeyboardMarkup(btns)
 
 
@@ -587,7 +587,7 @@ async def _show_league_list(q, context, uid: int, items: list, back_cb: str) -> 
     title = _tournaments_title(sport_name, lang)
     if not groups:
         # Never leave the user on a dead-end screen with no way back.
-        back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data=back_cb)]])
+        back_kb = InlineKeyboardMarkup([[InlineKeyboardButton(tr(uid, "ev_back"), callback_data=back_cb)]])
         await q.edit_message_text(title + "\n" + tr(uid, "ev_filter_empty"), reply_markup=back_kb)
         return
     await q.edit_message_text(title, reply_markup=_build_league_kb(groups, 0, back_cb, uid))
