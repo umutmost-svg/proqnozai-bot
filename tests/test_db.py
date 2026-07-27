@@ -231,3 +231,33 @@ def test_match_demand_ignores_empty_query(temp_db):
     temp_db.db_save_history(830056, "", "text")  # photo-flow forecasts have no query
     demand = temp_db.db_match_demand()
     assert frozenset() not in demand  # empty/no-token text never becomes a key
+
+
+# ─── db_log_req: last_active stays in the SAME clock as date('now') ──────────
+
+def test_log_req_increments_total_requests_and_inserts_row(temp_db):
+    uid = 830060
+    temp_db.db_ensure(uid, "u8", "en")
+    temp_db.db_log_req(uid, "TEXT")
+    temp_db.db_log_req(uid, "PHOTO")
+
+    assert temp_db.db_get(uid)["total_requests"] == 2
+    with temp_db.con() as c:
+        count = c.execute("SELECT COUNT(*) FROM requests WHERE user_id=?", (uid,)).fetchone()[0]
+    assert count == 2
+
+
+def test_log_req_last_active_matches_sqlite_utc_now(temp_db):
+    """last_active must be written via SQLite's datetime('now') (UTC), not
+    Python's datetime.now() (process-local time) — otherwise the dashboard's
+    date(last_active) >= date('now', ...) activity-segment queries in
+    stats_server.py can drift by up to a day depending on server timezone."""
+    uid = 830061
+    temp_db.db_ensure(uid, "u9", "en")
+    temp_db.db_log_req(uid, "TEXT")
+
+    with temp_db.con() as c:
+        same_day = c.execute(
+            "SELECT date(last_active) = date('now') FROM users WHERE user_id=?",
+            (uid,)).fetchone()[0]
+    assert same_day == 1
