@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import handlers.forecast as fc
 from config import MOSTBET_SRC_TZ, msg_times, nav_times
-from event_list import normalize_fixture
+from event_list import normalize_fixture, DAY_TODAY
 from translations import T
 
 _SRC_TZ = timezone(timedelta(hours=MOSTBET_SRC_TZ))
@@ -507,7 +507,7 @@ async def test_negative_index_never_resolves_via_python_wraparound(temp_db):
     await fc.fm_match_cb(_update(q2), _ctx(fm_matches=items))
     assert q2.edited == T["en"]["ev_menu_expired"]
 
-    day_options = [(fc.DAY_TODAY, 1)]
+    day_options = [(DAY_TODAY, 1)]
     q3 = _FakeQuery("fm_day_-1", uid)
     await fc.fm_day_cb(_update(q3), _ctx(fm_sport_items=items, fm_day_options=day_options))
     assert q3.edited == T["en"]["ev_menu_expired"]
