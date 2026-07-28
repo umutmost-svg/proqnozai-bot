@@ -13,6 +13,7 @@ from translations import T, tr
 from football_api import get_status, get_events
 from mostbet import mostbet_get_odds
 from claude_client import live_tip
+from handlers.utils import nav_guard
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,13 @@ async def matches_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def watch_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer(); uid = q.from_user.id
+    q = update.callback_query
+    # watch_ does a Mostbet odds fetch + DB writes, so throttle it like menu
+    # navigation (generous budget, no auto-block) instead of leaving it
+    # completely unguarded against rapid watch/unwatch spam.
+    if not await nav_guard(update):
+        return
+    await q.answer(); uid = q.from_user.id
     if q.data.startswith("watch_"):
         mid = q.data[6:]; mname = context.user_data.get(f"mn_{mid}", mid)
         mostbet_line_id = context.user_data.get(f"mb_line_{mid}")
