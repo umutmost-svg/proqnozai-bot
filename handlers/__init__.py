@@ -11,7 +11,7 @@ from handlers.registration import start, lang_cb, lang_cmd, ob_cb, profile_cmd, 
 from handlers.forecast import (
     forecast_cb, forecast_menu_start,
     fm_sport_cb, fm_sppg_cb, fm_day_cb, fm_ctry_cb, fm_ctrypg_cb,
-    fm_league_cb, fm_lgpg_cb, fm_match_cb, fm_mtpg_cb, fm_back_cb,
+    fm_league_cb, fm_lgpg_cb, fm_match_cb, fm_mtpg_cb, fm_back_cb, fm_noop_cb,
     handle_msg,
 )
 from handlers.live import watch_cb, matches_cmd
@@ -61,6 +61,7 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(fm_mtpg_cb,    pattern=r"^fm_mtpg_"))
     app.add_handler(CallbackQueryHandler(fm_match_cb,   pattern=r"^fm_mt_"))
     app.add_handler(CallbackQueryHandler(fm_back_cb,    pattern=r"^fm_back_"))
+    app.add_handler(CallbackQueryHandler(fm_noop_cb,    pattern=r"^fm_noop$"))
     app.add_handler(CallbackQueryHandler(watch_cb,      pattern=r"^(watch|unwatch)_"))
     app.add_handler(CallbackQueryHandler(history_cb,    pattern=r"^(fb_|repeat_)"))
     app.add_handler(CallbackQueryHandler(express_cb,    pattern=r"^expr_"))

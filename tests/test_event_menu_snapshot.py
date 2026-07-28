@@ -633,3 +633,38 @@ async def test_menu_shows_match_five_days_ahead(temp_db, monkeypatch):
 
     sports = ctx.user_data["fm_sports"]
     assert sports and sports[0][1][0].home == "France"
+
+
+# ─── Home shortcut + page counter (UX) ────────────────────────────────────────
+
+def test_match_kb_has_home_shortcut_and_page_counter(temp_db):
+    """Deep screens carry a "🏠 to start" shortcut (callback fm_back_sport) and,
+    when the list spans multiple pages, a read-only "page X / Y" counter
+    (callback fm_noop)."""
+    temp_db.db_ensure(830001, "u", "en")
+    matches = [normalize_fixture(_raw(i, f"H{i}", f"A{i}")) for i in range(12)]  # 2 pages
+    kb = fc._build_match_kb(matches, 0, 830001)
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "fm_back_sport" in cbs       # home shortcut
+    assert "fm_back_league" in cbs      # one-step back
+    assert "fm_noop" in cbs             # page counter
+    counter = [b.text for row in kb.inline_keyboard for b in row if b.callback_data == "fm_noop"]
+    assert counter == ["1 / 2"]
+
+
+def test_single_page_has_no_counter(temp_db):
+    temp_db.db_ensure(830002, "u", "en")
+    matches = [normalize_fixture(_raw(i, f"H{i}", f"A{i}")) for i in range(3)]  # 1 page
+    kb = fc._build_match_kb(matches, 0, 830002)
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "fm_noop" not in cbs
+
+
+def test_home_shortcut_deduped_when_back_is_already_sport(temp_db):
+    """If the league list's own back already targets the sport list, the home
+    shortcut would be identical — show only one button."""
+    from event_list import LeagueGroup
+    temp_db.db_ensure(830003, "u", "en")
+    groups = [LeagueGroup(f"k{i}", f"League{i}", "England") for i in range(2)]
+    bottom = fc._build_league_kb(groups, 0, "fm_back_sport", 830003).inline_keyboard[-1]
+    assert [b.callback_data for b in bottom] == ["fm_back_sport"]
