@@ -14,7 +14,25 @@ from handlers.utils import main_menu
 from translations import T, tr
 
 import logging
+import sys
 logger = logging.getLogger(__name__)
+
+
+def _deploy_version() -> str:
+    """Best-effort build identifier for the startup banner, so a fresh deploy is
+    identifiable in the logs: an explicit GIT_COMMIT env var if the platform set
+    one, else the short git hash if the repo is present, else 'unknown'."""
+    commit = os.environ.get("GIT_COMMIT")
+    if commit:
+        return commit[:12]
+    try:
+        import subprocess
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=subprocess.DEVNULL, text=True, timeout=3).strip() or "unknown"
+    except Exception:
+        return "unknown"
 
 
 # Bump this key whenever the main menu layout changes: the broadcast below runs
@@ -74,6 +92,8 @@ async def _error_handler(update, context):
 
 
 def main():
+    logger.info(f"=== ProqnozAI worker booting | commit={_deploy_version()} | "
+                f"python={sys.version.split()[0]} ===")
     db_init()
 
     from stats_server import run_stats_server
