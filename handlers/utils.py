@@ -4,7 +4,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMa
 
 from config import MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR
 from db import db_lang
-from security import sec_blocked, rate_check, record_viol
+from security import sec_blocked, rate_check, nav_rate_check, record_viol
 from translations import T, tr
 
 
@@ -73,16 +73,23 @@ def cb_release(uid) -> None:
 
 async def nav_guard(update) -> bool:
     """Gate for pure menu-navigation callbacks (sport/day/country/tournament
-    selection, "show more" pagination) that never call Claude or any external
-    API. Applies the SAME rate budget as text messages/cb_guard (sec_blocked +
-    rate_check + violation accounting) — but, unlike cb_guard, WITHOUT the
-    in-flight lock: navigation has no concurrent-duplicate-expensive-call risk
-    to guard against, only request volume. On refusal it answers the callback
-    query itself with a short localized toast, so the client spinner never
-    hangs; the caller does not need to release anything."""
+    selection, "show more" pagination, "back") that never call Claude or any
+    external API. Uses a SEPARATE, far more generous budget than text/expensive
+    callbacks (nav_rate_check: NAV_RATE_MAX clicks per NAV_RATE_WINDOW s), so
+    normal quick browsing — including tapping "back" a few times — is never
+    throttled, and a burst of navigation can never drain the strict text budget
+    or accrue violations toward the SPAM_DUR auto-block. A temp-blocked user is
+    still blocked (sec_blocked). On refusal it soft-throttles: answers the query
+    with a short toast so the spinner never hangs; nothing to release."""
     if await _blocked_gate(update):
         return False
-    return not await _rate_limited(update)
+    q = update.callback_query
+    uid = q.from_user.id
+    exceeded, wait = nav_rate_check(uid)
+    if exceeded:
+        await q.answer(tr(uid, "nav_slow", w=wait))
+        return False
+    return True
 
 # Universal language button — same label in every language so one handler matches.
 LANG_BTN = "🌐 Dil · Язык · Lang"

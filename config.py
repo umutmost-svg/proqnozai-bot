@@ -28,6 +28,13 @@ MOSTBET_BASE    = "https://mostbet2.com"   # Odds Checker API (IP whitelisted)
 MOSTBET_SRC_TZ  = 3
 
 RATE_WINDOW = 60; RATE_MAX = 5; SPAM_AFTER = 3; SPAM_DUR = 600
+# Pure menu navigation (sport/day/country/league/pagination/back) is cheap and
+# clicked in quick bursts, so it gets its OWN, far more generous budget — a
+# short sliding window with a high cap — instead of sharing the strict text /
+# expensive-call budget above. Exceeding it only soft-throttles (a toast); it
+# never accrues violations toward the SPAM_DUR auto-block. Expensive callbacks
+# (fm_match_cb → Claude) keep the strict RATE_MAX budget via cb_guard.
+NAV_RATE_WINDOW = 10; NAV_RATE_MAX = 15
 MOSTBET_CACHE_TTL = 900           # match LIST cache (15 min — list moves slowly)
 # Odds move much faster than the match list: a 15-min snapshot visibly diverges
 # from the live site. Keep odds fresh, and never pin a failed/empty fetch for
@@ -37,6 +44,7 @@ MOSTBET_ODDS_EMPTY_TTL = 45       # cache for a fetch that yielded no values
 
 # ─── In-memory ────────────────────────────────────────────────────────────────
 msg_times:     dict[int, deque] = defaultdict(deque)
+nav_times:     dict[int, deque] = defaultdict(deque)   # separate budget for menu navigation
 violations:    dict[int, int]   = defaultdict(int)
 blocked_until: dict[int, float] = {}
 reg_step:      dict[int, str]   = {}

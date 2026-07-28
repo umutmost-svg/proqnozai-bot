@@ -2,7 +2,8 @@ import re
 import time
 import logging
 
-from config import msg_times, violations, blocked_until, RATE_WINDOW, RATE_MAX, SPAM_AFTER, SPAM_DUR
+from config import (msg_times, nav_times, violations, blocked_until,
+                    RATE_WINDOW, RATE_MAX, NAV_RATE_WINDOW, NAV_RATE_MAX, SPAM_AFTER, SPAM_DUR)
 
 sus = logging.getLogger("suspicious")
 
@@ -60,6 +61,18 @@ def rate_check(uid):
     now = time.time(); q = msg_times[uid]
     while q and now - q[0] > RATE_WINDOW: q.popleft()
     if len(q) >= RATE_MAX: return True, int(RATE_WINDOW - (now - q[0])) + 1
+    q.append(now); return False, 0
+
+
+def nav_rate_check(uid):
+    """Separate, generous sliding-window budget for cheap menu navigation
+    (NAV_RATE_MAX clicks per NAV_RATE_WINDOW seconds). Same shape as rate_check
+    but on its own `nav_times` counter, so browsing never drains the strict
+    text/expensive-call budget. Callers must NOT feed a refusal here into
+    record_viol — navigation is throttled, never auto-blocked."""
+    now = time.time(); q = nav_times[uid]
+    while q and now - q[0] > NAV_RATE_WINDOW: q.popleft()
+    if len(q) >= NAV_RATE_MAX: return True, int(NAV_RATE_WINDOW - (now - q[0])) + 1
     q.append(now); return False, 0
 
 

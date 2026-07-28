@@ -16,7 +16,7 @@ import types
 import handlers.forecast as fc
 import handlers.express as ex
 import handlers.utils as hu
-from config import RATE_MAX, msg_times, blocked_until
+from config import RATE_MAX, NAV_RATE_MAX, msg_times, nav_times, blocked_until, violations
 from event_list import normalize_fixture
 from translations import T
 
@@ -73,6 +73,10 @@ def _future_item(fid=1):
 
 def _fill_rate(uid):
     msg_times[uid].extend([time.time()] * RATE_MAX)
+
+
+def _fill_nav_rate(uid):
+    nav_times[uid].extend([time.time()] * NAV_RATE_MAX)
 
 
 @pytest.fixture(autouse=True)
@@ -172,26 +176,42 @@ async def test_expired_keyboard_not_charged(temp_db):
     assert uid not in hu._cb_inflight
 
 
-async def test_navigation_now_rate_limited(temp_db):
-    """Menu navigation (day/country/tournament/pagination/back) is now gated
-    by nav_guard — the SAME rate budget as text messages. This closes the
-    previously-documented gap where callback buttons bypassed rate-limiting
-    entirely (see ARCHITECTURE.md known risks)."""
+async def test_navigation_uses_separate_generous_budget_not_text_budget(temp_db):
+    """Menu navigation has its OWN budget (nav_rate_check), separate from the
+    strict text/expensive budget. A user at the text limit can still browse —
+    tapping "back" must NOT be throttled by the text budget."""
     uid = 820006
     temp_db.db_ensure(uid, "u", "en")
-    _fill_rate(uid)                               # user is at the limit
+    _fill_rate(uid)                                # text budget exhausted…
 
     q = _Query("fm_back_sport", uid)
-    await fc.fm_back_cb(_cb_update(q), _ctx())
+    await fc.fm_back_cb(_cb_update(q), _ctx(fm_sports=[("Football", [1])]))
 
-    assert q.edited is None                        # handler body never ran
+    assert q.edited is not None                     # …navigation still went through
+    assert uid not in violations or violations[uid] == 0
+
+
+async def test_navigation_throttled_only_past_its_own_limit(temp_db):
+    """Navigation is refused only after NAV_RATE_MAX clicks in the window, and
+    a refusal soft-throttles WITHOUT accruing a violation toward the auto-block
+    (unlike the text/expensive path)."""
+    uid = 820023
+    temp_db.db_ensure(uid, "u", "en")
+    _fill_nav_rate(uid)                            # nav budget exhausted
+
+    q = _Query("fm_back_sport", uid)
+    await fc.fm_back_cb(_cb_update(q), _ctx(fm_sports=[("Football", [1])]))
+
+    assert q.edited is None                         # handler body never ran
     assert q.answers and q.answers[-1]              # refused with a toast
+    assert violations.get(uid, 0) == 0              # no violation accrued
+    assert uid not in blocked_until                 # never auto-blocked
 
 
 async def test_fm_sport_cb_rate_limited_before_rendering(temp_db):
     uid = 820020
     temp_db.db_ensure(uid, "u", "en")
-    _fill_rate(uid)
+    _fill_nav_rate(uid)
 
     q = _Query("fm_sp_0", uid)
     await fc.fm_sport_cb(_cb_update(q), _ctx(fm_sports=[("Football", [1])]))
@@ -203,7 +223,7 @@ async def test_fm_sport_cb_rate_limited_before_rendering(temp_db):
 async def test_fm_lgpg_cb_rate_limited_before_rendering(temp_db):
     uid = 820021
     temp_db.db_ensure(uid, "u", "en")
-    _fill_rate(uid)
+    _fill_nav_rate(uid)
 
     q = _Query("fm_lgpg_1", uid)
     await fc.fm_lgpg_cb(_cb_update(q), _ctx(fm_leagues=["x", "y"]))
@@ -214,17 +234,17 @@ async def test_fm_lgpg_cb_rate_limited_before_rendering(temp_db):
 
 async def test_navigation_stale_snapshot_still_free_before_rate_check(temp_db):
     """An invalid/stale index is the cheap path — it must resolve to the
-    expired-menu message WITHOUT being charged against the rate budget,
+    expired-menu message WITHOUT being charged against the nav budget,
     exactly like fm_mt_* already does (test_fm_match_stale_index_free_but_expired)."""
     uid = 820022
     temp_db.db_ensure(uid, "u", "en")
-    before = len(msg_times[uid])
+    before = len(nav_times[uid])
 
     q = _Query("fm_sp_0", uid)
     await fc.fm_sport_cb(_cb_update(q), _ctx())   # no fm_sports at all
 
     assert q.edited == T["en"]["ev_menu_expired"]
-    assert len(msg_times[uid]) == before           # budget untouched
+    assert len(nav_times[uid]) == before           # budget untouched
 
 
 # ─── expr_* is rate-limited before Claude ─────────────────────────────────────

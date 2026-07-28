@@ -6,7 +6,7 @@ import types
 from datetime import datetime, timedelta, timezone
 
 import handlers.forecast as fc
-from config import MOSTBET_SRC_TZ, msg_times
+from config import MOSTBET_SRC_TZ, msg_times, nav_times
 from event_list import normalize_fixture
 from translations import T
 
@@ -310,12 +310,13 @@ async def test_full_filter_flow_and_back_navigation(temp_db, monkeypatch):
     ]
     ctx = _ctx(fm_sports=[("Football", items)])
 
-    # Every step below is now gated by nav_guard/cb_guard (same rate budget as
-    # text). This test exercises FLOW correctness, not rate-limiting (that has
-    # its own coverage in test_callback_guard.py) — reset the shared counter
-    # before each step so 9 rapid calls for one uid can't trip RATE_MAX.
+    # Every step below is gated by nav_guard (its own nav budget) or cb_guard
+    # (the strict text/expensive budget). This test exercises FLOW correctness,
+    # not rate-limiting (covered in test_callback_guard.py) — reset both
+    # counters before each step so rapid calls for one uid can't trip a limit.
     def _reset_rate():
         msg_times[uid].clear()
+        nav_times[uid].clear()
 
     # 1. Sport → day filter screen.
     _reset_rate()
