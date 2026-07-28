@@ -57,6 +57,17 @@ def test_both_modes_include_base_prompt_and_language_directive(lang):
         assert "OUTPUT LANGUAGE" in p
 
 
+@pytest.mark.parametrize("lang", ALL_LANGS)
+def test_odds_integrity_directive_present_in_both_modes(lang):
+    """The model must never fabricate/derive an odds number — it may only echo a
+    value from the provided real-odds block, and must omit the figure when none
+    was supplied. This guard must hold whether or not enrichment data exists."""
+    for has_data in (True, False):
+        p = _build_system_prompt(lang, "beginner", has_data)
+        assert "ODDS INTEGRITY" in p
+        assert "NEVER compute, derive, estimate or invent an odds value" in p
+
+
 def test_unknown_language_falls_back_to_russian_base():
     p = _build_system_prompt("xx", "beginner", has_real_data=False)
     assert p.startswith(T["ru"]["system_prompt"])

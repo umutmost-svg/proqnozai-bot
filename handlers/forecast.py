@@ -313,6 +313,19 @@ def _build_system_prompt(lang: str, exp: str, has_real_data: bool) -> str:
     lang_name = _LANG_NAME.get(lang, "Russian")
     sys_prompt = base + hint
 
+    # Odds integrity (both modes): the model must NEVER produce an odds number —
+    # it may only echo a value that literally appears in the provided real-odds
+    # block. When the recommended market has no provided odd (or no odds were
+    # supplied at all), the bet must be given WITHOUT an "@X.XX" figure rather
+    # than an invented/derived one (CLAUDE.md: real odds are data, not generated).
+    sys_prompt += (
+        "\n\n### ODDS INTEGRITY: cite an odds value (@X.XX) ONLY if that exact value "
+        "appears in the provided real-odds block. If the market you recommend has no "
+        "provided odd — or no odds were provided at all — give the pick WITHOUT any "
+        "number (omit the \"@X.XX\" entirely). NEVER compute, derive, estimate or "
+        "invent an odds value."
+    )
+
     if has_real_data:
         # Quality directive (English — followed regardless of output language).
         # Overrides the base "12 lines max" rule: produce a richer, well-structured
@@ -362,7 +375,8 @@ def _build_system_prompt(lang: str, exp: str, has_real_data: bool) -> str:
             "🎯 [team A] — XX% | X.XX / draw — XX% | X.XX (if applicable) / [team B] — XX% | X.XX\n"
             "💎 [value verdict — your probability vs odds-implied 1/odd]\n"
             "🔢 [most likely score + one alternative]\n"
-            "⚡ **[bet: type @ X.XX]** — [reason, 1 sentence]\n"
+            "⚡ **[bet: type — add @odds ONLY if a real odd for it was provided, "
+            "else no number]** — [reason, 1 sentence]\n"
             "⚠️ [ONE closing line: the analysis is estimative because real data is "
             "unavailable — the localized equivalent of \"(оценочно)\"]\n"
             "Formal analytical tone, ~8–10 lines total."
