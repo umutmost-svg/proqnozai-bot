@@ -396,3 +396,21 @@ def test_handler_registration_patterns_unchanged():
                 r"^fm_mt_", r"^fm_back_", r"^(watch|unwatch)_",
                 r"^(fb_|repeat_)", r"^expr_", r"^adm_"):
         assert pat in src, f"handler pattern changed/missing: {pat}"
+
+
+async def test_watch_cb_throttled_when_nav_budget_exhausted(temp_db):
+    """watch_cb does a Mostbet odds fetch + DB writes, so it is throttled by the
+    nav budget: once exhausted, a watch tap is refused before any work and the
+    user is not subscribed."""
+    from handlers.live import watch_cb
+    from config import live_subs
+    uid = 820024
+    temp_db.db_ensure(uid, "u", "en")
+    _fill_nav_rate(uid)
+
+    q = _Query("watch_777", uid)
+    await watch_cb(_cb_update(q), _ctx())
+
+    assert q.edited is None                       # handler body never ran
+    assert q.answers and q.answers[-1]            # refused with a toast
+    assert uid not in live_subs.get("777", set())  # not subscribed
