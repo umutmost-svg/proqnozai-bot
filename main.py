@@ -91,9 +91,24 @@ async def _error_handler(update, context):
         pass
 
 
+def _log_db_location() -> None:
+    """Log where bot.db resolves and its current size, so a deploy can confirm
+    the SQLite file sits on a persistent volume (non-zero size that survives a
+    redeploy = the mount is working; a fresh 0-byte DB every deploy = the volume
+    is missing and user data is being wiped)."""
+    from db import DB
+    path = os.path.abspath(DB)
+    if os.path.exists(DB):
+        kb = os.path.getsize(DB) / 1024
+        logger.info(f"DB: {path} (exists, {kb:.0f} KB) — verify this path is a persistent volume")
+    else:
+        logger.warning(f"DB: {path} (NEW/empty) — if this is not a mounted volume, data is lost on redeploy")
+
+
 def main():
     logger.info(f"=== ProqnozAI worker booting | commit={_deploy_version()} | "
                 f"python={sys.version.split()[0]} ===")
+    _log_db_location()
     db_init()
 
     from stats_server import run_stats_server
