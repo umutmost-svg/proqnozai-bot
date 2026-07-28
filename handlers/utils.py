@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 from config import MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR
-from db import db_lang
+from db import db_lang, db_get_tz
 from security import sec_blocked, rate_check, nav_rate_check, record_viol
 from translations import T, tr
 
@@ -148,15 +148,17 @@ def _sport_emoji(cat: str) -> str:
     return next((v for k, v in SPORT_EMOJI.items() if k in cl), "🏆")
 
 
-# All match times are shown in Baku time (UTC+4) for every user.
+# Fallback display offset when a user has no stored timezone. Baku (UTC+4)
+# matches the bot's primary audience; fmt_dt_for_user overrides it per user.
 BAKU_OFFSET = 4
 
 
 def _fmt_dt(dt_raw: str, tz_offset: int = BAKU_OFFSET) -> str:
-    """Format a match datetime string into Baku time (UTC+4).
+    """Format a raw match datetime string into the given UTC offset, with a
+    matching "(UTC±N)" suffix (same convention as the menu's _fmt_kickoff).
 
-    ISO (T/Z) and "YYYY-MM-DD HH:MM" → assumed UTC → shifted to Baku.
-    "DD.MM.YYYY HH:MM" (Mostbet) → assumed MOSTBET_SRC_TZ → shifted to Baku.
+    ISO (T/Z) and "YYYY-MM-DD HH:MM" → assumed UTC.
+    "DD.MM.YYYY HH:MM" (Mostbet) → assumed MOSTBET_SRC_TZ.
     """
     if not dt_raw or len(dt_raw) < 16:
         return ""
@@ -175,9 +177,10 @@ def _fmt_dt(dt_raw: str, tz_offset: int = BAKU_OFFSET) -> str:
         else:
             dt = datetime.strptime(ds[:16], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
             src_offset = 0  # UTC
-        # Convert from the source zone to Baku.
-        dt_baku = dt + timedelta(hours=tz_offset - src_offset)
-        return dt_baku.strftime("%d.%m %H:%M") + " (UTC+4)"
+        # Convert from the source zone to the target display offset.
+        dt_local = dt + timedelta(hours=tz_offset - src_offset)
+        sign = "+" if tz_offset >= 0 else "-"
+        return dt_local.strftime("%d.%m %H:%M") + f" (UTC{sign}{abs(tz_offset)})"
     except Exception:
         try:
             return dt_raw[8:10] + "." + dt_raw[5:7] + " " + dt_raw[11:16]
@@ -186,5 +189,7 @@ def _fmt_dt(dt_raw: str, tz_offset: int = BAKU_OFFSET) -> str:
 
 
 def fmt_dt_for_user(dt_raw: str, uid: int) -> str:
-    # Always Baku time, regardless of the user's language/region.
-    return _fmt_dt(dt_raw, BAKU_OFFSET)
+    """Match time in the USER's stored timezone — same convention as the
+    forecast menu's _fmt_kickoff, so times are consistent across the menu and
+    the express/compare flows. Falls back to Baku when no tz is stored."""
+    return _fmt_dt(dt_raw, db_get_tz(uid) or BAKU_OFFSET)

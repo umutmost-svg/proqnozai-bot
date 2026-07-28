@@ -9,7 +9,7 @@ from translations import T, tr, SPORTS_LABELS, EXP_LABELS
 from claude_client import _create_with_retry
 from mostbet import (_mostbet_load_matches, _is_within_week, _is_virtual_match,
                      _is_outright_market, mostbet_get_odds, format_odds_compact)
-from handlers.utils import _fmt_dt, cb_guard, cb_release
+from handlers.utils import fmt_dt_for_user, cb_guard, cb_release
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ async def _express_run(context, q, uid: int) -> None:
     for m, o in selected:
         t1 = m.get("team1Title", "?"); t2 = m.get("team2Title", "?")
         league = m.get("lineSubCategory", "")
-        dt = _fmt_dt(m.get("matchBeginAt", ""))
+        dt = fmt_dt_for_user(m.get("matchBeginAt", ""), uid)
         lines_mb.append(f"- {t1} vs {t2} | {league} | {dt}\n  {format_odds_compact(o)}")
     real_matches_str = "\n".join(lines_mb) + "\n\n" + _use.get(lang, _use["ru"]) + "\n"
 
