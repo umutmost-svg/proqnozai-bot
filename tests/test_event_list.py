@@ -6,11 +6,12 @@ from datetime import datetime, timedelta, timezone
 import event_list as el
 from event_list import (
     EventItem, FINISHED_GRACE,
-    group_by_league, league_rank, normalize_fixture, parse_kickoff_utc,
+    group_by_league, normalize_fixture, parse_kickoff_utc,
     select_visible, visible_bucket,
     paginate, available_day_options, filter_by_day, DAY_LIVE, DAY_TODAY, DAY_TOMORROW, DAY_ALL,
     available_countries, filter_by_country, COUNTRY_ALL, COUNTRY_INTERNATIONAL,
 )
+from priority_config import tournament_tier
 
 UTC = timezone.utc
 NOW = datetime(2026, 7, 12, 12, 0, tzinfo=UTC)
@@ -96,38 +97,6 @@ def test_live_without_kickoff_allowed():
 def test_virtual_and_outright_rejected():
     assert normalize_fixture(_raw(t1="Arsenal (FC 25)", t2="Chelsea (FC 25)")) is None
     assert normalize_fixture(_raw(t2="?")) is None
-
-
-# ─── League priority ──────────────────────────────────────────────────────────
-
-def test_league_priority_order():
-    assert league_rank("Champions League", "Europe") == 0
-    assert league_rank("Europa League", "Europe") == 1
-    assert league_rank("Premier League", "England") < league_rank("Premier League", "Azerbaijan")
-    assert league_rank("Some Random Cup", "Nowhere") == len(el._LEAGUE_PRIORITY)
-
-
-def test_english_and_azerbaijan_premier_disambiguated():
-    # Both are "Premier League" — country decides which ranks higher.
-    assert league_rank("Premier League", "England") == 5
-    assert league_rank("Premier League", "Azerbaijan") == 11
-
-
-def test_other_domestic_premier_leagues_not_given_english_priority():
-    # A country with no explicit entry must NOT inherit England's PL rank.
-    assert league_rank("Premier League", "Egypt") == len(el._LEAGUE_PRIORITY)
-    assert league_rank("Premier League", "Egypt") != 5
-
-
-def test_conference_league_not_matched_as_europa():
-    # Old and new names both resolve to Conference (rank 2), never Europa (1).
-    assert league_rank("UEFA Europa Conference League", "Europe") == 2
-    assert league_rank("UEFA Conference League", "Europe") == 2
-    assert league_rank("UEFA Europa League", "Europe") == 1
-
-
-def test_super_lig_matched_with_diacritic():
-    assert league_rank("Süper Lig", "Turkey") == 10
 
 
 # ─── Status precedence & filtering ────────────────────────────────────────────
@@ -425,8 +394,9 @@ def test_empty_subcategory_falls_back_to_super_category():
     assert it is not None
     assert it.league_name == "World Cup 2026"
     assert it.country is None            # no duplicated label
-    # And the fallback name still ranks as a top tournament.
-    assert league_rank(it.league_name, it.country) < league_rank("Random Cup", None)
+    # And the fallback name still ranks as a top tournament (lower tier = higher
+    # prestige) via the engine's tournament_tier, which prod actually uses.
+    assert tournament_tier(it.league_name, it.country) < tournament_tier("Random Cup", None)
 
 
 def test_both_categories_empty_still_dropped():

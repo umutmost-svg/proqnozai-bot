@@ -624,8 +624,8 @@ def index():
     winrate_labels = [r[0][5:] for r in wr]
     winrate_values = [round(r[1] / r[2] * 100) if r[2] else 0 for r in wr]
 
-    from datetime import datetime
-    generated_at = datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC")
+    from datetime import datetime, timezone
+    generated_at = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
 
     class D:
         pass

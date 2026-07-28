@@ -821,6 +821,19 @@ async def _fm_match_run(context, q, uid: int, lang: str, it) -> None:
 async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = q.from_user.id; lang = db_lang(uid)
+
+    # A stale/expired "back" is the cheap path — resolve it to the expired-menu
+    # message WITHOUT charging the nav budget, exactly like the other menu
+    # handlers (fm_sport_cb, fm_league_cb, …) treat a missing snapshot.
+    ud = context.user_data
+    snapshot_ok = (
+        (q.data == "fm_back_sport" and ud.get("fm_sports")) or
+        (q.data == "fm_back_day" and ud.get("fm_day_options") is not None) or
+        (q.data == "fm_back_country" and ud.get("fm_country_options") is not None) or
+        (q.data == "fm_back_league" and ud.get("fm_leagues"))
+    )
+    if not snapshot_ok:
+        await q.answer(); await _expired_menu(q, uid); return
     if not await nav_guard(update):
         return
     await q.answer()
