@@ -268,40 +268,10 @@ def _opt_str(v) -> Optional[str]:
     return str(v) if v not in (None, "") else None
 
 
-# ─── League priority ──────────────────────────────────────────────────────────
+# ─── Name normalization (for deterministic sort tie-breaks) ────────────────────
 def _norm(s: Optional[str]) -> str:
     s = (s or "").lower()
     return s.replace("ü", "u").replace("ı", "i").replace("ə", "a")
-
-
-# (name substring, optional country substring). Country disambiguates the
-# domestic "Premier League"s so England's is not confused with Azerbaijan's.
-_LEAGUE_PRIORITY: tuple[tuple[str, Optional[str]], ...] = (
-    ("champions league", None),
-    ("europa league", None),
-    ("conference league", None),
-    ("world cup", None),
-    ("euro", None),                       # Euros / European Championship
-    ("premier league", "england"),
-    ("la liga", "spain"),
-    ("serie a", "italy"),
-    ("bundesliga", "germany"),
-    ("ligue 1", "france"),
-    ("super lig", "turkey"),              # Süper Lig
-    ("premier league", "azerbaijan"),     # Azərbaycan Premyer Liqası
-)
-
-
-def league_rank(league_name: str, country: Optional[str]) -> int:
-    """Lower = higher priority. Unlisted leagues share the lowest rank."""
-    n, c = _norm(league_name), _norm(country)
-    for i, (kw, country_hint) in enumerate(_LEAGUE_PRIORITY):
-        if kw in n and (country_hint is None or country_hint in c):
-            return i
-    # Also honor an explicit Azerbaijani name regardless of country field.
-    if "premyer liqa" in n:
-        return len(_LEAGUE_PRIORITY) - 1
-    return len(_LEAGUE_PRIORITY)
 
 
 # ─── Filtering + bucketing ────────────────────────────────────────────────────
