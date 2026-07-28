@@ -271,10 +271,13 @@ def _build_day_kb(day_options: list, uid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(btns)
 
 
-def _build_country_kb(country_options: list, page: int, uid: int) -> InlineKeyboardMarkup:
+def _build_country_kb(country_options: list, page: int, uid: int,
+                      back_cb: str = "fm_back_day") -> InlineKeyboardMarkup:
     """Country/region filter selector, paginated. Index 0 is always the fixed
     "all countries" option (shown only on page 0); index i (1-based) is the
-    ABSOLUTE position in the full country_options list."""
+    ABSOLUTE position in the full country_options list. `back_cb` is the target
+    of the back button — normally the day screen, but the sport screen when the
+    day step was auto-skipped (single day option)."""
     page_opts, page, has_prev, has_next = paginate(country_options, page, PAGE_SIZE)
     offset = page * PAGE_SIZE
     btns = []
@@ -285,7 +288,7 @@ def _build_country_kb(country_options: list, page: int, uid: int) -> InlineKeybo
         btns.append([InlineKeyboardButton(f"{flag} {key} ({count})", callback_data=f"fm_ctry_{i + 1}")])
     btns.extend(_pagination_rows(uid, page, has_prev, has_next, "fm_ctrypg_",
                                  _total_pages(len(country_options))))
-    btns.append([InlineKeyboardButton(tr(uid, "ev_back"), callback_data="fm_back_day")])
+    btns.append(_home_back_row(uid, back_cb))
     return InlineKeyboardMarkup(btns)
 
 
@@ -515,6 +518,7 @@ async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fm_day_filtered"] = None
     context.user_data["fm_country_options"] = None
     context.user_data["fm_country_page"] = 0
+    context.user_data["fm_country_back"] = "fm_back_day"
     context.user_data["fm_leagues"] = None
     context.user_data["fm_league_page"] = 0
     context.user_data["fm_league_back"] = "fm_back_sport"
@@ -548,6 +552,12 @@ async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     day_options = available_day_options(sport_items, _user_tz(uid))
     context.user_data["fm_day_options"] = day_options
+    if len(day_options) <= 1:
+        # A single (or zero) day bucket makes the day screen a redundant tap —
+        # "All" and the lone day lead to the same set. Skip straight to the
+        # country/league step; back then leads to the sport list.
+        await _show_country_or_league(q, context, uid, sport_items, country_back="fm_back_sport")
+        return
     await q.edit_message_text(tr(uid, "ev_day_title"), reply_markup=_build_day_kb(day_options, uid))
 
 
@@ -582,17 +592,27 @@ async def fm_day_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     day_key = DAY_ALL if idx == 0 else day_options[idx - 1][0]
     filtered = sport_items if day_key == DAY_ALL else filter_by_day(sport_items, day_key, _user_tz(uid))
-    context.user_data["fm_day_filtered"] = filtered
+    await _show_country_or_league(q, context, uid, filtered, country_back="fm_back_day")
 
+
+async def _show_country_or_league(q, context, uid: int, filtered: list, country_back: str) -> None:
+    """After the day filter (or its auto-skip): show the country screen when
+    there's more than one country, else go straight to the league list.
+    `country_back` is where the country screen's / league list's back button
+    leads — the day screen normally, or the sport screen when the day step was
+    auto-skipped."""
+    context.user_data["fm_day_filtered"] = filtered
     country_options = available_countries(filtered)
     if len(country_options) <= 1:
-        # Nothing to narrow by country — go straight to the league list.
-        await _show_league_list(q, context, uid, filtered, back_cb="fm_back_day")
+        # Nothing to narrow by country — go straight to the league list, whose
+        # back inherits country_back (day or sport).
+        await _show_league_list(q, context, uid, filtered, back_cb=country_back)
         return
     context.user_data["fm_country_options"] = country_options
     context.user_data["fm_country_page"] = 0
+    context.user_data["fm_country_back"] = country_back
     await q.edit_message_text(tr(uid, "ev_country_title"),
-                              reply_markup=_build_country_kb(country_options, 0, uid))
+                              reply_markup=_build_country_kb(country_options, 0, uid, country_back))
 
 
 async def fm_ctry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -628,8 +648,9 @@ async def fm_ctrypg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     _, page, _, _ = paginate(country_options, page, PAGE_SIZE)
     context.user_data["fm_country_page"] = page
+    back_cb = context.user_data.get("fm_country_back", "fm_back_day")
     await q.edit_message_text(tr(uid, "ev_country_title"),
-                              reply_markup=_build_country_kb(country_options, page, uid))
+                              reply_markup=_build_country_kb(country_options, page, uid, back_cb))
 
 
 async def _show_league_list(q, context, uid: int, items: list, back_cb: str) -> None:
@@ -880,8 +901,9 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if country_options is None:
             await _expired_menu(q, uid); return
         page = context.user_data.get("fm_country_page", 0)
+        back_cb = context.user_data.get("fm_country_back", "fm_back_day")
         await q.edit_message_text(tr(uid, "ev_country_title"),
-                                  reply_markup=_build_country_kb(country_options, page, uid))
+                                  reply_markup=_build_country_kb(country_options, page, uid, back_cb))
 
     elif q.data == "fm_back_league":
         groups = context.user_data.get("fm_leagues")

@@ -240,16 +240,42 @@ def test_fmt_kickoff_uses_user_timezone(temp_db):
 # ─── Pagination visible to the user (replaces the old hard truncation) ───────
 
 async def test_sport_cb_shows_day_filter_screen(temp_db):
-    """fm_sport_cb now leads to the day-filter screen, not straight to the
-    league list — the league list itself is reached via fm_day_cb/fm_ctry_cb."""
+    """fm_sport_cb leads to the day-filter screen when more than one day bucket
+    is present — the league list itself is reached via fm_day_cb/fm_ctry_cb.
+    (With a single day option the day step auto-skips; see
+    test_sport_cb_auto_skips_day_when_single_option.)"""
     uid = 811006
     temp_db.db_ensure(uid, "u", "en")
+    # Spread across today AND tomorrow so there are two day options.
     items = [normalize_fixture(_raw(1000 + i, f"T{i}a", f"T{i}b",
-                                    league=f"League {i:02d}", country=f"C{i}"))
+                                    league=f"League {i:02d}", country=f"C{i}",
+                                    when=_when(6 if i % 2 else 30)))
              for i in range(16)]
     q = _FakeQuery("fm_sp_0", uid)
     await fc.fm_sport_cb(_update(q), _ctx(fm_sports=[("Football", items)]))
     assert q.edited == T["en"]["ev_day_title"]
+
+
+async def test_sport_cb_auto_skips_day_when_single_option(temp_db):
+    """With only one day bucket the day screen is a redundant tap, so fm_sport_cb
+    skips straight to the country screen (and its back leads to the sport list,
+    not a day screen that was never shown)."""
+    uid = 811033
+    temp_db.db_ensure(uid, "u", "en")
+    # All today, but two countries → country screen (not league) is next.
+    items = [normalize_fixture(_raw(1000 + i, f"T{i}a", f"T{i}b",
+                                    league=f"League {i:02d}",
+                                    country="England" if i % 2 else "Spain",
+                                    when=_when(6)))
+             for i in range(6)]
+    q = _FakeQuery("fm_sp_0", uid)
+    ctx = _ctx(fm_sports=[("Football", items)])
+    await fc.fm_sport_cb(_update(q), ctx)
+    assert q.edited == T["en"]["ev_country_title"]        # day skipped
+    assert ctx.user_data["fm_country_back"] == "fm_back_sport"
+    # The country screen's back button points at the sport list.
+    cbs = [b.callback_data for row in q.markup.inline_keyboard for b in row]
+    assert "fm_back_sport" in cbs
 
 
 async def test_league_list_paginates_beyond_one_page(temp_db):
@@ -303,10 +329,15 @@ async def test_full_filter_flow_and_back_navigation(temp_db, monkeypatch):
     monkeypatch.setattr(fc, "format_mostbet_odds", lambda o, l: "")
     monkeypatch.setattr(fc, "claude_forecast", _forecast)
 
+    # Two day buckets (today + tomorrow) so the day screen is actually shown
+    # (a single bucket would auto-skip it); "All days" then keeps all three.
     items = [
-        normalize_fixture(_raw(1, "Arsenal", "Chelsea", league="Premier League", country="England")),
-        normalize_fixture(_raw(2, "Liverpool", "Everton", league="Premier League", country="England")),
-        normalize_fixture(_raw(3, "Real Madrid", "Barcelona", league="La Liga", country="Spain")),
+        normalize_fixture(_raw(1, "Arsenal", "Chelsea", league="Premier League",
+                               country="England", when=_when(6))),
+        normalize_fixture(_raw(2, "Liverpool", "Everton", league="Premier League",
+                               country="England", when=_when(6))),
+        normalize_fixture(_raw(3, "Real Madrid", "Barcelona", league="La Liga",
+                               country="Spain", when=_when(30))),
     ]
     ctx = _ctx(fm_sports=[("Football", items)])
 
