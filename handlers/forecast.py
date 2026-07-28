@@ -151,9 +151,8 @@ def _build_sport_kb(sport_groups: list, page: int, uid: int) -> InlineKeyboardMa
         emoji = _sport_emoji(cat)
         btns.append([InlineKeyboardButton(f"{emoji} {cat} ({len(items)})",
                                           callback_data=f"fm_sp_{i}")])
-    nav = _pagination_row(uid, page, has_prev, has_next, "fm_sppg_")
-    if nav:
-        btns.append(nav)
+    btns.extend(_pagination_rows(uid, page, has_prev, has_next, "fm_sppg_",
+                                 _total_pages(len(sport_groups))))
     return InlineKeyboardMarkup(btns)
 
 
@@ -186,13 +185,34 @@ def _country_flag(country: str) -> str:
     return _COUNTRY_FLAG.get((country or "").strip().lower(), "🏆")
 
 
-def _pagination_row(uid: int, page: int, has_prev: bool, has_next: bool, prefix: str) -> list:
-    row = []
+def _total_pages(n: int) -> int:
+    return max(1, (n + PAGE_SIZE - 1) // PAGE_SIZE)
+
+
+def _home_back_row(uid: int, back_cb: str) -> list:
+    """Bottom row for deep screens: a "🏠 to start" shortcut (jump straight to
+    the sport list from anywhere) alongside the one-step "back". When back
+    already targets the sport list, the two would be identical — show just back."""
+    back_btn = InlineKeyboardButton(tr(uid, "ev_back"), callback_data=back_cb)
+    if back_cb == "fm_back_sport":
+        return [back_btn]
+    return [InlineKeyboardButton(tr(uid, "ev_home"), callback_data="fm_back_sport"), back_btn]
+
+
+def _pagination_rows(uid: int, page: int, has_prev: bool, has_next: bool,
+                     prefix: str, total_pages: int) -> list:
+    """Prev/next row plus a centered "page X / Y" counter row so the user can
+    see how deep the list is. Returns [] on a single page. The counter uses a
+    no-op callback (fm_noop) — it's a read-only indicator, not a control."""
+    if not (has_prev or has_next):
+        return []
+    nav = []
     if has_prev:
-        row.append(InlineKeyboardButton(tr(uid, "ev_page_prev"), callback_data=f"{prefix}{page-1}"))
+        nav.append(InlineKeyboardButton(tr(uid, "ev_page_prev"), callback_data=f"{prefix}{page-1}"))
     if has_next:
-        row.append(InlineKeyboardButton(tr(uid, "ev_page_more"), callback_data=f"{prefix}{page+1}"))
-    return row
+        nav.append(InlineKeyboardButton(tr(uid, "ev_page_more"), callback_data=f"{prefix}{page+1}"))
+    counter = [InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="fm_noop")]
+    return [nav, counter]
 
 
 def _build_league_kb(groups: list, page: int, back_cb: str, uid: int) -> InlineKeyboardMarkup:
@@ -210,10 +230,9 @@ def _build_league_kb(groups: list, page: int, back_cb: str, uid: int) -> InlineK
             label += f" · {g.country}"
         label += f" ({len(g.items)})"
         btns.append([InlineKeyboardButton(label, callback_data=f"fm_lg_{i}")])
-    nav = _pagination_row(uid, page, has_prev, has_next, "fm_lgpg_")
-    if nav:
-        btns.append(nav)
-    btns.append([InlineKeyboardButton(tr(uid, "ev_back"), callback_data=back_cb)])
+    btns.extend(_pagination_rows(uid, page, has_prev, has_next, "fm_lgpg_",
+                                 _total_pages(len(groups))))
+    btns.append(_home_back_row(uid, back_cb))
     return InlineKeyboardMarkup(btns)
 
 
@@ -225,10 +244,9 @@ def _build_match_kb(matches: list, page: int, uid: int) -> InlineKeyboardMarkup:
     offset = page * PAGE_SIZE
     btns = [[InlineKeyboardButton(_match_label(it, uid), callback_data=f"fm_mt_{i}")]
             for i, it in enumerate(page_matches, start=offset)]
-    nav = _pagination_row(uid, page, has_prev, has_next, "fm_mtpg_")
-    if nav:
-        btns.append(nav)
-    btns.append([InlineKeyboardButton(tr(uid, "ev_back"), callback_data="fm_back_league")])
+    btns.extend(_pagination_rows(uid, page, has_prev, has_next, "fm_mtpg_",
+                                 _total_pages(len(matches))))
+    btns.append(_home_back_row(uid, "fm_back_league"))
     return InlineKeyboardMarkup(btns)
 
 
@@ -265,9 +283,8 @@ def _build_country_kb(country_options: list, page: int, uid: int) -> InlineKeybo
     for i, (key, count) in enumerate(page_opts, start=offset):
         flag = "🌍" if key == COUNTRY_INTERNATIONAL else _country_flag(key)
         btns.append([InlineKeyboardButton(f"{flag} {key} ({count})", callback_data=f"fm_ctry_{i + 1}")])
-    nav = _pagination_row(uid, page, has_prev, has_next, "fm_ctrypg_")
-    if nav:
-        btns.append(nav)
+    btns.extend(_pagination_rows(uid, page, has_prev, has_next, "fm_ctrypg_",
+                                 _total_pages(len(country_options))))
     btns.append([InlineKeyboardButton(tr(uid, "ev_back"), callback_data="fm_back_day")])
     return InlineKeyboardMarkup(btns)
 
@@ -816,6 +833,13 @@ async def _fm_match_run(context, q, uid: int, lang: str, it) -> None:
         chat_id=uid, text=header + f"\n\n{_loc(_THINKING, lang)}")
     await context.bot.send_chat_action(chat_id=uid, action="typing")
     await _generate_forecast(uid, context, status_msg)
+
+
+async def fm_noop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """The page-counter button is a read-only indicator — just acknowledge the
+    tap so the client spinner clears; never re-render (that would trip
+    Telegram's 'message not modified')."""
+    await update.callback_query.answer()
 
 
 async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
