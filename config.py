@@ -10,6 +10,13 @@ _bot_fh = RotatingFileHandler("bot.log", maxBytes=5 * 1024 * 1024, backupCount=3
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[_bot_fh, logging.StreamHandler()])
 logger = logging.getLogger(__name__)
+
+# httpx logs every request URL at INFO — that includes the Telegram bot TOKEN in
+# the getUpdates URL, plus one line every few seconds. Quiet these to WARNING so
+# secrets never reach the logs and long-polling doesn't spam them.
+for _noisy in ("httpx", "httpcore", "telegram.ext.Updater"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 sus = logging.getLogger("suspicious")
 _sh = RotatingFileHandler("suspicious.log", maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8")
 _sh.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
