@@ -137,7 +137,10 @@ def _match_label(it, uid: int) -> str:
     else:
         t = _fmt_kickoff(it.kickoff_utc, uid)
         prefix = ("⏸ " + t) if it.postponed else t
-    return f"{prefix}  {it.home[:18]} — {it.away[:18]}".strip()
+    # Team names get a bit more room before truncation so common long names
+    # ("Borussia M'gladbach") aren't chopped mid-word; Telegram wraps a long
+    # button label rather than clipping it.
+    return f"{prefix}  {it.home[:22]} — {it.away[:22]}".strip()
 
 
 def _build_sport_kb(sport_groups: list, page: int, uid: int) -> InlineKeyboardMarkup:
@@ -463,8 +466,11 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     if note:
         reply = f"{reply}\n\n{note}"
 
-    final_kb = watch_kb
-    await status_msg.edit_text(reply, reply_markup=final_kb)
+    # Offer a one-tap way back into the match menu so the user can get another
+    # forecast without re-typing; keep any watch button above it.
+    rows = list(watch_kb.inline_keyboard) if watch_kb else []
+    rows.append([InlineKeyboardButton(tr(uid, "ev_more_matches"), callback_data="fm_restart")])
+    await status_msg.edit_text(reply, reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -479,17 +485,40 @@ async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cb_release(q.from_user.id)
 
 
+_LOADING_MATCHES = {
+    "ru": "⏳ Загружаю матчи...", "az": "⏳ Matçlar yüklənir...",
+    "en": "⏳ Loading matches...", "tr": "⏳ Maçlar yükleniyor...",
+    "kz": "⏳ Матчтар жүктелуде...", "uz": "⏳ O'yinlar yuklanmoqda...",
+    "ar": "⏳ جارٍ تحميل المباريات...",
+}
+
+
 async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry from the reply-keyboard button / text flow: post a fresh loading
+    message, then build the menu into it."""
     uid = update.effective_user.id
     lang = db_lang(uid)
-    loading = {
-        "ru": "⏳ Загружаю матчи...", "az": "⏳ Matçlar yüklənir...",
-        "en": "⏳ Loading matches...", "tr": "⏳ Maçlar yükleniyor...",
-        "kz": "⏳ Матчтар жүктелуде...", "uz": "⏳ O'yinlar yuklanmoqda...",
-        "ar": "⏳ جارٍ تحميل المباريات...",
-    }
-    msg = await update.message.reply_text(loading.get(lang, "⏳"))
+    msg = await update.message.reply_text(_loc(_LOADING_MATCHES, lang))
+    await _open_forecast_menu(uid, lang, context, msg)
 
+
+async def fm_restart_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """"📋 More matches" under a finished forecast — reopen the menu as a NEW
+    message (the forecast stays visible above it)."""
+    q = update.callback_query
+    uid = q.from_user.id
+    if not await nav_guard(update):
+        return
+    await q.answer()
+    lang = db_lang(uid)
+    msg = await context.bot.send_message(chat_id=uid, text=_loc(_LOADING_MATCHES, lang))
+    await _open_forecast_menu(uid, lang, context, msg)
+
+
+async def _open_forecast_menu(uid: int, lang: str, context: ContextTypes.DEFAULT_TYPE, msg) -> None:
+    """Load the feed, freeze a new event-list session and render the sport
+    screen into the already-sent `msg`. Shared by the text entry and the
+    "more matches" restart button."""
     all_m = await _mostbet_load_matches()
     if not all_m:
         # Empty feed = provider failure (network/429), not "no matches".
@@ -819,9 +848,10 @@ async def _fm_match_run(context, q, uid: int, lang: str, it) -> None:
             note = _enrichment_gap_note(uid, enr.missing_fields)
             if note:
                 context.user_data["enrichment_note"] = note
-        else:
-            # No verified fixture → keep odds, no LLM factual fallback, be honest.
-            context.user_data["enrichment_note"] = tr(uid, "enr_football_unavailable")
+        # else: no verified fixture → has_real_data stays False, so the lean
+        # no-data prompt already appends ONE honest "(оценочно)" marker. We no
+        # longer also append enr_football_unavailable — that produced two
+        # near-identical trailing disclaimers on the same forecast.
     elif real_data_task is not None:
         real_data = await real_data_task
 

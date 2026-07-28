@@ -125,7 +125,11 @@ async def test_football_unverified_keeps_odds_no_fallback(monkeypatch, temp_db):
     assert not any("VERIFIED FOOTBALL DATA" in t for t in texts)
     assert "ODDS" in texts  # odds preserved
     assert ctx.user_data["has_real_data"] is False  # no factual fallback
-    assert bot.status_msg.text.endswith(fc.tr(uid, "enr_football_unavailable"))
+    # The deterministic enr_football_unavailable note is no longer appended —
+    # honesty is now carried by the lean no-data prompt's single "(оценочно)"
+    # marker (see test_forecast_prompt), avoiding two trailing disclaimers.
+    assert fc.tr(uid, "enr_football_unavailable") not in bot.status_msg.text
+    assert "enrichment_note" not in ctx.user_data
 
 
 async def test_enrichment_failure_does_not_break_forecast(monkeypatch, temp_db):

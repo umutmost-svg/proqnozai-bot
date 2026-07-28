@@ -699,3 +699,23 @@ def test_home_shortcut_deduped_when_back_is_already_sport(temp_db):
     groups = [LeagueGroup(f"k{i}", f"League{i}", "England") for i in range(2)]
     bottom = fc._build_league_kb(groups, 0, "fm_back_sport", 830003).inline_keyboard[-1]
     assert [b.callback_data for b in bottom] == ["fm_back_sport"]
+
+
+async def test_more_matches_button_reopens_menu(temp_db, monkeypatch):
+    """The "📋 More matches" button (fm_restart) posts a fresh loading message
+    and rebuilds a new event-list session, so the user gets back into the menu
+    without re-typing."""
+    uid = 830040
+    temp_db.db_ensure(uid, "u", "en")
+
+    async def _load():
+        return [_raw(1, "Arsenal", "Chelsea")]
+
+    monkeypatch.setattr(fc, "_mostbet_load_matches", _load)
+    bot = _FakeBot()
+    ctx = _ctx(bot)
+    q = _FakeQuery("fm_restart", uid)
+    await fc.fm_restart_cb(_update(q), ctx)
+
+    assert bot.sent                       # a new loading message was posted
+    assert ctx.user_data.get("fm_sports") # a fresh menu session was built
