@@ -38,9 +38,10 @@ def temp_db():
     only by the `days` window (not by uid), so it would otherwise leak a
     stale demand snapshot across tests that share the same window."""
     import db
-    from config import demand_cache
+    from config import demand_cache, winrate_cache
     db.db_init()
     demand_cache.clear()
+    winrate_cache.clear()
     return db
 
 

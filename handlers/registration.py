@@ -5,7 +5,8 @@ from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
 
 from config import reg_step, UNIVERSAL_WELCOME
-from db import db_ensure, db_get, db_set, db_lang, db_is_reg, db_get_tz, con, normalize_lang
+from db import (db_ensure, db_get, db_set, db_lang, db_is_reg, db_get_tz, con,
+                normalize_lang, db_user_streak, db_feedback_stats)
 from translations import T, tr, LANG_NAMES, OB_SPORTS, sport_label, exp_label
 from handlers.utils import main_menu, lang_kb, ob_kb
 
@@ -104,10 +105,22 @@ async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = db_get(uid)
     tz = db_get_tz(uid)
     tz_str = f"UTC+{tz}" if tz >= 0 else f"UTC{tz}"
-    await update.message.reply_text(tr(uid, "profile_text",
-        name=u["display_name"] or "-",
-        lang=LANG_NAMES.get(u["lang"], u["lang"]),
-        tz=tz_str))
+    lines = [tr(uid, "profile_text",
+                name=u["display_name"] or "-",
+                lang=LANG_NAMES.get(u["lang"], u["lang"]),
+                tz=tz_str), ""]
+    # Track record: activity streak (habit) + accuracy (trust). Both from data
+    # we already collect — see db_user_streak / db_feedback_stats.
+    streak = db_user_streak(uid)
+    if streak > 0:
+        lines.append(tr(uid, "profile_streak", n=streak))
+    stats = db_feedback_stats(uid)
+    if stats["total"] > 0:
+        lines.append(tr(uid, "profile_accuracy",
+                        wins=stats["wins"], total=stats["total"], pct=stats["pct"]))
+    else:
+        lines.append(tr(uid, "profile_rate_hint"))
+    await update.message.reply_text("\n".join(lines))
 
 
 async def tz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

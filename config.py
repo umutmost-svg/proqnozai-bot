@@ -58,6 +58,7 @@ reg_step:      dict[int, str]   = {}
 live_subs:     dict[str, set]   = defaultdict(set)
 mostbet_cache: dict              = {}   # cache: key -> (timestamp, data)
 demand_cache:  dict              = {}   # cache: days -> (timestamp, demand dict)
+winrate_cache: dict              = {}   # cache: days -> (timestamp, bot-winrate dict|None)
 last_events:   dict[str, list]  = {}
 ht_sent:       set              = set()
 _mostbet_lock: asyncio.Lock     = asyncio.Lock()
