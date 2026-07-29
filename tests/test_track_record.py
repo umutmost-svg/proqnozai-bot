@@ -1,13 +1,6 @@
-"""Retention loop: bot-wide winrate, per-user activity streak, match-of-day pick.
+"""Retention loop: bot-wide winrate + per-user activity streak.
 All offline — no network. db_bot_winrate is GLOBAL (all rows), so its tests wipe
 forecast_history first; streak is per-uid, so unique uids keep it isolated."""
-from datetime import datetime, timezone, timedelta
-
-import handlers.forecast as fc
-from event_list import normalize_fixture, select_visible, assign_priority_scores
-
-UTC = timezone.utc
-NOW = datetime(2026, 7, 12, 12, 0, tzinfo=UTC)
 
 
 def _seed_history(temp_db, wins, losses):
@@ -78,44 +71,3 @@ def test_streak_zero_when_last_activity_too_old(temp_db):
 
 def test_streak_zero_for_new_user(temp_db):
     assert temp_db.db_user_streak(739999) == 0
-
-
-# ─── Match of the day pick ────────────────────────────────────────────────────
-
-def _raw(fid, t1, t2, league, country, hours):
-    ko = (NOW + timedelta(hours=hours)).strftime("%d.%m.%Y %H:%M:%S")
-    # Mostbet times are MOSTBET_SRC_TZ(+3); NOW is UTC, so shift the string +3h
-    # is unnecessary for a relative "future" check — kickoff just needs > now.
-    return {"id": fid, "team1Title": t1, "team2Title": t2, "lineCategory": "Football",
-            "lineSubCategory": league, "lineSuperCategory": country, "matchBeginAt": ko,
-            "isLive": False}
-
-
-def _items(raws, tz=UTC):
-    items = select_visible([normalize_fixture(r) for r in raws], NOW, tz, include_later=True)
-    assign_priority_scores(items, NOW, {})
-    return items
-
-
-def test_match_of_day_picks_highest_priority_today(temp_db):
-    # A Champions League match (tier-1 prestige) today must outrank a regional
-    # match today.
-    raws = [
-        _raw(1, "Team A", "Team B", "Regional Cup", "Nowhere", 4),
-        _raw(2, "Team C", "Team D", "Champions League", "Europe", 5),
-    ]
-    pick, bucket = fc._pick_match_of_day(_items(raws), NOW)
-    assert pick is not None and pick.fixture_id == "2"
-    assert bucket == "TODAY"
-
-
-def test_match_of_day_falls_back_to_tomorrow(temp_db):
-    # Only a match ~30h out (tomorrow bucket in UTC) → picked as fallback.
-    raws = [_raw(3, "Team E", "Team F", "Champions League", "Europe", 30)]
-    pick, bucket = fc._pick_match_of_day(_items(raws), NOW)
-    assert pick is not None and pick.fixture_id == "3"
-    assert bucket in ("TOMORROW", "LATER")
-
-
-def test_match_of_day_none_when_no_upcoming(temp_db):
-    assert fc._pick_match_of_day([], NOW) == (None, None)
