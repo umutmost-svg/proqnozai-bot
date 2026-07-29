@@ -103,8 +103,9 @@ async def test_football_high_enrichment_attaches_verified_data(monkeypatch, temp
     assert any("VERIFIED FOOTBALL DATA" in t for t in texts)
     assert "ODDS" in texts
     assert ctx.user_data["has_real_data"] is True
-    # Honest note for the one unavailable verified block appears in the reply.
-    assert bot.status_msg.text.endswith(fc.tr(uid, "enr_standings_unavailable"))
+    # Honest note for the one unavailable verified block appears in the reply
+    # (the bot-winrate line is now appended after it).
+    assert fc.tr(uid, "enr_standings_unavailable") in bot.status_msg.text
 
 
 async def test_football_unverified_keeps_odds_no_fallback(monkeypatch, temp_db):

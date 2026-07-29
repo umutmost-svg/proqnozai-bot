@@ -8,7 +8,7 @@ from telegram.ext import ContextTypes
 
 from config import reg_step, violations, SPAM_DUR, SPAM_AFTER, APIFOOTBALL_KEY
 from db import (db_ensure, db_get, db_lang, db_is_reg, db_is_blocked, db_log_req,
-                db_save_history, db_match_demand)
+                db_save_history, db_match_demand, db_bot_winrate)
 from translations import T, tr
 from security import uinfo, sec_blocked, rate_check, record_viol, detect_injection
 from claude_client import claude_forecast
@@ -17,7 +17,7 @@ from enrichment import enrich_football_match
 from match_validation import MatchRef, validate_match
 from event_list import (
     normalize_fixture, select_visible, group_by_sport, group_by_league,
-    paginate, PAGE_SIZE,
+    assign_priority_scores, paginate, PAGE_SIZE, TODAY, TOMORROW, LATER,
     available_day_options, filter_by_day, DAY_ALL,
     available_countries, filter_by_country,
 )
@@ -25,7 +25,7 @@ from mostbet import (
     _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
 )
-from handlers.utils import LANG_BTN, lang_kb, cb_guard, cb_release, nav_guard
+from handlers.utils import LANG_BTN, lang_kb, cb_guard, cb_release, nav_guard, _cb_inflight
 from handlers.forecast_kb import (
     _user_tz, _fmt_kickoff, _parse_index, _country_flag,
     _build_sport_kb, _build_league_kb, _build_match_kb, _build_day_kb, _build_country_kb,
@@ -278,6 +278,13 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     if note:
         reply = f"{reply}\n\n{note}"
 
+    # Bot track record: our moat over generic LLMs is REAL odds + verified data,
+    # so show community accuracy (from 👍/👎) — a real % once we have enough
+    # rated forecasts, otherwise a line inviting feedback (which builds it).
+    wr = db_bot_winrate()
+    wr_line = tr(uid, "bot_winrate", pct=wr["pct"]) if wr else tr(uid, "bot_winrate_building")
+    reply = f"{reply}\n\n{wr_line}"
+
     # Offer a one-tap way back into the match menu so the user can get another
     # forecast without re-typing; keep any watch button above it.
     rows = list(watch_kb.inline_keyboard) if watch_kb else []
@@ -371,6 +378,82 @@ async def _open_forecast_menu(uid: int, lang: str, context: ContextTypes.DEFAULT
     context.user_data["fm_demand"] = db_match_demand()
 
     await msg.edit_text(_loc(_SPORT_TITLE, lang), reply_markup=_build_sport_kb(sport_groups, 0, uid))
+
+
+# ─── Match of the day ─────────────────────────────────────────────────────────
+class _MsgQuery:
+    """Adapter so the expensive forecast body (_fm_match_run, which only ever
+    calls q.edit_message_text) can be driven from a plain message flow — the
+    "Match of the day" button has no callback query to pass."""
+    def __init__(self, msg):
+        self._msg = msg
+
+    async def edit_message_text(self, text, **kw):
+        await self._msg.edit_text(text, **kw)
+
+
+def _pick_match_of_day(items: list, now_utc):
+    """The single most important UPCOMING match: highest priority_score among
+    not-yet-started (non-live) fixtures, preferring today, then tomorrow, then
+    later in the week. Returns (item, bucket) or (None, None)."""
+    for bucket in (TODAY, TOMORROW, LATER):
+        pool = [it for it in items if it.bucket == bucket and not it.is_live
+                and it.kickoff_utc and it.kickoff_utc > now_utc]
+        if pool:
+            return max(pool, key=lambda it: it.priority_score or 0), bucket
+    return None, None
+
+
+async def match_of_day(update, context: ContextTypes.DEFAULT_TYPE):
+    """Reply-keyboard "🔥 Match of the day": one tap → a full forecast on the
+    top match by priority_score. Runs the same expensive path as picking a match
+    from the menu, so it carries the same money-guard (rate limit + in-flight
+    lock) as fm_match_cb."""
+    uid = update.effective_user.id
+    lang = db_lang(uid)
+    blk, secs = sec_blocked(uid)
+    if blk:
+        await update.message.reply_text(tr(uid, "blocked", m=secs // 60, s=secs % 60)); return
+    if uid in _cb_inflight:
+        await update.message.reply_text("⏳"); return
+    exceeded, wait = rate_check(uid)
+    if exceeded:
+        if record_viol(uid, uinfo(update)):
+            await update.message.reply_text(tr(uid, "auto_blocked", min=SPAM_DUR // 60))
+        else:
+            await update.message.reply_text(tr(uid, "rate_limit", w=wait, v=violations[uid], max=SPAM_AFTER))
+        return
+    violations[uid] = 0
+    db_log_req(uid, "MDAY")
+    _cb_inflight.add(uid)
+    try:
+        await _match_of_day_run(update, context, uid, lang)
+    finally:
+        cb_release(uid)
+
+
+async def _match_of_day_run(update, context, uid: int, lang: str) -> None:
+    msg = await update.message.reply_text(_loc(_LOADING_MATCHES, lang))
+    all_m = await _mostbet_load_matches()
+    if not all_m:
+        await msg.edit_text(tr(uid, "ev_provider_unavailable")); return
+    now_utc = datetime.now(timezone.utc)
+    items = select_visible(
+        [it for m in all_m if (it := normalize_fixture(m)) is not None],
+        now_utc, _user_tz(uid), include_later=True)
+    if not items:
+        await msg.edit_text("\n".join(
+            [tr(uid, "ev_no_live"), tr(uid, "ev_no_today"), tr(uid, "ev_no_tomorrow")]))
+        return
+    assign_priority_scores(items, now_utc, db_match_demand())
+    pick, bucket = _pick_match_of_day(items, now_utc)
+    if pick is None:
+        await msg.edit_text("\n".join([tr(uid, "ev_no_today"), tr(uid, "ev_no_tomorrow")]))
+        return
+    if bucket != TODAY:
+        # The strongest match isn't today — say so before the forecast lands.
+        await context.bot.send_message(chat_id=uid, text=tr(uid, "match_day_fallback"))
+    await _fm_match_run(context, _MsgQuery(msg), uid, lang, pick)
 
 
 async def fm_sport_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -782,6 +865,8 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Menu routing
     lang = db_lang(uid); tl = T[lang]
+    if text == tl["menu_match_of_day"]:
+        await match_of_day(update, context); return
     if text == tl["menu_profile"]:
         from handlers.registration import profile_cmd
         await profile_cmd(update, context); return

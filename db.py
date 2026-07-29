@@ -6,7 +6,7 @@ import time
 from collections import defaultdict
 from contextlib import contextmanager
 
-from config import live_subs, demand_cache
+from config import live_subs, demand_cache, winrate_cache
 from priority_config import normalize_participant_tokens
 
 logger = logging.getLogger(__name__)
@@ -311,6 +311,56 @@ def db_feedback_stats(uid) -> dict:
     total = _one("SELECT COUNT(*) FROM forecast_history WHERE user_id=? AND feedback IS NOT NULL", (uid,)) or 0
     wins  = _one("SELECT COUNT(*) FROM forecast_history WHERE user_id=? AND feedback=1", (uid,)) or 0
     return dict(total=total, wins=wins, pct=round(wins / total * 100) if total > 0 else 0)
+
+
+# ─── Track record: bot-wide winrate + per-user activity streak ─────────────────
+WINRATE_CACHE_TTL = 3600     # 1h — winrate is shown often, changes slowly
+WINRATE_MIN_SAMPLES = 30     # cold-start: never show a % off a handful of votes
+
+
+def db_bot_winrate(days: int = 30) -> dict | None:
+    """Community forecast accuracy over the trailing `days`, from user 👍/👎
+    feedback. Returns {wins, total, pct} or None when there aren't enough rated
+    forecasts yet (cold-start) — we never show a percentage off a tiny sample.
+    Cached in-memory. NOTE: forecast_history keeps only each user's last ~10
+    forecasts, so this is a RECENT community signal, not a lifetime record."""
+    now = time.time()
+    cached = winrate_cache.get(days)
+    if cached and now - cached[0] < WINRATE_CACHE_TTL:
+        return cached[1]
+    cutoff = f"-{int(days)} days"
+    total = _one("SELECT COUNT(*) FROM forecast_history WHERE feedback IS NOT NULL "
+                 "AND created_at >= datetime('now', ?)", (cutoff,)) or 0
+    wins = _one("SELECT COUNT(*) FROM forecast_history WHERE feedback=1 "
+                "AND created_at >= datetime('now', ?)", (cutoff,)) or 0
+    result = None if total < WINRATE_MIN_SAMPLES else {
+        "wins": wins, "total": total, "pct": round(wins / total * 100)}
+    winrate_cache[days] = (now, result)
+    return result
+
+
+def db_user_streak(uid) -> int:
+    """Consecutive days (ending today or yesterday, UTC) on which the user
+    interacted, from the uncapped `requests` table. Yesterday still counts so a
+    user who hasn't opened the bot *yet today* isn't shown a 0."""
+    from datetime import datetime, timezone, timedelta
+    rows = _all("SELECT DISTINCT date(created_at) FROM requests WHERE user_id=? "
+                "ORDER BY 1 DESC LIMIT 400", (uid,))
+    day_set = {r[0] for r in rows if r[0]}
+    if not day_set:
+        return 0
+    today = datetime.now(timezone.utc).date()
+    if today.isoformat() in day_set:
+        cur = today
+    elif (today - timedelta(days=1)).isoformat() in day_set:
+        cur = today - timedelta(days=1)
+    else:
+        return 0  # last activity is older than yesterday → streak broken
+    streak = 0
+    while cur.isoformat() in day_set:
+        streak += 1
+        cur -= timedelta(days=1)
+    return streak
 
 
 # ─── Conversation memory ──────────────────────────────────────────────────────

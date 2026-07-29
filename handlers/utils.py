@@ -99,6 +99,7 @@ def main_menu(uid):
     lang = db_lang(uid)
     tl = T[lang]
     return ReplyKeyboardMarkup([
+        [tl["menu_match_of_day"]],
         [tl["menu_forecast"],  tl["menu_express"]],
         [tl["menu_history"],   tl["menu_profile"]],
         [tl["menu_support"],   LANG_BTN],
