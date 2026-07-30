@@ -98,6 +98,12 @@ def db_init():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER, created_at TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS promo_codes (
+            code       TEXT PRIMARY KEY,
+            claimed_by INTEGER DEFAULT NULL,
+            claimed_at TEXT    DEFAULT NULL,
+            created_at TEXT     DEFAULT (datetime('now'))
+        );
         """)
         for stmt in (
             "ALTER TABLE users ADD COLUMN tz_offset INTEGER DEFAULT 0",
@@ -337,6 +343,47 @@ def db_bot_winrate(days: int = 30) -> dict | None:
         "wins": wins, "total": total, "pct": round(wins / total * 100)}
     winrate_cache[days] = (now, result)
     return result
+
+
+# ─── Promo codes (channel-gated giveaway) ─────────────────────────────────────
+def db_add_promo_codes(codes) -> int:
+    """Add promo codes to the pool (deduplicated). Returns how many NEW codes
+    were actually inserted."""
+    clean = [c.strip() for c in codes if c and c.strip()]
+    if not clean:
+        return 0
+    with con() as c:
+        before = c.execute("SELECT COUNT(*) FROM promo_codes").fetchone()[0]
+        c.executemany("INSERT OR IGNORE INTO promo_codes (code) VALUES (?)",
+                      [(code,) for code in clean])
+        after = c.execute("SELECT COUNT(*) FROM promo_codes").fetchone()[0]
+    return after - before
+
+
+def db_claim_promo(uid) -> str | None:
+    """Hand this user a promo code. Idempotent: a user who already claimed one
+    gets the SAME code back (never a second). Returns None when the pool is
+    empty. Atomic within a single write transaction — SQLite serializes writers,
+    so two users can never be handed the same code."""
+    with con() as c:
+        row = c.execute("SELECT code FROM promo_codes WHERE claimed_by=? LIMIT 1", (uid,)).fetchone()
+        if row:
+            return row[0]
+        row = c.execute("SELECT code FROM promo_codes WHERE claimed_by IS NULL "
+                        "ORDER BY rowid LIMIT 1").fetchone()
+        if not row:
+            return None
+        code = row[0]
+        c.execute("UPDATE promo_codes SET claimed_by=?, claimed_at=datetime('now') "
+                  "WHERE code=? AND claimed_by IS NULL", (uid, code))
+        return code
+
+
+def db_promo_stats() -> dict:
+    with con() as c:
+        total   = c.execute("SELECT COUNT(*) FROM promo_codes").fetchone()[0]
+        claimed = c.execute("SELECT COUNT(*) FROM promo_codes WHERE claimed_by IS NOT NULL").fetchone()[0]
+    return dict(total=total, claimed=claimed, available=total - claimed)
 
 
 def db_user_streak(uid) -> int:

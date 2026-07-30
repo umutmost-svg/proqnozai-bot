@@ -17,6 +17,7 @@ from handlers.forecast import (
 from handlers.live import watch_cb, matches_cmd
 from handlers.history import history_cmd, history_cb
 from handlers.express import express_cb, express_cmd, compare_cmd
+from handlers.promo import promo_cmd, promo_check_cb, addpromo_cmd, promostats_cmd
 from handlers.admin import admin_cmd, adm_cb, handle_adm_msg, cancel_cmd, testapi_cmd
 from handlers.utils import SUPPORT_URL
 from translations import T
@@ -47,6 +48,9 @@ def register_handlers(app):
     app.add_handler(CommandHandler("admin",   admin_cmd))
     app.add_handler(CommandHandler("cancel",  cancel_cmd))
     app.add_handler(CommandHandler("testapi", testapi_cmd))
+    app.add_handler(CommandHandler("promo",      promo_cmd))
+    app.add_handler(CommandHandler("addpromo",   addpromo_cmd))
+    app.add_handler(CommandHandler("promostats", promostats_cmd))
 
     app.add_handler(CallbackQueryHandler(lang_cb,       pattern=r"^lang_"))
     app.add_handler(CallbackQueryHandler(ob_cb,         pattern=r"^ob_"))
@@ -66,6 +70,7 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(watch_cb,      pattern=r"^(watch|unwatch)_"))
     app.add_handler(CallbackQueryHandler(history_cb,    pattern=r"^(fb_|repeat_)"))
     app.add_handler(CallbackQueryHandler(express_cb,    pattern=r"^expr_"))
+    app.add_handler(CallbackQueryHandler(promo_check_cb, pattern=r"^promo_check$"))
     app.add_handler(CallbackQueryHandler(adm_cb,        pattern=r"^adm_"))
 
     # Support button — filter by all support menu texts across languages.
