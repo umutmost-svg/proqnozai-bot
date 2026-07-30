@@ -775,7 +775,12 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     step = reg_step.get(uid)
     if step == "awaiting_name" and update.message.text:
         await handle_name(update, context); return
-    if step in ("awaiting_lang", "awaiting_name", "ob_sports", "ob_exp"):
+    # Silently swallow messages ONLY while a user is still pre-registration
+    # (choosing a language / entering a name). A registered user is never
+    # frozen: onboarding auto-registers at the language step, so a stale
+    # ob_sports/ob_exp step (user abandoned the sport picker) must not drop
+    # every tap forever — otherwise the whole bot goes silent for them.
+    if step in ("awaiting_lang", "awaiting_name", "ob_sports", "ob_exp") and not db_is_reg(uid):
         return
 
     if not db_is_reg(uid):

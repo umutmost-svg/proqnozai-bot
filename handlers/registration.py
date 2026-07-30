@@ -17,6 +17,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user; uid = user.id
     db_ensure(uid, user.username or "", user.language_code)
     if db_is_reg(uid):
+        # Clear any stale onboarding step (e.g. abandoned sport picker) so a
+        # registered user is never left frozen by the reg_step guard.
+        reg_step.pop(uid, None)
         u = db_get(uid)
         await update.message.reply_text(
             tr(uid, "already_reg", name=u["display_name"] or user.first_name),
