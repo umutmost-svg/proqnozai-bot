@@ -59,6 +59,8 @@ Railway запускает два процесса из `Procfile`:
 | `FOOTBALL_KEY` | football-data.org — форма команд текущих сезонов (предпочтительное имя) | Нет |
 | `FOOTBALL_API_KEY` | Legacy-алиас `FOOTBALL_KEY`, читается как fallback | Нет |
 | `APIFOOTBALL_KEY` | api-football.com (api-sports.io) — live-статусы, события, H2H | Нет |
+| `PROMO_CHANNEL` | Канал для гейта промокодов (`@name`/`-100…`); бот должен быть его админом. Пусто → кнопка скрыта | Нет |
+| `PROMO_CHANNEL_URL` | Публичная ссылка для кнопки «Открыть канал» (иначе выводится из `@name`) | Нет |
 | `WEBHOOK_URL` | Если задан — webhook вместо polling | Нет |
 | `PORT` | Порт webhook-режима / Flask-дашборда | Нет |
 | `STATS_PORT` | Порт внутреннего stats-сервера (по умолчанию 8888) | Нет |

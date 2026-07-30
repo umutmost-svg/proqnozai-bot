@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from config import MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR
+from config import MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR, PROMO_CHANNEL
 from db import db_lang, db_get_tz
 from security import sec_blocked, rate_check, nav_rate_check, record_viol
 from translations import T, tr
@@ -98,11 +98,15 @@ LANG_BTN = "🌐 Dil · Язык · Lang"
 def main_menu(uid):
     lang = db_lang(uid)
     tl = T[lang]
-    return ReplyKeyboardMarkup([
+    rows = [
         [tl["menu_forecast"]],
         [tl["menu_history"],   tl["menu_profile"]],
         [tl["menu_support"],   LANG_BTN],
-    ], resize_keyboard=True, is_persistent=True)
+    ]
+    # The promo button only appears once a gate channel is configured.
+    if PROMO_CHANNEL:
+        rows.insert(1, [tl["menu_get_promo"]])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 
 def lang_kb():

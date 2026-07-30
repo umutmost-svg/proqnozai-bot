@@ -795,6 +795,9 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == tl["menu_history"]:
         from handlers.history import history_cmd
         await history_cmd(update, context); return
+    if text == tl["menu_get_promo"]:
+        from handlers.promo import promo_cmd
+        await promo_cmd(update, context); return
     if text == tl["menu_forecast"]:
         await forecast_menu_start(update, context); return
     if text == LANG_BTN:
