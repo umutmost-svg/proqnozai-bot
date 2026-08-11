@@ -789,6 +789,18 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(title, reply_markup=_build_league_kb(groups, page, back_cb, uid))
 
 
+# The promo button was relabelled from "get a promo code" to "partner bonus for
+# your bet". Reply keyboards already sitting in users' chats keep sending the
+# old label until the menu broadcast reaches them (and forever, for anyone the
+# broadcast fails to deliver to), so those taps must still reach the promo flow
+# instead of falling through and being read as a forecast query.
+_LEGACY_PROMO_LABELS = frozenset({
+    "🎁 Promokod al", "🎁 Получить промокод", "🎁 Get promo code",
+    "🎁 Promo kod al", "🎁 Промокод алу", "🎁 Promokod olish",
+    "🎁 احصل على رمز ترويجي",
+})
+
+
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user; uid = user.id; info = uinfo(update)
     db_ensure(uid, user.username or "", user.language_code)
@@ -822,7 +834,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == tl["menu_history"]:
         from handlers.history import history_cmd
         await history_cmd(update, context); return
-    if text == tl["menu_get_promo"]:
+    if text == tl["menu_get_promo"] or text in _LEGACY_PROMO_LABELS:
         from handlers.promo import promo_cmd
         await promo_cmd(update, context); return
     if text == tl["menu_partners"]:
