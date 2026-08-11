@@ -87,6 +87,7 @@ def db_init():
         CREATE TABLE IF NOT EXISTS conversation (
             user_id INTEGER PRIMARY KEY,
             messages TEXT DEFAULT '[]',
+            fixture_key TEXT DEFAULT '',
             updated_at TEXT DEFAULT (datetime('now'))
         );
         CREATE TABLE IF NOT EXISTS odds_alerts (
@@ -97,6 +98,12 @@ def db_init():
         CREATE TABLE IF NOT EXISTS request_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER, created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS live_events_seen (
+            match_id   TEXT,
+            event_key  TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (match_id, event_key)
         );
         CREATE TABLE IF NOT EXISTS promo_campaign (
             code       TEXT,
@@ -116,6 +123,9 @@ def db_init():
             # be cleaned up on unwatch / full time, and keep a human-readable name.
             "ALTER TABLE odds_alerts ADD COLUMN fixture_id TEXT DEFAULT ''",
             "ALTER TABLE odds_alerts ADD COLUMN match_name TEXT DEFAULT ''",
+            # Scopes conversation memory to one fixture, so an analysis of match
+            # A can't leak into an independent forecast for match B.
+            "ALTER TABLE conversation ADD COLUMN fixture_key TEXT DEFAULT ''",
         ):
             try:
                 c.execute(stmt)
@@ -284,6 +294,45 @@ def db_user_lsubs(uid) -> list[dict]:
     return [dict(match_id=r[0], match_name=r[1]) for r in rows]
 
 
+# ─── Live event de-duplication ────────────────────────────────────────────────
+# Which live events a match has already notified about. Persisted rather than
+# kept in memory: the previous in-memory "how many events did we see last time"
+# counter reset on every restart, so a restart mid-match re-sent every goal and
+# card that had already gone out. Keys are content-derived (see
+# handlers.live._event_key), so a reordered or shortened provider response can't
+# create duplicates either.
+LIVE_EVENTS_RETENTION_DAYS = 7
+
+
+def db_filter_new_live_events(match_id: str, keys: list[str]) -> list[str]:
+    """Record `keys` for `match_id` and return only the ones not seen before,
+    in the order given. Insert-and-check in one transaction, so the "have we
+    sent this?" decision and the record of having sent it can't diverge."""
+    if not keys:
+        return []
+    fresh = []
+    with con() as c:
+        for key in keys:
+            cur = c.execute(
+                "INSERT OR IGNORE INTO live_events_seen (match_id, event_key) VALUES (?,?)",
+                (str(match_id), key))
+            if cur.rowcount:            # 0 ⇒ the key was already there
+                fresh.append(key)
+    return fresh
+
+
+def db_clear_live_events(match_id: str) -> None:
+    """Drop a finished match's event keys — nothing left to de-duplicate."""
+    _run("DELETE FROM live_events_seen WHERE match_id=?", (str(match_id),))
+
+
+def db_purge_stale_live_events() -> None:
+    """Safety net for matches that never reached a final status (the normal
+    cleanup path is db_clear_live_events on FT)."""
+    _run("DELETE FROM live_events_seen WHERE created_at < datetime('now', ?)",
+         (f"-{LIVE_EVENTS_RETENTION_DAYS} days",))
+
+
 def db_restore_live_subs():
     rows = _all("SELECT user_id, match_id FROM live_subscriptions")
     for uid, mid in rows:
@@ -421,21 +470,40 @@ def db_user_streak(uid) -> int:
 
 
 # ─── Conversation memory ──────────────────────────────────────────────────────
-def db_get_conv(uid) -> list:
-    row = _one("SELECT messages FROM conversation WHERE user_id=?", (uid,))
+# Memory is scoped to a fixture so an analysis of match A never becomes context
+# for an independent forecast of match B. `fixture_key` identifies the match
+# (see handlers.forecast._fixture_key); an EMPTY key means "this request names no
+# fixture" — a plain follow-up question — and keeps whatever context is stored.
+def db_get_conv(uid, fixture_key: str = "") -> list:
+    with con() as c:
+        row = c.execute("SELECT messages, fixture_key FROM conversation WHERE user_id=?",
+                        (uid,)).fetchone()
     if not row:
         return []
+    messages_json, stored_key = row
+    # A named fixture that differs from the stored one starts a fresh context.
+    # Rows written before fixture_key existed carry '' and are dropped once, on
+    # the user's next fixture-bearing request.
+    if fixture_key and (stored_key or "") != fixture_key:
+        return []
     try:
-        return json.loads(row)[-6:]
+        return json.loads(messages_json)[-6:]
     except Exception as e:
         logger.warning(f"db_get_conv parse error uid={uid}: {e}")
         return []
 
 
-def db_save_conv(uid, messages: list):
+def db_save_conv(uid, messages: list, fixture_key: str = ""):
     trimmed = messages[-6:]
-    _run("INSERT OR REPLACE INTO conversation (user_id, messages, updated_at) VALUES (?,?,datetime('now'))",
-         (uid, json.dumps(trimmed, ensure_ascii=False)))
+    with con() as c:
+        if not fixture_key:
+            # A follow-up doesn't re-label the context it is continuing.
+            prev = c.execute("SELECT fixture_key FROM conversation WHERE user_id=?",
+                             (uid,)).fetchone()
+            fixture_key = (prev[0] if prev else "") or ""
+        c.execute("INSERT OR REPLACE INTO conversation (user_id, messages, fixture_key, updated_at) "
+                  "VALUES (?,?,?,datetime('now'))",
+                  (uid, json.dumps(trimmed, ensure_ascii=False), fixture_key))
 
 
 def db_clear_conv(uid):

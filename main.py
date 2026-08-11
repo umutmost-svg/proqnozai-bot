@@ -67,14 +67,33 @@ async def _broadcast_menu_update(application):
     logger.info(f"Menu broadcast done: {sent} sent, {failed} failed")
 
 
+# Retry delay after a failed refresh. Much shorter than the normal TTL: a failed
+# fetch means the cached feed is already going stale, so we want back in sooner —
+# but not so soon that a persistent outage turns into a hot retry loop.
+PRELOAD_ERROR_BACKOFF = 60
+
+
 async def _preload_mostbet():
-    """Preload Mostbet matches at startup, then refresh every 15 min."""
+    """Preload Mostbet matches at startup, then refresh every 15 min.
+
+    One failed fetch must never kill the task: an exception escaping this loop
+    would leave the bot serving a frozen match list until the next restart, and
+    asyncio only surfaces a dead task's exception when it is garbage-collected —
+    so the failure would also be invisible in the logs."""
     await asyncio.sleep(10)
     while True:
-        logger.info("Loading Mostbet matches...")
-        matches = await _mostbet_load_matches()
-        logger.info(f"Mostbet loaded: {len(matches)} matches")
-        await asyncio.sleep(MOSTBET_CACHE_TTL)
+        try:
+            logger.info("Loading Mostbet matches...")
+            matches = await _mostbet_load_matches()
+            logger.info(f"Mostbet loaded: {len(matches)} matches")
+            delay = MOSTBET_CACHE_TTL
+        except asyncio.CancelledError:
+            raise  # shutdown, not a failure — never swallow it
+        except Exception:
+            logger.exception(
+                f"Mostbet preload failed; retrying in {PRELOAD_ERROR_BACKOFF}s")
+            delay = PRELOAD_ERROR_BACKOFF
+        await asyncio.sleep(delay)
 
 
 async def _error_handler(update, context):

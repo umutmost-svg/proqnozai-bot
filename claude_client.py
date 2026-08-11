@@ -59,17 +59,48 @@ async def _create_with_retry(*, max_retries: int = 2, **kwargs):
     raise last_exc  # pragma: no cover
 
 
-async def claude_forecast(uid: int, msg_content: list, sys_prompt: str, max_tok: int) -> str:
+FORECAST_MODEL = "claude-opus-4-8"
+
+# Adaptive thinking is the ONLY thinking mode Opus 4.7+ accepts: the legacy
+# {"type": "enabled", "budget_tokens": N} form is rejected with a 400
+# ("thinking.type.enabled is not supported for this model"). Depth is steered by
+# output_config.effort instead of a token budget. "medium" keeps spend close to
+# the ~2500-token budget this call used to ask for; the API default is "high".
+FORECAST_EFFORT = "medium"
+# Thinking tokens count toward max_tokens together with the answer, so the cap
+# needs headroom on top of the visible-answer budget or the reply truncates.
+THINKING_HEADROOM = 2500
+
+# Flipped off after the API rejects our thinking configuration outright. A 400 is
+# a bug in what we send, not a transient failure — retrying it on every forecast
+# would burn a round-trip per request forever, so the process stops asking.
+_thinking_supported = True
+
+
+def _disable_thinking(reason: str) -> None:
+    global _thinking_supported
+    _thinking_supported = False
+    logger.error(
+        "Adaptive thinking rejected by the API — falling back to plain calls for "
+        "the rest of this process. Fix the request config: %s", reason)
+
+
+async def claude_forecast(uid: int, msg_content: list, sys_prompt: str, max_tok: int,
+                          fixture_key: str = "") -> str:
     """
     Call Claude for a forecast, prepending per-user conversation history.
     Saves the completed turn to conversation memory so future requests have context.
+
+    `fixture_key` scopes that memory to one match: a request carrying a different
+    key starts a fresh context, an empty key (a follow-up question that names no
+    fixture) continues the stored one. See db.db_get_conv.
 
     msg_content may include image blocks; only text is persisted to history.
     Transient API errors are retried; on permanent failure a localized message
     is returned instead of raising.
     """
     from translations import tr
-    history = db_get_conv(uid)
+    history = db_get_conv(uid, fixture_key)
 
     # Text-only summary of the current user turn (for storing in history)
     user_text = " ".join(p["text"] for p in msg_content if p.get("type") == "text")
@@ -77,28 +108,33 @@ async def claude_forecast(uid: int, msg_content: list, sys_prompt: str, max_tok:
     # Full messages: previous turns (text-only) + current turn (may include images)
     messages = list(history) + [{"role": "user", "content": msg_content}]
 
-    # Extended thinking: the model reasons deeply (weighing form, H2H, injuries,
-    # odds value) before writing a concise answer. Budget is separate from the
-    # visible output. If the gateway rejects thinking, fall back to a plain call
-    # so forecasts never break.
-    think_budget = 2500
+    # Adaptive thinking: the model decides how deeply to reason (weighing form,
+    # H2H, injuries, odds value) before writing a concise answer. If the call
+    # fails for any reason, fall back to a plain one so forecasts never break.
     try:
-        try:
+        resp = None
+        if _thinking_supported:
+            try:
+                resp = await _create_with_retry(
+                    model=FORECAST_MODEL,
+                    max_tokens=max_tok + THINKING_HEADROOM,
+                    system=sys_prompt,
+                    messages=messages,
+                    thinking={"type": "adaptive"},
+                    output_config={"effort": FORECAST_EFFORT},
+                )
+            except anthropic.RateLimitError:
+                raise  # let the outer handler show the overload message
+            except anthropic.BadRequestError as e:
+                # Our request shape is wrong — the same call will fail forever.
+                _disable_thinking(f"{type(e).__name__}: {e}")
+            except Exception as e:
+                # Transient or unexpected (already retried inside
+                # _create_with_retry) — keep thinking on for the next forecast.
+                logger.warning(f"thinking call failed, falling back to plain: {type(e).__name__}: {e}")
+        if resp is None:
             resp = await _create_with_retry(
-                model="claude-opus-4-8",
-                max_tokens=max_tok + think_budget,
-                system=sys_prompt,
-                messages=messages,
-                thinking={"type": "enabled", "budget_tokens": think_budget},
-            )
-        except anthropic.RateLimitError:
-            raise  # let the outer handler show the overload message
-        except Exception as e:
-            # Any other failure from the thinking call → retry once without it,
-            # so an unsupported/rejected thinking param never breaks forecasts.
-            logger.warning(f"thinking call failed, falling back to plain: {type(e).__name__}: {e}")
-            resp = await _create_with_retry(
-                model="claude-opus-4-8",
+                model=FORECAST_MODEL,
                 max_tokens=max_tok,
                 system=sys_prompt,
                 messages=messages,
@@ -116,7 +152,7 @@ async def claude_forecast(uid: int, msg_content: list, sys_prompt: str, max_tok:
             {"role": "user", "content": user_text},
             {"role": "assistant", "content": reply},
         ]
-        db_save_conv(uid, updated)
+        db_save_conv(uid, updated, fixture_key)
 
         return reply
 

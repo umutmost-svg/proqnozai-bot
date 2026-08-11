@@ -61,7 +61,7 @@ def _ctx(bot, **user_data):
 
 
 async def _stub_common(monkeypatch):
-    async def _fake_forecast(uid, content, sys_prompt, max_tok):
+    async def _fake_forecast(uid, content, sys_prompt, max_tok, **kw):
         return "FORECAST"
 
     async def _fake_get_odds(line_id):

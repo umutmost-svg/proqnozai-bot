@@ -5,9 +5,10 @@ from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from config import live_subs, ht_sent, last_events
+from config import live_subs, ht_sent
 from db import (
-    db_lang, db_is_reg, db_user_lsubs, db_add_lsub, db_del_lsub, con
+    db_lang, db_is_reg, db_user_lsubs, db_add_lsub, db_del_lsub, con,
+    db_filter_new_live_events, db_clear_live_events, db_purge_stale_live_events,
 )
 from translations import T, tr
 from football_api import get_status, get_events
@@ -69,6 +70,30 @@ async def watch_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(tr(uid, "watch_stopped", match=mname))
 
 
+def _event_key(ev: dict) -> str:
+    """Stable identity for one live event.
+
+    api-football's /fixtures/events entries carry no event id, so identity is
+    derived from the fields that don't move once an event has happened: minute
+    (incl. stoppage-time offset), type/detail, team, player. Deriving the key
+    from content rather than list position is what makes the de-duplication
+    survive a reordered or shortened provider response — position-based
+    comparison treated both as "new events"."""
+    provider_id = ev.get("id") or ev.get("event_id")
+    if provider_id:
+        return f"id:{provider_id}"
+    t = ev.get("time") or {}
+    parts = (
+        str(ev.get("type") or ""),
+        str(ev.get("detail") or ""),
+        str((ev.get("team") or {}).get("name") or ""),
+        str((ev.get("player") or {}).get("name") or ""),
+        str(t.get("elapsed") if t.get("elapsed") is not None else ""),
+        str(t.get("extra") or 0),
+    )
+    return "|".join(parts)
+
+
 async def poller(app):
     while True:
         await asyncio.sleep(60)
@@ -87,9 +112,14 @@ async def poller(app):
                 if not match_name: match_name = f"{st['home']} vs {st['away']}"
 
                 evs = await get_events(mid)
-                prev = last_events.get(mid, [])
-                new_evs = evs[len(prev):]
-                last_events[mid] = evs
+                # Persisted, content-keyed de-duplication: only events this
+                # match has never notified about survive, and the record of
+                # them survives a restart.
+                keys = {}
+                for ev in evs:
+                    keys.setdefault(_event_key(ev), ev)
+                fresh = db_filter_new_live_events(mid, list(keys))
+                new_evs = [keys[k] for k in fresh]
 
                 for ev in new_evs:
                     etype = ev.get("type", ""); detail = ev.get("detail", "")
@@ -154,9 +184,9 @@ async def poller(app):
                     # Match over: drop every trace so nothing leaks or keeps alerting.
                     with con() as c:
                         c.execute("DELETE FROM odds_alerts WHERE fixture_id=?", (mid,))
+                    db_clear_live_events(mid)
                     live_subs.pop(mid, None)
                     ht_sent.discard(mid)
-                    last_events.pop(mid, None)
             except Exception as e:
                 logger.error(f"poller mid={mid}: {e}")
 
@@ -170,6 +200,8 @@ async def check_odds_changes(app):
                 # Safety net: drop alerts whose match is long over (covers rows
                 # created before fixture_id existed and matches that never hit FT).
                 c.execute("DELETE FROM odds_alerts WHERE created_at < datetime('now','-7 days')")
+            db_purge_stale_live_events()
+            with con() as c:
                 alerts = c.execute(
                     "SELECT user_id, match_id, market, last_odd, match_name FROM odds_alerts"
                 ).fetchall()
