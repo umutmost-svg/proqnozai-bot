@@ -9,6 +9,7 @@ from config import live_subs, ht_sent
 from db import (
     db_lang, db_is_reg, db_user_lsubs, db_add_lsub, db_del_lsub, con,
     db_filter_new_live_events, db_clear_live_events, db_purge_stale_live_events,
+    db_lsub_name,
 )
 from translations import T, tr
 from football_api import get_status, get_events
@@ -70,6 +71,25 @@ async def watch_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(tr(uid, "watch_stopped", match=mname))
 
 
+# Card colour per language. All 7 languages are covered (CLAUDE.md: a local
+# dict either covers every language or falls back to ru) — the previous version
+# had az/ru/en only and showed tr/kz/uz/ar users the bare English word "Card".
+_CARD_COLOURS: dict[str, tuple[str, str]] = {   # lang -> (red, yellow)
+    "az": ("Qırmızı", "Sarı"),
+    "ru": ("Красная", "Жёлтая"),
+    "en": ("Red", "Yellow"),
+    "tr": ("Kırmızı", "Sarı"),
+    "kz": ("Қызыл", "Сары"),
+    "uz": ("Qizil", "Sariq"),
+    "ar": ("حمراء", "صفراء"),
+}
+
+
+def _card_colour(lang: str, detail: str) -> str:
+    red, yellow = _CARD_COLOURS.get(lang, _CARD_COLOURS["ru"])
+    return red if "Red" in detail else yellow
+
+
 def _event_key(ev: dict) -> str:
     """Stable identity for one live event.
 
@@ -104,12 +124,10 @@ async def poller(app):
                 st = await get_status(mid)
                 if not st: continue
                 score = st["score"]; minute = st["minute"] or 0; status = st["status"]
-                match_name = None
-                for uid in uids:
-                    for s in db_user_lsubs(uid):
-                        if s["match_id"] == mid: match_name = s["match_name"]; break
-                    if match_name: break
-                if not match_name: match_name = f"{st['home']} vs {st['away']}"
+                # One lookup for the match, not one per subscriber: the old loop
+                # ran a query per uid every minute just to read a name that is
+                # the same for all of them.
+                match_name = db_lsub_name(mid) or f"{st['home']} vs {st['away']}"
 
                 evs = await get_events(mid)
                 # Persisted, content-keyed de-duplication: only events this
@@ -140,11 +158,7 @@ async def poller(app):
                                     match=match_name, minute=ev_min, team=team,
                                     score=score, tip=tip)
                             elif etype == "Card":
-                                card = {
-                                    "az": "Qirmizi" if "Red" in detail else "Sari",
-                                    "ru": "Красная" if "Red" in detail else "Жёлтая",
-                                    "en": "Red" if "Red" in detail else "Yellow",
-                                }.get(lang, "Card")
+                                card = _card_colour(lang, detail)
                                 msg = T[lang]["live_card"].format(
                                     match=match_name, minute=ev_min, player=player,
                                     team=team, card=card, tip=tip)
@@ -205,9 +219,22 @@ async def check_odds_changes(app):
                 alerts = c.execute(
                     "SELECT user_id, match_id, market, last_odd, match_name FROM odds_alerts"
                 ).fetchall()
+            # Fetch each match's odds ONCE per cycle. Alert rows are per
+            # (user × market), so ten subscribers on one match used to mean ten
+            # identical fetches; only the TTL cache kept that from being ten
+            # round-trips. Group first, then fan the result out.
+            odds_by_match: dict[str, dict] = {}
+            for mid in {a[1] for a in alerts}:
+                try:
+                    odds_by_match[mid] = await mostbet_get_odds(int(mid))
+                except Exception:
+                    continue  # this match is unavailable this cycle
+
             for uid, mid, market, last_odd, mname in alerts:
                 try:
-                    odds = await mostbet_get_odds(int(mid))
+                    odds = odds_by_match.get(mid)
+                    if not odds:
+                        continue
                     market_map = {
                         "w1": odds["w1"], "x": odds["x"], "w2": odds["w2"],
                         "over25": odds["over25"], "under25": odds["under25"],

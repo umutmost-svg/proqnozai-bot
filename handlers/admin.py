@@ -49,8 +49,15 @@ NATION_NAMES = frozenset(n.lower() for n in (
 ))
 
 
-def is_adm(update):
-    return (update.effective_user.id if update.effective_user else 0) == ADMIN_ID
+def is_adm(update) -> bool:
+    # ADMIN_ID defaults to 0 when the env var is unset, and an update without an
+    # effective_user (a channel post, say) used to report id 0 too — so on a
+    # misconfigured deployment 0 == 0 handed out admin. No admin configured now
+    # means nobody is admin.
+    if not ADMIN_ID:
+        return False
+    user = getattr(update, "effective_user", None)
+    return bool(user) and user.id == ADMIN_ID
 
 
 def admin_kb():

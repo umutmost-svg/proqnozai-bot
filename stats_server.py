@@ -33,6 +33,21 @@ def _auth_ok(token: str) -> bool:
     return bool(STATS_TOKEN) and hmac.compare_digest(token, STATS_TOKEN)
 
 
+def _token_from(handler, parsed) -> str:
+    """Read the token from the X-Dashboard-Token header, falling back to the
+    ?token= query parameter.
+
+    The header is the real channel: a query string is echoed into proxy access
+    logs and browser history, so the token used to be written to disk on every
+    dashboard poll. The query fallback stays only so that worker and dashboard
+    can be redeployed in either order — remove it once both sides are on the
+    header."""
+    header = handler.headers.get("X-Dashboard-Token", "")
+    if header:
+        return header
+    return parse_qs(parsed.query).get("token", [""])[0]
+
+
 def _uids_for_seg(seg: str) -> list[int]:
     base = "SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0"
     if seg == "all":
@@ -112,7 +127,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        token = parse_qs(parsed.query).get("token", [""])[0]
+        token = _token_from(self, parsed)
 
         if parsed.path == "/health":
             self._send(200, b"ok")
@@ -159,7 +174,7 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:
             self._send(400, b"invalid json"); return
 
-        if not _auth_ok(body.get("token", "")):
+        if not _auth_ok(self.headers.get("X-Dashboard-Token", "") or body.get("token", "")):
             self._send(503 if not STATS_TOKEN else 401, b"dashboard token required"); return
 
         if parsed.path == "/users/block":
