@@ -1,8 +1,13 @@
 """Channel-gated promo codes.
 
+One shared code with a total-use cap, not a pool of unique codes: every user
+who qualifies receives the SAME code, and the campaign stops issuing it once
+the cap is reached.
+
 User taps "🎁 Get promo code" → must be registered AND subscribed to
-PROMO_CHANNEL → gets ONE unique code from the pool (idempotent: the same code
-on repeat taps). Admin loads codes with /addpromo and checks /promostats.
+PROMO_CHANNEL → receives the active code (idempotent: repeat taps return the
+same code and consume only one use). Admin sets the campaign with
+/setpromo CODE MAX_USES and checks /promostats.
 The bot must be an admin/member of PROMO_CHANNEL for getChatMember to work.
 """
 import logging
