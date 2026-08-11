@@ -804,11 +804,14 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from handlers.promo import promo_cmd
         await promo_cmd(update, context); return
     if text == tl["menu_partners"]:
-        from config import PARTNERS_URL
-        if PARTNERS_URL:
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-                tr(uid, "partners_btn"), url=PARTNERS_URL)]])
-            await update.message.reply_text(tr(uid, "partners_text"), reply_markup=kb)
+        from config import PARTNERS
+        if PARTNERS:
+            # One inline link button per partner; a partner with no label
+            # falls back to the generic "open partner" caption.
+            rows = [[InlineKeyboardButton(label or tr(uid, "partners_btn"), url=url)]
+                    for label, url in PARTNERS]
+            await update.message.reply_text(
+                tr(uid, "partners_text"), reply_markup=InlineKeyboardMarkup(rows))
         return
     if text == tl["menu_forecast"]:
         await forecast_menu_start(update, context); return
