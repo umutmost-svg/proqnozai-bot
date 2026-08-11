@@ -67,7 +67,7 @@ def _ctx(**user_data):
 
 
 async def _stub_common(monkeypatch, calls):
-    async def _fake_forecast(uid, content, sys_prompt, max_tok):
+    async def _fake_forecast(uid, content, sys_prompt, max_tok, **kw):
         return "FORECAST"
 
     async def _fake_find(t1, t2):

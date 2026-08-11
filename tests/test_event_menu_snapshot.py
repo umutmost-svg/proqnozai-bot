@@ -120,7 +120,7 @@ async def test_match_cb_resolves_against_frozen_snapshot(monkeypatch, temp_db):
     async def _noop_real(t1, t2, hint):
         return ""
 
-    async def _forecast(uid_, content, sys, tok):
+    async def _forecast(uid_, content, sys, tok, **kw):
         return "OK"
 
     monkeypatch.setattr(fc, "mostbet_get_odds", _noop_odds)
@@ -321,7 +321,7 @@ async def test_full_filter_flow_and_back_navigation(temp_db, monkeypatch):
     async def _noop_real(t1, t2, hint):
         return ""
 
-    async def _forecast(uid_, content, sys, tok):
+    async def _forecast(uid_, content, sys, tok, **kw):
         return "OK"
 
     monkeypatch.setattr(fc, "mostbet_get_odds", _noop_odds)

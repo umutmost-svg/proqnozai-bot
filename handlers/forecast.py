@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -15,6 +16,7 @@ from claude_client import claude_forecast
 from football_api import search_match, fetch_real_data
 from enrichment import enrich_football_match
 from match_validation import MatchRef, validate_match
+from priority_config import normalize_participant_tokens
 from event_list import (
     normalize_fixture, select_visible, group_by_sport, group_by_league,
     paginate, PAGE_SIZE,
@@ -128,6 +130,19 @@ _DATA_NOTE = {
     "uz": "\n\nMUHIM: Haqiqiy o'yin ma'lumotlari mavjud. Faqat shular asosida forma va H2H tahlili. Natijalarni o'ylab topma.",
     "ar": "\n\nمهم: بيانات المباريات الحقيقية متوفرة. استخدمها فقط لتحليل الشكل والمواجهات. لا تخترع نتائج.",
 }
+
+
+def _fixture_key(parsed_teams, text: str) -> str:
+    """Identity of the match this request is about, used to scope conversation
+    memory (db.db_get_conv). Order-independent and normalized, so "Barcelona
+    Real" and "Real Barcelona" are the same fixture.
+
+    Returns "" when the request names no recognizable fixture — a plain
+    follow-up question like "а что по тоталу?". An empty key deliberately keeps
+    the stored context alive; only a DIFFERENT named fixture resets it."""
+    source = " ".join(parsed_teams) if parsed_teams else (text or "")
+    tokens = normalize_participant_tokens(source)
+    return "|".join(sorted(tokens)) if tokens else ""
 
 
 def _build_system_prompt(lang: str, exp: str, has_real_data: bool) -> str:
@@ -250,7 +265,14 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
                 msg = T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"])
                 await status_msg.edit_text(msg); return
 
-    reply = await claude_forecast(uid, msg_content, sys_prompt, 1400)
+    # Scope conversation memory to this fixture: a forecast for a different
+    # match must not inherit the previous match's analysis as context. Flows
+    # that know their own identity (a photo, which names no teams) set
+    # pending_fixture_key; the menu/text flows derive it from the match.
+    fixture_key = (context.user_data.pop("pending_fixture_key", "")
+                   or _fixture_key(parsed_teams, text))
+    reply = await claude_forecast(uid, msg_content, sys_prompt, 1400,
+                                  fixture_key=fixture_key)
     logger.info(f"FORECAST OK | uid={uid}")
 
     watch_kb = None
@@ -879,6 +901,10 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["parsed_teams"] = None
         context.user_data["match_ref"] = None
         context.user_data["has_real_data"] = False
+        # A photo names no teams, so there is no fixture to share memory with.
+        # A unique key isolates it: it inherits nothing from the previous match
+        # and leaves nothing behind for the next one.
+        context.user_data["pending_fixture_key"] = f"photo:{uuid.uuid4().hex}"
         status_msg = await update.message.reply_text(_loc(_THINKING, lang))
         await _generate_forecast(uid, context, status_msg)
         return

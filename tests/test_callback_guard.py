@@ -93,7 +93,7 @@ def _stub_forecast_calls(monkeypatch, calls):
     async def _real(t1, t2, hint):
         calls.append("real"); return ""
 
-    async def _claude(uid, content, sys, tok):
+    async def _claude(uid, content, sys, tok, **kw):
         calls.append("claude"); return "OK"
 
     monkeypatch.setattr(fc, "mostbet_get_odds", _odds)
