@@ -1,15 +1,18 @@
 import asyncio
 import base64
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import quote, urlparse
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import reg_step, violations, SPAM_DUR, SPAM_AFTER, APIFOOTBALL_KEY
 from db import (db_ensure, db_get, db_lang, db_is_reg, db_is_blocked, db_log_req,
-                db_save_history, db_match_demand, db_bot_winrate)
+                db_save_history, db_match_demand, db_bot_winrate,
+                REQ_TEXT, REQ_PHOTO, REQ_FORECAST, REQ_PARTNERS_OPEN)
 from translations import T, tr
 from security import uinfo, sec_blocked, rate_check, record_viol, detect_injection
 from claude_client import claude_forecast
@@ -132,6 +135,20 @@ _DATA_NOTE = {
 }
 
 
+def partner_url(label: str, url: str, uid: int) -> str:
+    """The URL a partner button points at.
+
+    With PARTNER_REDIRECT_BASE set, it points at our own redirect so the click
+    can be counted before the user is forwarded on. Unset — the default — it is
+    the partner's URL verbatim, which is untrackable but cannot be broken by
+    our own dashboard being down."""
+    from config import PARTNER_REDIRECT_BASE
+    if not PARTNER_REDIRECT_BASE:
+        return url
+    name = quote(label or urlparse(url).netloc or "partner", safe="")
+    return f"{PARTNER_REDIRECT_BASE}/r/{name}?u={uid}"
+
+
 def _fixture_key(parsed_teams, text: str) -> str:
     """Identity of the match this request is about, used to scope conversation
     memory (db.db_get_conv). Order-independent and normalized, so "Barcelona
@@ -235,12 +252,23 @@ def _build_system_prompt(lang: str, exp: str, has_real_data: bool) -> str:
 
 
 async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, status_msg):
-    """Build prompt, call Claude, send reply. status_msg is the '⏳' message to edit."""
+    """Build prompt, call Claude, send reply. status_msg is the '⏳' message to edit.
+
+    Every path into this function is a forecast, so this is where the FORECAST
+    event is recorded — with its outcome and duration. The menu flow logged
+    nothing at all before, which left menu-only users looking permanently
+    inactive to last_active, the dashboard, the broadcast segments and
+    daily_push."""
+    started_at = time.monotonic()
     lang = db_lang(uid)
     msg_content = list(context.user_data.get("pending_content") or [])
     text = context.user_data.get("pending_text", "")
     if not msg_content:
         await status_msg.edit_text(tr(uid, "no_input")); return
+
+    def _log_outcome(ok: bool) -> None:
+        db_log_req(uid, REQ_FORECAST, ok=ok,
+                   ms=int((time.monotonic() - started_at) * 1000))
 
     u = db_get(uid) or {}
     exp = u.get("experience", "beginner")
@@ -263,6 +291,7 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
                 logger.info(f"Mostbet odds OK | uid={uid} match={mb_match.get('matchTitle','?')}")
             elif not _is_within_week(mb_match.get("matchBeginAt", "")):
                 msg = T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"])
+                _log_outcome(False)
                 await status_msg.edit_text(msg); return
 
     # Scope conversation memory to this fixture: a forecast for a different
@@ -273,7 +302,13 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
                    or _fixture_key(parsed_teams, text))
     reply = await claude_forecast(uid, msg_content, sys_prompt, 1400,
                                   fixture_key=fixture_key)
-    logger.info(f"FORECAST OK | uid={uid}")
+    # claude_forecast never raises: on a permanent failure it returns the
+    # localized error text instead of a forecast. Compare against those two
+    # strings so a failed generation is recorded as such rather than counted
+    # as a successful forecast.
+    produced = reply not in (tr(uid, "api_error"), tr(uid, "api_overload"))
+    _log_outcome(produced)
+    logger.info(f"FORECAST {'OK' if produced else 'FAILED'} | uid={uid}")
 
     watch_kb = None
     if text:
@@ -840,9 +875,13 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == tl["menu_partners"]:
         from config import PARTNERS
         if PARTNERS:
+            # Opening the list is the one partner interaction Telegram reports
+            # to us for free; the click itself needs partner_url() (below).
+            db_log_req(uid, REQ_PARTNERS_OPEN)
             # One inline link button per company; an entry with no name
             # falls back to the generic "open the site" caption.
-            rows = [[InlineKeyboardButton(label or tr(uid, "partners_btn"), url=url)]
+            rows = [[InlineKeyboardButton(label or tr(uid, "partners_btn"),
+                                          url=partner_url(label, url, uid))]
                     for label, url in PARTNERS]
             await update.message.reply_text(
                 tr(uid, "partners_text"), reply_markup=InlineKeyboardMarkup(rows))
@@ -868,7 +907,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     violations[uid] = 0
 
-    mtype = "PHOTO" if update.message.photo else "TEXT"
+    mtype = REQ_PHOTO if update.message.photo else REQ_TEXT
     logger.info(f"MSG [{mtype}] | {info}")
     db_log_req(uid, mtype)
     await update.message.chat.send_action("typing")
