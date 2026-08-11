@@ -107,25 +107,24 @@ def test_stats_server_accepts_the_header(monkeypatch):
     import stats_server as ss
     monkeypatch.setattr(ss, "STATS_TOKEN", "s3cret")
     handler = types.SimpleNamespace(headers={"X-Dashboard-Token": "s3cret"})
-    parsed = types.SimpleNamespace(query="")
-    assert ss._auth_ok(ss._token_from(handler, parsed))
+    assert ss._auth_ok(ss._token_from(handler))
 
 
-def test_stats_server_still_accepts_the_query_param(monkeypatch):
-    """Kept so worker and dashboard can be redeployed in either order."""
+def test_query_token_no_longer_authenticates(monkeypatch):
+    """The transitional ?token= fallback is gone: a URL-borne token is simply
+    unauthenticated, so the secret can never reach a proxy access log."""
     import stats_server as ss
     monkeypatch.setattr(ss, "STATS_TOKEN", "s3cret")
     handler = types.SimpleNamespace(headers={})
-    parsed = types.SimpleNamespace(query="token=s3cret")
-    assert ss._auth_ok(ss._token_from(handler, parsed))
+    assert ss._token_from(handler) == ""
+    assert not ss._auth_ok(ss._token_from(handler))
 
 
-def test_header_wins_over_query_param(monkeypatch):
+def test_wrong_header_is_rejected(monkeypatch):
     import stats_server as ss
     monkeypatch.setattr(ss, "STATS_TOKEN", "s3cret")
-    handler = types.SimpleNamespace(headers={"X-Dashboard-Token": "s3cret"})
-    parsed = types.SimpleNamespace(query="token=wrong")
-    assert ss._auth_ok(ss._token_from(handler, parsed))
+    handler = types.SimpleNamespace(headers={"X-Dashboard-Token": "wrong"})
+    assert not ss._auth_ok(ss._token_from(handler))
 
 
 def test_dashboard_no_longer_puts_the_token_in_urls():

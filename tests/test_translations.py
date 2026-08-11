@@ -1,9 +1,13 @@
 """Seven-language consistency of the translations table."""
 import pytest
 
+import db
 from translations import EXP_LABELS, OB_SPORTS, SPORTS_LABELS, T, tr
 
-ALL_LANGS = ["az", "ru", "en", "tr", "kz", "uz", "ar"]
+# Single source of truth: db.SUPPORTED_LANGS is the set the app may store in
+# users.lang. Adding a language there without translating it fails the tests
+# below, which is the point.
+ALL_LANGS = sorted(db.SUPPORTED_LANGS)
 
 
 def test_all_seven_languages_present():

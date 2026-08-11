@@ -1,7 +1,15 @@
 """
 Lightweight stats HTTP server that runs inside the bot process.
-Exposes GET /stats?token=X -> JSON with all dashboard metrics.
-Exposes POST /broadcast     -> send message to user segment.
+
+Every protected endpoint authenticates with the X-Dashboard-Token header —
+never a query parameter, which would put the secret in proxy access logs.
+
+  GET  /health           -> "ok" (unauthenticated, for platform health checks)
+  GET  /stats            -> JSON with all dashboard metrics
+  GET  /broadcast/status -> progress of the current/last broadcast
+  GET  /users/search?q=  -> user lookup
+  POST /broadcast        -> send a message to a user segment
+  POST /users/block      -> block/unblock a user
 """
 import asyncio
 import hmac
@@ -33,19 +41,14 @@ def _auth_ok(token: str) -> bool:
     return bool(STATS_TOKEN) and hmac.compare_digest(token, STATS_TOKEN)
 
 
-def _token_from(handler, parsed) -> str:
-    """Read the token from the X-Dashboard-Token header, falling back to the
-    ?token= query parameter.
+def _token_from(handler) -> str:
+    """The token travels in the X-Dashboard-Token header and nowhere else.
 
-    The header is the real channel: a query string is echoed into proxy access
-    logs and browser history, so the token used to be written to disk on every
-    dashboard poll. The query fallback stays only so that worker and dashboard
-    can be redeployed in either order — remove it once both sides are on the
-    header."""
-    header = handler.headers.get("X-Dashboard-Token", "")
-    if header:
-        return header
-    return parse_qs(parsed.query).get("token", [""])[0]
+    It used to be accepted from a ?token= query parameter, which put the secret
+    into proxy access logs and browser history on every dashboard poll. The
+    query fallback existed only to decouple worker and dashboard deploys; both
+    now send the header, so a URL-borne token is simply unauthenticated."""
+    return handler.headers.get("X-Dashboard-Token", "")
 
 
 def _uids_for_seg(seg: str) -> list[int]:
@@ -127,7 +130,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        token = _token_from(self, parsed)
+        token = _token_from(self)
 
         if parsed.path == "/health":
             self._send(200, b"ok")
@@ -174,7 +177,7 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:
             self._send(400, b"invalid json"); return
 
-        if not _auth_ok(self.headers.get("X-Dashboard-Token", "") or body.get("token", "")):
+        if not _auth_ok(_token_from(self)):
             self._send(503 if not STATS_TOKEN else 401, b"dashboard token required"); return
 
         if parsed.path == "/users/block":

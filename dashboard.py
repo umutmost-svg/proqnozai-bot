@@ -141,6 +141,7 @@ header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 
 
 /* ── Cards ── */
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:18px;box-shadow:var(--card-shadow);transition:border-color .2s;}
+.chart-fallback{color:var(--muted);font-size:13px;padding:24px 8px;text-align:center;}
 .card:hover{border-color:var(--accent);}
 
 /* ── Stat cards ── */
@@ -443,7 +444,24 @@ const COLORS = ['#6c63ff','#38bdf8','#22c55e','#f59e0b','#ef4444','#a78bfa','#fb
 
 let lineChart, langChart, barChart, feedbackChart, winrateChart;
 
+// Chart.js is loaded from a CDN. If that host is unreachable the global is
+// undefined, and the first Chart.* access used to throw — killing the rest of
+// this script along with auto-refresh, the theme toggle and user search. The
+// numbers, tables and controls do not need the library, so a missing Chart
+// costs the graphs only.
+function chartsAvailable() { return typeof Chart !== 'undefined'; }
+
+function noteChartsUnavailable() {
+  document.querySelectorAll('canvas').forEach(cv => {
+    const note = document.createElement('div');
+    note.className = 'chart-fallback';
+    note.textContent = 'Графики недоступны: не загрузилась библиотека Chart.js.';
+    if (cv.parentNode) cv.parentNode.replaceChild(note, cv);
+  });
+}
+
 function makeCharts() {
+  if (!chartsAvailable()) { noteChartsUnavailable(); return; }
   const gridColor = () => cssVar('--border');
   const textColor = () => cssVar('--muted');
   const accent    = () => cssVar('--accent');
@@ -550,6 +568,7 @@ function makeCharts() {
 }
 
 function updateCharts() {
+  if (!chartsAvailable()) return;   // nothing to redraw; the rest still refreshes
   [lineChart, langChart, barChart, feedbackChart, winrateChart].forEach(c => { if(c) c.destroy(); });
   setTimeout(makeCharts, 50);
 }

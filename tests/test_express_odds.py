@@ -4,6 +4,7 @@ data, fabrication guidance is gone, and with fewer than two priced matches the
 user gets an honest localized message instead of a model call. No network."""
 import types
 
+import db
 import handlers.express as ex
 from translations import T
 
@@ -172,5 +173,5 @@ async def test_az_prompt_uses_emsal_not_kef(temp_db, capture):
 
 
 def test_new_translation_key_in_all_seven():
-    for lang in ("az", "ru", "en", "tr", "kz", "uz", "ar"):
+    for lang in sorted(db.SUPPORTED_LANGS):
         assert T[lang]["express_no_odds"].strip()

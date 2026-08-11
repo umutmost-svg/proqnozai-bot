@@ -23,7 +23,11 @@ def con():
     always close (sqlite3's own __exit__ commits but never closes)."""
     c = sqlite3.connect(DB, timeout=10)
     try:
-        c.execute("PRAGMA journal_mode=WAL")
+        # journal_mode is a property of the DATABASE FILE and persists once set,
+        # so it is applied in db_init() rather than re-issued on every
+        # connection. busy_timeout and synchronous are per-connection and do
+        # have to be set here — busy_timeout in particular is what lets a writer
+        # wait instead of failing while another holds the lock.
         c.execute("PRAGMA busy_timeout=5000")
         c.execute("PRAGMA synchronous=NORMAL")
         with c:
@@ -50,6 +54,10 @@ def _run(sql, params=()):
 
 def db_init():
     with con() as c:
+        # Set once: WAL is stored in the database header and survives restarts,
+        # so every later connection inherits it. Concurrency is unchanged —
+        # readers still don't block the writer.
+        c.execute("PRAGMA journal_mode=WAL")
         c.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             user_id         INTEGER PRIMARY KEY,

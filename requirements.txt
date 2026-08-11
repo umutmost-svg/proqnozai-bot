@@ -1,4 +1,8 @@
 python-telegram-bot==21.5
-anthropic>=0.40.0
+# Floor is the version this code is verified against: adaptive thinking
+# (thinking={"type":"adaptive"}) and output_config.effort must both be
+# accepted by messages.create. Capped below the next major so a breaking
+# SDK release can't reach production unreviewed.
+anthropic>=0.119.0,<1.0.0
 httpx>=0.27.0
 flask>=3.0.0

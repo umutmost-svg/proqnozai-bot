@@ -9,10 +9,11 @@ anti-fabrication directive.
 """
 import pytest
 
+import db
 from handlers.forecast import _build_system_prompt, _DATA_NOTE
 from translations import T
 
-ALL_LANGS = ["az", "ru", "en", "tr", "kz", "uz", "ar"]
+ALL_LANGS = sorted(db.SUPPORTED_LANGS)   # see tests/test_translations.py
 
 # Substrings that appear ONLY in the rich (real-data) block.
 _RICH_ONLY = ("Extend the format with these sections", "list each team's last 5", "~18-24 lines")

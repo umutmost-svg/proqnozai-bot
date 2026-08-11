@@ -129,7 +129,7 @@ REQUIRED_KEYS = [
 class TestTranslations(unittest.TestCase):
 
     def test_all_langs_present(self):
-        for lang in ["az", "ru", "en", "tr", "kz", "uz", "ar"]:
+        for lang in sorted(db.SUPPORTED_LANGS):
             self.assertIn(lang, T, f"Language '{lang}' missing from T")
 
     def test_required_keys_in_all_langs(self):
