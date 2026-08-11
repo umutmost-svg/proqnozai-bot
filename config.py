@@ -33,19 +33,19 @@ ADMIN_ID        = int(os.environ.get("ADMIN_ID", "0"))
 # promo feature stays hidden.
 PROMO_CHANNEL     = os.environ.get("PROMO_CHANNEL", "").strip()
 PROMO_CHANNEL_URL = os.environ.get("PROMO_CHANNEL_URL", "").strip()
-# "Our partners" menu button. Configure via PARTNERS as one "Label | https://url"
-# per line (or ';'-separated), e.g.
-#   PARTNERS="Mostbet | https://mostbet.com\n1xBet | https://1xbet.com"
+# "Our partners" menu button. Configure via PARTNERS as "Label | https://url"
+# entries separated by ';' (newlines also work), e.g.
+#   PARTNERS=Mostbet | https://mostbet.com;1xBet | https://1xbet.com
 # Legacy single-link PARTNERS_URL is still accepted (labeled at render time).
 # No partners configured ⇒ the button stays hidden.
 PARTNERS_URL      = os.environ.get("PARTNERS_URL", "").strip()
 
 
-def _parse_partners(raw: str, legacy_url: str):
+def _parse_partners(raw: str, legacy_url: str) -> list[tuple[str, str]]:
     """List of (label, url). Each entry is "Label | url"; a bare url gets an
     empty label (the UI then uses a generic 'open partner' caption). Only
     http(s) links are kept, so a malformed env can't inject junk buttons."""
-    out = []
+    out: list[tuple[str, str]] = []
     for chunk in (raw or "").replace(";", "\n").split("\n"):
         chunk = chunk.strip()
         if not chunk:
