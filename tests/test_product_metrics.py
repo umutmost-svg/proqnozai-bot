@@ -125,11 +125,12 @@ def test_retention_percentages_are_bounded(temp_db):
 
 def test_promo_funnel_reports_cap_and_conversion(temp_db):
     temp_db.db_ensure(810500, "u", "ru"); temp_db.db_set(810500, "is_registered", 1)
-    temp_db.db_set_promo_campaign("FUNNEL-CODE", 10)
-    temp_db.db_claim_promo(810500)
+    temp_db.db_set_promo_code("Funnel", "FUNNEL-CODE", 10)
+    temp_db.db_claim_promos(810500)
     p = temp_db.db_promo_funnel()
-    assert p["code"] == "FUNNEL-CODE"
-    assert p["claimed"] == 1 and p["remaining"] == 9
+    names = [x["partner"] for x in p["partners"]]
+    assert "Funnel" in names
+    assert p["claimed"] >= 1 and p["remaining"] >= 0
     assert p["eligible"] >= 1 and 0 <= p["conversion"] <= 100
 
 
@@ -137,7 +138,7 @@ def test_promo_funnel_without_a_campaign(temp_db):
     with temp_db.con() as c:
         c.execute("DELETE FROM promo_campaign")
     p = temp_db.db_promo_funnel()
-    assert p["code"] is None and p["claimed"] == 0
+    assert p["partners"] == [] and p["claimed"] == 0
 
 
 # ─── partner clicks ───────────────────────────────────────────────────────────

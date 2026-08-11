@@ -16,8 +16,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import PROMO_CHANNEL, PROMO_CHANNEL_URL, ADMIN_ID
-from db import (db_is_reg, db_claim_promo, db_get_promo_campaign,
-                db_set_promo_campaign, db_promo_stats)
+from db import (db_is_reg, db_claim_promos, db_list_promo_codes,
+                db_set_promo_code, db_delete_promo_code)
 from translations import tr
 
 logger = logging.getLogger(__name__)
@@ -61,17 +61,21 @@ async def _run_promo(context, uid, reply) -> None:
     hand out THE code. `reply(text, reply_markup=None)` is an async sender."""
     if not db_is_reg(uid):
         await reply(tr(uid, "need_reg")); return
-    if db_get_promo_campaign() is None:
-        await reply(tr(uid, "promo_unavailable")); return   # no active promo
+    if not db_list_promo_codes():
+        await reply(tr(uid, "promo_unavailable")); return   # nothing configured
     sub = await _is_subscribed(context, uid)
     if sub is None:
         await reply(tr(uid, "promo_unavailable")); return   # can't verify channel
     if not sub:
         await reply(tr(uid, "promo_subscribe"), reply_markup=_subscribe_kb(uid)); return
-    code = db_claim_promo(uid)
-    if code is None:
-        await reply(tr(uid, "promo_empty")); return         # use cap reached
-    await reply(tr(uid, "promo_code", code=code))
+    granted = db_claim_promos(uid)
+    if not granted:
+        await reply(tr(uid, "promo_empty")); return         # every cap reached
+    lines = [tr(uid, "promo_codes_title")]
+    for item in granted:
+        name = item["partner"] or tr(uid, "partners_btn")
+        lines.append(f"{name} — <code>{item['code']}</code>")
+    await reply("\n\n".join(lines), parse_mode="HTML")
 
 
 async def promo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -98,39 +102,57 @@ async def promo_check_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── Admin ────────────────────────────────────────────────────────────────────
 async def setpromo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/setpromo CODE MAX_USES — set THE promo code and its total-use cap
-    (e.g. /setpromo WELCOME500 500). Setting a new code resets the count.
-    Admin only."""
+    """/setpromo PARTNER CODE MAX_USES — set one partner's code and its own cap,
+    e.g. /setpromo Mostbet WELCOME500 500. Each partner is independent: running
+    one out does not hide the others. Admin only."""
     if update.effective_user.id != ADMIN_ID:
         return
     parts = (update.message.text or "").split()
-    if len(parts) < 3:
+    if len(parts) < 4:
         await update.message.reply_text(
-            "Usage: /setpromo CODE MAX_USES   e.g. /setpromo WELCOME500 500")
+            "Usage: /setpromo PARTNER CODE MAX_USES\n"
+            "  e.g. /setpromo Mostbet WELCOME500 500\n"
+            "  /delpromo PARTNER — remove one\n"
+            "  /promostats — current state")
         return
-    code = parts[1]
+    partner, code = parts[1], parts[2]
     try:
-        max_uses = int(parts[2])
+        max_uses = int(parts[3])
         if max_uses <= 0:
             raise ValueError
     except ValueError:
         await update.message.reply_text("MAX_USES must be a positive integer.")
         return
-    db_set_promo_campaign(code, max_uses)
-    st = db_promo_stats()
+    db_set_promo_code(partner, code, max_uses)
+    await update.message.reply_text(f"✅ {partner}: {code} · cap {max_uses}")
+    await promostats_cmd(update, context)
+
+
+async def delpromo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/delpromo PARTNER — remove one partner's code. Admin only."""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    parts = (update.message.text or "").split()
+    if len(parts) < 2:
+        await update.message.reply_text("Usage: /delpromo PARTNER")
+        return
+    removed = db_delete_promo_code(parts[1])
     await update.message.reply_text(
-        f"✅ Promo set: {st['code']} · cap {st['max_uses']} uses.\n"
-        f"Claimed: {st['claimed']} · available: {st['available']}.")
+        f"🗑 {parts[1]} removed." if removed else f"No code for {parts[1]}.")
 
 
 async def promostats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/promostats — active code, claimed / cap. Admin only."""
+    """/promostats — every partner's code, claimed / cap. Admin only."""
     if update.effective_user.id != ADMIN_ID:
         return
-    st = db_promo_stats()
-    if not st["code"]:
-        await update.message.reply_text("No active promo. Set one: /setpromo CODE MAX_USES")
+    codes = db_list_promo_codes()
+    if not codes:
+        await update.message.reply_text(
+            "No promo codes. Add one: /setpromo PARTNER CODE MAX_USES")
         return
-    await update.message.reply_text(
-        f"🎁 Promo: {st['code']}\nClaimed: {st['claimed']} / {st['max_uses']}\n"
-        f"Available: {st['available']}")
+    lines = ["🎁 Promo codes:"]
+    for c in codes:
+        name = c["partner"] or "(no partner)"
+        lines.append(f"{name}: {c['code']} — {c['claimed']}/{c['max_uses']} "
+                     f"(available {c['available']})")
+    await update.message.reply_text("\n".join(lines))

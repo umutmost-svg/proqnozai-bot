@@ -32,7 +32,7 @@ def test_label_no_longer_promises_a_code(lang):
 
 
 def test_russian_wording():
-    assert T["ru"]["menu_get_promo"] == "🎁 Бонус от партнёров на ставку"
+    assert T["ru"]["menu_get_promo"] == "🎁 Получить бонус"
 
 
 # ─── menu placement is unchanged ──────────────────────────────────────────────
@@ -103,10 +103,10 @@ async def test_stale_keyboard_label_still_opens_the_promo_flow(temp_db, promo_ca
     assert promo_calls == [uid]
 
 
-def test_legacy_set_covers_every_language():
-    """One stale label per language — a missing one means those users' taps
-    silently fall through to the forecast flow."""
-    assert len(fc._LEGACY_PROMO_LABELS) == len(db.SUPPORTED_LANGS)
+def test_legacy_set_covers_every_language_and_wording():
+    """Every past label in every language — a missing one means those users'
+    taps silently fall through to the forecast flow. Two past wordings so far."""
+    assert len(fc._LEGACY_PROMO_LABELS) == len(db.SUPPORTED_LANGS) * 2
 
 
 # ─── the new keyboard actually gets delivered ─────────────────────────────────
@@ -115,4 +115,4 @@ def test_menu_broadcast_key_was_bumped():
     """The reply keyboard only changes when the bot sends a new one, and the
     broadcast runs once per key."""
     import main
-    assert main.MENU_BROADCAST_KEY == "menu_broadcast_2026_08_promo_bonus_wording"
+    assert main.MENU_BROADCAST_KEY == "menu_broadcast_2026_08_bonus_and_partners"

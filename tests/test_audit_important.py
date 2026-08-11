@@ -60,23 +60,23 @@ def test_configured_admin_still_recognised(monkeypatch):
 # ─── 3. Promo cap holds under concurrent claims ───────────────────────────────
 
 def test_promo_cap_is_never_exceeded_sequentially(temp_db):
-    temp_db.db_set_promo_campaign("SEQ-CODE", 3)
-    got = [temp_db.db_claim_promo(870100 + i) for i in range(10)]
+    temp_db.db_set_promo_code("Seq", "SEQ-CODE", 3)
+    got = [temp_db.db_claim_promos(870100 + i) for i in range(10)]
     assert sum(1 for g in got if g) == 3
-    assert temp_db.db_promo_stats()["claimed"] == 3
+    assert [c for c in temp_db.db_list_promo_codes() if c["partner"] == "Seq"][0]["claimed"] == 3
 
 
 def test_promo_claim_is_idempotent_per_user(temp_db):
-    temp_db.db_set_promo_campaign("IDEM-CODE", 5)
-    first = temp_db.db_claim_promo(870200)
-    assert temp_db.db_claim_promo(870200) == first
-    assert temp_db.db_promo_stats()["claimed"] == 1   # one use, not two
+    temp_db.db_set_promo_code("Idem", "IDEM-CODE", 5)
+    first = temp_db.db_claim_promos(870200)
+    assert temp_db.db_claim_promos(870200) == first
+    assert [c for c in temp_db.db_list_promo_codes() if c["partner"] == "Idem"][0]["claimed"] == 1
 
 
 def test_promo_cap_holds_under_parallel_claims(temp_db):
     """The race the BEGIN IMMEDIATE fixes: with a deferred transaction two
     writers could both read used == cap-1 and both insert."""
-    temp_db.db_set_promo_campaign("RACE-CODE", 5)
+    temp_db.db_set_promo_code("Race", "RACE-CODE", 5)
     results = []
     lock = threading.Lock()
     start = threading.Barrier(12)
@@ -84,7 +84,10 @@ def test_promo_cap_holds_under_parallel_claims(temp_db):
     def _claim(uid):
         start.wait()
         try:
-            code = temp_db.db_claim_promo(uid)
+            got = temp_db.db_claim_promos(uid)
+            # A claim returns every partner's code; pick this test's own,
+            # since the session-wide DB carries other tests' partners too.
+            code = next((g["code"] for g in got if g["partner"] == "Race"), None)
         except Exception as e:                 # a lost race must not be silent
             code = f"ERROR:{e}"
         with lock:
@@ -98,7 +101,7 @@ def test_promo_cap_holds_under_parallel_claims(temp_db):
 
     assert not [r for r in results if isinstance(r, str) and r.startswith("ERROR:")]
     assert sum(1 for r in results if r == "RACE-CODE") == 5
-    assert temp_db.db_promo_stats()["claimed"] == 5
+    assert [c for c in temp_db.db_list_promo_codes() if c["partner"] == "Race"][0]["claimed"] == 5
 
 
 # ─── 4. Dashboard token travels in a header ───────────────────────────────────
