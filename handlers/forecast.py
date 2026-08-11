@@ -149,6 +149,26 @@ def partner_url(label: str, url: str, uid: int) -> str:
     return f"{PARTNER_REDIRECT_BASE}/r/{name}?u={uid}"
 
 
+def _partner_list_kb(uid: int) -> InlineKeyboardMarkup:
+    """One link button per configured partner."""
+    from config import PARTNERS
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(label or tr(uid, "partners_btn"),
+                               url=partner_url(label, url, uid))]
+         for label, url in PARTNERS])
+
+
+async def _send_partner_list(uid: int, send) -> None:
+    """Show the partner list. Shared by the menu button and the inline button
+    under a forecast, so both record the same PARTNERS_OPEN event and render
+    the same thing. `send(text, reply_markup=...)` is an async sender."""
+    from config import PARTNERS
+    if not PARTNERS:
+        return
+    db_log_req(uid, REQ_PARTNERS_OPEN)
+    await send(tr(uid, "partners_text"), reply_markup=_partner_list_kb(uid))
+
+
 def _fixture_key(parsed_teams, text: str) -> str:
     """Identity of the match this request is about, used to scope conversation
     memory (db.db_get_conv). Order-independent and normalized, so "Barcelona
@@ -345,8 +365,32 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     # Offer a one-tap way back into the match menu so the user can get another
     # forecast without re-typing; keep any watch button above it.
     rows = list(watch_kb.inline_keyboard) if watch_kb else []
-    rows.append([InlineKeyboardButton(tr(uid, "ev_more_matches"), callback_data="fm_restart")])
+
+    # Two buttons side by side under the forecast: back into the match menu,
+    # and the partner list. Partners only on a forecast that was actually
+    # produced — offering bookmakers under an error message would be
+    # tone-deaf — and only when any are configured.
+    from config import PARTNERS
+    actions = [InlineKeyboardButton(tr(uid, "ev_more_matches"), callback_data="fm_restart")]
+    if produced and PARTNERS:
+        actions.append(InlineKeyboardButton(tr(uid, "partners_cta_btn"),
+                                            callback_data="partners_show"))
+    rows.append(actions)
+
     await status_msg.edit_text(reply, reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def partners_show_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """"Where to place a bet" under a forecast — send the partner list as a new
+    message so the forecast itself stays on screen."""
+    q = update.callback_query
+    uid = q.from_user.id
+    await q.answer()
+
+    async def _send(text, reply_markup=None):
+        await context.bot.send_message(chat_id=uid, text=text, reply_markup=reply_markup)
+
+    await _send_partner_list(uid, _send)
 
 
 async def forecast_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -830,9 +874,15 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # broadcast fails to deliver to), so those taps must still reach the promo flow
 # instead of falling through and being read as a forecast query.
 _LEGACY_PROMO_LABELS = frozenset({
+    # First wording: "get a promo code".
     "🎁 Promokod al", "🎁 Получить промокод", "🎁 Get promo code",
     "🎁 Promo kod al", "🎁 Промокод алу", "🎁 Promokod olish",
     "🎁 احصل على رمز ترويجي",
+    # Second wording: "partner bonus for your bet".
+    "🎁 Partnyorlarımızdan mərc bonusu", "🎁 Бонус от партнёров на ставку",
+    "🎁 Partner bonus for your bet", "🎁 Ortaklarımızdan bahis bonusu",
+    "🎁 Серіктестерден ставкаға бонус", "🎁 Hamkorlardan garov bonusi",
+    "🎁 مكافأة الشركاء على الرهان",
 })
 
 
@@ -873,18 +923,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from handlers.promo import promo_cmd
         await promo_cmd(update, context); return
     if text == tl["menu_partners"]:
-        from config import PARTNERS
-        if PARTNERS:
-            # Opening the list is the one partner interaction Telegram reports
-            # to us for free; the click itself needs partner_url() (below).
-            db_log_req(uid, REQ_PARTNERS_OPEN)
-            # One inline link button per company; an entry with no name
-            # falls back to the generic "open the site" caption.
-            rows = [[InlineKeyboardButton(label or tr(uid, "partners_btn"),
-                                          url=partner_url(label, url, uid))]
-                    for label, url in PARTNERS]
-            await update.message.reply_text(
-                tr(uid, "partners_text"), reply_markup=InlineKeyboardMarkup(rows))
+        await _send_partner_list(uid, update.message.reply_text)
         return
     if text == tl["menu_forecast"]:
         await forecast_menu_start(update, context); return

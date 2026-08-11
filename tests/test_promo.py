@@ -1,6 +1,6 @@
-"""Channel-gated promo: ONE shared code with a total-use cap (e.g. one code for
-500 users). Offline — get_chat_member is faked. The campaign is a single global
-row, so each test resets it first."""
+"""Channel-gated promo: one code PER PARTNER, each with its own use cap. A
+partner running out hides only that partner's code. Offline — get_chat_member
+is faked. Campaign rows are global, so each test resets them first."""
 import types
 
 import handlers.promo as promo
@@ -15,44 +15,65 @@ def _reset(temp_db):
 
 # ─── Campaign + capped claims ─────────────────────────────────────────────────
 
-def test_no_campaign_by_default(temp_db):
-    _reset(temp_db)
-    assert temp_db.db_get_promo_campaign() is None
-    assert temp_db.db_claim_promo(1) is None
+def _codes(granted):
+    return {g["partner"]: g["code"] for g in granted}
 
 
-def test_same_code_to_many_users_until_cap(temp_db):
+def test_nothing_configured_by_default(temp_db):
     _reset(temp_db)
-    temp_db.db_set_promo_campaign("WELCOME500", 3)
-    assert temp_db.db_claim_promo(101) == "WELCOME500"
-    assert temp_db.db_claim_promo(102) == "WELCOME500"   # same shared code
-    assert temp_db.db_claim_promo(103) == "WELCOME500"
-    assert temp_db.db_claim_promo(104) is None            # cap of 3 reached
+    assert temp_db.db_list_promo_codes() == []
+    assert temp_db.db_claim_promos(1) == []
+
+
+def test_user_gets_one_code_per_partner(temp_db):
+    _reset(temp_db)
+    temp_db.db_set_promo_code("Mostbet", "MB100", 5)
+    temp_db.db_set_promo_code("Topaz", "TZ50", 5)
+    assert _codes(temp_db.db_claim_promos(101)) == {"Mostbet": "MB100", "Topaz": "TZ50"}
+
+
+def test_each_partner_has_its_own_cap(temp_db):
+    """Mostbet running out must not hide Topaz."""
+    _reset(temp_db)
+    temp_db.db_set_promo_code("Mostbet", "MB", 1)
+    temp_db.db_set_promo_code("Topaz", "TZ", 5)
+    temp_db.db_claim_promos(110)                       # Mostbet's only use spent
+    assert _codes(temp_db.db_claim_promos(111)) == {"Topaz": "TZ"}
 
 
 def test_claim_is_idempotent_per_user(temp_db):
     _reset(temp_db)
-    temp_db.db_set_promo_campaign("CODE", 1)
-    assert temp_db.db_claim_promo(200) == "CODE"
-    assert temp_db.db_claim_promo(200) == "CODE"          # repeat → same, no extra use
-    assert temp_db.db_promo_stats()["claimed"] == 1       # still counts as 1
+    temp_db.db_set_promo_code("Mostbet", "CODE", 1)
+    first = _codes(temp_db.db_claim_promos(200))
+    assert _codes(temp_db.db_claim_promos(200)) == first     # same, no extra use
+    assert temp_db.db_list_promo_codes()[0]["claimed"] == 1
 
 
-def test_setting_new_code_resets_the_count(temp_db):
+def test_replacing_one_partner_code_resets_only_its_count(temp_db):
     _reset(temp_db)
-    temp_db.db_set_promo_campaign("OLD", 1)
-    temp_db.db_claim_promo(300)                            # OLD exhausted
-    assert temp_db.db_claim_promo(301) is None
-    temp_db.db_set_promo_campaign("NEW", 1)               # fresh campaign
-    assert temp_db.db_claim_promo(301) == "NEW"           # counts reset
+    temp_db.db_set_promo_code("Mostbet", "OLD", 1)
+    temp_db.db_set_promo_code("Topaz", "TZ", 1)
+    temp_db.db_claim_promos(300)                       # both spent
+    assert temp_db.db_claim_promos(301) == []
+    temp_db.db_set_promo_code("Mostbet", "NEW", 1)     # fresh code for one partner
+    assert _codes(temp_db.db_claim_promos(301)) == {"Mostbet": "NEW"}
 
 
-def test_promo_stats(temp_db):
+def test_deleting_a_partner_code(temp_db):
     _reset(temp_db)
-    temp_db.db_set_promo_campaign("S", 500)
-    temp_db.db_claim_promo(1); temp_db.db_claim_promo(2)
-    assert temp_db.db_promo_stats() == {
-        "code": "S", "max_uses": 500, "claimed": 2, "available": 498}
+    temp_db.db_set_promo_code("Mostbet", "MB", 5)
+    assert temp_db.db_delete_promo_code("Mostbet") is True
+    assert temp_db.db_list_promo_codes() == []
+    assert temp_db.db_delete_promo_code("Mostbet") is False
+
+
+def test_promo_stats_per_partner(temp_db):
+    _reset(temp_db)
+    temp_db.db_set_promo_code("Mostbet", "S", 500)
+    temp_db.db_claim_promos(1); temp_db.db_claim_promos(2)
+    assert temp_db.db_list_promo_codes() == [
+        {"partner": "Mostbet", "code": "S", "max_uses": 500,
+         "claimed": 2, "available": 498}]
 
 
 # ─── Gate flow ────────────────────────────────────────────────────────────────
@@ -75,7 +96,7 @@ async def _run(temp_db, uid, status, monkeypatch, channel="@test"):
     monkeypatch.setattr(promo, "PROMO_CHANNEL", channel)
     sent = []
 
-    async def reply(text, reply_markup=None):
+    async def reply(text, reply_markup=None, **kw):
         sent.append((text, reply_markup))
 
     await promo._run_promo(_ctx(status), uid, reply)
@@ -100,7 +121,7 @@ async def test_gate_unavailable_without_active_campaign(temp_db, monkeypatch):
 async def test_gate_prompts_subscription_when_not_member(temp_db, monkeypatch):
     uid = 950003
     temp_db.db_ensure(uid, "u", "en"); temp_db.db_set(uid, "is_registered", 1)
-    _reset(temp_db); temp_db.db_set_promo_campaign("C", 500)
+    _reset(temp_db); temp_db.db_set_promo_code("Mostbet", "C", 500)
     sent = await _run(temp_db, uid, "left", monkeypatch)
     assert sent[0][0] == tr(uid, "promo_subscribe")
     assert sent[0][1] is not None                    # subscribe keyboard attached
@@ -109,16 +130,17 @@ async def test_gate_prompts_subscription_when_not_member(temp_db, monkeypatch):
 async def test_gate_issues_code_when_subscribed(temp_db, monkeypatch):
     uid = 950004
     temp_db.db_ensure(uid, "u", "en"); temp_db.db_set(uid, "is_registered", 1)
-    _reset(temp_db); temp_db.db_set_promo_campaign("WELCOME10", 500)
+    _reset(temp_db); temp_db.db_set_promo_code("Mostbet", "WELCOME10", 500)
     sent = await _run(temp_db, uid, "member", monkeypatch)
-    assert sent[0][0] == tr(uid, "promo_code", code="WELCOME10")
+    assert tr(uid, "promo_codes_title") in sent[0][0]
+    assert "Mostbet" in sent[0][0] and "WELCOME10" in sent[0][0]
 
 
 async def test_gate_reports_cap_reached(temp_db, monkeypatch):
     uid = 950005
     temp_db.db_ensure(uid, "u", "en"); temp_db.db_set(uid, "is_registered", 1)
-    _reset(temp_db); temp_db.db_set_promo_campaign("C", 1)
-    temp_db.db_claim_promo(999999)                   # someone else took the only use
+    _reset(temp_db); temp_db.db_set_promo_code("Mostbet", "C", 1)
+    temp_db.db_claim_promos(999999)                  # someone else took the only use
     sent = await _run(temp_db, uid, "administrator", monkeypatch)
     assert sent[0][0] == tr(uid, "promo_empty")
 
@@ -126,6 +148,6 @@ async def test_gate_reports_cap_reached(temp_db, monkeypatch):
 async def test_gate_unavailable_when_bot_cannot_check(temp_db, monkeypatch):
     uid = 950006
     temp_db.db_ensure(uid, "u", "en"); temp_db.db_set(uid, "is_registered", 1)
-    _reset(temp_db); temp_db.db_set_promo_campaign("C", 500)
+    _reset(temp_db); temp_db.db_set_promo_code("Mostbet", "C", 500)
     sent = await _run(temp_db, uid, "error", monkeypatch)   # get_chat_member raises
     assert sent[0][0] == tr(uid, "promo_unavailable")

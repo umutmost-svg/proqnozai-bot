@@ -146,6 +146,9 @@ def db_init():
             # events — every query below filters for NOT NULL.
             "ALTER TABLE requests ADD COLUMN ok INTEGER DEFAULT NULL",
             "ALTER TABLE requests ADD COLUMN ms INTEGER DEFAULT NULL",
+            # Promo codes are per partner now, each with its own cap. A row
+            # written before this carries partner='' and keeps working.
+            "ALTER TABLE promo_campaign ADD COLUMN partner TEXT DEFAULT ''",
         ):
             try:
                 c.execute(stmt)
@@ -421,20 +424,23 @@ def db_churn() -> dict:
 
 
 def db_promo_funnel() -> dict:
-    """Promo campaign as a funnel: of the users who could claim, how many did.
-    This is the monetization step, so it gets its own conversion figure."""
-    camp = db_get_promo_campaign()
+    """Promo campaigns as a funnel: of the users who could claim, how many did.
+    Aggregated across partners, with the per-partner breakdown alongside — that
+    is the monetization step, so it gets its own conversion figure."""
+    codes = db_list_promo_codes()
     eligible = _one("SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0") or 0
-    if not camp:
-        return dict(code=None, max_uses=0, claimed=0, remaining=0,
-                    eligible=eligible, conversion=0, claimed_7d=0)
-    claimed = _one("SELECT COUNT(*) FROM promo_claims WHERE code=?", (camp["code"],)) or 0
-    claimed_7d = _one("SELECT COUNT(*) FROM promo_claims WHERE code=? "
-                      "AND claimed_at >= datetime('now','-7 days')", (camp["code"],)) or 0
-    return dict(code=camp["code"], max_uses=camp["max_uses"], claimed=claimed,
-                remaining=max(0, camp["max_uses"] - claimed), eligible=eligible,
-                conversion=round(claimed / eligible * 100) if eligible else 0,
-                claimed_7d=claimed_7d)
+    if not codes:
+        return dict(partners=[], max_uses=0, claimed=0, remaining=0,
+                    eligible=eligible, conversion=0, claimed_7d=0, users=0)
+    claimed = sum(c["claimed"] for c in codes)
+    max_uses = sum(c["max_uses"] for c in codes)
+    users = _one("SELECT COUNT(DISTINCT user_id) FROM promo_claims") or 0
+    claimed_7d = _one("SELECT COUNT(*) FROM promo_claims "
+                      "WHERE claimed_at >= datetime('now','-7 days')") or 0
+    return dict(partners=codes, max_uses=max_uses, claimed=claimed,
+                remaining=max(0, max_uses - claimed), eligible=eligible,
+                conversion=round(users / eligible * 100) if eligible else 0,
+                claimed_7d=claimed_7d, users=users)
 
 
 # ─── Partner click tracking ───────────────────────────────────────────────────
@@ -631,54 +637,72 @@ def db_bot_winrate(days: int = 30) -> dict | None:
 
 
 # ─── Promo campaign (one shared code, capped total uses) ──────────────────────
-def db_set_promo_campaign(code: str, max_uses: int) -> None:
-    """Set THE active promo code and its total-use cap (e.g. one code for 500
-    users). Replaces any previous campaign. Claims are tracked per code, so
-    setting a NEW code starts a fresh count."""
+def db_set_promo_code(partner: str, code: str, max_uses: int) -> None:
+    """Set (or replace) ONE partner's promo code and its own use cap.
+
+    Each partner has an independent cap, so Mostbet running out doesn't hide
+    Topaz's code. Claims are tracked per code, so replacing a partner's code
+    starts that partner's count fresh while the others keep theirs."""
+    partner = (partner or "").strip()
     with con() as c:
-        c.execute("DELETE FROM promo_campaign")
-        c.execute("INSERT INTO promo_campaign (code, max_uses) VALUES (?,?)",
-                  (code.strip(), int(max_uses)))
+        c.execute("DELETE FROM promo_campaign WHERE partner=?", (partner,))
+        c.execute("INSERT INTO promo_campaign (partner, code, max_uses) VALUES (?,?,?)",
+                  (partner, code.strip(), int(max_uses)))
 
 
-def db_get_promo_campaign() -> dict | None:
+def db_delete_promo_code(partner: str) -> bool:
+    """Remove one partner's code. Returns whether anything was removed."""
     with con() as c:
-        row = c.execute("SELECT code, max_uses FROM promo_campaign LIMIT 1").fetchone()
-    return dict(code=row[0], max_uses=row[1]) if row else None
+        cur = c.execute("DELETE FROM promo_campaign WHERE partner=?",
+                        ((partner or "").strip(),))
+        return bool(cur.rowcount)
 
 
-def db_claim_promo(uid) -> str | None:
-    """Give this user the active promo code. Idempotent: a user who already
-    claimed it gets the SAME code back (not a second use). Returns None when no
-    campaign is set OR the use cap is reached.
+def db_list_promo_codes() -> list[dict]:
+    """Every configured code with how much of its cap is used."""
+    rows = _all("SELECT partner, code, max_uses FROM promo_campaign ORDER BY partner")
+    out = []
+    for partner, code, max_uses in rows:
+        claimed = _one("SELECT COUNT(*) FROM promo_claims WHERE code=?", (code,)) or 0
+        out.append(dict(partner=partner, code=code, max_uses=max_uses,
+                        claimed=claimed, available=max(0, max_uses - claimed)))
+    return out
 
-    BEGIN IMMEDIATE takes the write lock up front. SQLite's default deferred
-    transaction starts read-only and only upgrades on the INSERT, so two callers
-    could both read used == max_uses - 1 and both insert, issuing one code over
-    the cap. Taking the lock before the count makes read and write one unit."""
+
+def db_claim_promos(uid) -> list[dict]:
+    """Hand this user every code still available, one per partner.
+
+    Idempotent per code: a user who already has a partner's code gets the same
+    string back without consuming a second use. A partner whose cap is spent is
+    simply absent from the result — the others are unaffected.
+
+    BEGIN IMMEDIATE takes the write lock up front. A deferred transaction starts
+    read-only and only upgrades on the INSERT, so two callers could both read
+    used == max_uses - 1 and both insert, issuing one code over the cap."""
+    granted = []
     with con() as c:
         c.execute("BEGIN IMMEDIATE")
-        row = c.execute("SELECT code, max_uses FROM promo_campaign LIMIT 1").fetchone()
-        if not row:
-            return None
-        code, max_uses = row
-        if c.execute("SELECT 1 FROM promo_claims WHERE user_id=? AND code=?",
-                     (uid, code)).fetchone():
-            return code  # already claimed → same code
-        used = c.execute("SELECT COUNT(*) FROM promo_claims WHERE code=?", (code,)).fetchone()[0]
-        if used >= max_uses:
-            return None  # cap reached
-        c.execute("INSERT OR IGNORE INTO promo_claims (user_id, code) VALUES (?,?)", (uid, code))
-        return code
+        rows = c.execute(
+            "SELECT partner, code, max_uses FROM promo_campaign ORDER BY partner").fetchall()
+        for partner, code, max_uses in rows:
+            already = c.execute("SELECT 1 FROM promo_claims WHERE user_id=? AND code=?",
+                                (uid, code)).fetchone()
+            if already:
+                granted.append(dict(partner=partner, code=code))
+                continue
+            used = c.execute("SELECT COUNT(*) FROM promo_claims WHERE code=?",
+                             (code,)).fetchone()[0]
+            if used >= max_uses:
+                continue                     # this partner is out; others aren't
+            c.execute("INSERT OR IGNORE INTO promo_claims (user_id, code) VALUES (?,?)",
+                      (uid, code))
+            granted.append(dict(partner=partner, code=code))
+    return granted
 
 
-def db_promo_stats() -> dict:
-    camp = db_get_promo_campaign()
-    if not camp:
-        return dict(code=None, max_uses=0, claimed=0, available=0)
-    claimed = _one("SELECT COUNT(*) FROM promo_claims WHERE code=?", (camp["code"],)) or 0
-    return dict(code=camp["code"], max_uses=camp["max_uses"], claimed=claimed,
-                available=max(0, camp["max_uses"] - claimed))
+def db_promo_stats() -> list[dict]:
+    """Per-partner campaign state, for the admin readout."""
+    return db_list_promo_codes()
 
 
 def db_user_streak(uid) -> int:

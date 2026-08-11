@@ -37,7 +37,7 @@ def _deploy_version() -> str:
 
 # Bump this key whenever the main menu layout changes: the broadcast below runs
 # once per key, not on every restart (a crash-loop must never spam the user base).
-MENU_BROADCAST_KEY = "menu_broadcast_2026_08_promo_bonus_wording"
+MENU_BROADCAST_KEY = "menu_broadcast_2026_08_bonus_and_partners"
 
 
 async def _broadcast_menu_update(application):
