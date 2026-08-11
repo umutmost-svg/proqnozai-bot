@@ -33,6 +33,8 @@ ADMIN_ID        = int(os.environ.get("ADMIN_ID", "0"))
 # promo feature stays hidden.
 PROMO_CHANNEL     = os.environ.get("PROMO_CHANNEL", "").strip()
 PROMO_CHANNEL_URL = os.environ.get("PROMO_CHANNEL_URL", "").strip()
+# "Our partners" menu button → this link. Empty ⇒ the button stays hidden.
+PARTNERS_URL      = os.environ.get("PARTNERS_URL", "").strip()
 # Accept either name: FOOTBALL_KEY (preferred) or legacy FOOTBALL_API_KEY.
 FOOTBALL_KEY    = os.environ.get("FOOTBALL_KEY") or os.environ.get("FOOTBALL_API_KEY", "")
 APIFOOTBALL_KEY = os.environ.get("APIFOOTBALL_KEY", "")
