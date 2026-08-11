@@ -165,3 +165,47 @@ def test_error_summary_never_includes_the_message():
     class _E(Exception):
         pass
     assert dash._safe_err(_E(f"boom ?token={TOKEN}")) == "_E"
+
+
+# ─── partner click redirect ───────────────────────────────────────────────────
+
+@pytest.fixture
+def partners_env(monkeypatch):
+    monkeypatch.setenv("PARTNERS", "Mostbet | https://mostbet.com;1xBet | https://1xbet.com")
+    monkeypatch.setattr(dash, "_PARTNER_TARGETS", {})   # drop the memoized map
+    yield
+    monkeypatch.setattr(dash, "_PARTNER_TARGETS", {})
+
+
+def test_redirect_sends_the_user_to_the_partner(client, calls, partners_env):
+    r = client.get("/r/Mostbet?u=42")
+    assert r.status_code == 302
+    assert r.headers["Location"] == "https://mostbet.com"
+
+
+def test_redirect_records_the_click(client, calls, partners_env):
+    client.get("/r/1xBet?u=42")
+    method, url, kw = calls[-1]
+    assert method == "POST" and url.endswith("/track/partner_click")
+    assert kw["json"] == {"user_id": "42", "partner": "1xBet"}
+    assert kw["headers"]["X-Dashboard-Token"] == TOKEN
+
+
+def test_redirect_still_works_when_tracking_fails(client, monkeypatch, partners_env):
+    """A dead worker must never stop someone reaching the partner."""
+    def _boom(*a, **kw):
+        raise RuntimeError("worker unreachable")
+
+    monkeypatch.setattr(dash.httpx, "post", _boom)
+    r = client.get("/r/Mostbet?u=1")
+    assert r.status_code == 302
+    assert r.headers["Location"] == "https://mostbet.com"
+
+
+def test_redirect_needs_no_dashboard_login(client, calls, partners_env):
+    """The visitor is a bot user following a link, not an operator."""
+    assert client.get("/r/Mostbet?u=1").status_code == 302
+
+
+def test_unknown_partner_is_404(client, calls, partners_env):
+    assert client.get("/r/NotAPartner?u=1").status_code == 404

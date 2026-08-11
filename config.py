@@ -61,6 +61,16 @@ def _parse_partners(raw: str, legacy_url: str) -> list[tuple[str, str]]:
 
 
 PARTNERS = _parse_partners(os.environ.get("PARTNERS", ""), PARTNERS_URL)
+
+# Public base URL of the dashboard service, used to count partner clicks:
+# buttons point at <base>/r/<partner>?u=<uid> which records the click and
+# redirects on. Telegram reports nothing about taps on a plain URL button, so
+# without this there is no click data at all.
+#
+# LEAVING IT UNSET IS THE SAFE DEFAULT: buttons then link straight to the
+# partner exactly as before. Set it only once the dashboard is reliably
+# reachable — while it is set, a dashboard outage breaks partner links.
+PARTNER_REDIRECT_BASE = os.environ.get("PARTNER_REDIRECT_BASE", "").rstrip("/")
 # Accept either name: FOOTBALL_KEY (preferred) or legacy FOOTBALL_API_KEY.
 FOOTBALL_KEY    = os.environ.get("FOOTBALL_KEY") or os.environ.get("FOOTBALL_API_KEY", "")
 APIFOOTBALL_KEY = os.environ.get("APIFOOTBALL_KEY", "")

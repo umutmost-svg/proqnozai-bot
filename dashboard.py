@@ -10,6 +10,8 @@ import logging
 import os
 from functools import wraps
 
+from urllib.parse import urlparse
+
 import httpx
 from flask import Flask, Response, render_template_string, request, redirect, url_for
 
@@ -49,6 +51,56 @@ STATS_URL     = os.environ.get("STATS_URL", _BOT_BASE + "/stats")
 BROADCAST_URL = _BOT_BASE + "/broadcast"
 STATS_TOKEN   = os.environ.get("DASHBOARD_TOKEN", "")
 DASH_USER     = os.environ.get("DASHBOARD_USER", "admin")
+
+
+# ─── Partner click redirect ───────────────────────────────────────────────────
+# Only reachable when the bot is configured with PARTNER_REDIRECT_BASE pointing
+# here; otherwise partner buttons link straight to the partner and this route is
+# simply unused. Deliberately unauthenticated — the visitor is a bot user
+# following a link, not an operator.
+_PARTNER_TARGETS = {}
+
+
+def _partner_targets() -> dict:
+    """name → destination URL, parsed from the same PARTNERS value the bot uses.
+
+    The dashboard has no database and no Telegram context, so the mapping comes
+    from the environment both services already share."""
+    global _PARTNER_TARGETS
+    if _PARTNER_TARGETS:
+        return _PARTNER_TARGETS
+    raw = os.environ.get("PARTNERS", "")
+    legacy = os.environ.get("PARTNERS_URL", "").strip()
+    out = {}
+    for chunk in raw.replace(";", "\n").split("\n"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        label, _, url = chunk.partition("|")
+        url = (url or label).strip()
+        label = label.strip() if url != label.strip() else ""
+        if url.startswith(("http://", "https://")):
+            out[label or urlparse(url).netloc] = url
+    if not out and legacy.startswith(("http://", "https://")):
+        out[urlparse(legacy).netloc] = legacy
+    _PARTNER_TARGETS = out
+    return out
+
+
+@app.route("/r/<path:partner>")
+def partner_redirect(partner):
+    """Count the click, then send the user on. Recording is best-effort: a
+    failing worker must never stop someone reaching the partner."""
+    target = _partner_targets().get(partner)
+    if not target:
+        return Response("unknown partner", 404)
+    try:
+        httpx.post(f"{_BOT_BASE}/track/partner_click", headers=_auth_headers(),
+                   json={"user_id": request.args.get("u"), "partner": partner},
+                   timeout=2)
+    except Exception as e:
+        logger.warning("partner click not recorded: %s", _safe_err(e))
+    return redirect(target, code=302)
 
 
 # ─── Basic Auth ───────────────────────────────────────────────────────────────
@@ -281,6 +333,115 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-t
       </div>
     </div>
   </div>
+
+  <!-- ── Продуктовые метрики ── -->
+  {% set f  = d.funnel|default({}) %}
+  {% set e  = d.engagement|default({}) %}
+  {% set fh = d.forecast_health|default({}) %}
+  {% set fc = d.feedback_coverage|default({}) %}
+  {% set pr = d.promo|default({}) %}
+  {% set pt = d.partners|default({}) %}
+  {% set ch = d.churn|default({}) %}
+  {% if e %}
+  <div class="section-title">Продукт</div>
+  <div class="grid g4">
+    <div class="card stat-card">
+      <div class="stat-label">DAU / WAU / MAU</div>
+      <div class="stat-value">{{ e.dau }}<span class="muted" style="font-size:18px"> / {{ e.wau }} / {{ e.mau }}</span></div>
+      <div class="stat-sub">Липучесть DAU/MAU: <b class="{{ 'green' if e.stickiness >= 20 else 'yellow' }}">{{ e.stickiness }}%</b></div>
+    </div>
+    <div class="card stat-card">
+      <div class="stat-label">Прогнозов всего</div>
+      <div class="stat-value">{{ d.forecasts_real_total|default(0) }}</div>
+      <div class="stat-sub">сегодня {{ d.forecasts_real_today|default(0) }} · на активного за неделю {{ e.forecasts_per_wau }}</div>
+    </div>
+    <div class="card stat-card">
+      <div class="stat-label">Успешность генерации</div>
+      <div class="stat-value {{ 'green' if fh.ok_pct|default(0) >= 95 else 'red' }}">{{ fh.ok_pct|default(0) }}%</div>
+      <div class="stat-sub">за 7 дней: {{ fh.ok|default(0) }} из {{ fh.total|default(0) }} · сбоев {{ fh.failed|default(0) }}</div>
+    </div>
+    <div class="card stat-card">
+      <div class="stat-label">Время генерации</div>
+      <div class="stat-value">{{ (fh.p50_ms|default(0) / 1000)|round(1) }}<span class="muted" style="font-size:18px"> с</span></div>
+      <div class="stat-sub">медиана · среднее {{ (fh.avg_ms|default(0) / 1000)|round(1) }} с</div>
+    </div>
+  </div>
+
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card">
+      <div class="stat-label" style="margin-bottom:12px">Воронка активации</div>
+      {% set base = f.started|default(1) or 1 %}
+      {% for name, val in [('Пришли', f.started|default(0)), ('Зарегистрировались', f.registered|default(0)),
+                           ('Прошли онбординг', f.onboarded|default(0)), ('Получили прогноз', f.forecasted|default(0))] %}
+      <div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span>{{ name }}</span><span><b>{{ val }}</b> <span class="muted">{{ (val / base * 100)|round|int }}%</span></span>
+        </div>
+        <div class="bar-wrap"><div class="bar bar-accent" style="width:{{ (val / base * 100)|round|int }}%"></div></div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="card">
+      <div class="stat-label" style="margin-bottom:12px">Удержание по когортам</div>
+      <table>
+        <tr><th>Дата</th><th>Когорта</th><th>D1</th><th>D7</th><th>D30</th></tr>
+        {% for r in (d.retention|default([]))[:7] %}
+        <tr><td>{{ r.day }}</td><td>{{ r.size }}</td>
+            <td>{{ r.d1 }}%</td><td>{{ r.d7 }}%</td><td>{{ r.d30 }}%</td></tr>
+        {% else %}
+        <tr><td colspan="5" class="muted">Пока нет данных</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card">
+      <div class="stat-label" style="margin-bottom:10px">Партнёры (30 дней)</div>
+      <div class="stat-value" style="font-size:26px">{{ pt.total|default(0) }}</div>
+      <div class="stat-sub" style="margin-bottom:10px">
+        кликов · уникальных {{ pt.unique_users|default(0) }} · открывали список {{ pt.opened_list|default(0) }}
+        {% if pt.opened_list|default(0) %}· конверсия {{ pt.click_through }}%{% endif %}
+      </div>
+      {% if pt.by_partner|default([]) %}
+      <table>
+        <tr><th>Партнёр</th><th>Кликов</th><th>Людей</th></tr>
+        {% for name, clicks, users in pt.by_partner %}
+        <tr><td>{{ name }}</td><td>{{ clicks }}</td><td>{{ users }}</td></tr>
+        {% endfor %}
+      </table>
+      {% else %}
+      <div class="muted" style="font-size:12px">Трекинг кликов выключен (PARTNER_REDIRECT_BASE не задан)</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="stat-label" style="margin-bottom:10px">Промокоды</div>
+      {% if pr.code %}
+      <div class="stat-value" style="font-size:26px">{{ pr.claimed }}<span class="muted" style="font-size:16px"> / {{ pr.max_uses }}</span></div>
+      <div class="bar-wrap"><div class="bar bar-green" style="width:{{ (pr.claimed / (pr.max_uses or 1) * 100)|round|int }}%"></div></div>
+      <div class="stat-sub" style="margin-top:8px">
+        код <b>{{ pr.code }}</b> · осталось {{ pr.remaining }}<br>
+        за неделю {{ pr.claimed_7d }} · конверсия от базы {{ pr.conversion }}%
+      </div>
+      {% else %}
+      <div class="muted" style="font-size:12px">Активной кампании нет</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="stat-label" style="margin-bottom:10px">Отток и обратная связь</div>
+      <div class="stat-sub" style="line-height:1.9">
+        Активны за 7 дней: <b class="green">{{ ch.active_7d|default(0) }}</b><br>
+        Молчат 7–30 дней: <b class="yellow">{{ ch.silent_7_30|default(0) }}</b><br>
+        Молчат больше 30: <b class="red">{{ ch.silent_30|default(0) }}</b><br>
+        Ни одного действия: <b class="muted">{{ ch.never|default(0) }}</b><br>
+        Оценено прогнозов: <b>{{ fc.pct|default(0) }}%</b> <span class="muted">({{ fc.rated|default(0) }} из {{ fc.total|default(0) }})</span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   <!-- ── Графики ── -->
   <div class="section-title">Аналитика</div>

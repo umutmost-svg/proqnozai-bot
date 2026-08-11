@@ -18,7 +18,10 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-from db import con, _all, like_escape
+from db import (con, _all, like_escape, db_log_partner_click,
+                db_activation_funnel, db_engagement, db_retention,
+                db_feedback_coverage, db_forecast_health, db_churn,
+                db_promo_funnel, db_partner_clicks)
 
 STATS_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
 STATS_PORT  = int(os.environ.get("STATS_PORT", "8888"))
@@ -122,6 +125,20 @@ def _collect():
         "winrate_daily":      [[r[0], r[1], r[2]] for r in q("SELECT date(created_at), SUM(CASE WHEN feedback=1 THEN 1 ELSE 0 END), COUNT(*) FROM forecast_history WHERE feedback IS NOT NULL AND date(created_at)>=? GROUP BY 1 ORDER BY 1", ((now - timedelta(days=14)).strftime("%Y-%m-%d"),))],
         "recent_users":       [[r[0],r[1],r[2],r[3],r[4]] for r in q("SELECT user_id,display_name,username,lang,joined_at FROM users WHERE is_registered=1 ORDER BY joined_at DESC LIMIT 10")],
         "recent_forecasts":   [[r[0],r[1],r[2],r[3],r[4]] for r in q("SELECT fh.user_id,u.display_name,fh.match_name,fh.feedback,fh.created_at FROM forecast_history fh LEFT JOIN users u ON fh.user_id=u.user_id ORDER BY fh.created_at DESC LIMIT 10")],
+        # ── Product metrics ────────────────────────────────────────────
+        # forecasts_* above come from forecast_history, which is capped at
+        # 10 rows per user and therefore cannot measure volume. The block
+        # below is computed from the uncapped `requests` event log.
+        "funnel":             db_activation_funnel(),
+        "engagement":         db_engagement(),
+        "retention":          db_retention(),
+        "feedback_coverage":  db_feedback_coverage(),
+        "forecast_health":    db_forecast_health(),
+        "churn":              db_churn(),
+        "promo":              db_promo_funnel(),
+        "partners":           db_partner_clicks(),
+        "forecasts_real_total": one("SELECT COUNT(*) FROM requests WHERE msg_type='FORECAST'"),
+        "forecasts_real_today": one("SELECT COUNT(*) FROM requests WHERE msg_type='FORECAST' AND date(created_at)=?", (today,)),
     }
 
 
@@ -168,7 +185,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path not in ("/broadcast", "/users/block"):
+        if parsed.path not in ("/broadcast", "/users/block", "/track/partner_click"):
             self._send(404, b"not found"); return
 
         length = int(self.headers.get("Content-Length", 0))
@@ -179,6 +196,17 @@ class _Handler(BaseHTTPRequestHandler):
 
         if not _auth_ok(_token_from(self)):
             self._send(503 if not STATS_TOKEN else 401, b"dashboard token required"); return
+
+        if parsed.path == "/track/partner_click":
+            # The dashboard forwards a partner click here; it has no DB access
+            # of its own (web talks to the worker over HTTP only).
+            try:
+                uid = int(body.get("user_id") or 0)
+            except (TypeError, ValueError):
+                uid = 0
+            db_log_partner_click(uid, str(body.get("partner") or ""))
+            self._send(200, b"ok")
+            return
 
         if parsed.path == "/users/block":
             try:

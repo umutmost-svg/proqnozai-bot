@@ -113,6 +113,12 @@ def db_init():
             created_at TEXT DEFAULT (datetime('now')),
             PRIMARY KEY (match_id, event_key)
         );
+        CREATE TABLE IF NOT EXISTS partner_clicks (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER,
+            partner    TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
         CREATE TABLE IF NOT EXISTS promo_campaign (
             code       TEXT,
             max_uses   INTEGER,
@@ -134,6 +140,12 @@ def db_init():
             # Scopes conversation memory to one fixture, so an analysis of match
             # A can't leak into an independent forecast for match B.
             "ALTER TABLE conversation ADD COLUMN fixture_key TEXT DEFAULT ''",
+            # Outcome and duration of a forecast, so the dashboard can show a
+            # real success rate and latency instead of guessing from the logs.
+            # NULL on rows written before this existed, and on non-forecast
+            # events — every query below filters for NOT NULL.
+            "ALTER TABLE requests ADD COLUMN ok INTEGER DEFAULT NULL",
+            "ALTER TABLE requests ADD COLUMN ms INTEGER DEFAULT NULL",
         ):
             try:
                 c.execute(stmt)
@@ -241,10 +253,28 @@ def db_all_uids() -> list[int]:
         return []
 
 
-def db_log_req(uid, mtype):
+# msg_type values written to `requests`. TEXT/PHOTO are inbound messages;
+# FORECAST is a generated forecast, which is what the product actually does.
+# FORECAST was missing entirely until now: the menu flow never logged, so every
+# menu-only user looked permanently inactive to last_active, to the dashboard's
+# activity counts, to the broadcast segments and to daily_push.
+REQ_TEXT = "TEXT"
+REQ_PHOTO = "PHOTO"
+REQ_FORECAST = "FORECAST"
+# The user opened the partner list. Paired with partner_clicks, this gives the
+# only funnel we can measure on partner links.
+REQ_PARTNERS_OPEN = "PARTNERS_OPEN"
+
+
+def db_log_req(uid, mtype, ok: bool | None = None, ms: int | None = None):
+    """Record one user event and refresh last_active.
+
+    `ok`/`ms` are only meaningful for REQ_FORECAST — they carry whether the
+    forecast was produced and how long it took."""
     try:
         with con() as c:
-            c.execute("INSERT INTO requests (user_id,msg_type) VALUES (?,?)", (uid, mtype))
+            c.execute("INSERT INTO requests (user_id,msg_type,ok,ms) VALUES (?,?,?,?)",
+                      (uid, mtype, None if ok is None else int(ok), ms))
             # datetime('now') (SQLite, UTC) — NOT Python's datetime.now() (local
             # process time) — so last_active stays in the same UTC clock as
             # every date('now')/datetime('now') comparison elsewhere (joined_at,
@@ -255,6 +285,188 @@ def db_log_req(uid, mtype):
                       (uid,))
     except Exception as e:
         logger.error(f"db_log_req uid={uid}: {e}")
+
+
+# ─── Product metrics ──────────────────────────────────────────────────────────
+# Everything below is derived from the existing tables. Two measurement traps
+# they deliberately avoid:
+#   * forecast_history is capped at 10 rows per user, so it can never be used
+#     as a volume metric — `requests` (uncapped) is the event log.
+#   * "active" must mean "did something", which is a FORECAST/TEXT/PHOTO row,
+#     not merely "is registered".
+
+def db_activation_funnel() -> dict:
+    """How far users get: arrived → registered → finished onboarding → got a
+    forecast. The drop between two adjacent steps is where the product loses
+    people.
+
+    Each step is a strict subset of the one before it, which is what makes the
+    percentages mean anything. That matters because the underlying columns are
+    independent flags: a user carried over from before onboarding existed can
+    have forecasts without onboarding_done, and counting the steps separately
+    would produce a "funnel" that widens. `forecasted_any` keeps that raw
+    number, since it is the honest count of people who ever got a forecast."""
+    with con() as c:
+        def one(sql):
+            return c.execute(sql).fetchone()[0]
+        started = one("SELECT COUNT(*) FROM users")
+        registered = one("SELECT COUNT(*) FROM users WHERE is_registered=1")
+        onboarded = one("SELECT COUNT(*) FROM users "
+                        "WHERE is_registered=1 AND onboarding_done=1")
+        forecasted = one(
+            "SELECT COUNT(DISTINCT u.user_id) FROM users u "
+            "JOIN requests r ON r.user_id = u.user_id AND r.msg_type='FORECAST' "
+            "WHERE u.is_registered=1 AND u.onboarding_done=1")
+        forecasted_any = one(
+            "SELECT COUNT(DISTINCT user_id) FROM requests WHERE msg_type='FORECAST'")
+    return dict(started=started, registered=registered, onboarded=onboarded,
+                forecasted=forecasted, forecasted_any=forecasted_any)
+
+
+def db_engagement() -> dict:
+    """DAU / WAU / MAU plus stickiness (DAU/MAU) — the single number that says
+    whether the product is a habit or a one-off."""
+    with con() as c:
+        def act(days):
+            return c.execute(
+                "SELECT COUNT(DISTINCT user_id) FROM requests "
+                "WHERE created_at >= datetime('now', ?)", (f"-{days} days",)).fetchone()[0]
+        dau, wau, mau = act(1), act(7), act(30)
+        forecasts_7d = c.execute(
+            "SELECT COUNT(*) FROM requests WHERE msg_type='FORECAST' "
+            "AND created_at >= datetime('now','-7 days')").fetchone()[0]
+    return dict(dau=dau, wau=wau, mau=mau,
+                stickiness=round(dau / mau * 100) if mau else 0,
+                forecasts_per_wau=round(forecasts_7d / wau, 1) if wau else 0.0)
+
+
+def db_retention(cohort_days: int = 30) -> list[dict]:
+    """Classic D1/D7/D30: of the users who joined on a given day, how many came
+    back on day 1, within a week, within a month. Anchored on joined_at, counted
+    from the uncapped `requests` log."""
+    rows = _all(
+        """
+        WITH cohort AS (
+            SELECT user_id, date(joined_at) AS day FROM users
+            WHERE date(joined_at) >= date('now', ?)
+        )
+        SELECT c.day, COUNT(DISTINCT c.user_id),
+               COUNT(DISTINCT CASE WHEN julianday(date(r.created_at))
+                                      - julianday(c.day) BETWEEN 1 AND 1
+                              THEN c.user_id END),
+               COUNT(DISTINCT CASE WHEN julianday(date(r.created_at))
+                                      - julianday(c.day) BETWEEN 1 AND 7
+                              THEN c.user_id END),
+               COUNT(DISTINCT CASE WHEN julianday(date(r.created_at))
+                                      - julianday(c.day) BETWEEN 1 AND 30
+                              THEN c.user_id END)
+        FROM cohort c LEFT JOIN requests r ON r.user_id = c.user_id
+        GROUP BY c.day ORDER BY c.day DESC
+        """, (f"-{int(cohort_days)} days",))
+    out = []
+    for day, size, d1, d7, d30 in rows:
+        pct = lambda n: round(n / size * 100) if size else 0   # noqa: E731
+        out.append(dict(day=day, size=size, d1=pct(d1), d7=pct(d7), d30=pct(d30)))
+    return out
+
+
+def db_feedback_coverage() -> dict:
+    """What share of forecasts anyone actually rates. The bot-wide winrate is
+    computed over rated forecasts only, so a low coverage means the headline
+    accuracy figure rests on a thin, self-selected sample."""
+    total = _one("SELECT COUNT(*) FROM forecast_history") or 0
+    rated = _one("SELECT COUNT(*) FROM forecast_history WHERE feedback IS NOT NULL") or 0
+    return dict(total=total, rated=rated,
+                pct=round(rated / total * 100) if total else 0)
+
+
+def db_forecast_health(days: int = 7) -> dict:
+    """Success rate and latency of forecast generation, from the outcome
+    recorded alongside each FORECAST event."""
+    with con() as c:
+        row = c.execute(
+            "SELECT COUNT(*), SUM(CASE WHEN ok=1 THEN 1 ELSE 0 END), AVG(ms) "
+            "FROM requests WHERE msg_type='FORECAST' AND ok IS NOT NULL "
+            "AND created_at >= datetime('now', ?)", (f"-{int(days)} days",)).fetchone()
+        # Median latency: SQLite has no percentile function, so take the middle
+        # row of the ordered set.
+        p50 = c.execute(
+            "SELECT ms FROM requests WHERE msg_type='FORECAST' AND ms IS NOT NULL "
+            "AND created_at >= datetime('now', ?) ORDER BY ms "
+            "LIMIT 1 OFFSET (SELECT COUNT(*)/2 FROM requests "
+            "                WHERE msg_type='FORECAST' AND ms IS NOT NULL "
+            "                AND created_at >= datetime('now', ?))",
+            (f"-{int(days)} days", f"-{int(days)} days")).fetchone()
+    total, ok, avg_ms = row[0] or 0, row[1] or 0, row[2]
+    return dict(total=total, ok=ok, failed=total - ok,
+                ok_pct=round(ok / total * 100) if total else 0,
+                avg_ms=round(avg_ms) if avg_ms else 0,
+                p50_ms=p50[0] if p50 else 0)
+
+
+def db_churn() -> dict:
+    """Registered users by how long they have been silent. `never` is the
+    activation leak: registered and then never did anything."""
+    with con() as c:
+        def one(sql):
+            return c.execute(sql).fetchone()[0]
+        base = "SELECT COUNT(*) FROM users WHERE is_registered=1"
+        return dict(
+            active_7d=one(base + " AND last_active != '' AND date(last_active) >= date('now','-7 days')"),
+            silent_7_30=one(base + " AND last_active != '' AND date(last_active) < date('now','-7 days')"
+                                   " AND date(last_active) >= date('now','-30 days')"),
+            silent_30=one(base + " AND last_active != '' AND date(last_active) < date('now','-30 days')"),
+            never=one(base + " AND (last_active IS NULL OR last_active='')"),
+        )
+
+
+def db_promo_funnel() -> dict:
+    """Promo campaign as a funnel: of the users who could claim, how many did.
+    This is the monetization step, so it gets its own conversion figure."""
+    camp = db_get_promo_campaign()
+    eligible = _one("SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0") or 0
+    if not camp:
+        return dict(code=None, max_uses=0, claimed=0, remaining=0,
+                    eligible=eligible, conversion=0, claimed_7d=0)
+    claimed = _one("SELECT COUNT(*) FROM promo_claims WHERE code=?", (camp["code"],)) or 0
+    claimed_7d = _one("SELECT COUNT(*) FROM promo_claims WHERE code=? "
+                      "AND claimed_at >= datetime('now','-7 days')", (camp["code"],)) or 0
+    return dict(code=camp["code"], max_uses=camp["max_uses"], claimed=claimed,
+                remaining=max(0, camp["max_uses"] - claimed), eligible=eligible,
+                conversion=round(claimed / eligible * 100) if eligible else 0,
+                claimed_7d=claimed_7d)
+
+
+# ─── Partner click tracking ───────────────────────────────────────────────────
+def db_log_partner_click(uid, partner: str) -> None:
+    """One click on a partner link. Best-effort: a failure here must never
+    interfere with sending the user to the partner."""
+    try:
+        _run("INSERT INTO partner_clicks (user_id, partner) VALUES (?,?)",
+             (uid, (partner or "")[:100]))
+    except Exception as e:
+        logger.error(f"db_log_partner_click: {e}")
+
+
+def db_partner_clicks(days: int = 30) -> dict:
+    """Clicks per partner plus unique clickers — the closest thing the bot has
+    to a revenue signal."""
+    cutoff = f"-{int(days)} days"
+    rows = _all("SELECT partner, COUNT(*), COUNT(DISTINCT user_id) FROM partner_clicks "
+                "WHERE created_at >= datetime('now', ?) GROUP BY 1 ORDER BY 2 DESC", (cutoff,))
+    total = sum(r[1] for r in rows)
+    uniq = _one("SELECT COUNT(DISTINCT user_id) FROM partner_clicks "
+                "WHERE created_at >= datetime('now', ?)", (cutoff,)) or 0
+    opened = _one("SELECT COUNT(DISTINCT user_id) FROM requests "
+                  "WHERE msg_type='PARTNERS_OPEN' AND created_at >= datetime('now', ?)",
+                  (cutoff,)) or 0
+    # Clicks can arrive from a partner list opened before this window, so the
+    # raw ratio can exceed 100%. Clamp it: the number is meant to read as "what
+    # share of people who open the list go on to a partner", and a figure above
+    # 100 only means the two counters cover slightly different populations.
+    return dict(total=total, unique_users=uniq, opened_list=opened,
+                click_through=min(100, round(uniq / opened * 100)) if opened else 0,
+                by_partner=[[r[0], r[1], r[2]] for r in rows])
 
 
 def db_stats() -> dict:
