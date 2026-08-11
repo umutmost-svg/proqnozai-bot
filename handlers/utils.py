@@ -98,9 +98,11 @@ LANG_BTN = "🌐 Dil · Язык · Lang"
 def main_menu(uid):
     lang = db_lang(uid)
     tl = T[lang]
+    # History/Profile are intentionally kept out of the keyboard (low value in
+    # the menu); the labels still route in handle_msg for stale keyboards, and
+    # the profile stays reachable via /profile.
     rows = [
         [tl["menu_forecast"]],
-        [tl["menu_history"],   tl["menu_profile"]],
         [tl["menu_support"],   LANG_BTN],
     ]
     # The promo button only appears once a gate channel is configured.
@@ -119,13 +121,12 @@ def lang_kb():
             InlineKeyboardButton("Русский",    callback_data="lang_ru"),
             InlineKeyboardButton("English",    callback_data="lang_en"),
         ],
+        # uz/ar are temporarily off the picker; their translations stay in
+        # place, so users already on them keep a translated UI and re-enabling
+        # is just putting the two buttons back.
         [
             InlineKeyboardButton("Türkçe",     callback_data="lang_tr"),
             InlineKeyboardButton("Қазақша",    callback_data="lang_kz"),
-            InlineKeyboardButton("O'zbek",     callback_data="lang_uz"),
-        ],
-        [
-            InlineKeyboardButton("العربية",    callback_data="lang_ar"),
         ],
     ])
 

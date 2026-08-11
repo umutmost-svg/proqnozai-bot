@@ -113,5 +113,15 @@ def test_lang_keyboard_callback_data_unchanged():
     from handlers.utils import lang_kb
     kb = lang_kb()
     datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
-    assert datas == ["lang_az", "lang_ru", "lang_en",
-                     "lang_tr", "lang_kz", "lang_uz", "lang_ar"]
+    # uz/ar are temporarily off the picker; the remaining callback_data values
+    # keep their exact format, so buttons already in chats still resolve.
+    assert datas == ["lang_az", "lang_ru", "lang_en", "lang_tr", "lang_kz"]
+
+
+def test_disabled_languages_still_render_for_existing_users(temp_db):
+    """uz/ar users keep a translated UI even though the picker no longer
+    offers those languages — only the entry point was removed."""
+    temp_db.db_ensure(940003, "u", "ru")
+    temp_db.db_set(940003, "lang", "uz")
+    assert temp_db.db_lang(940003) == "uz"
+    assert tr(940003, "need_reg") == T["uz"]["need_reg"]

@@ -42,6 +42,9 @@ def register_handlers(app):
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("lang",    lang_cmd))
     app.add_handler(CommandHandler("profile", profile_cmd))
+    # /history is the only entry point left after the menu button was dropped —
+    # and the only place the ✅/❌ feedback buttons are offered.
+    app.add_handler(CommandHandler("history", history_cmd))
     app.add_handler(CommandHandler("tz",      tz_cmd))
     app.add_handler(CommandHandler("matches", matches_cmd))
     app.add_handler(CommandHandler("compare", compare_cmd))

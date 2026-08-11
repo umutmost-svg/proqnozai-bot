@@ -806,8 +806,8 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == tl["menu_partners"]:
         from config import PARTNERS
         if PARTNERS:
-            # One inline link button per partner; a partner with no label
-            # falls back to the generic "open partner" caption.
+            # One inline link button per company; an entry with no name
+            # falls back to the generic "open the site" caption.
             rows = [[InlineKeyboardButton(label or tr(uid, "partners_btn"), url=url)]
                     for label, url in PARTNERS]
             await update.message.reply_text(
