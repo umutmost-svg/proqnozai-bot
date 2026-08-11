@@ -17,7 +17,14 @@ def test_detect_lang_aliases():
     assert detect_lang("uk") == "ru"   # Ukrainian → ru UI
     assert detect_lang("be") == "ru"
     assert detect_lang("kk") == "kz"
-    assert detect_lang("fa") == "ar"
+
+
+def test_disabled_locales_map_to_offered_languages():
+    """uz/ar are off the language picker for now — detection must not park a
+    user on a language they cannot see as an option."""
+    assert detect_lang("uz") == "ru"
+    assert detect_lang("ar") == "en"
+    assert detect_lang("fa") == "en"
 
 
 def test_detect_lang_region_suffix_and_case():

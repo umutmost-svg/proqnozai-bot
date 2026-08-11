@@ -164,10 +164,13 @@ def normalize_lang(lang) -> str:
 def detect_lang(tg_lang: str | None) -> str:
     if not tg_lang:
         return DEFAULT_LANG
+    # uz/ar are temporarily disabled in the UI (see handlers.utils.lang_kb), so
+    # those locales land on a language the picker can actually offer instead of
+    # a language the user cannot switch away from by name.
     mapping = {
         "az": "az", "ru": "ru", "uk": "ru", "be": "ru",
-        "tr": "tr", "kk": "kz", "uz": "uz",
-        "ar": "ar", "fa": "ar", "en": "en",
+        "tr": "tr", "kk": "kz", "uz": "ru",
+        "ar": "en", "fa": "en", "en": "en",
     }
     return mapping.get(tg_lang.lower()[:2], DEFAULT_LANG)
 
