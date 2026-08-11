@@ -19,9 +19,10 @@ logger = logging.getLogger("dashboard")
 
 def _safe_err(e: Exception) -> str:
     """A log-safe description of a backend error. httpx exception strings embed
-    the request URL, and that URL carries ?token=<DASHBOARD_TOKEN> — so we must
-    NEVER log the exception message (CLAUDE.md: never log token/key values).
-    Log only the exception type, or the HTTP status when one is available."""
+    the request URL and can carry request detail with them, so we log only the
+    exception type or the HTTP status — never the message (CLAUDE.md: never log
+    token/key values). The token itself now travels in a header rather than the
+    URL, but the rule stands: nothing from the exception body reaches the log."""
     resp = getattr(e, "response", None)
     status = getattr(resp, "status_code", None)
     return f"HTTP {status}" if status is not None else type(e).__name__
@@ -589,9 +590,8 @@ setInterval(refreshData, 45000);
 @app.route("/")
 @require_auth
 def index():
-    token_param = f"?token={STATS_TOKEN}" if STATS_TOKEN else ""
     try:
-        resp = httpx.get(STATS_URL + token_param, timeout=10)
+        resp = httpx.get(STATS_URL, headers=_auth_headers(), timeout=10)
         resp.raise_for_status()
         raw = resp.json()
         if not isinstance(raw, dict):
@@ -642,8 +642,11 @@ def index():
     )
 
 
-def _stats_param():
-    return f"?token={STATS_TOKEN}" if STATS_TOKEN else ""
+def _auth_headers() -> dict:
+    """Token goes in a header, never in the URL: a query string lands in proxy
+    access logs and browser history. The worker still accepts ?token= so the two
+    services can be redeployed in either order."""
+    return {"X-Dashboard-Token": STATS_TOKEN} if STATS_TOKEN else {}
 
 
 @app.route("/api/data")
@@ -651,7 +654,7 @@ def _stats_param():
 def api_data():
     """JSON stats for the dashboard's AJAX auto-refresh."""
     try:
-        resp = httpx.get(STATS_URL + _stats_param(), timeout=10)
+        resp = httpx.get(STATS_URL, headers=_auth_headers(), timeout=10)
         resp.raise_for_status()
         return Response(resp.text, mimetype="application/json")
     except Exception as e:
@@ -663,7 +666,7 @@ def api_data():
 @require_auth
 def api_broadcast_status():
     try:
-        resp = httpx.get(f"{_BOT_BASE}/broadcast/status" + _stats_param(), timeout=8)
+        resp = httpx.get(f"{_BOT_BASE}/broadcast/status", headers=_auth_headers(), timeout=8)
         return Response(resp.text, mimetype="application/json", status=resp.status_code)
     except Exception as e:
         logger.warning("stats backend unavailable for API route: %s", _safe_err(e))
@@ -675,8 +678,8 @@ def api_broadcast_status():
 def api_users_search():
     q = request.args.get("q", "").strip()
     try:
-        resp = httpx.get(f"{_BOT_BASE}/users/search",
-                         params={"token": STATS_TOKEN, "q": q}, timeout=8)
+        resp = httpx.get(f"{_BOT_BASE}/users/search", params={"q": q},
+                         headers=_auth_headers(), timeout=8)
         return Response(resp.text, mimetype="application/json", status=resp.status_code)
     except Exception as e:
         logger.warning("stats backend unavailable for API route: %s", _safe_err(e))
@@ -688,8 +691,7 @@ def api_users_search():
 def api_users_block():
     body = request.get_json(silent=True) or {}
     try:
-        resp = httpx.post(f"{_BOT_BASE}/users/block", json={
-            "token": STATS_TOKEN,
+        resp = httpx.post(f"{_BOT_BASE}/users/block", headers=_auth_headers(), json={
             "user_id": body.get("user_id"),
             "blocked": body.get("blocked"),
         }, timeout=8)
@@ -973,8 +975,8 @@ def broadcast():
         else:
             try:
                 resp = httpx.post(
-                    BROADCAST_URL,
-                    json={"token": STATS_TOKEN, "text": text, "segment": segment},
+                    BROADCAST_URL, headers=_auth_headers(),
+                    json={"text": text, "segment": segment},
                     timeout=15,
                 )
                 data = resp.json()

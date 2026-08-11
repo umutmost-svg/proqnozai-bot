@@ -292,6 +292,14 @@ def db_del_lsub(uid, mid):
     _run("DELETE FROM live_subscriptions WHERE user_id=? AND match_id=?", (uid, mid))
 
 
+def db_lsub_name(mid) -> str | None:
+    """The human-readable name of a watched match, from any subscriber's row —
+    it is the same for all of them, so the poller reads it once per match
+    instead of once per subscriber."""
+    return _one("SELECT match_name FROM live_subscriptions WHERE match_id=? "
+                "AND match_name != '' LIMIT 1", (str(mid),))
+
+
 def db_user_lsubs(uid) -> list[dict]:
     rows = _all("SELECT match_id,match_name FROM live_subscriptions WHERE user_id=?", (uid,))
     return [dict(match_id=r[0], match_name=r[1]) for r in rows]
@@ -422,9 +430,14 @@ def db_get_promo_campaign() -> dict | None:
 def db_claim_promo(uid) -> str | None:
     """Give this user the active promo code. Idempotent: a user who already
     claimed it gets the SAME code back (not a second use). Returns None when no
-    campaign is set OR the use cap is reached. Atomic within one write
-    transaction — SQLite serializes writers, so the cap can't be over-issued."""
+    campaign is set OR the use cap is reached.
+
+    BEGIN IMMEDIATE takes the write lock up front. SQLite's default deferred
+    transaction starts read-only and only upgrades on the INSERT, so two callers
+    could both read used == max_uses - 1 and both insert, issuing one code over
+    the cap. Taking the lock before the count makes read and write one unit."""
     with con() as c:
+        c.execute("BEGIN IMMEDIATE")
         row = c.execute("SELECT code, max_uses FROM promo_campaign LIMIT 1").fetchone()
         if not row:
             return None
