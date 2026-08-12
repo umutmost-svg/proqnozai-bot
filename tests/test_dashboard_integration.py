@@ -109,7 +109,8 @@ def test_user_search_uses_the_header(client, calls):
 
 
 def test_block_call_uses_the_header_not_the_body(client, calls):
-    client.post("/api/users/block", headers=_auth(),
+    headers = {**_auth(), "X-CSRF-Token": dash.csrf_token()}
+    client.post("/api/users/block", headers=headers,
                 json={"user_id": 5, "blocked": 1})
     method, url, kw = calls[-1]
     assert method == "POST"

@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from collections import defaultdict
+from datetime import date, datetime, timezone
 from contextlib import contextmanager
 
 from config import live_subs, demand_cache, winrate_cache
@@ -367,20 +368,35 @@ def db_retention(cohort_days: int = 30) -> list[dict]:
         GROUP BY c.day ORDER BY c.day DESC
         """, (f"-{int(cohort_days)} days",))
     out = []
+    today = datetime.now(timezone.utc).date()
     for day, size, d1, d7, d30 in rows:
         pct = lambda n: round(n / size * 100) if size else 0   # noqa: E731
-        out.append(dict(day=day, size=size, d1=pct(d1), d7=pct(d7), d30=pct(d30)))
+        # A cohort registered today cannot have a D7 number yet. Reporting 0%
+        # for it drags the eye down and makes healthy retention look broken, so
+        # immature windows are returned as None and rendered as "—".
+        age = (today - date.fromisoformat(day)).days if day else 0
+        out.append(dict(day=day, size=size, age=age,
+                        d1=pct(d1) if age >= 1 else None,
+                        d7=pct(d7) if age >= 7 else None,
+                        d30=pct(d30) if age >= 30 else None))
     return out
 
 
 def db_feedback_coverage() -> dict:
     """What share of forecasts anyone actually rates. The bot-wide winrate is
     computed over rated forecasts only, so a low coverage means the headline
-    accuracy figure rests on a thin, self-selected sample."""
-    total = _one("SELECT COUNT(*) FROM forecast_history") or 0
+    accuracy figure rests on a thin, self-selected sample.
+
+    The denominator is the FORECAST event count, not forecast_history: history
+    is trimmed to ten rows per user, which would quietly shrink the denominator
+    and overstate coverage. A forecast trimmed away can no longer be rated, so
+    counting it as unrated is the honest reading."""
+    total = _one("SELECT COUNT(*) FROM requests WHERE msg_type='FORECAST'") or 0
     rated = _one("SELECT COUNT(*) FROM forecast_history WHERE feedback IS NOT NULL") or 0
+    # Ratings predate the FORECAST event, so early on `rated` can exceed the
+    # events counted; clamp rather than show an impossible percentage.
     return dict(total=total, rated=rated,
-                pct=round(rated / total * 100) if total else 0)
+                pct=min(100, round(rated / total * 100)) if total else 0)
 
 
 def db_forecast_health(days: int = 7) -> dict:
@@ -544,7 +560,13 @@ LIVE_EVENTS_RETENTION_DAYS = 7
 def db_filter_new_live_events(match_id: str, keys: list[str]) -> list[str]:
     """Record `keys` for `match_id` and return only the ones not seen before,
     in the order given. Insert-and-check in one transaction, so the "have we
-    sent this?" decision and the record of having sent it can't diverge."""
+    sent this?" decision and the record of having sent it can't diverge.
+
+    An event is marked seen BEFORE the notifications go out, which makes this
+    at-most-once: if delivery then fails, that event is never retried. That is
+    deliberate. Marking after delivery would make a crash mid-fanout re-notify
+    everyone who already received it, and for a goal alert a duplicate is worse
+    than a miss."""
     if not keys:
         return []
     fresh = []
@@ -644,10 +666,18 @@ def db_set_promo_code(partner: str, code: str, max_uses: int) -> None:
     Topaz's code. Claims are tracked per code, so replacing a partner's code
     starts that partner's count fresh while the others keep theirs."""
     partner = (partner or "").strip()
+    code = code.strip()
     with con() as c:
+        # Claims are keyed by the code string (promo_claims PK), so two partners
+        # sharing one code would share a claim count and a cap. Refuse rather
+        # than silently merge them.
+        clash = c.execute("SELECT partner FROM promo_campaign WHERE code=? AND partner!=?",
+                          (code, partner)).fetchone()
+        if clash:
+            raise ValueError(f"code '{code}' is already used by partner '{clash[0]}'")
         c.execute("DELETE FROM promo_campaign WHERE partner=?", (partner,))
         c.execute("INSERT INTO promo_campaign (partner, code, max_uses) VALUES (?,?,?)",
-                  (partner, code.strip(), int(max_uses)))
+                  (partner, code, int(max_uses)))
 
 
 def db_delete_promo_code(partner: str) -> bool:

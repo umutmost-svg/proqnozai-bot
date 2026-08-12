@@ -383,6 +383,10 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
 async def partners_show_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """"Where to place a bet" under a forecast — send the partner list as a new
     message so the forecast itself stays on screen."""
+    # Cheap, but it still sends a message and reads the DB, so it goes through
+    # the same navigation budget and block check as every other menu callback.
+    if not await nav_guard(update):
+        return
     q = update.callback_query
     uid = q.from_user.id
     await q.answer()

@@ -118,7 +118,17 @@ def test_retention_percentages_are_bounded(temp_db):
     for row in temp_db.db_retention():
         assert row["size"] > 0
         for k in ("d1", "d7", "d30"):
-            assert 0 <= row[k] <= 100
+            # None = the window hasn't elapsed for this cohort yet.
+            assert row[k] is None or 0 <= row[k] <= 100
+
+
+def test_retention_hides_windows_a_cohort_cannot_have_reached(temp_db):
+    """A cohort registered today has no D7 number; reporting 0% would make
+    healthy retention look broken."""
+    temp_db.db_ensure(810401, "u", "ru")
+    today = [r for r in temp_db.db_retention() if r["age"] == 0]
+    assert today, "today's cohort should be present"
+    assert today[0]["d1"] is None and today[0]["d7"] is None and today[0]["d30"] is None
 
 
 # ─── promo funnel ─────────────────────────────────────────────────────────────
