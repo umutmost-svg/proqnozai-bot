@@ -118,6 +118,4 @@ Azərbaycan: Dil seçin aşağıda
 English: Choose language below
 Türkçe: Aşağıdan dil seçin
 Қазақша: Төменде тілді таңдаңыз
-O'zbek: Quyida tilni tanlang
-العربية: اختر اللغة أدناه
 """

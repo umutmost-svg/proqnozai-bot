@@ -207,3 +207,26 @@ def validate_match(
         level = Confidence.LOW
 
     return MatchConfidence(level, round(team_score, 2), team_order, reasons)
+
+
+# ─── Forecast data sufficiency ────────────────────────────────────────────────
+# Whether there is enough real material to be worth a forecast at all. Purely
+# deterministic and computed in Python — the model is never asked to judge
+# whether it has data, only to work with what it was given.
+READY = "ready"                # odds AND verified match data
+PARTIAL = "partial"            # one of the two: a narrower forecast is honest
+INSUFFICIENT = "insufficient"  # neither: nothing to analyse
+
+
+def forecast_readiness(has_odds: bool, has_real_data: bool) -> str:
+    """Classify what a forecast can honestly be built from.
+
+    INSUFFICIENT is the case this exists for. Without odds and without verified
+    data the model can only produce a page of "not available" lines — formally
+    honest, useless to read, and paid for at Opus rates. The caller skips the
+    call entirely and says so plainly instead."""
+    if has_odds and has_real_data:
+        return READY
+    if has_odds or has_real_data:
+        return PARTIAL
+    return INSUFFICIENT

@@ -65,9 +65,19 @@ async def _run_promo(context, uid, reply) -> None:
         await reply(tr(uid, "promo_unavailable")); return   # nothing configured
     sub = await _is_subscribed(context, uid)
     if sub is None:
-        await reply(tr(uid, "promo_unavailable")); return   # can't verify channel
+        # Distinct from "no campaign": the gate itself is broken (channel not
+        # configured, or the bot isn't in it). The user gets a message that
+        # says to retry; the technical reason is already in the warning log.
+        await reply(tr(uid, "promo_check_failed")); return
     if not sub:
-        await reply(tr(uid, "promo_subscribe"), reply_markup=_subscribe_kb(uid)); return
+        # Name the partners BEFORE asking for a subscription: the gate used to
+        # demand a paid action ("subscribe") for an unnamed reward, which is the
+        # order that makes people leave.
+        names = ", ".join(c["partner"] for c in db_list_promo_codes() if c["partner"])
+        text = tr(uid, "promo_subscribe")
+        if names:
+            text = f"{tr(uid, 'promo_preview', partners=names)}\n\n{text}"
+        await reply(text, reply_markup=_subscribe_kb(uid)); return
     granted = db_claim_promos(uid)
     if not granted:
         await reply(tr(uid, "promo_empty")); return         # every cap reached
@@ -82,8 +92,8 @@ async def promo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """"🎁 Get promo code" reply-keyboard button / /promo command."""
     uid = update.effective_user.id
 
-    async def reply(text, reply_markup=None):
-        await update.message.reply_text(text, reply_markup=reply_markup)
+    async def reply(text, reply_markup=None, **kw):
+        await update.message.reply_text(text, reply_markup=reply_markup, **kw)
 
     await _run_promo(context, uid, reply)
 
@@ -94,8 +104,9 @@ async def promo_check_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id
     await q.answer()
 
-    async def reply(text, reply_markup=None):
-        await context.bot.send_message(chat_id=uid, text=text, reply_markup=reply_markup)
+    async def reply(text, reply_markup=None, **kw):
+        await context.bot.send_message(chat_id=uid, text=text,
+                                       reply_markup=reply_markup, **kw)
 
     await _run_promo(context, uid, reply)
 

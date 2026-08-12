@@ -1,13 +1,15 @@
 import asyncio
 import logging
 
-from telegram import Update, ReplyKeyboardRemove
+from telegram import (Update, ReplyKeyboardRemove, InlineKeyboardButton,
+                      InlineKeyboardMarkup)
 from telegram.ext import ContextTypes
 
 from config import reg_step, UNIVERSAL_WELCOME
 from db import (db_ensure, db_get, db_set, db_lang, db_is_reg, db_get_tz, con,
                 normalize_lang, db_user_streak, db_feedback_stats)
-from translations import T, tr, LANG_NAMES, OB_SPORTS, sport_label, exp_label
+from translations import (T, tr, LANG_NAMES, OB_SPORTS, OB_EXP, sport_label,
+                          exp_label)
 from handlers.utils import main_menu, lang_kb, ob_kb
 
 logger = logging.getLogger(__name__)
@@ -91,11 +93,23 @@ async def ob_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step == "ob_sports":
         db_set(uid, "sports", val)
+        # Experience decides how the forecast is written, so ask it here rather
+        # than defaulting everyone to "beginner".
+        reg_step[uid] = "ob_exp"
+        ob_lang = lang if lang in OB_EXP else "ru"
+        await q.edit_message_text(T[lang]["ob_sports"] + f"\n\n✅ {sport_label(uid, val)}")
+        await asyncio.sleep(0.3)
+        await context.bot.send_message(chat_id=uid, text=T[lang]["ob_exp"],
+                                       reply_markup=ob_kb(OB_EXP[ob_lang]))
+        return
+
+    if step == "ob_exp":
+        db_set(uid, "experience", val)
         db_set(uid, "onboarding_done", 1)
         reg_step[uid] = "done"
         u = db_get(uid)
         done_msg = T[lang]["ob_done"].format(sports=sport_label(uid, u["sports"]))
-        await q.edit_message_text(done_msg)
+        await q.edit_message_text(f"{done_msg}\n{exp_label(uid, val)}")
         await asyncio.sleep(0.3)
         await context.bot.send_message(
             chat_id=uid, text=T[lang]["post_onboarding"], reply_markup=main_menu(uid))
@@ -123,13 +137,39 @@ async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         wins=stats["wins"], total=stats["total"], pct=stats["pct"]))
     else:
         lines.append(tr(uid, "profile_rate_hint"))
-    await update.message.reply_text("\n".join(lines))
+    # The profile showed language and time zone but offered no way to change
+    # either — you had to already know /lang and /tz. Put the two settings it
+    # displays one tap away.
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"🌐 {tr(uid, 'menu_lang')}", callback_data="prof_lang"),
+        InlineKeyboardButton(f"🕐 {tr(uid, 'menu_tz')}", callback_data="prof_tz"),
+    ]])
+    await update.message.reply_text("\n".join(lines), reply_markup=kb)
+
+
+async def profile_settings_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Language / time-zone buttons under the profile. Both reuse the existing
+    flows, so there is only one implementation of each."""
+    q = update.callback_query
+    uid = q.from_user.id
+    await q.answer()
+    if q.data == "prof_lang":
+        await context.bot.send_message(chat_id=uid, text=tr(uid, "choose_lang"),
+                                       reply_markup=lang_kb())
+        return
+    context.user_data["awaiting_tz"] = True
+    await context.bot.send_message(chat_id=uid, text=_tz_prompt(uid))
 
 
 async def tz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not db_is_reg(uid):
         await update.message.reply_text(tr(uid, "need_reg")); return
+    context.user_data["awaiting_tz"] = True
+    await update.message.reply_text(_tz_prompt(uid))
+
+
+def _tz_prompt(uid: int) -> str:
     lang = db_lang(uid)
     tz = db_get_tz(uid)
     tz_str = f"UTC+{tz}" if tz >= 0 else f"UTC{tz}"
@@ -142,8 +182,7 @@ async def tz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "uz": f"🕐 Vaqt mintaqangiz: {tz_str}\n\nO'zgartirish uchun UTC farqini yuboring.\nMasalan: +4, +3, 0, -5",
         "ar": f"🕐 منطقتك الزمنية: {tz_str}\n\nلتغييرها أرسل الفرق عن UTC.\nمثلاً: +4، +3، 0، -5",
     }
-    context.user_data["awaiting_tz"] = True
-    await update.message.reply_text(msgs.get(lang, msgs["ru"]))
+    return msgs.get(lang, msgs["ru"])
 
 
 async def handle_tz_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:

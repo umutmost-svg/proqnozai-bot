@@ -7,7 +7,8 @@ from telegram.ext import (
 )
 
 from config import ADMIN_ID
-from handlers.registration import start, lang_cb, lang_cmd, ob_cb, profile_cmd, tz_cmd, handle_tz_input
+from handlers.registration import (start, lang_cb, lang_cmd, ob_cb, profile_cmd,
+                                   profile_settings_cb, tz_cmd, handle_tz_input)
 from handlers.forecast import (
     forecast_cb, forecast_menu_start,
     fm_sport_cb, fm_sppg_cb, fm_day_cb, fm_ctry_cb, fm_ctrypg_cb,
@@ -49,6 +50,7 @@ def register_handlers(app):
     app.add_handler(CommandHandler("tz",      tz_cmd))
     app.add_handler(CommandHandler("matches", matches_cmd))
     app.add_handler(CommandHandler("compare", compare_cmd))
+    app.add_handler(CommandHandler("express", express_cmd))
     app.add_handler(CommandHandler("admin",   admin_cmd))
     app.add_handler(CommandHandler("cancel",  cancel_cmd))
     app.add_handler(CommandHandler("testapi", testapi_cmd))
@@ -59,6 +61,7 @@ def register_handlers(app):
 
     app.add_handler(CallbackQueryHandler(lang_cb,       pattern=r"^lang_"))
     app.add_handler(CallbackQueryHandler(ob_cb,         pattern=r"^ob_"))
+    app.add_handler(CallbackQueryHandler(profile_settings_cb, pattern=r"^prof_(lang|tz)$"))
     app.add_handler(CallbackQueryHandler(forecast_cb,   pattern=r"^forecast_"))
     app.add_handler(CallbackQueryHandler(fm_sppg_cb,    pattern=r"^fm_sppg_"))
     app.add_handler(CallbackQueryHandler(fm_sport_cb,   pattern=r"^fm_sp_"))

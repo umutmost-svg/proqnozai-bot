@@ -37,7 +37,7 @@ def _deploy_version() -> str:
 
 # Bump this key whenever the main menu layout changes: the broadcast below runs
 # once per key, not on every restart (a crash-loop must never spam the user base).
-MENU_BROADCAST_KEY = "menu_broadcast_2026_08_bonus_and_partners"
+MENU_BROADCAST_KEY = "menu_broadcast_2026_08_express_button"
 
 
 async def _broadcast_menu_update(application):
@@ -124,6 +124,35 @@ def _log_db_location() -> None:
         logger.warning(f"DB: {path} (NEW/empty) — if this is not a mounted volume, data is lost on redeploy")
 
 
+async def _publish_commands(application) -> None:
+    """Fill Telegram's own "/" menu. Without it the only discoverable command is
+    /start, so /express, /history and /tz existed but nobody could find them.
+    Telegram picks the list by the CLIENT's language, so a per-language scope is
+    published for each translation plus a default (ru) for everyone else."""
+    from telegram import BotCommand
+    from telegram.error import TelegramError
+    from translations import BOT_COMMANDS
+
+    def _cmds(lang: str):
+        return [BotCommand(c, d) for c, d in BOT_COMMANDS[lang]]
+
+    # Telegram scopes by ISO 639-1 LANGUAGE code, and our "kz" is a country
+    # code — Kazakh is "kk". Publishing the wrong code is rejected, so map it.
+    tg_code = {"kz": "kk"}
+
+    # One try per call: an invalid/rejected scope must not abandon the scopes
+    # after it in the loop. Cosmetic either way — the bot starts regardless.
+    for lang in (None, *BOT_COMMANDS):
+        try:
+            if lang is None:
+                await application.bot.set_my_commands(_cmds("ru"))   # default scope
+            else:
+                await application.bot.set_my_commands(
+                    _cmds(lang), language_code=tg_code.get(lang, lang))
+        except TelegramError as e:
+            logger.warning(f"set_my_commands failed (lang={lang}): {e}")
+
+
 def main():
     logger.info(f"=== ProqnozAI worker booting | commit={_deploy_version()} | "
                 f"python={sys.version.split()[0]} ===")
@@ -146,6 +175,7 @@ def main():
         asyncio.create_task(_preload_mostbet())
         asyncio.create_task(check_odds_changes(application))
         asyncio.create_task(_broadcast_menu_update(application))
+        asyncio.create_task(_publish_commands(application))
 
     app.post_init = post_init
 

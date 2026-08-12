@@ -88,7 +88,7 @@ def _clean_inflight():
 
 def _stub_forecast_calls(monkeypatch, calls):
     async def _odds(mid):
-        calls.append("odds"); return {}
+        calls.append("odds"); return {"w1": 2.0}
 
     async def _real(t1, t2, hint):
         calls.append("real"); return ""
@@ -98,7 +98,9 @@ def _stub_forecast_calls(monkeypatch, calls):
 
     monkeypatch.setattr(fc, "mostbet_get_odds", _odds)
     monkeypatch.setattr(fc, "fetch_real_data", _real)
-    monkeypatch.setattr(fc, "format_mostbet_odds", lambda o, l: "")
+    # Non-empty odds: these tests are about the callback guard, and without any
+    # data at all the sufficiency gate would (correctly) skip the model call.
+    monkeypatch.setattr(fc, "format_mostbet_odds", lambda o, l: "П1 2.00")
     monkeypatch.setattr(fc, "claude_forecast", _claude)
 
 

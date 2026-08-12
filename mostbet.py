@@ -115,6 +115,17 @@ def _publish_generation(fresh: list, last_id, complete: bool, prev: list) -> lis
 
 # ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
 
+def cached_matches() -> list:
+    """The match list already in memory, without ever touching the network.
+
+    For callers that want to *use* the feed but must not cause a fetch — the
+    daily digest runs on a timer for every user, and it has no business
+    triggering a Mostbet request. Returns [] when the cache is cold; the
+    background refresh in main._preload_mostbet fills it every 15 minutes."""
+    entry = mostbet_cache.get("all_matches")
+    return list(entry[1]) if entry else []
+
+
 async def _mostbet_load_matches() -> list:
     """Load all matches from Mostbet with caching (15 min TTL).
     Uses lock so only one concurrent request goes to Mostbet API."""

@@ -13,7 +13,9 @@ from db import (
 )
 from translations import T, tr
 from football_api import get_status, get_events
-from mostbet import mostbet_get_odds
+from event_list import normalize_fixture, select_visible, assign_priority_scores
+from handlers.forecast_kb import _fmt_kickoff
+from mostbet import mostbet_get_odds, cached_matches
 from claude_client import live_tip
 from handlers.utils import nav_guard
 
@@ -261,13 +263,58 @@ async def check_odds_changes(app):
             logger.error(f"check_odds_changes: {e}")
 
 
+# A nudge is only worth sending when there is something to nudge about, and the
+# digest competes with every other notification on the phone. Measured against
+# the current engine: a Champions League Real–Barcelona scores 74, a Serie A
+# Inter–Milan derby 47, an ordinary Premier League fixture 12. The bar sits in
+# the gap — big names and derbies get through, filler does not.
+DAILY_PUSH_MIN_SCORE = 45
+DAILY_PUSH_MAX_MATCHES = 3
+
+_SPORT_ICON = {"football": "⚽", "soccer": "⚽", "futbol": "⚽", "tennis": "🎾",
+               "basketball": "🏀", "nba": "🏀", "hockey": "🏒", "ufc": "🥊", "mma": "🥊"}
+
+
+def digest_matches(now_utc, min_score: int = DAILY_PUSH_MIN_SCORE,
+                   limit: int = DAILY_PUSH_MAX_MATCHES) -> list:
+    """The few genuinely notable fixtures on right now, highest priority first.
+
+    Reads the cache only — a timer that fires for every user must never cause a
+    provider request. Returns [] when the feed is cold or nothing clears the
+    bar, and [] is the signal to send nothing at all."""
+    raw = cached_matches()
+    if not raw:
+        return []
+    items = select_visible(
+        [it for m in raw if (it := normalize_fixture(m)) is not None],
+        now_utc, timezone.utc, include_later=False)      # today / live only
+    if not items:
+        return []
+    assign_priority_scores(items, now_utc)
+    worthy = [it for it in items if (it.priority_score or 0) >= min_score]
+    worthy.sort(key=lambda it: (-(it.priority_score or 0), it.kickoff_utc or now_utc))
+    return worthy[:limit]
+
+
+def format_digest(uid: int, items: list) -> str:
+    """Localized digest naming the actual matches, so the message earns its
+    place instead of repeating the same generic line every morning."""
+    lines = [tr(uid, "push_digest_title"), ""]
+    for it in items:
+        icon = _SPORT_ICON.get((it.sport or "").strip().lower(), "•")
+        when = _fmt_kickoff(it.kickoff_utc, uid) if it.kickoff_utc else ""
+        lines.append(f"{icon} {it.home} — {it.away}" + (f" · {when}" if when else ""))
+    lines += ["", tr(uid, "push_digest_cta")]
+    return "\n".join(lines)
+
+
 async def daily_push(app):
-    """Nudge inactive users at 10:00 in THEIR timezone (users.tz_offset)."""
-    msgs = {
-        "az": "Bugun maraqli oyunlar var! Proqnoz ucun yazin.",
-        "ru": "Сегодня интересные матчи! Напишите для прогноза.",
-        "en": "Interesting matches today! Write for a forecast.",
-    }
+    """Nudge inactive users at 10:00 in THEIR timezone (users.tz_offset), but
+    only when the feed actually has something worth opening the bot for.
+
+    The previous version sent a fixed "interesting matches today" line whether
+    or not any existed, every day — which is how a notification stops being
+    read at all."""
     sent: set[tuple[str, int]] = set()  # (local date iso, uid) already pushed
     while True:
         await asyncio.sleep(60)
@@ -278,16 +325,28 @@ async def daily_push(app):
                     "SELECT user_id,lang,tz_offset FROM users WHERE is_registered=1 AND is_blocked=0 "
                     "AND (last_active='' OR date(last_active) <= date('now', '-2 days'))"
                 ).fetchall()
-            for uid, lang, tz in rows:
-                local = now_utc + timedelta(hours=tz or 0)
-                if local.hour != 10:
-                    continue
-                key = (local.date().isoformat(), uid)
-                if key in sent:
-                    continue
-                sent.add(key)
+            due = [(uid, tz) for uid, lang, tz in rows
+                   if (now_utc + timedelta(hours=tz or 0)).hour == 10
+                   and ((now_utc + timedelta(hours=tz or 0)).date().isoformat(), uid) not in sent]
+            if not due:
+                continue
+
+            # Computed once per cycle, not per user: same feed, same ranking.
+            top = digest_matches(now_utc)
+            if not top:
+                logger.info("daily_push skipped: no fixture at or above "
+                            f"priority {DAILY_PUSH_MIN_SCORE} (candidates={len(due)})")
+                # Mark them done for today anyway — a nudge that had nothing to
+                # say should not be retried minute after minute until 11:00.
+                for uid, tz in due:
+                    sent.add(((now_utc + timedelta(hours=tz or 0)).date().isoformat(), uid))
+                continue
+
+            logger.info(f"daily_push sending: {len(top)} matches to {len(due)} users")
+            for uid, tz in due:
+                sent.add(((now_utc + timedelta(hours=tz or 0)).date().isoformat(), uid))
                 try:
-                    await app.bot.send_message(chat_id=uid, text=msgs.get(lang, msgs["ru"]))
+                    await app.bot.send_message(chat_id=uid, text=format_digest(uid, top))
                     await asyncio.sleep(0.1)
                 except Exception:
                     pass

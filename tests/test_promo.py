@@ -123,7 +123,9 @@ async def test_gate_prompts_subscription_when_not_member(temp_db, monkeypatch):
     temp_db.db_ensure(uid, "u", "en"); temp_db.db_set(uid, "is_registered", 1)
     _reset(temp_db); temp_db.db_set_promo_code("Mostbet", "C", 500)
     sent = await _run(temp_db, uid, "left", monkeypatch)
-    assert sent[0][0] == tr(uid, "promo_subscribe")
+    # What is on offer is stated before the subscription is demanded.
+    assert "Mostbet" in sent[0][0]
+    assert tr(uid, "promo_subscribe") in sent[0][0]
     assert sent[0][1] is not None                    # subscribe keyboard attached
 
 
@@ -150,7 +152,9 @@ async def test_gate_unavailable_when_bot_cannot_check(temp_db, monkeypatch):
     temp_db.db_ensure(uid, "u", "en"); temp_db.db_set(uid, "is_registered", 1)
     _reset(temp_db); temp_db.db_set_promo_code("Mostbet", "C", 500)
     sent = await _run(temp_db, uid, "error", monkeypatch)   # get_chat_member raises
-    assert sent[0][0] == tr(uid, "promo_unavailable")
+    # Its own message, not the same one as "no campaign configured".
+    assert sent[0][0] == tr(uid, "promo_check_failed")
+    assert sent[0][0] != tr(uid, "promo_unavailable")
 
 
 # ─── admin command reports why a code was refused ─────────────────────────────

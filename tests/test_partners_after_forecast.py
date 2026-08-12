@@ -81,6 +81,10 @@ def _ctx():
         "pending_text": "Barcelona Real",
         "parsed_teams": ("Barcelona", "Real"),
         "odds_attached": True,
+        # Enough data to clear the sufficiency gate; without it the forecast
+        # is skipped and there is no keyboard to assert on.
+        "has_odds": True,
+        "has_real_data": True,
     }, bot=None)
 
 

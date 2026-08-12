@@ -4,12 +4,7 @@ T = {
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Xoş gəldiniz! Adınızı daxil edin:",
 "reg_done":      "Hazırdır, {name}! Başlayaq 👇",
-"welcome_intro": """ProqnozAI 👋
-
-Mən futbol üzrə AI analitikəm.
-Matçı seçin — statistikanı, formanı və analizi göstərim.
-
-Başlayaq 👇""",
+"welcome_intro": "ProqnozAI 👋\n\nMən AI idman analitikəm — futbol, tennis, basketbol, xokkey, UFC.\n\n⚽ Proqnoz — matçı seçin, təhlil və real əmsallar alın\n⚡ Ekspress — 2–5 matçdan kupon\n📸 Foto — cədvəl və ya afişa şəklini göndərin\n\nBaşlayaq 👇",
 "post_onboarding": """Hazırdır! İndi nə etmək istəyirsiniz?
 
 ⚽ Təhlil üçün "Proqnoz" düyməsini seçin
@@ -44,13 +39,19 @@ Başlayaq 👇""",
 "menu_forecast": "⚽ Proqnoz",
 "menu_get_promo": "🎁 Bonus al",
 "promo_unavailable": "🎁 Promokodlar hələ əlçatan deyil. Sonra yoxla.",
+"promo_preview": "🎁 Bu partnyorların bonus promokodları sizi gözləyir: {partners}.",
 "promo_subscribe": "🎁 Promokod almaq üçün kanalımıza abunə ol və «Abunə oldum» düyməsinə bas.",
 "promo_open_channel": "📢 Kanalı aç",
 "promo_check_btn": "✅ Abunə oldum",
 "promo_empty": "😔 Promokodlar bitdi. Sonra yoxla.",
+"push_digest_title": "🔥 Bu gün maraqlı matçlar var:",
+"push_digest_cta": "Proqnoz üçün matç seçin 👇",
+"promo_check_failed": "🎁 Abunəliyi yoxlaya bilmirəm. Bir azdan yenidən cəhd edin.",
+"fc_insufficient": "⚠️ Bu matç üzrə keyfiyyətli proqnoz üçün hələ kifayət qədər məlumat yoxdur.\n\nHazırda yoxdur:\n• aktual əmsallar;\n• kifayət qədər statistika;\n• dəyəri qiymətləndirmək üçün məlumat.\n\nRəqəmləri uydurmayacağam. Bir azdan yenidən yoxlayın.",
 "promo_code": "🎁 Sənin promokodun: {code}",
 "promo_codes_title": "🎁 Partnyorlarımızdan bonus kodları:",
 "menu_match_of_day": "🔥 Günün matçı",
+"fc_basis": "📐 Real əmsallar və mövcud məlumatlar əsasında · 18+, maliyyə məsləhəti deyil",
 "bot_winrate": "🎯 ProqnozAI: istifadəçi rəylərinə görə {pct}% dəqiq (30 gün)",
 "bot_winrate_building": "🎯 Dəqiqlik statistikası toplanır",
 "profile_streak": "🔥 Seriya: {n} gün ardıcıl",
@@ -59,6 +60,7 @@ Başlayaq 👇""",
 "match_day_fallback": "Bu gün üçün top matç yoxdur — sabahın ən güclüsü 👇",
 "menu_profile":  "👤 Profil",
 "menu_lang":     "Dil dəyiş",
+"menu_tz": "Saat qurşağı",
 "profile_text":  "👤 PROFİL\n\nAd: {name}\nDil: {lang}\nSaat qurşağı: {tz}",
 "ob_sports":     "Ən çox nəyi izləyirsiniz?",
 "ob_exp":        "Matçları nə qədər dərin izləyirsiniz?",
@@ -92,7 +94,7 @@ Başlayaq 👇""",
 
 QAYDALAR:
 - Keflər varsa — yalnız onları istifadə et
-- Yalnız mətn və emoji, ** markdown yox (mərc sətri istisna)
+- Yalnız mətn və emoji, markdown işarələri yoxdur
 - FORMA: hər iştirakçının formasını YALNIZ verilən real məlumat əsasında yaz; məlumat yoxdursa "məlumat mövcud deyil" yaz — UYDURMA
 - Real matç verileri varsa — ortalama qol sayını göstər
 - Real məlumat yoxdursa bunu açıq yaz ("məlumat mövcud deyil") — fakt, nəticə, zədə və ya heyət UYDURMA
@@ -110,7 +112,7 @@ FORMAT (bütün sətirler MƏCBURI):
 Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 [B] — XX% | X.XX
 
-⚡ **Mərc: [növ] @ X.XX** — [1 cümlə, niyə]""",
+⚡ Mərc: [növ] @ X.XX — [1 cümlə, niyə]""",
 "live_tip_prompt": "Canlı mərc analitikisən. Oyun: {match}, {minute}. dəq, hesab {score}. Hadisə: {event}. Ən yaxşı canlı mərci tövsiyə et. Qısa, maks 2 cümlə.",
 "history_title":"Son proqnozlarınız:",
 "history_empty":"Hələ proqnoz almamısınız.",
@@ -141,12 +143,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Добро пожаловать! Введите ваше имя:",
 "reg_done":      "Готово, {name}! Погнали 👇",
-"welcome_intro": """ProqnozAI 👋
-
-Я — AI-аналитик по футболу.
-Выбери матч — покажу статистику, форму и разбор.
-
-Погнали 👇""",
+"welcome_intro": "ProqnozAI 👋\n\nЯ — AI-аналитик по спорту: футбол, теннис, баскетбол, хоккей, UFC.\n\n⚽ Прогноз — выбери матч, получи разбор и реальные коэффициенты\n⚡ Экспресс — купон из 2–5 матчей\n📸 Фото — пришли снимок расписания или афиши\n\nПогнали 👇",
 "post_onboarding": """Готово! Что дальше?
 
 ⚽ Для разбора нажми «Прогноз»
@@ -181,13 +178,19 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "menu_forecast": "⚽ Прогноз",
 "menu_get_promo": "🎁 Получить бонус",
 "promo_unavailable": "🎁 Промокоды пока недоступны. Загляни позже.",
+"promo_preview": "🎁 Тебя ждут бонусные промокоды от: {partners}.",
 "promo_subscribe": "🎁 Чтобы получить промокод, подпишись на наш канал и нажми «Я подписался».",
 "promo_open_channel": "📢 Открыть канал",
 "promo_check_btn": "✅ Я подписался",
 "promo_empty": "😔 Промокоды закончились. Загляни позже.",
+"push_digest_title": "🔥 Сегодня есть интересные матчи:",
+"push_digest_cta": "Выберите матч для прогноза 👇",
+"promo_check_failed": "🎁 Не получается проверить подписку. Попробуйте через пару минут.",
+"fc_insufficient": "⚠️ По этому матчу пока недостаточно данных для качественного прогноза.\n\nСейчас нет:\n• актуальных коэффициентов;\n• достаточной статистики;\n• данных для оценки value.\n\nЯ не буду придумывать цифры. Загляните чуть позже.",
 "promo_code": "🎁 Твой промокод: {code}",
 "promo_codes_title": "🎁 Ваши бонусы от партнёров:",
 "menu_match_of_day": "🔥 Матч дня",
+"fc_basis": "📐 Оценка по реальным коэффициентам и доступным данным · 18+, не финансовый совет",
 "bot_winrate": "🎯 ProqnozAI: {pct}% верных по оценкам пользователей (30 дн.)",
 "bot_winrate_building": "🎯 Копим статистику точности",
 "profile_streak": "🔥 Серия: {n} дн. подряд",
@@ -196,6 +199,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "match_day_fallback": "Сегодня топ-матчей нет — вот сильнейший на завтра 👇",
 "menu_profile":  "👤 Профиль",
 "menu_lang":     "Сменить язык",
+"menu_tz": "Часовой пояс",
 "profile_text":  "👤 ПРОФИЛЬ\n\nИмя: {name}\nЯзык: {lang}\nЧасовой пояс: {tz}",
 "ob_sports":     "Что смотришь чаще всего?",
 "ob_exp":        "Насколько глубоко разбираешь матчи?",
@@ -229,7 +233,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 
 ПРАВИЛА:
 - Если есть коэффициенты — используй только их
-- Только текст и emoji, без ** markdown (кроме строки ставки)
+- Только текст и emoji, без markdown-разметки
 - ФОРМА: описывай форму каждого ТОЛЬКО по предоставленным реальным данным; если данных нет — напиши "данные недоступны", НЕ выдумывай
 - Если есть реальные данные матчей — укажи среднее количество голов
 - Если реальных данных нет — честно укажи это ("данные недоступны"); НЕ выдумывай факты, результаты, травмы и составы
@@ -247,7 +251,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 Ничья — XX% | X.XX  (если применимо)
 [Б] — XX% | X.XX
 
-⚡ **Ставка: [тип] @ X.XX** — [причина, 1 предложение]""",
+⚡ Ставка: [тип] @ X.XX — [причина, 1 предложение]""",
 "live_tip_prompt": "Ты лайв-аналитик. Матч {match}, {minute} мин, счёт {score}. Событие: {event}. Дай лучшую лайв-ставку. Коротко, макс 2 предложения.",
 "history_title": "Ваши последние прогнозы:",
 "history_empty": "У вас ещё нет прогнозов.",
@@ -278,16 +282,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Welcome! Please enter your name:",
 "reg_done":      "Registration complete! Hi, {name}!",
-"welcome_intro": """Welcome to ProqnozAI!
-
-I'm an AI sports analyst. Here's what I do:
-
-⚽ Match forecasts — pick a sport, find a match, get instant analysis
-⚡ Express — build a 2–5 match coupon with combined odds
-📸 Photo — send a schedule or fixture photo
-📋 History — view your previous forecasts
-
-Choose your sport and let's go!""",
+"welcome_intro": "ProqnozAI 👋\n\nI'm an AI sports analyst: football, tennis, basketball, hockey, UFC.\n\n⚽ Forecast — pick a match, get analysis and real odds\n⚡ Express — a coupon of 2–5 matches\n📸 Photo — send a schedule or fixture photo\n\nLet's go 👇",
 "post_onboarding": """All set! What would you like to do?
 
 ⚽ Tap «Match forecasts» for a prediction
@@ -322,13 +317,19 @@ Choose your sport and let's go!""",
 "menu_forecast": "⚽ Match forecasts",
 "menu_get_promo": "🎁 Get a bonus",
 "promo_unavailable": "🎁 Promo codes aren't available yet. Check back later.",
+"promo_preview": "🎁 Bonus promo codes from {partners} are waiting for you.",
 "promo_subscribe": "🎁 To get your promo code, subscribe to our channel and tap “I subscribed”.",
 "promo_open_channel": "📢 Open channel",
 "promo_check_btn": "✅ I subscribed",
 "promo_empty": "😔 Promo codes ran out. Check back later.",
+"push_digest_title": "🔥 Interesting matches today:",
+"push_digest_cta": "Pick a match for a forecast 👇",
+"promo_check_failed": "🎁 Can't verify your subscription right now. Try again in a couple of minutes.",
+"fc_insufficient": "⚠️ There isn't enough data on this match for a useful forecast yet.\n\nMissing right now:\n• current odds;\n• enough statistics;\n• anything to judge value on.\n\nI won't invent numbers. Check back a little later.",
 "promo_code": "🎁 Your promo code: {code}",
 "promo_codes_title": "🎁 Your partner bonus codes:",
 "menu_match_of_day": "🔥 Match of the day",
+"fc_basis": "📐 Based on real odds and available data · 18+, not financial advice",
 "bot_winrate": "🎯 ProqnozAI: {pct}% correct by user ratings (30d)",
 "bot_winrate_building": "🎯 Building accuracy stats",
 "profile_streak": "🔥 Streak: {n} days in a row",
@@ -337,6 +338,7 @@ Choose your sport and let's go!""",
 "match_day_fallback": "No top matches today — here's the strongest for tomorrow 👇",
 "menu_profile":  "👤 Profile",
 "menu_lang":     "Change language",
+"menu_tz": "Time zone",
 "profile_text":  "👤 PROFILE\n\nName: {name}\nLanguage: {lang}\nTimezone: {tz}",
 "ob_sports":     "Which sport interests you the most?",
 "ob_exp":        "What is your betting experience?",
@@ -370,7 +372,7 @@ Choose your sport and let's go!""",
 
 RULES:
 - If odds are provided — use only those
-- Plain text and emoji only, no ** markdown (except the bet line)
+- Plain text and emoji only, no markdown marks
 - FORM: describe each participant's form ONLY from the provided real data; if none is provided, write "data unavailable" — do NOT invent
 - If real match data is provided — include avg goals per game
 - If real data is missing, state it honestly ("data unavailable"); do NOT fabricate facts, results, injuries or lineups
@@ -388,7 +390,7 @@ FORMAT (all lines MANDATORY):
 Draw — XX% | X.XX  (if applicable)
 [B] — XX% | X.XX
 
-⚡ **Bet: [type] @ X.XX** — [1 sentence why]""",
+⚡ Bet: [type] @ X.XX — [1 sentence why]""",
 "live_tip_prompt": "You are a live betting analyst. Match {match}, {minute} min, score {score}. Event: {event}. Best live bet now. Max 2 sentences.",
 "history_title": "Your recent forecasts:",
 "history_empty": "No forecasts yet.",
@@ -447,13 +449,19 @@ Draw — XX% | X.XX  (if applicable)
 "menu_forecast": "⚽ Tahmin",
 "menu_get_promo": "🎁 Bonus al",
 "promo_unavailable": "🎁 Promo kodlar henüz mevcut değil. Sonra tekrar bak.",
+"promo_preview": "🎁 Şu ortakların bonus promo kodları seni bekliyor: {partners}.",
 "promo_subscribe": "🎁 Promo kodu almak için kanalımıza abone ol ve «Abone oldum»'a bas.",
 "promo_open_channel": "📢 Kanalı aç",
 "promo_check_btn": "✅ Abone oldum",
 "promo_empty": "😔 Promo kodlar tükendi. Sonra tekrar bak.",
+"push_digest_title": "🔥 Bugün ilginç maçlar var:",
+"push_digest_cta": "Tahmin için maç seçin 👇",
+"promo_check_failed": "🎁 Aboneliği şu an kontrol edemiyorum. Birkaç dakika sonra deneyin.",
+"fc_insufficient": "⚠️ Bu maç için kaliteli bir tahmin yapacak kadar veri yok.\n\nŞu an eksik:\n• güncel oranlar;\n• yeterli istatistik;\n• değer analizi için veri.\n\nRakam uydurmayacağım. Biraz sonra tekrar bakın.",
 "promo_code": "🎁 Promo kodun: {code}",
 "promo_codes_title": "🎁 Ortaklarımızdan bonus kodları:",
 "menu_match_of_day": "🔥 Günün maçı",
+"fc_basis": "📐 Gerçek oranlar ve mevcut verilere dayalı · 18+, finansal tavsiye değildir",
 "bot_winrate": "🎯 ProqnozAI: kullanıcı oylarına göre %{pct} doğru (30 gün)",
 "bot_winrate_building": "🎯 Doğruluk istatistiği toplanıyor",
 "profile_streak": "🔥 Seri: {n} gün üst üste",
@@ -462,16 +470,12 @@ Draw — XX% | X.XX  (if applicable)
 "match_day_fallback": "Bugün öne çıkan maç yok — yarının en güçlüsü 👇",
 "menu_profile":  "👤 Profil",
 "menu_lang":     "Dil değiştir",
+"menu_tz": "Saat dilimi",
 "profile_text":  "👤 PROFİL\n\nAd: {name}\nDil: {lang}\nSaat dilimi: {tz}",
 "ob_sports":     "En çok neyi izliyorsun?",
 "ob_exp":        "Maçları ne kadar derin takip ediyorsun?",
 "ob_done":       "Hazır! Seçilen spor: {sports}. Artık tahmin alabilirsiniz.",
-"welcome_intro": """ProqnozAI 👋
-
-Ben futbol için AI analistiyim.
-Maçı seç — istatistik, form ve analizi göstereyim.
-
-Başlayalım 👇""",
+"welcome_intro": "ProqnozAI 👋\n\nBen AI spor analistiyim: futbol, tenis, basketbol, hokey, UFC.\n\n⚽ Tahmin — maçı seç, analiz ve gerçek oranları al\n⚡ Kombine — 2–5 maçlık kupon\n📸 Fotoğraf — fikstür veya afiş fotoğrafı gönder\n\nBaşlayalım 👇",
 "post_onboarding": "Hazır! Sırada ne var?\n\n⚽ Analiz için «Tahmin» tuşuna bas\n⚡ Kupon için «Kombine» tuşuna bas\n📸 Ya da fikstür fotoğrafı gönder",
 "match_too_far": "Maça daha çok var — yalnızca yakın 7 günü analiz ediyorum.",
 "ev_menu_expired":        "⚠️ Maç listesi zaman aşımına uğradı. Lütfen yeniden açın.",
@@ -502,7 +506,7 @@ Başlayalım 👇""",
 
 KURALLAR:
 - Oran varsa — sadece onları kullan
-- Sadece metin ve emoji, ** markdown yok (bahis satırı hariç)
+- Sadece metin ve emoji, markdown işareti yok
 - FORM: her katılımcının formunu YALNIZCA verilen gerçek veriye göre yaz; veri yoksa "veri mevcut değil" yaz — UYDURMA
 - Gerçek maç verisi varsa — ortalama gol sayısını göster
 - Gerçek veri yoksa bunu dürüstçe belirt ("veri mevcut değil"); gerçek, sonuç, sakatlık veya kadro UYDURMA
@@ -520,7 +524,7 @@ FORMAT (tüm satırlar ZORUNLU):
 Beraberlik — XX% | X.XX  (geçerliyse)
 [B] — XX% | X.XX
 
-⚡ **Bahis: [tür] @ X.XX** — [1 cümle neden]""",
+⚡ Bahis: [tür] @ X.XX — [1 cümle neden]""",
 "live_tip_prompt": "Canlı bahis analistisin. Maç {match}, {minute}. dk, skor {score}. Olay: {event}. En iyi canlı bahsi öner. Kısa, max 2 cümle.",
 "history_title": "Son tahminleriniz:",
 "history_empty": "Henüz tahmin yok.",
@@ -580,13 +584,19 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "menu_forecast": "⚽ Матч болжамдары",
 "menu_get_promo": "🎁 Бонус алу",
 "promo_unavailable": "🎁 Промокодтар әзірге қолжетімсіз. Кейінірек кір.",
+"promo_preview": "🎁 Сізді мына серіктестердің бонустық промокодтары күтіп тұр: {partners}.",
 "promo_subscribe": "🎁 Промокод алу үшін арнамызға жазыл да, «Жазылдым» батырмасын бас.",
 "promo_open_channel": "📢 Арнаны ашу",
 "promo_check_btn": "✅ Жазылдым",
 "promo_empty": "😔 Промокодтар бітті. Кейінірек кір.",
+"push_digest_title": "🔥 Бүгін қызық матчтар бар:",
+"push_digest_cta": "Болжам үшін матч таңдаңыз 👇",
+"promo_check_failed": "🎁 Жазылымды тексере алмай тұрмын. Бірнеше минуттан кейін көріңіз.",
+"fc_insufficient": "⚠️ Бұл матч бойынша сапалы болжам жасауға дерек жеткіліксіз.\n\nҚазір жоқ:\n• өзекті коэффициенттер;\n• жеткілікті статистика;\n• құндылықты бағалауға дерек.\n\nСандарды ойдан шығармаймын. Сәлден соң қараңыз.",
 "promo_code": "🎁 Сенің промокодың: {code}",
 "promo_codes_title": "🎁 Серіктестерден бонус кодтары:",
 "menu_match_of_day": "🔥 Күн матчы",
+"fc_basis": "📐 Нақты коэффициенттер мен қолжетімді деректерге негізделген · 18+, қаржылық кеңес емес",
 "bot_winrate": "🎯 ProqnozAI: пайдаланушы бағасы бойынша {pct}% дәл (30 күн)",
 "bot_winrate_building": "🎯 Дәлдік статистикасы жиналуда",
 "profile_streak": "🔥 Серия: {n} күн қатарынан",
@@ -595,20 +605,12 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "match_day_fallback": "Бүгін топ-матч жоқ — ертеңгі ең күштісі 👇",
 "menu_profile":  "👤 Профиль",
 "menu_lang":     "Тілді өзгерту",
+"menu_tz": "Уақыт белдеуі",
 "profile_text":  "👤 ПРОФИЛЬ\n\nАты: {name}\nТіл: {lang}\nУақыт белдеуі: {tz}",
 "ob_sports":     "Қандай спортты ұнатасыз?",
 "ob_exp":        "Ставкалардағы тәжірибеңіз қандай?",
 "ob_done":       "Дайын! Спорт: {sports}. Болжам сұрай аласыз.",
-"welcome_intro": """ProqnozAI-ге қош келдіңіз!
-
-Мен AI спорт аналитигімін. Не істей аламын:
-
-⚽ Матч болжамдары — спорт түрін таңдаңыз, матч тауып, талдау алыңыз
-⚡ Экспресс — 2–5 матчтан купон жасаңыз
-📸 Фото — кесте немесе афиша фотосын жіберіңіз
-📋 Тарих — алдыңғы болжамдарыңызды қараңыз
-
-Спорт түрін таңдап, бастайық!""",
+"welcome_intro": "ProqnozAI 👋\n\nМен AI спорт аналитигімін: футбол, теннис, баскетбол, хоккей, UFC.\n\n⚽ Болжам — матчты таңдаңыз, талдау мен нақты коэффициенттерді алыңыз\n⚡ Экспресс — 2–5 матчтан купон\n📸 Фото — кесте немесе афиша суретін жіберіңіз\n\nБастайық 👇",
 "post_onboarding": "Дайын! Не істегіңіз келеді?\n\n⚽ Болжам үшін «Матч болжамдары» батырмасын басыңыз\n⚡ Купон үшін «Экспресс» батырмасын басыңыз\n📸 Немесе кесте фотосын жіберіңіз",
 "match_too_far": "Бұл матч тым алыс. Мен тек келесі 7 күн ішіндегі матчтарға болжам беремін.",
 "ev_menu_expired":        "⚠️ Матчтар тізімі ескірді. Оны қайта ашыңыз.",
@@ -639,7 +641,7 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 
 ЕРЕЖЕЛЕР:
 - Коэффициенттер берілсе — тек соларды қолдан
-- Тек мәтін және emoji, ** markdown жоқ (ставка жолы ерекше)
+- Тек мәтін және emoji, markdown белгілері жоқ
 - ФОРМА: әр қатысушының формасын ТЕК берілген нақты дерекпен жаз; дерек болмаса "деректер қолжетімсіз" деп жаз — ОЙДАН ШЫҒАРМА
 - Нақты матч деректері болса — орташа гол санын көрсет
 - Нақты дерек болмаса — оны шыншыл көрсет ("деректер қолжетімсіз"); факті, нәтиже, жарақат, құрам ОЙДАН ШЫҒАРМА
@@ -657,7 +659,7 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 Тең — XX% | X.XX  (қолданылса)
 [Б] — XX% | X.XX
 
-⚡ **Ставка: [түрі] @ X.XX** — [1 сөйлем, неге]""",
+⚡ Ставка: [түрі] @ X.XX — [1 сөйлем, неге]""",
 "live_tip_prompt": "Тікелей ставка аналитигісің. Матч {match}, {minute} мин, есеп {score}. Оқиға: {event}. Үздік тікелей ставканы ұсын. Қысқа, максимум 2 сөйлем.",
 "history_title": "Соңғы болжамдарыңыз:",
 "history_empty": "Болжамдар жоқ.",
@@ -717,13 +719,19 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "menu_forecast": "⚽ O'yin bashoratlari",
 "menu_get_promo": "🎁 Bonus olish",
 "promo_unavailable": "🎁 Promokodlar hozircha mavjud emas. Keyinroq qarang.",
+"promo_preview": "🎁 Sizni ushbu hamkorlarning bonus promokodlari kutmoqda: {partners}.",
 "promo_subscribe": "🎁 Promokod olish uchun kanalimizga obuna bo'l va «Obuna bo'ldim»ni bos.",
 "promo_open_channel": "📢 Kanalni ochish",
 "promo_check_btn": "✅ Obuna bo'ldim",
 "promo_empty": "😔 Promokodlar tugadi. Keyinroq qarang.",
+"push_digest_title": "🔥 Bugun qiziqarli o'yinlar bor:",
+"push_digest_cta": "Bashorat uchun o'yin tanlang 👇",
+"promo_check_failed": "🎁 Obunani hozir tekshira olmayapman. Bir necha daqiqadan so'ng urinib ko'ring.",
+"fc_insufficient": "⚠️ Bu o'yin bo'yicha sifatli bashorat uchun ma'lumot yetarli emas.\n\nHozir yo'q:\n• dolzarb koeffitsiyentlar;\n• yetarli statistika;\n• qiymatni baholash uchun ma'lumot.\n\nRaqamlarni o'ylab topmayman. Birozdan keyin qarang.",
 "promo_code": "🎁 Sizning promokodingiz: {code}",
 "promo_codes_title": "🎁 Hamkorlardan bonus kodlari:",
 "menu_match_of_day": "🔥 Kun o'yini",
+"fc_basis": "📐 Haqiqiy koeffitsiyentlar va mavjud ma'lumotlarga asoslangan · 18+, moliyaviy maslahat emas",
 "bot_winrate": "🎯 ProqnozAI: foydalanuvchi baholariga ko'ra {pct}% to'g'ri (30 kun)",
 "bot_winrate_building": "🎯 Aniqlik statistikasi yig'ilmoqda",
 "profile_streak": "🔥 Seriya: {n} kun ketma-ket",
@@ -732,20 +740,12 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "match_day_fallback": "Bugun top o'yin yo'q — ertangi eng kuchlisi 👇",
 "menu_profile":  "👤 Profil",
 "menu_lang":     "Tilni o'zgartirish",
+"menu_tz": "Vaqt mintaqasi",
 "profile_text":  "👤 PROFIL\n\nIsm: {name}\nTil: {lang}\nVaqt mintaqasi: {tz}",
 "ob_sports":     "Qaysi sportni yaxshi ko'rasiz?",
 "ob_exp":        "Stavkalardagi tajribangiz qanday?",
 "ob_done":       "Tayyor! Sport: {sports}. Bashorat so'rasangiz bo'ladi.",
-"welcome_intro": """ProqnozAI-ga xush kelibsiz!
-
-Men AI sport analitikiman. Nima qila olaman:
-
-⚽ O'yin bashoratlari — sport turini tanlang, o'yin toping, tahlil oling
-⚡ Ekspress — 2–5 ta o'yindan kupon tuzing
-📸 Rasm — jadval yoki afisha rasmini yuboring
-📋 Tarix — oldingi bashoratlaringizni ko'ring
-
-Sport turini tanlang va boshlaymiz!""",
+"welcome_intro": "ProqnozAI 👋\n\nMen AI sport analitikiman: futbol, tennis, basketbol, xokkey, UFC.\n\n⚽ Bashorat — o'yinni tanlang, tahlil va haqiqiy koeffitsiyentlarni oling\n⚡ Ekspress — 2–5 o'yindan kupon\n📸 Rasm — jadval yoki afisha rasmini yuboring\n\nBoshladik 👇",
 "post_onboarding": "Tayyor! Nima qilishni xohlaysiz?\n\n⚽ Bashorat uchun «O'yin bashoratlari» tugmasini bosing\n⚡ Kupon uchun «Ekspress» tugmasini bosing\n📸 Yoki jadval rasmini yuboring",
 "match_too_far": "Bu o'yin juda uzoqda. Men faqat keyingi 7 kun ichidagi o'yinlar uchun bashorat beraman.",
 "ev_menu_expired":        "⚠️ O'yinlar ro'yxati eskirdi. Iltimos, uni qayta oching.",
@@ -776,7 +776,7 @@ Sport turini tanlang va boshlaymiz!""",
 
 QOIDALAR:
 - Koeffitsientlar berilsa — faqat shularni ishlatish
-- Faqat matn va emoji, ** markdown yo'q (garov satri bundan mustasno)
+- Faqat matn va emoji, markdown belgilari yo'q
 - SHAKL: har bir ishtirokchining formasini FAQAT berilgan haqiqiy ma'lumot asosida yoz; ma'lumot bo'lmasa "ma'lumot mavjud emas" deb yoz — O'YLAB TOPMA
 - Haqiqiy ma'lumotlar bo'lsa — o'rtacha gol sonini ko'rsat
 - Haqiqiy ma'lumot bo'lmasa, buni rostini yoz ("ma'lumot mavjud emas"); fakt, natija, jarohat yoki tarkib O'YLAB TOPMA
@@ -794,7 +794,7 @@ FORMAT (barcha satrlar MAJBURIY):
 Durrang — XX% | X.XX  (taalluqli bo'lsa)
 [B] — XX% | X.XX
 
-⚡ **Stavka: [turi] @ X.XX** — [1 jumla, nima uchun]""",
+⚡ Stavka: [turi] @ X.XX — [1 jumla, nima uchun]""",
 "live_tip_prompt": "Sen jonli stavkalar analitikisisan. O'yin {match}, {minute} daq, hisob {score}. Voqea: {event}. Eng yaxshi jonli stavkani tavsiya et. Qisqa, max 2 jumla.",
 "history_title": "Oxirgi bashoratlaringiz:",
 "history_empty": "Bashoratlar yo'q.",
@@ -854,13 +854,19 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "menu_forecast": "⚽ توقعات المباريات",
 "menu_get_promo": "🎁 احصل على مكافأة",
 "promo_unavailable": "🎁 الرموز الترويجية غير متاحة بعد. تحقق لاحقًا.",
+"promo_preview": "🎁 رموز ترويجية من {partners} في انتظارك.",
 "promo_subscribe": "🎁 للحصول على الرمز الترويجي، اشترك في قناتنا واضغط «اشتركت».",
 "promo_open_channel": "📢 فتح القناة",
 "promo_check_btn": "✅ اشتركت",
 "promo_empty": "😔 نفدت الرموز الترويجية. تحقق لاحقًا.",
+"push_digest_title": "🔥 مباريات مثيرة اليوم:",
+"push_digest_cta": "اختر مباراة للحصول على توقع 👇",
+"promo_check_failed": "🎁 لا يمكنني التحقق من الاشتراك الآن. حاول بعد دقائق.",
+"fc_insufficient": "⚠️ لا توجد بيانات كافية عن هذه المباراة لتوقع مفيد.\n\nغير متوفر حالياً:\n• معاملات حديثة؛\n• إحصائيات كافية؛\n• بيانات لتقييم القيمة.\n\nلن أختلق الأرقام. تحقق لاحقاً.",
 "promo_code": "🎁 رمزك الترويجي: {code}",
 "promo_codes_title": "🎁 أكواد المكافآت من شركائنا:",
 "menu_match_of_day": "🔥 مباراة اليوم",
+"fc_basis": "📐 يستند إلى الاحتمالات الحقيقية والبيانات المتاحة · 18+، ليست نصيحة مالية",
 "bot_winrate": "🎯 ProqnozAI: دقة {pct}% حسب تقييمات المستخدمين (30 يومًا)",
 "bot_winrate_building": "🎯 نجمع إحصائيات الدقة",
 "profile_streak": "🔥 سلسلة: {n} يوم متتالٍ",
@@ -869,20 +875,12 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "match_day_fallback": "لا مباريات مميزة اليوم — إليك أقوى مباراة غدًا 👇",
 "menu_profile":  "👤 الملف",
 "menu_lang":     "تغيير اللغة",
+"menu_tz": "المنطقة الزمنية",
 "profile_text":  "👤 الملف الشخصي\n\nالاسم: {name}\nاللغة: {lang}\nالمنطقة الزمنية: {tz}",
 "ob_sports":     "ما هي الرياضة المفضلة لديك؟",
 "ob_exp":        "ما هي خبرتك في الرهانات؟",
 "ob_done":       "جاهز! الرياضة: {sports}. يمكنك طلب التوقعات.",
-"welcome_intro": """مرحباً بك في ProqnozAI!
-
-أنا محلل رياضي بالذكاء الاصطناعي. ما أستطيع فعله:
-
-⚽ توقعات المباريات — اختر رياضة، ابحث عن مباراة، احصل على تحليل فوري
-⚡ رهان مركب — بناء كوبون من 2–5 مباريات
-📸 صورة — أرسل صورة الجدول أو الملصق
-📋 السجل — عرض توقعاتك السابقة
-
-اختر رياضتك ولنبدأ!""",
+"welcome_intro": "ProqnozAI 👋\n\nأنا محلل رياضي بالذكاء الاصطناعي: كرة القدم، التنس، كرة السلة، الهوكي، UFC.\n\n⚽ التوقع — اختر مباراة واحصل على تحليل واحتمالات حقيقية\n⚡ المركب — كوبون من 2–5 مباريات\n📸 صورة — أرسل صورة الجدول أو الملصق\n\nلنبدأ 👇",
 "post_onboarding": "جاهز! ماذا تريد أن تفعل؟\n\n⚽ للتوقع اضغط «توقعات المباريات»\n⚡ للكوبون اضغط «رهان مركب»\n📸 أو أرسل صورة الجدول",
 "match_too_far": "هذه المباراة بعيدة جداً. أقدم التوقعات فقط للمباريات خلال الأيام السبعة القادمة.",
 "ev_menu_expired":        "⚠️ انتهت صلاحية قائمة المباريات. يرجى إعادة فتحها.",
@@ -913,7 +911,7 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 
 القواعد:
 - إذا وُجدت أرباح — استخدمها فقط
-- نص عادي وإيموجي فقط، لا Markdown ** (إلا سطر الرهان)
+- نص عادي وإيموجي فقط، بدون علامات Markdown
 - الشكل: صف حالة كل مشارك من البيانات الحقيقية المتوفرة فقط؛ إن لم تتوفر بيانات فاكتب "لا تتوفر بيانات" — لا تختلق
 - إذا توفرت بيانات حقيقية — أضف متوسط الأهداف
 - إن غابت البيانات الحقيقية فاذكر ذلك بصدق ("لا تتوفر بيانات")؛ لا تختلق وقائع أو نتائج أو إصابات أو تشكيلات
@@ -931,7 +929,7 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 تعادل — XX% | X.XX  (إن انطبق)
 [ب] — XX% | X.XX
 
-⚡ **الرهان: [النوع] @ X.XX** — [جملة واحدة لماذا]""",
+⚡ الرهان: [النوع] @ X.XX — [جملة واحدة لماذا]""",
 "live_tip_prompt": "أنت محلل رهانات مباشرة. المباراة {match}، الدقيقة {minute}، النتيجة {score}. الحدث: {event}. اقترح أفضل رهان مباشر. مختصر، جملتان كحد أقصى.",
 "history_title": "توقعاتك الأخيرة:",
 "history_empty": "لا توجد توقعات بعد.",
@@ -963,6 +961,34 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 LANG_NAMES = {"az": "Azerbaycan", "ru": "Русский", "en": "English"}
 
 # ─── Human-readable label maps ────────────────────────────────────────────────
+# Telegram's own command menu (the "/" list next to the input box). Kept small
+# and separate from T: these are one-line command captions, not UI copy, and
+# Telegram caps them at 256 chars. Order here is the order the user sees.
+BOT_COMMANDS = {
+    "ru": [("start", "Запустить бота"), ("matches", "Матчи и прогноз"),
+           ("express", "Собрать экспресс"), ("profile", "Профиль"),
+           ("history", "Мои прогнозы"), ("lang", "Язык"), ("tz", "Часовой пояс")],
+    "az": [("start", "Botu başlat"), ("matches", "Matçlar və proqnoz"),
+           ("express", "Ekspress yığ"), ("profile", "Profil"),
+           ("history", "Proqnozlarım"), ("lang", "Dil"), ("tz", "Saat qurşağı")],
+    "en": [("start", "Start the bot"), ("matches", "Matches and forecast"),
+           ("express", "Build an accumulator"), ("profile", "Profile"),
+           ("history", "My forecasts"), ("lang", "Language"), ("tz", "Time zone")],
+    "tr": [("start", "Botu başlat"), ("matches", "Maçlar ve tahmin"),
+           ("express", "Kombine oluştur"), ("profile", "Profil"),
+           ("history", "Tahminlerim"), ("lang", "Dil"), ("tz", "Saat dilimi")],
+    "kz": [("start", "Ботты іске қосу"), ("matches", "Матчтар және болжам"),
+           ("express", "Экспресс жинау"), ("profile", "Профиль"),
+           ("history", "Менің болжамдарым"), ("lang", "Тіл"), ("tz", "Уақыт белдеуі")],
+    "uz": [("start", "Botni ishga tushirish"), ("matches", "Matchlar va prognoz"),
+           ("express", "Ekspress yig'ish"), ("profile", "Profil"),
+           ("history", "Mening prognozlarim"), ("lang", "Til"), ("tz", "Vaqt mintaqasi")],
+    "ar": [("start", "تشغيل البوت"), ("matches", "المباريات والتوقعات"),
+           ("express", "إنشاء مركب"), ("profile", "الملف الشخصي"),
+           ("history", "توقعاتي"), ("lang", "اللغة"), ("tz", "المنطقة الزمنية")],
+}
+
+
 SPORTS_LABELS = {
     "az": {"football": "Futbol", "ufc": "UFC/MMA", "nba": "Basketbol",
            "tennis": "Tennis", "hockey": "Hokey", "all": "Hamısı"},
@@ -987,6 +1013,16 @@ EXP_LABELS = {
     "kz": {"beginner": "Жаңадан бастаған", "mid": "Орта деңгей", "expert": "Тәжірибелі"},
     "uz": {"beginner": "Yangi boshlagan", "mid": "O'rta daraja", "expert": "Tajribali"},
     "ar": {"beginner": "مبتدئ", "mid": "متوسط", "expert": "خبير"},
+}
+
+# Experience level. The value feeds the forecast prompt (beginner gets the
+# terms explained, expert gets the numbers), so it has to be ASKED — while the
+# question was missing everyone silently stayed "beginner".
+OB_EXP = {
+    lang: [("🌱 " + lbl["beginner"], "beginner"),
+           ("📈 " + lbl["mid"], "mid"),
+           ("🎯 " + lbl["expert"], "expert")]
+    for lang, lbl in EXP_LABELS.items()
 }
 
 # ─── Onboarding data ──────────────────────────────────────────────────────────
