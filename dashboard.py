@@ -13,6 +13,8 @@ from functools import wraps
 
 from urllib.parse import urlparse
 
+from partner_links import verify_click
+
 import httpx
 from flask import Flask, Response, render_template_string, request, redirect, url_for
 
@@ -95,12 +97,19 @@ def partner_redirect(partner):
     target = _partner_targets().get(partner)
     if not target:
         return Response("unknown partner", 404)
-    try:
-        httpx.post(f"{_BOT_BASE}/track/partner_click", headers=_auth_headers(),
-                   json={"user_id": request.args.get("u"), "partner": partner},
-                   timeout=2)
-    except Exception as e:
-        logger.warning("partner click not recorded: %s", _safe_err(e))
+
+    uid = request.args.get("u")
+    if verify_click(STATS_TOKEN, partner, uid, request.args.get("s", "")):
+        try:
+            httpx.post(f"{_BOT_BASE}/track/partner_click", headers=_auth_headers(),
+                       json={"user_id": uid, "partner": partner}, timeout=2)
+        except Exception as e:
+            logger.warning("partner click not recorded: %s", _safe_err(e))
+    else:
+        # Unsigned or tampered — count nothing rather than let anyone inflate
+        # the numbers by hitting this URL. The redirect itself still happens:
+        # reaching the partner must never depend on our bookkeeping.
+        logger.warning("partner click not counted: bad or missing signature")
     return redirect(target, code=302)
 
 

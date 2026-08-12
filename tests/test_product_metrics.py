@@ -198,7 +198,8 @@ def test_partner_url_goes_through_the_redirect_when_configured(monkeypatch):
     from handlers.forecast import partner_url
     monkeypatch.setattr(config, "PARTNER_REDIRECT_BASE", "https://dash.example")
     url = partner_url("Mostbet", "https://mostbet.com", 42)
-    assert url == "https://dash.example/r/Mostbet?u=42"
+    # The user id is signed, so the click cannot be attributed to anyone else.
+    assert url.startswith("https://dash.example/r/Mostbet?u=42&s=")
 
 
 def test_partner_url_escapes_the_name(monkeypatch):
@@ -213,8 +214,8 @@ def test_partner_url_falls_back_to_the_host_when_unnamed(monkeypatch):
     import config
     from handlers.forecast import partner_url
     monkeypatch.setattr(config, "PARTNER_REDIRECT_BASE", "https://dash.example")
-    assert partner_url("", "https://mostbet.com/promo", 1) == \
-        "https://dash.example/r/mostbet.com?u=1"
+    assert partner_url("", "https://mostbet.com/promo", 1).startswith(
+        "https://dash.example/r/mostbet.com?u=1&s=")
 
 
 # ─── opening the partner list is recorded ─────────────────────────────────────
