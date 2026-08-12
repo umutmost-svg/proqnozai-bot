@@ -4,6 +4,7 @@ Auth: HTTP Basic Auth (login: admin, password: DASHBOARD_TOKEN)
 Stats source: bot's internal stats server (stats_server.py via Railway private network)
 """
 import base64
+import hashlib
 import hmac
 import json
 import logging
@@ -101,6 +102,37 @@ def partner_redirect(partner):
     except Exception as e:
         logger.warning("partner click not recorded: %s", _safe_err(e))
     return redirect(target, code=302)
+
+
+# ─── CSRF protection for state-changing requests ──────────────────────────────
+# Basic Auth alone does not stop CSRF: the browser replays the credentials on a
+# cross-site POST, so any page the logged-in admin visits could fire a broadcast
+# to the whole user base. Two independent checks, either of which is enough:
+#
+#   * a token in the form, derived from DASHBOARD_TOKEN. An attacker's page
+#     cannot read it (same-origin policy), so it cannot forge the POST.
+#   * Origin / Referer must match the host actually serving the request.
+#
+# The token is stateless — there is no session to hang a nonce on — so it does
+# not expire. That is acceptable here: knowing it requires already being able to
+# read an authenticated page, which is the thing CSRF cannot do.
+def csrf_token() -> str:
+    return hmac.new(STATS_TOKEN.encode(), b"dashboard-csrf", hashlib.sha256).hexdigest()
+
+
+def _same_origin() -> bool:
+    """True when the request demonstrably came from our own page. A missing
+    Origin AND Referer is treated as untrusted for state-changing methods."""
+    origin = request.headers.get("Origin") or request.headers.get("Referer") or ""
+    if not origin:
+        return False
+    return urlparse(origin).netloc == urlparse(request.host_url).netloc
+
+
+def csrf_ok() -> bool:
+    supplied = request.form.get("csrf") or request.headers.get("X-CSRF-Token") or ""
+    return bool(STATS_TOKEN) and (
+        hmac.compare_digest(supplied, csrf_token()) or _same_origin())
 
 
 # ─── Basic Auth ───────────────────────────────────────────────────────────────
@@ -298,7 +330,7 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-t
     <div class="card stat-card">
       <span class="stat-icon">📊</span>
       <div class="stat-label">Прогнозов всего</div>
-      <div class="stat-value accent" id="k_forecasts">{{ d.forecasts_total }}</div>
+      <div class="stat-value accent" id="k_forecasts">{{ d.forecasts_real_total|default(d.forecasts_total) }}</div>
       <div class="stat-sub">{{ d.forecasts_today }} сегодня</div>
     </div>
     <div class="card stat-card">
@@ -388,7 +420,9 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-t
         <tr><th>Дата</th><th>Когорта</th><th>D1</th><th>D7</th><th>D30</th></tr>
         {% for r in (d.retention|default([]))[:7] %}
         <tr><td>{{ r.day }}</td><td>{{ r.size }}</td>
-            <td>{{ r.d1 }}%</td><td>{{ r.d7 }}%</td><td>{{ r.d30 }}%</td></tr>
+            <td>{% if r.d1 is none %}<span class="muted">—</span>{% else %}{{ r.d1 }}%{% endif %}</td>
+            <td>{% if r.d7 is none %}<span class="muted">—</span>{% else %}{{ r.d7 }}%{% endif %}</td>
+            <td>{% if r.d30 is none %}<span class="muted">—</span>{% else %}{{ r.d30 }}%{% endif %}</td></tr>
         {% else %}
         <tr><td colspan="5" class="muted">Пока нет данных</td></tr>
         {% endfor %}
@@ -418,15 +452,21 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-t
 
     <div class="card">
       <div class="stat-label" style="margin-bottom:10px">Промокоды</div>
-      {% if pr.code %}
+      {% if pr.partners %}
       <div class="stat-value" style="font-size:26px">{{ pr.claimed }}<span class="muted" style="font-size:16px"> / {{ pr.max_uses }}</span></div>
       <div class="bar-wrap"><div class="bar bar-green" style="width:{{ (pr.claimed / (pr.max_uses or 1) * 100)|round|int }}%"></div></div>
-      <div class="stat-sub" style="margin-top:8px">
-        код <b>{{ pr.code }}</b> · осталось {{ pr.remaining }}<br>
-        за неделю {{ pr.claimed_7d }} · конверсия от базы {{ pr.conversion }}%
+      <div class="stat-sub" style="margin:8px 0 10px">
+        получили {{ pr.users }} чел. · за неделю {{ pr.claimed_7d }} · конверсия от базы {{ pr.conversion }}%
       </div>
+      <table>
+        <tr><th>Партнёр</th><th>Код</th><th>Выдано</th></tr>
+        {% for c in pr.partners %}
+        <tr><td>{{ c.partner or '—' }}</td><td>{{ c.code }}</td>
+            <td>{{ c.claimed }}/{{ c.max_uses }}</td></tr>
+        {% endfor %}
+      </table>
       {% else %}
-      <div class="muted" style="font-size:12px">Активной кампании нет</div>
+      <div class="muted" style="font-size:12px">Активных кампаний нет</div>
       {% endif %}
     </div>
 
@@ -745,7 +785,7 @@ async function refreshData(){
     setText('k_users', x.users_total);
     setText('k_new', '+' + (x.users_today||0));
     setText('k_dau', x.users_active_today);
-    setText('k_forecasts', x.forecasts_total);
+    setText('k_forecasts', x.forecasts_real_total ?? x.forecasts_total);
     const fbt = x.fb_total||0, fbw = x.fb_wins||0;
     setText('k_acc', (fbt ? Math.round(fbw/fbt*100) : 0) + '%');
     dailyLabels = (x.daily||[]).map(r=>r[0].slice(5));
@@ -869,6 +909,9 @@ def api_users_search():
 @app.route("/api/users/block", methods=["POST"])
 @require_auth
 def api_users_block():
+    if not csrf_ok():
+        logger.warning("user block rejected: CSRF check failed")
+        return Response("CSRF check failed", 403)
     body = request.get_json(silent=True) or {}
     try:
         resp = httpx.post(f"{_BOT_BASE}/users/block", headers=_auth_headers(), json={
@@ -884,7 +927,7 @@ def api_users_block():
 @app.route("/users")
 @require_auth
 def users_page():
-    return render_template_string(USERS_TEMPLATE)
+    return render_template_string(USERS_TEMPLATE, csrf=csrf_token())
 
 
 USERS_TEMPLATE = r"""<!DOCTYPE html>
@@ -965,7 +1008,8 @@ async function doSearch(){
 }
 async function toggleBlock(uid, blocked){
   try{
-    await fetch('/api/users/block', {method:'POST', headers:{'Content-Type':'application/json'},
+    await fetch('/api/users/block', {method:'POST',
+      headers:{'Content-Type':'application/json','X-CSRF-Token':'{{ csrf }}'},
       body: JSON.stringify({user_id: uid, blocked: blocked})});
     doSearch();
   }catch(e){ alert('Ошибка: '+e); }
@@ -1055,6 +1099,7 @@ textarea{min-height:160px;resize:vertical;}
     </div>
 
     <form method="POST" action="/broadcast" onsubmit="return confirmSend()">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
       <label for="segment">Аудитория</label>
       <select name="segment" id="segment" onchange="updateCount()">
         <option value="all">👥 Все активные пользователи</option>
@@ -1146,6 +1191,10 @@ def broadcast():
     prefill = ""
 
     if request.method == "POST":
+        if not csrf_ok():
+            # A cross-site POST replaying the admin's Basic Auth credentials.
+            logger.warning("broadcast rejected: CSRF check failed")
+            return Response("CSRF check failed", 403)
         text    = (request.form.get("text") or "").strip()
         segment = request.form.get("segment", "all")
         prefill = text
@@ -1170,7 +1219,8 @@ def broadcast():
                 logger.warning("broadcast backend unavailable: %s", _safe_err(e))
                 result = {"started": 0, "error": "Сервис недоступен, попробуйте позже."}
 
-    return render_template_string(BROADCAST_TEMPLATE, result=result, prefill=prefill)
+    return render_template_string(BROADCAST_TEMPLATE, result=result, prefill=prefill,
+                                  csrf=csrf_token())
 
 
 @app.route("/health")
