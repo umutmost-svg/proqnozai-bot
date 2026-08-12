@@ -184,12 +184,20 @@ def test_redirect_sends_the_user_to_the_partner(client, calls, partners_env):
     assert r.headers["Location"] == "https://mostbet.com"
 
 
-def test_redirect_records_the_click(client, calls, partners_env):
-    client.get("/r/1xBet?u=42")
+def test_redirect_records_a_signed_click(client, calls, partners_env):
+    from partner_links import sign_click
+    sig = sign_click(TOKEN, "1xBet", 42)
+    client.get(f"/r/1xBet?u=42&s={sig}")
     method, url, kw = calls[-1]
     assert method == "POST" and url.endswith("/track/partner_click")
     assert kw["json"] == {"user_id": "42", "partner": "1xBet"}
     assert kw["headers"]["X-Dashboard-Token"] == TOKEN
+
+
+def test_redirect_ignores_an_unsigned_click(client, calls, partners_env):
+    """Anyone can hit this public URL; only signed clicks are counted."""
+    assert client.get("/r/1xBet?u=42").status_code == 302
+    assert not calls
 
 
 def test_redirect_still_works_when_tracking_fails(client, monkeypatch, partners_env):

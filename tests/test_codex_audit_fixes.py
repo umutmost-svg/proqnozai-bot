@@ -147,3 +147,87 @@ def test_coverage_denominator_is_not_the_capped_history(temp_db):
                            "WHERE msg_type='FORECAST'").fetchone()[0]
     assert cov["total"] == events
     assert cov["pct"] <= 100
+
+
+# ─── partner clicks are attributable, not inventable ──────────────────────────
+
+@pytest.fixture
+def partner_env(monkeypatch):
+    monkeypatch.setenv("PARTNERS", "Mostbet | https://mostbet.example")
+    monkeypatch.setattr(dash, "_PARTNER_TARGETS", {})
+    yield
+    monkeypatch.setattr(dash, "_PARTNER_TARGETS", {})
+
+
+@pytest.fixture
+def recorded(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dash.httpx, "post", lambda *a, **k: calls.append(k))
+    return calls
+
+
+def _signed_url(uid=42, partner="Mostbet"):
+    from partner_links import sign_click
+    return f"/r/{partner}?u={uid}&s={sign_click(TOKEN, partner, uid)}"
+
+
+def test_signed_click_is_recorded(client, partner_env, recorded):
+    r = client.get(_signed_url())
+    assert r.status_code == 302
+    assert recorded[-1]["json"] == {"user_id": "42", "partner": "Mostbet"}
+
+
+def test_forged_user_id_is_not_recorded(client, partner_env, recorded):
+    """The signature binds the id: swapping it must not attribute the click."""
+    from partner_links import sign_click
+    sig = sign_click(TOKEN, "Mostbet", 42)
+    r = client.get(f"/r/Mostbet?u=999&s={sig}")
+    assert r.status_code == 302              # the user still reaches the partner
+    assert not recorded                      # but nothing is counted
+
+
+def test_unsigned_click_is_not_recorded(client, partner_env, recorded):
+    r = client.get("/r/Mostbet?u=42")
+    assert r.status_code == 302
+    assert not recorded
+
+
+def test_signature_is_bound_to_the_partner(client, partner_env, recorded, monkeypatch):
+    """A signature minted for one partner must not count for another."""
+    monkeypatch.setenv("PARTNERS", "Mostbet | https://a.example;Topaz | https://b.example")
+    monkeypatch.setattr(dash, "_PARTNER_TARGETS", {})
+    from partner_links import sign_click
+    sig = sign_click(TOKEN, "Mostbet", 42)
+    assert client.get(f"/r/Topaz?u=42&s={sig}").status_code == 302
+    assert not recorded
+
+
+def test_redirect_survives_a_missing_secret(client, partner_env, recorded, monkeypatch):
+    """No secret means no attribution — never a broken partner link."""
+    monkeypatch.setattr(dash, "STATS_TOKEN", "")
+    r = client.get(_signed_url())
+    assert r.status_code == 302
+    assert not recorded
+
+
+def test_bot_builds_a_signed_link(monkeypatch):
+    import config
+    from handlers.forecast import partner_url
+    from partner_links import verify_click
+    monkeypatch.setattr(config, "PARTNER_REDIRECT_BASE", "https://dash.example")
+    monkeypatch.setattr(config, "DASHBOARD_TOKEN", TOKEN)
+
+    url = partner_url("Mostbet", "https://mostbet.example", 42)
+    from urllib.parse import urlparse, parse_qs
+    q = parse_qs(urlparse(url).query)
+    assert q["u"] == ["42"]
+    assert verify_click(TOKEN, "Mostbet", "42", q["s"][0])
+
+
+def test_bot_omits_attribution_without_a_secret(monkeypatch):
+    import config
+    from handlers.forecast import partner_url
+    monkeypatch.setattr(config, "PARTNER_REDIRECT_BASE", "https://dash.example")
+    monkeypatch.setattr(config, "DASHBOARD_TOKEN", "")
+    assert partner_url("Mostbet", "https://mostbet.example", 42) == \
+        "https://dash.example/r/Mostbet"

@@ -37,7 +37,8 @@ def test_list_buttons_go_through_the_click_redirect_when_enabled(monkeypatch):
     monkeypatch.setattr(config, "PARTNERS", [("Mostbet", "https://a.example")])
     monkeypatch.setattr(config, "PARTNER_REDIRECT_BASE", "https://dash.example")
     kb = fc._partner_list_kb(42)
-    assert kb.inline_keyboard[0][0].url == "https://dash.example/r/Mostbet?u=42"
+    assert kb.inline_keyboard[0][0].url.startswith(
+        "https://dash.example/r/Mostbet?u=42&s=")
 
 
 # ─── the button caption ───────────────────────────────────────────────────────

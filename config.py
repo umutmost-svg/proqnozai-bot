@@ -71,6 +71,10 @@ PARTNERS = _parse_partners(os.environ.get("PARTNERS", ""), PARTNERS_URL)
 # partner exactly as before. Set it only once the dashboard is reliably
 # reachable — while it is set, a dashboard outage breaks partner links.
 PARTNER_REDIRECT_BASE = os.environ.get("PARTNER_REDIRECT_BASE", "").rstrip("/")
+# Shared with the dashboard (same env var it authenticates with). Used to sign
+# the user id on partner links so a click cannot be attributed to someone else,
+# or invented wholesale by hitting the redirect URL.
+DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
 # Accept either name: FOOTBALL_KEY (preferred) or legacy FOOTBALL_API_KEY.
 FOOTBALL_KEY    = os.environ.get("FOOTBALL_KEY") or os.environ.get("FOOTBALL_API_KEY", "")
 APIFOOTBALL_KEY = os.environ.get("APIFOOTBALL_KEY", "")

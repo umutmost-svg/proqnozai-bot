@@ -20,6 +20,7 @@ from football_api import search_match, fetch_real_data
 from enrichment import enrich_football_match
 from match_validation import MatchRef, validate_match
 from priority_config import normalize_participant_tokens
+from partner_links import sign_click
 from event_list import (
     normalize_fixture, select_visible, group_by_sport, group_by_league,
     paginate, PAGE_SIZE,
@@ -142,11 +143,16 @@ def partner_url(label: str, url: str, uid: int) -> str:
     can be counted before the user is forwarded on. Unset — the default — it is
     the partner's URL verbatim, which is untrackable but cannot be broken by
     our own dashboard being down."""
-    from config import PARTNER_REDIRECT_BASE
+    from config import PARTNER_REDIRECT_BASE, DASHBOARD_TOKEN
     if not PARTNER_REDIRECT_BASE:
         return url
     name = quote(label or urlparse(url).netloc or "partner", safe="")
-    return f"{PARTNER_REDIRECT_BASE}/r/{name}?u={uid}"
+    # The user id is signed: the redirect is a public URL, so an unsigned id
+    # could be swapped for anyone else's or invented outright.
+    sig = sign_click(DASHBOARD_TOKEN, name, uid)
+    if not sig:
+        return f"{PARTNER_REDIRECT_BASE}/r/{name}"      # unattributed, still works
+    return f"{PARTNER_REDIRECT_BASE}/r/{name}?u={uid}&s={sig}"
 
 
 def _partner_list_kb(uid: int) -> InlineKeyboardMarkup:
