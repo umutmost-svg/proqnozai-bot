@@ -18,7 +18,7 @@ from security import uinfo, sec_blocked, rate_check, record_viol, detect_injecti
 from claude_client import claude_forecast
 from football_api import search_match, fetch_real_data
 from enrichment import enrich_football_match
-from match_validation import MatchRef, validate_match
+from match_validation import MatchRef, validate_match, forecast_readiness, INSUFFICIENT
 from priority_config import normalize_participant_tokens
 from partner_links import sign_click
 from event_list import (
@@ -314,6 +314,7 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
             odds_str = format_mostbet_odds(mb_odds, lang)
             if odds_str:
                 msg_content.append({"type": "text", "text": odds_str})
+                context.user_data["has_odds"] = True
                 logger.info(f"Mostbet odds OK | uid={uid} match={mb_match.get('matchTitle','?')}")
             elif not _is_within_week(mb_match.get("matchBeginAt", "")):
                 msg = T.get(lang, T["ru"]).get("match_too_far", T["ru"]["match_too_far"])
@@ -326,6 +327,21 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     # pending_fixture_key; the menu/text flows derive it from the match.
     fixture_key = (context.user_data.pop("pending_fixture_key", "")
                    or _fixture_key(parsed_teams, text))
+    # Deterministic sufficiency gate. With neither odds nor verified data the
+    # model can only return a page of "not available" lines, so don't pay for
+    # it — say plainly what is missing and offer a way onward.
+    readiness = forecast_readiness(bool(context.user_data.get("has_odds")),
+                                   bool(context.user_data.get("has_real_data")))
+    if readiness == INSUFFICIENT:
+        logger.info(f"forecast skipped: insufficient data | uid={uid} "
+                    f"fixture={fixture_key or '?'} odds=0 verified=0")
+        _log_outcome(False)
+        await status_msg.edit_text(
+            tr(uid, "fc_insufficient"),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                tr(uid, "ev_more_matches"), callback_data="fm_restart")]]))
+        return
+
     reply = await claude_forecast(uid, msg_content, sys_prompt, 1400,
                                   fixture_key=fixture_key)
     # claude_forecast never raises: on a permanent failure it returns the
@@ -785,10 +801,13 @@ async def _fm_match_run(context, q, uid: int, lang: str, it) -> None:
     elif real_data_task is not None:
         real_data = await real_data_task
 
+    odds_attached_here = False
     if mb_odds:
         odds_str = format_mostbet_odds(mb_odds, lang)
         if odds_str:
             content.append({"type": "text", "text": odds_str})
+            odds_attached_here = True
+    context.user_data["has_odds"] = odds_attached_here
 
     context.user_data["parsed_teams"] = (t1, t2)
     # Odds for this exact match are already in `content`; tell _generate_forecast
