@@ -115,4 +115,5 @@ def test_menu_broadcast_key_was_bumped():
     """The reply keyboard only changes when the bot sends a new one, and the
     broadcast runs once per key."""
     import main
-    assert main.MENU_BROADCAST_KEY == "menu_broadcast_2026_08_bonus_and_partners"
+    # Bumped again when the Express button joined the menu.
+    assert main.MENU_BROADCAST_KEY == "menu_broadcast_2026_08_express_button"

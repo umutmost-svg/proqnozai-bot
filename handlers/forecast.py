@@ -35,6 +35,7 @@ from handlers.utils import LANG_BTN, lang_kb, cb_guard, cb_release, nav_guard
 from handlers.forecast_kb import (
     _user_tz, _fmt_kickoff, _parse_index, _country_flag,
     _build_sport_kb, _build_league_kb, _build_match_kb, _build_day_kb, _build_country_kb,
+    sport_name as _sport_label,
 )
 from handlers.registration import handle_name
 
@@ -110,7 +111,7 @@ def _pick_watch_candidate(candidates: list, ref: dict | None) -> dict | None:
 async def _expired_menu(q, uid: int) -> None:
     """Shown when a keyboard's snapshot is gone or an index is stale/invalid, so
     an index from an old keyboard can never silently resolve to another event."""
-    await q.edit_message_text(tr(uid, "ev_menu_expired"))
+    await q.edit_message_text(tr(uid, "ev_menu_expired"), reply_markup=_way_out_kb(uid))
 
 
 _LANG_NAME = {
@@ -348,6 +349,10 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     # localized error text instead of a forecast. Compare against those two
     # strings so a failed generation is recorded as such rather than counted
     # as a successful forecast.
+    # The message is sent as plain text, so any markdown the model still emits
+    # would show up as literal asterisks on the most important line of the
+    # product. The prompt no longer asks for them; this catches the rest.
+    reply = reply.replace("**", "")
     produced = reply not in (tr(uid, "api_error"), tr(uid, "api_overload"))
     _log_outcome(produced)
     logger.info(f"FORECAST {'OK' if produced else 'FAILED'} | uid={uid}")
@@ -383,6 +388,11 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     wr = db_bot_winrate()
     wr_line = tr(uid, "bot_winrate", pct=wr["pct"]) if wr else tr(uid, "bot_winrate_building")
     reply = f"{reply}\n\n{wr_line}"
+
+    # One line saying what the forecast rests on and that it is not advice.
+    # Only under a real forecast — an error message needs neither.
+    if produced:
+        reply = f"{reply}\n{tr(uid, 'fc_basis')}"
 
     # Offer a one-tap way back into the match menu so the user can get another
     # forecast without re-typing; keep any watch button above it.
@@ -439,6 +449,15 @@ _LOADING_MATCHES = {
 }
 
 
+def _way_out_kb(uid: int) -> InlineKeyboardMarkup:
+    """Every error screen used to be a dead end: the message said "try again"
+    and gave nothing to press, so the only way forward was to remember the menu
+    button. One button back into the match list costs nothing and ends the
+    dead end."""
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        tr(uid, "ev_more_matches"), callback_data="fm_restart")]])
+
+
 async def forecast_menu_start(update, context: ContextTypes.DEFAULT_TYPE):
     """Entry from the reply-keyboard button / text flow: post a fresh loading
     message, then build the menu into it."""
@@ -468,7 +487,8 @@ async def _open_forecast_menu(uid: int, lang: str, context: ContextTypes.DEFAULT
     all_m = await _mostbet_load_matches()
     if not all_m:
         # Empty feed = provider failure (network/429), not "no matches".
-        await msg.edit_text(tr(uid, "ev_provider_unavailable")); return
+        await msg.edit_text(tr(uid, "ev_provider_unavailable"),
+                            reply_markup=_way_out_kb(uid)); return
 
     now_utc = datetime.now(timezone.utc)
     items = select_visible(
@@ -641,7 +661,7 @@ async def _show_league_list(q, context, uid: int, items: list, back_cb: str) -> 
     idx = context.user_data.get("fm_sport_idx", 0)
     sport_groups = context.user_data.get("fm_sports") or []
     sport_name = sport_groups[idx][0] if idx < len(sport_groups) else ""
-    title = tr(uid, "ev_tournaments_title", name=sport_name)
+    title = tr(uid, "ev_tournaments_title", name=_sport_label(uid, sport_name))
     if not groups:
         # Never leave the user on a dead-end screen with no way back.
         back_kb = InlineKeyboardMarkup([[InlineKeyboardButton(tr(uid, "ev_back"), callback_data=back_cb)]])
@@ -668,7 +688,7 @@ async def fm_lgpg_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     idx = context.user_data.get("fm_sport_idx", 0)
     sport_groups = context.user_data.get("fm_sports") or []
     sport_name = sport_groups[idx][0] if idx < len(sport_groups) else ""
-    title = tr(uid, "ev_tournaments_title", name=sport_name)
+    title = tr(uid, "ev_tournaments_title", name=_sport_label(uid, sport_name))
     await q.edit_message_text(title, reply_markup=_build_league_kb(groups, page, back_cb, uid))
 
 
@@ -893,7 +913,7 @@ async def fm_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         idx = context.user_data.get("fm_sport_idx", 0)
         sport_groups = context.user_data.get("fm_sports") or []
         sport_name = sport_groups[idx][0] if idx < len(sport_groups) else ""
-        title = tr(uid, "ev_tournaments_title", name=sport_name)
+        title = tr(uid, "ev_tournaments_title", name=_sport_label(uid, sport_name))
         await q.edit_message_text(title, reply_markup=_build_league_kb(groups, page, back_cb, uid))
 
 
@@ -954,6 +974,9 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == tl["menu_partners"]:
         await _send_partner_list(uid, update.message.reply_text)
         return
+    if text == tl["menu_express"]:
+        from handlers.express import express_cmd
+        await express_cmd(update, context); return
     if text == tl["menu_forecast"]:
         await forecast_menu_start(update, context); return
     if text == LANG_BTN:
@@ -1010,7 +1033,8 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fb = await f.download_as_bytearray()
         except Exception as e:
             logger.error(f"photo download error uid={uid}: {e}")
-            await update.message.reply_text(tr(uid, "api_error")); return
+            await update.message.reply_text(tr(uid, "api_error"),
+                                            reply_markup=_way_out_kb(uid)); return
         if len(fb) > MAX_IMAGE_BYTES:
             await update.message.reply_text(tr(uid, "img_too_big")); return
         content = [

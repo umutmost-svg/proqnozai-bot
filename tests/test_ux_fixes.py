@@ -209,7 +209,9 @@ async def test_not_subscribed_is_asked_to_subscribe(temp_db, monkeypatch, status
     _reset_promo(temp_db)
     temp_db.db_set_promo_code("Mostbet", "MB-4", 10)
     _, sent = await _tap_i_subscribed(temp_db, uid, status, monkeypatch)
-    assert sent[0] == tr(uid, "promo_subscribe")
+    # The partner is named before the subscription is asked for.
+    assert "Mostbet" in sent[0]
+    assert tr(uid, "promo_subscribe") in sent[0]
 
 
 async def test_api_failure_has_its_own_message(temp_db, monkeypatch):

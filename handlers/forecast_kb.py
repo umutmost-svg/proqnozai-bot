@@ -10,8 +10,8 @@ from datetime import date, timedelta, timezone
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from db import db_get_tz
-from translations import tr
+from db import db_get_tz, db_lang
+from translations import tr, SPORTS_LABELS
 from event_list import (
     paginate, PAGE_SIZE, COUNTRY_INTERNATIONAL, DAY_LIVE, DAY_TODAY, DAY_TOMORROW,
 )
@@ -58,6 +58,16 @@ def _match_label(it, uid: int) -> str:
     return f"{prefix}  {it.home[:22]} — {it.away[:22]}".strip()
 
 
+def sport_name(uid: int, raw: str) -> str:
+    """The sport as a person reads it. The feed hands back lowercase English
+    ("football", "tennis"), which looked like leaked internals next to Russian
+    UI text. Falls back to the raw value capitalized for sports the table
+    doesn't know."""
+    key = (raw or "").strip().lower()
+    table = SPORTS_LABELS.get(db_lang(uid), SPORTS_LABELS["ru"])
+    return table.get(key) or (raw or "").strip().capitalize()
+
+
 def _build_sport_kb(sport_groups: list, page: int, uid: int) -> InlineKeyboardMarkup:
     """Top-level sport selector, one page of the frozen ordered
     [(sport, items)] list. Button indices are the ABSOLUTE position in the
@@ -67,7 +77,7 @@ def _build_sport_kb(sport_groups: list, page: int, uid: int) -> InlineKeyboardMa
     btns = []
     for i, (cat, items) in enumerate(page_groups, start=offset):
         emoji = _sport_emoji(cat)
-        btns.append([InlineKeyboardButton(f"{emoji} {cat} ({len(items)})",
+        btns.append([InlineKeyboardButton(f"{emoji} {sport_name(uid, cat)} ({len(items)})",
                                           callback_data=f"fm_sp_{i}")])
     btns.extend(_pagination_rows(uid, page, has_prev, has_next, "fm_sppg_",
                                  _total_pages(len(sport_groups))))

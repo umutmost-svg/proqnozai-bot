@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 from config import MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR, PROMO_CHANNEL, PARTNERS
-from db import db_lang, db_get_tz
+from db import db_lang, db_get_tz, db_list_promo_codes
 from security import sec_blocked, rate_check, nav_rate_check, record_viol
 from translations import T, tr
 
@@ -105,9 +105,14 @@ def main_menu(uid):
         [tl["menu_forecast"]],
         [tl["menu_support"],   LANG_BTN],
     ]
-    # The promo button only appears once a gate channel is configured.
-    if PROMO_CHANNEL:
+    # The bonus button appears only when there is an actual code to hand out.
+    # Gating it on the channel alone promised a bonus in the main menu, made
+    # the user subscribe, and then answered "no codes yet" — the worst possible
+    # order for a paid action.
+    if PROMO_CHANNEL and db_list_promo_codes():
         rows.insert(1, [tl["menu_get_promo"]])
+    # Express is a finished feature that had no way in: no button, no command.
+    rows.insert(1, [tl["menu_express"]])
     # "Our partners" only appears once at least one partner is configured.
     if PARTNERS:
         rows.append([tl["menu_partners"]])
