@@ -57,8 +57,8 @@ def test_format_placeholders_subset_of_russian_reference():
 
 
 def test_no_betting_brand_in_user_facing_strings():
-    user_facing = ["welcome_intro", "post_onboarding", "menu_forecast", "menu_express",
-                   "menu_history", "menu_profile", "express_ask", "express_title"]
+    user_facing = ["welcome_intro", "post_onboarding", "menu_forecast",
+                   "menu_history", "menu_profile"]
     for lang in ALL_LANGS:
         for key in user_facing:
             assert "mostbet" not in T[lang].get(key, "").lower(), f"T[{lang}][{key}]"
@@ -86,6 +86,6 @@ def test_tr_formats_kwargs(temp_db):
 def test_menu_keys_unique_within_language(lang):
     """Menu routing compares message text to labels — duplicates would make
     two menu buttons trigger the same handler."""
-    labels = [T[lang][k] for k in ("menu_forecast", "menu_express",
-                                   "menu_history", "menu_profile", "menu_support")]
+    labels = [T[lang][k] for k in ("menu_forecast", "menu_history",
+                                   "menu_profile", "menu_support")]
     assert len(labels) == len(set(labels)), lang

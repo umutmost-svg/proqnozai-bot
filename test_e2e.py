@@ -122,8 +122,8 @@ class TestDB(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 REQUIRED_KEYS = [
     "welcome_intro", "post_onboarding", "need_reg", "system_prompt",
-    "menu_forecast", "menu_express", "menu_history", "menu_profile",
-    "express_ask", "express_title", "api_error", "no_input",
+    "menu_forecast", "menu_history", "menu_profile",
+    "api_error", "no_input",
 ]
 
 class TestTranslations(unittest.TestCase):
@@ -157,8 +157,8 @@ class TestTranslations(unittest.TestCase):
     def test_no_brand_name_in_user_messages(self):
         """User-facing strings must not mention the betting site by name."""
         user_facing = [
-            "welcome_intro", "post_onboarding", "menu_forecast", "menu_express",
-            "menu_history", "menu_profile", "express_ask", "express_title",
+            "welcome_intro", "post_onboarding", "menu_forecast",
+            "menu_history", "menu_profile",
         ]
         brand = "mostbet"
         for lang in T:

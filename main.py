@@ -37,7 +37,7 @@ def _deploy_version() -> str:
 
 # Bump this key whenever the main menu layout changes: the broadcast below runs
 # once per key, not on every restart (a crash-loop must never spam the user base).
-MENU_BROADCAST_KEY = "menu_broadcast_2026_08_express_button"
+MENU_BROADCAST_KEY = "menu_broadcast_2026_08_express_removed"
 
 
 async def _broadcast_menu_update(application):
@@ -126,7 +126,7 @@ def _log_db_location() -> None:
 
 async def _publish_commands(application) -> None:
     """Fill Telegram's own "/" menu. Without it the only discoverable command is
-    /start, so /express, /history and /tz existed but nobody could find them.
+    /start, so /history and /tz existed but nobody could find them.
     Telegram picks the list by the CLIENT's language, so a per-language scope is
     published for each translation plus a default (ru) for everyone else."""
     from telegram import BotCommand
