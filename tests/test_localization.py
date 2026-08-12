@@ -50,8 +50,6 @@ def test_canonical_menu_labels():
     assert T["az"]["menu_forecast"] == "⚽ Proqnoz"
     assert T["ru"]["menu_forecast"] == "⚽ Прогноз"
     assert T["tr"]["menu_forecast"] == "⚽ Tahmin"
-    # TR parlay label uses the native "Kombine".
-    assert T["tr"]["menu_express"] == "⚡ Kombine"
 
 
 def test_no_gambling_hype_in_priority_user_facing():

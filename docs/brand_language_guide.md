@@ -234,7 +234,6 @@ label is safe — it is not a `callback_data` value.
 | Purpose | 🇷🇺 Recommended | 🇦🇿 Recommended | 🇹🇷 Recommended | Decision |
 |---|---|---|---|---|
 | Main analysis action | ⚽ Прогноз | ⚽ **Proqnoz** | ⚽ Tahmin | Hero action = the brand word, singular. Drops the wordy "Прогнозы матчей / Matç proqnozları". |
-| Multi-match slip | ⚡ Экспресс | ⚡ **Ekspress** | ⚡ Kombine | RU/AZ keep the native "экспресс/ekspress"; TR fans say "kombine". Framed as *combined analysis*, not "place a bet". |
 | Past forecasts | 📋 История | 📋 **Tarixçə** | 📋 Geçmiş | Standard list label in each language. |
 | User profile | 👤 Профиль | 👤 **Profil** | 👤 Profil | Universal. |
 | Help / contact | 🆘 Поддержка | 🆘 **Dəstək** | 🆘 Destek | Standard. |

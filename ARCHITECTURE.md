@@ -41,7 +41,7 @@ proqnozai-bot/
 │   ├── forecast.py          #     Флоу прогноза: спорт→день→страна→турнир→матч→анализ,
 │   │                        #     постраничный вывод (без жёсткой обрезки)
 │   ├── live.py              #     Live-трекинг: poller, голы, изменения кэфов, daily_push
-│   ├── express.py           #     Экспресс-купоны (2–5 матчей)
+│   ├── compare.py           #     Сравнение двух команд (/compare)
 │   ├── history.py           #     История прогнозов + фидбэк (зашло/не зашло)
 │   └── admin.py             #     Админ-панель: статистика, рассылки, поиск юзеров
 │
@@ -78,7 +78,7 @@ Railway (`BOT_API_URL`). Эндпоинты stats-сервера (`/stats`, `/br
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
 │  L4  ХЕНДЛЕРЫ (handlers/)                                    │
-│      __init__ → registration, forecast, live, express,      │
+│      __init__ → registration, forecast, live, compare,      │
 │                 history, admin                              │
 │      utils (клавиатуры) — общий для всех хендлеров          │
 └───────────────────────────┬─────────────────────────────────┘
@@ -123,7 +123,7 @@ Railway (`BOT_API_URL`). Эндпоинты stats-сервера (`/stats`, `/br
 | `handlers/registration`| `config`, `db`, `translations`, `utils`                         |
 | `handlers/forecast`   | `config`, `db`, `translations`, `security`, `claude_client`, `mostbet`, `football_api`, `enrichment`, `match_validation`, `event_list`, `utils`, `registration` |
 | `handlers/live`       | `config`, `db`, `translations`, `football_api`, `mostbet`, `claude_client` |
-| `handlers/express`    | `db`, `translations`, `claude_client`, `mostbet`                 |
+| `handlers/compare`    | `db`, `translations`, `claude_client`                            |
 | `handlers/history`    | `db`, `translations`                                            |
 | `handlers/admin`      | `config`, `db`, `translations`, `mostbet`                       |
 | `stats_server`        | `db`                                                             |
@@ -192,8 +192,7 @@ per-user in-flight lock, чтобы двойной клик не запусти�
 |---------------------------------|---------------------|------------------------|
 | Прогноз матча (extended thinking, budget 2500) | `claude-opus-4-8` | `claude_forecast` |
 | Оценка формы (нет API-данных)   | `claude-opus-4-8`   | `_sonnet_form_estimate`|
-| Экспресс-купоны                 | `claude-haiku-4-5`  | `handlers/express.py`  |
-| Сравнение команд (`/compare`)   | `claude-haiku-4-5`  | `handlers/express.py`  |
+| Сравнение команд (`/compare`)   | `claude-haiku-4-5`  | `handlers/compare.py`  |
 | Перевод имён команд             | `claude-haiku-4-5`  | `_normalize_names`     |
 | Сопоставление с ростером football-data | `claude-haiku-4-5` | `_fd_resolve_ai`  |
 | Live-подсказки                  | `claude-haiku-4-5`  | `live_tip`             |

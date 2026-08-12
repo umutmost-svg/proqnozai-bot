@@ -31,7 +31,6 @@ ignore = ["E701", "E702", "E741"]
 "handlers/admin.py" = ["F401"]
 "handlers/forecast.py" = ["F401"]
 "handlers/registration.py" = ["F401"]
-"handlers/express.py" = ["F841"]
 # Manual integration script: env/stub setup must precede project imports.
 "test_e2e.py" = ["E402", "E731", "F401", "F811"]
 

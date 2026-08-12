@@ -411,6 +411,14 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     await status_msg.edit_text(reply, reply_markup=InlineKeyboardMarkup(rows))
 
 
+async def expired_feature_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Taps on buttons of a removed feature. Inline keyboards live in users'
+    chats forever, so `expr_` callbacks keep arriving after the express flow is
+    gone; without an answer the client spins until it times out."""
+    q = update.callback_query
+    await q.answer(tr(q.from_user.id, "ev_menu_expired"), show_alert=False)
+
+
 async def partners_show_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """"Where to place a bet" under a forecast — send the partner list as a new
     message so the forecast itself stays on screen."""
@@ -969,9 +977,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == tl["menu_partners"]:
         await _send_partner_list(uid, update.message.reply_text)
         return
-    if text == tl["menu_express"]:
-        from handlers.express import express_cmd
-        await express_cmd(update, context); return
     if text == tl["menu_forecast"]:
         await forecast_menu_start(update, context); return
     if text == LANG_BTN:
@@ -1014,7 +1019,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # length, injection): compare text reaches Claude, so it must never bypass
     # the same checks ordinary forecast text goes through.
     if context.user_data.get("awaiting_compare"):
-        from handlers.express import handle_compare
+        from handlers.compare import handle_compare
         if await handle_compare(uid, text, context): return
 
     if photo:

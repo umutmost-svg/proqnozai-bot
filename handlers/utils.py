@@ -11,7 +11,7 @@ from translations import T, tr
 SUPPORT_URL = "https://t.me/AIproqnoz_support"
 
 # ─── Callback rate-limit gates ─────────────────────────────────────────────────
-# Users the bot is CURRENTLY generating a forecast/express for. One expensive
+# Users the bot is CURRENTLY generating a forecast for. One expensive
 # operation per user at a time, so rapid double-clicks can't start duplicate
 # Claude/enrichment work. In-memory like the rest of the rate-limit state.
 _cb_inflight: set = set()
@@ -111,8 +111,6 @@ def main_menu(uid):
     # order for a paid action.
     if PROMO_CHANNEL and db_list_promo_codes():
         rows.insert(1, [tl["menu_get_promo"]])
-    # Express is a finished feature that had no way in: no button, no command.
-    rows.insert(1, [tl["menu_express"]])
     # "Our partners" only appears once at least one partner is configured.
     if PARTNERS:
         rows.append([tl["menu_partners"]])
@@ -204,5 +202,5 @@ def _fmt_dt(dt_raw: str, tz_offset: int = BAKU_OFFSET) -> str:
 def fmt_dt_for_user(dt_raw: str, uid: int) -> str:
     """Match time in the USER's stored timezone — same convention as the
     forecast menu's _fmt_kickoff, so times are consistent across the menu and
-    the express/compare flows. Falls back to Baku when no tz is stored."""
+    the compare flow. Falls back to Baku when no tz is stored."""
     return _fmt_dt(dt_raw, db_get_tz(uid) or BAKU_OFFSET)

@@ -89,8 +89,7 @@ Railway запускает два процесса из `Procfile`:
 |---|---|---|
 | Прогноз матча (extended thinking, budget 2500; при отказе thinking — fallback на обычный вызов) | `claude-opus-4-8` | `claude_client.claude_forecast` |
 | Оценка формы, когда реальные API пусты (помечается «(оценочно)») | `claude-opus-4-8` | `football_api._sonnet_form_estimate` |
-| Экспресс-купоны | `claude-haiku-4-5-20251001` | `handlers/express.py` |
-| Сравнение команд (`/compare`) | `claude-haiku-4-5-20251001` | `handlers/express.py` |
+| Сравнение команд (`/compare`) | `claude-haiku-4-5-20251001` | `handlers/compare.py` |
 | Live-подсказки при событиях матча | `claude-haiku-4-5-20251001` | `claude_client.live_tip` |
 | Перевод имён команд на английский | `claude-haiku-4-5-20251001` | `football_api._normalize_names` |
 | Сопоставление имён с ростером football-data | `claude-haiku-4-5-20251001` | `football_api._fd_resolve_ai` |

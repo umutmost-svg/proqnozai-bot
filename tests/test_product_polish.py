@@ -16,34 +16,16 @@ from translations import T, BOT_COMMANDS, OB_EXP, tr
 
 # ─── Menu surfaces what is built ──────────────────────────────────────────────
 
-def test_express_has_a_menu_button(temp_db, monkeypatch):
+def test_express_is_gone_from_the_menu(temp_db, monkeypatch):
+    """The express feature was removed: no button, no command, no keys."""
     monkeypatch.setattr(hutils, "PROMO_CHANNEL", "")
     labels = [b.text for row in hutils.main_menu(1).keyboard for b in row]
-    assert T["ru"]["menu_express"] in labels
-
-
-async def test_express_button_opens_the_express_flow(temp_db, monkeypatch):
-    import handlers.forecast as fc
-    uid = 880002
-    temp_db.db_ensure(uid, "u", "ru"); temp_db.db_set(uid, "is_registered", 1)
-    called = []
-
-    async def fake_express(update, context):
-        called.append(update.effective_user.id)
-
-    import handlers.express as express
-    monkeypatch.setattr(express, "express_cmd", fake_express)
-
-    class _M:
-        text = T["ru"]["menu_express"]
-        caption = None
-        async def reply_text(self, *a, **k):
-            pass
-
-    upd = types.SimpleNamespace(effective_user=types.SimpleNamespace(
-        id=uid, username="u", language_code="ru", full_name="U"), message=_M())
-    await fc.handle_msg(upd, types.SimpleNamespace(user_data={}))
-    assert called == [uid]
+    assert not any("кспресс" in b or "ombine" in b for b in labels), labels
+    for lang in T:
+        for dead in ("menu_express", "express_ask", "express_title",
+                     "express_no_odds"):
+            assert dead not in T[lang], f"{lang}: {dead}"
+    assert "express" not in [c for c, _ in BOT_COMMANDS["ru"]]
 
 
 def test_bonus_button_hidden_without_codes(temp_db, monkeypatch):
@@ -201,7 +183,9 @@ def test_welcome_language_list_matches_the_buttons():
 
 def test_welcome_is_not_football_only():
     for lang in T:
-        assert "⚡" in T[lang]["welcome_intro"], lang     # express is mentioned
+        intro = T[lang]["welcome_intro"]
+        assert "📸" in intro, lang          # more than one way in is offered
+        assert "⚡" not in intro, lang      # …but not the removed express
 
 
 def test_no_service_footer_keys_remain():
