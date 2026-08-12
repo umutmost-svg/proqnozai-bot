@@ -151,3 +151,44 @@ async def test_gate_unavailable_when_bot_cannot_check(temp_db, monkeypatch):
     _reset(temp_db); temp_db.db_set_promo_code("Mostbet", "C", 500)
     sent = await _run(temp_db, uid, "error", monkeypatch)   # get_chat_member raises
     assert sent[0][0] == tr(uid, "promo_unavailable")
+
+
+# ─── admin command reports why a code was refused ─────────────────────────────
+
+async def test_setpromo_explains_a_duplicate_code(temp_db, monkeypatch):
+    """The duplicate-code guard raises; unhandled it surfaced as a generic
+    "error" with no hint about what to do."""
+    import types
+    _reset(temp_db)
+    temp_db.db_set_promo_code("First", "SHARED", 5)
+    monkeypatch.setattr(promo, "ADMIN_ID", 1)
+
+    sent = []
+
+    class _M:
+        text = "/setpromo Second SHARED 5"
+        async def reply_text(self, t, **kw):
+            sent.append(t)
+
+    upd = types.SimpleNamespace(effective_user=types.SimpleNamespace(id=1), message=_M())
+    await promo.setpromo_cmd(upd, types.SimpleNamespace())
+
+    assert sent and "SHARED" in sent[0] and "First" in sent[0]
+    assert len(temp_db.db_list_promo_codes()) == 1      # nothing was overwritten
+
+
+async def test_setpromo_accepts_a_distinct_code(temp_db, monkeypatch):
+    import types
+    _reset(temp_db)
+    monkeypatch.setattr(promo, "ADMIN_ID", 1)
+    sent = []
+
+    class _M:
+        text = "/setpromo Mostbet MB-1 100"
+        async def reply_text(self, t, **kw):
+            sent.append(t)
+
+    upd = types.SimpleNamespace(effective_user=types.SimpleNamespace(id=1), message=_M())
+    await promo.setpromo_cmd(upd, types.SimpleNamespace())
+    assert sent[0].startswith("✅")
+    assert temp_db.db_list_promo_codes()[0]["code"] == "MB-1"
