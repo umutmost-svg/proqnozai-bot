@@ -112,6 +112,7 @@ async def setpromo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Usage: /setpromo PARTNER CODE MAX_USES\n"
             "  e.g. /setpromo Mostbet WELCOME500 500\n"
+            "  each partner needs its OWN code\n"
             "  /delpromo PARTNER — remove one\n"
             "  /promostats — current state")
         return
@@ -123,7 +124,14 @@ async def setpromo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("MAX_USES must be a positive integer.")
         return
-    db_set_promo_code(partner, code, max_uses)
+    try:
+        db_set_promo_code(partner, code, max_uses)
+    except ValueError as e:
+        # Most likely the same code given to two partners: claims are keyed by
+        # the code string, so sharing one would merge their caps. Say so plainly
+        # instead of letting the error handler show a generic failure.
+        await update.message.reply_text(f"⚠️ {e}\nGive each partner its own code.")
+        return
     await update.message.reply_text(f"✅ {partner}: {code} · cap {max_uses}")
     await promostats_cmd(update, context)
 
