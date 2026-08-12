@@ -4,8 +4,10 @@ The forecast used to request the rich data-dependent sections (recent matches,
 injuries, per-team form) even when no real data was attached, so the model
 emitted a "data unavailable" placeholder line per section — several
 near-identical lines of noise. The no-data branch must instead produce a lean,
-odds-only prompt with a single estimative marker, WITHOUT weakening any
-anti-fabrication directive.
+odds-only prompt, WITHOUT weakening any anti-fabrication directive.
+
+A PARTIAL forecast is marked inside the probabilities heading — never by a
+trailing caveat, which the product no longer prints at all.
 """
 import pytest
 
@@ -31,12 +33,14 @@ def test_no_data_prompt_is_lean_and_omits_placeholder_sections(lang):
 
 
 @pytest.mark.parametrize("lang", ALL_LANGS)
-def test_no_data_prompt_keeps_anti_fabrication_and_estimative_marker(lang):
+def test_no_data_prompt_keeps_anti_fabrication(lang):
+    """The never-invent directives stay. The trailing "(оценочно)" caveat does
+    NOT: the forecast now ends on the recommendation, and every closing
+    commentary line was removed on request."""
     p = _build_system_prompt(lang, "beginner", has_real_data=False)
-    # Honesty guarantee must survive the trim (CLAUDE.md: no invented facts +
-    # an explicit "(оценочно)"/estimative marker is required when data is absent).
     assert "Do NOT invent" in p
-    assert "(оценочно)" in p  # (оценочно)
+    assert "NEVER compute, derive, estimate or invent an odds value" in p
+    assert "(оценочно)" not in p
 
 
 @pytest.mark.parametrize("lang", ALL_LANGS)
@@ -81,3 +85,51 @@ def test_experience_hint_applied_and_optional():
     unknown = _build_system_prompt("en", "nonesuch", has_real_data=False)
     assert "Profile: expert" in expert
     assert "Profile:" not in unknown
+
+
+# ─── PARTIAL is marked inside the forecast, never under it ────────────────────
+
+@pytest.mark.parametrize("lang", ALL_LANGS)
+@pytest.mark.parametrize("has_real_data", [False, True])
+def test_partial_marks_the_probabilities_block(lang, has_real_data):
+    """PARTIAL has two shapes — odds without verified data, and verified data
+    without odds. Both must be marked, so the marking follows readiness rather
+    than the data mode."""
+    p = _build_system_prompt(lang, "beginner", has_real_data, is_partial=True)
+    assert "PARTIAL DATA" in p
+    assert "Оценка вероятностей" in p
+
+
+@pytest.mark.parametrize("lang", ALL_LANGS)
+@pytest.mark.parametrize("has_real_data", [False, True])
+def test_partial_marking_forbids_a_footer(lang, has_real_data):
+    p = _build_system_prompt(lang, "beginner", has_real_data, is_partial=True)
+    assert "add NO caveat line, NO warning, NO closing remark, NO" in p
+    assert "must end on the ⚡ bet line" in p
+
+
+@pytest.mark.parametrize("lang", ALL_LANGS)
+def test_ready_forecast_carries_no_estimative_marking(lang):
+    """READY has both odds and verified data — nothing to qualify."""
+    p = _build_system_prompt(lang, "beginner", has_real_data=True, is_partial=False)
+    assert "PARTIAL DATA" not in p
+    assert "Оценка вероятностей" not in p
+
+
+@pytest.mark.parametrize("lang", ALL_LANGS)
+@pytest.mark.parametrize("has_real_data", [False, True])
+@pytest.mark.parametrize("is_partial", [False, True])
+def test_anti_hallucination_directives_survive_every_combination(lang, has_real_data,
+                                                                 is_partial):
+    """Form, lineups, injuries, results and odds may never be invented — in any
+    data mode, with or without the partial marking."""
+    p = _build_system_prompt(lang, "beginner", has_real_data, is_partial=is_partial)
+    assert "NEVER compute, derive, estimate or invent an odds value" in p
+    assert "cite an odds value (@X.XX) ONLY if that exact value" in p
+    if has_real_data:
+        assert "NEVER claim a team has no" in p          # injuries/absences
+        assert "using ONLY the provided computed metrics" in p   # form
+        assert _DATA_NOTE[lang] in p                     # do not invent results
+    else:
+        assert "Do NOT invent any of it" in p
+        assert "NO real data (form, H2H, injuries, lineups, statistics)" in p

@@ -204,10 +204,44 @@ def test_welcome_is_not_football_only():
         assert "⚡" in T[lang]["welcome_intro"], lang     # express is mentioned
 
 
-def test_forecast_carries_a_basis_and_disclaimer_line():
+def test_no_service_footer_keys_remain():
+    """The forecast ends on the recommendation: every footer string that used
+    to be appended under it is gone from the translations."""
     for lang in T:
-        line = T[lang]["fc_basis"]
-        assert line.startswith("📐") and "18+" in line, lang
+        for dead in ("fc_basis", "bot_winrate", "bot_winrate_building",
+                     "enr_standings_unavailable", "enr_lineups_unavailable",
+                     "enr_injuries_unavailable"):
+            assert dead not in T[lang], f"{lang}: {dead}"
+
+
+@pytest.mark.parametrize("tail", [
+    "⚠️ (оценочно — реальные данные по форме и составам недоступны)",
+    "📐 Основано на доступных данных и рыночных коэффициентах",
+    "18+ • Не является финансовой рекомендацией",
+    "ℹ️ Составы пока неизвестны.",
+])
+def test_a_model_written_footer_is_trimmed(tail):
+    """The prompt no longer asks for a closing caveat, but the model still
+    volunteers one; the reply must end on the bet line regardless."""
+    from handlers.forecast import _strip_footer
+    body = "🏆 A — B\n⚡ Ставка: П1 @1.85 — причина"
+    assert _strip_footer(f"{body}\n\n{tail}") == body
+
+
+def test_trimming_never_empties_a_reply():
+    from handlers.forecast import _strip_footer
+    only_footer = "⚠️ всё, что вернула модель"
+    assert _strip_footer(only_footer) == only_footer
+
+
+def test_error_texts_survive_trimming(temp_db):
+    """_strip_footer runs before the produced/failed check, so it must not
+    rewrite the two error strings that check compares against."""
+    from handlers.forecast import _strip_footer
+    uid = 880600
+    temp_db.db_ensure(uid, "u", "ru")
+    for key in ("api_error", "api_overload"):
+        assert _strip_footer(tr(uid, key)) == tr(uid, key)
 
 
 def test_promo_preview_names_the_partners(temp_db):
@@ -246,3 +280,74 @@ def test_legacy_users_without_an_experience_value_still_get_a_prompt(temp_db):
         p = _build_system_prompt("ru", legacy, False)
         assert p and len(p) < len(base)          # valid prompt, just no hint
     assert EXP_LABELS["ru"].get("", "Beginner") == "Beginner"
+
+
+# ─── the handler marks PARTIAL, and nothing trails the recommendation ─────────
+
+class _StatusMsg2:
+    text = ""
+    markup = None
+
+    async def edit_text(self, text, **kw):
+        self.text = text
+        self.markup = kw.get("reply_markup")
+
+
+@pytest.fixture
+def captured_prompt(monkeypatch):
+    """Capture the system prompt the handler actually sends."""
+    import config
+    import handlers.forecast as fc
+    monkeypatch.setattr(config, "APIFOOTBALL_KEY", "")
+    monkeypatch.setattr(config, "PARTNERS", [])
+    seen = {}
+
+    async def _claude(uid, content, sys_prompt, *a, **k):
+        seen["prompt"] = sys_prompt
+        return "🏆 A — B\n⚡ Ставка: П1 @1.85 — причина"
+
+    async def _no_search(*a, **k):
+        return []
+
+    monkeypatch.setattr(fc, "claude_forecast", _claude)
+    monkeypatch.setattr(fc, "search_match", _no_search)
+    return seen
+
+
+def _fc_ctx(has_odds, has_real_data):
+    return types.SimpleNamespace(user_data={
+        "pending_content": [{"type": "text", "text": "Barcelona Real"}],
+        "pending_text": "Barcelona Real",
+        "parsed_teams": ("Barcelona", "Real"),
+        "odds_attached": True,
+        "has_odds": has_odds,
+        "has_real_data": has_real_data,
+    }, bot=None)
+
+
+@pytest.mark.parametrize("has_odds,has_real_data", [(True, False), (False, True)])
+async def test_partial_forecast_is_marked_in_the_prompt(temp_db, captured_prompt,
+                                                        has_odds, has_real_data):
+    import handlers.forecast as fc
+    uid = 880700
+    temp_db.db_ensure(uid, "u", "ru"); temp_db.db_set(uid, "is_registered", 1)
+    await fc._generate_forecast(uid, _fc_ctx(has_odds, has_real_data), _StatusMsg2())
+    assert "PARTIAL DATA" in captured_prompt["prompt"]
+
+
+async def test_ready_forecast_is_not_marked(temp_db, captured_prompt):
+    import handlers.forecast as fc
+    uid = 880701
+    temp_db.db_ensure(uid, "u", "ru"); temp_db.db_set(uid, "is_registered", 1)
+    await fc._generate_forecast(uid, _fc_ctx(True, True), _StatusMsg2())
+    assert "PARTIAL DATA" not in captured_prompt["prompt"]
+
+
+async def test_reply_ends_on_the_recommendation(temp_db, captured_prompt):
+    """Whatever the mode, the last line of the message is the bet."""
+    import handlers.forecast as fc
+    uid = 880702
+    temp_db.db_ensure(uid, "u", "ru"); temp_db.db_set(uid, "is_registered", 1)
+    msg = _StatusMsg2()
+    await fc._generate_forecast(uid, _fc_ctx(True, False), msg)
+    assert msg.text.splitlines()[-1].startswith("⚡ Ставка:")

@@ -11,14 +11,15 @@ from telegram.ext import ContextTypes
 
 from config import reg_step, violations, SPAM_DUR, SPAM_AFTER, APIFOOTBALL_KEY
 from db import (db_ensure, db_get, db_lang, db_is_reg, db_is_blocked, db_log_req,
-                db_save_history, db_match_demand, db_bot_winrate,
+                db_save_history, db_match_demand,
                 REQ_TEXT, REQ_PHOTO, REQ_FORECAST, REQ_PARTNERS_OPEN)
 from translations import T, tr
 from security import uinfo, sec_blocked, rate_check, record_viol, detect_injection
 from claude_client import claude_forecast
 from football_api import search_match, fetch_real_data
 from enrichment import enrich_football_match
-from match_validation import MatchRef, validate_match, forecast_readiness, INSUFFICIENT
+from match_validation import (MatchRef, validate_match, forecast_readiness,
+                              INSUFFICIENT, PARTIAL)
 from priority_config import normalize_participant_tokens
 from partner_links import sign_click
 from event_list import (
@@ -67,26 +68,22 @@ def _loc(d: dict, lang: str) -> str:
 # Mostbet lineCategory values that mean association football (enrichment scope).
 _FOOTBALL_SPORTS = {"football", "soccer", "futbol"}
 
-# Enrichment block name (from EnrichmentResult.missing_fields) → localized note
-# shown to the user when a verified fixture is missing that block.
-_ENRICH_GAP_KEYS = {
-    "standings": "enr_standings_unavailable",
-    "lineups": "enr_lineups_unavailable",
-    "injuries": "enr_injuries_unavailable",
-}
+# Trailing lines that are commentary about the forecast rather than the forecast
+# itself: an estimative caveat, a "based on / not advice" footer, an availability
+# note. The prompt no longer asks for any of them, but the model volunteers one
+# often enough that the last line has to be checked — the forecast must end on
+# the recommendation, with the buttons right under it.
+_FOOTER_MARKERS = ("⚠️", "📐", "ℹ️", "18+")
 
 
-def _enrichment_gap_note(uid: int, missing_fields: list) -> str | None:
-    """Honest localized note listing which verified blocks are unavailable.
-    Only the user-facing blocks (standings/lineups/injuries) are surfaced;
-    recent/H2H/stats gaps are already stated in the analysis itself."""
-    seen, lines = set(), []
-    for name in missing_fields:
-        key = _ENRICH_GAP_KEYS.get(name)
-        if key and key not in seen:
-            seen.add(key)
-            lines.append(tr(uid, key))
-    return "\n".join(lines) if lines else None
+def _strip_footer(reply: str) -> str:
+    lines = reply.rstrip().split("\n")
+    while lines and (not lines[-1].strip()
+                     or lines[-1].lstrip().startswith(_FOOTER_MARKERS)):
+        lines.pop()
+    # Never turn a reply into nothing: an empty edit_text would raise, and a
+    # degenerate answer is still better shown than swallowed.
+    return "\n".join(lines) if lines else reply
 
 
 def _pick_watch_candidate(candidates: list, ref: dict | None) -> dict | None:
@@ -189,7 +186,8 @@ def _fixture_key(parsed_teams, text: str) -> str:
     return "|".join(sorted(tokens)) if tokens else ""
 
 
-def _build_system_prompt(lang: str, exp: str, has_real_data: bool) -> str:
+def _build_system_prompt(lang: str, exp: str, has_real_data: bool,
+                         is_partial: bool = False) -> str:
     """Assemble the forecast system prompt. Pure (reads only the static
     translations/hint tables), so it is unit-testable across languages and both
     data modes without touching the network or DB.
@@ -198,9 +196,12 @@ def _build_system_prompt(lang: str, exp: str, has_real_data: bool) -> str:
     is requested ONLY when real enrichment data is actually attached. Without
     it, requesting those sections merely made the model emit a "data
     unavailable" placeholder per section — several near-identical lines of
-    noise. The no-data branch instead asks for a lean, odds-only forecast plus a
-    SINGLE estimative marker, while keeping every anti-fabrication directive
-    (never invent form/injuries/lineups/results) fully intact.
+    noise. The no-data branch instead asks for a lean, odds-only forecast.
+
+    A PARTIAL forecast is marked inside the probabilities heading rather than by
+    a trailing caveat, so the reply still ends on the recommendation. Every
+    anti-fabrication directive (never invent form/injuries/lineups/results,
+    never invent odds) is unchanged in both branches.
     """
     base = (T.get(lang) or T["ru"]).get("system_prompt") or T["ru"]["system_prompt"]
     hint = _EXP_HINTS.get(lang, _EXP_HINTS["ru"]).get(exp, "")
@@ -219,6 +220,19 @@ def _build_system_prompt(lang: str, exp: str, has_real_data: bool) -> str:
         "number (omit the \"@X.XX\" entirely). NEVER compute, derive, estimate or "
         "invent an odds value."
     )
+
+    # PARTIAL = only one of (odds, verified data). The limitation is marked
+    # INSIDE the probabilities block instead of a trailing caveat: the forecast
+    # must still end on the recommendation (CLAUDE.md: compact, explicit
+    # marking of a partial analysis — never a footer).
+    if is_partial:
+        sys_prompt += (
+            "\n\n### PARTIAL DATA: head the 🎯 probabilities block with the localized "
+            "equivalent of \"Оценка вероятностей\" (estimated probabilities) so the "
+            "reader sees the numbers are an estimate. That heading is the ONLY "
+            "marking — add NO caveat line, NO warning, NO closing remark, NO "
+            "footer. The reply must end on the ⚡ bet line."
+        )
 
     if has_real_data:
         # Quality directive (English — followed regardless of output language).
@@ -271,8 +285,6 @@ def _build_system_prompt(lang: str, exp: str, has_real_data: bool) -> str:
             "🔢 [most likely score + one alternative]\n"
             "⚡ **[bet: type — add @odds ONLY if a real odd for it was provided, "
             "else no number]** — [reason, 1 sentence]\n"
-            "⚠️ [ONE closing line: the analysis is estimative because real data is "
-            "unavailable — the localized equivalent of \"(оценочно)\"]\n"
             "Formal analytical tone, ~8–10 lines total."
         )
     return sys_prompt
@@ -299,7 +311,6 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
 
     u = db_get(uid) or {}
     exp = u.get("experience", "beginner")
-    sys_prompt = _build_system_prompt(lang, exp, bool(context.user_data.get("has_real_data")))
 
     # Fetch Mostbet odds for text-based queries. In the menu flow fm_match_cb has
     # already attached odds for this exact match, so guard against a second
@@ -343,6 +354,12 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
                 tr(uid, "ev_more_matches"), callback_data="fm_restart")]]))
         return
 
+    # Built here, not earlier: the text flow attaches odds above, so readiness
+    # (and with it the PARTIAL marking) is only final at this point.
+    sys_prompt = _build_system_prompt(
+        lang, exp, bool(context.user_data.get("has_real_data")),
+        is_partial=(readiness == PARTIAL))
+
     reply = await claude_forecast(uid, msg_content, sys_prompt, 1400,
                                   fixture_key=fixture_key)
     # claude_forecast never raises: on a permanent failure it returns the
@@ -352,7 +369,7 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     # The message is sent as plain text, so any markdown the model still emits
     # would show up as literal asterisks on the most important line of the
     # product. The prompt no longer asks for them; this catches the rest.
-    reply = reply.replace("**", "")
+    reply = _strip_footer(reply.replace("**", ""))
     produced = reply not in (tr(uid, "api_error"), tr(uid, "api_overload"))
     _log_outcome(produced)
     logger.info(f"FORECAST {'OK' if produced else 'FAILED'} | uid={uid}")
@@ -375,24 +392,6 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
                     callback_data=f"watch_{m['id']}")]])
 
     db_save_history(uid, text, reply)
-
-    # Append the honest enrichment note (unverified fixture, or missing verified
-    # blocks) so the user sees exactly what real data was / was not available.
-    note = context.user_data.pop("enrichment_note", None)
-    if note:
-        reply = f"{reply}\n\n{note}"
-
-    # Bot track record: our moat over generic LLMs is REAL odds + verified data,
-    # so show community accuracy (from 👍/👎) — a real % once we have enough
-    # rated forecasts, otherwise a line inviting feedback (which builds it).
-    wr = db_bot_winrate()
-    wr_line = tr(uid, "bot_winrate", pct=wr["pct"]) if wr else tr(uid, "bot_winrate_building")
-    reply = f"{reply}\n\n{wr_line}"
-
-    # One line saying what the forecast rests on and that it is not advice.
-    # Only under a real forecast — an error message needs neither.
-    if produced:
-        reply = f"{reply}\n{tr(uid, 'fc_basis')}"
 
     # Offer a one-tap way back into the match menu so the user can get another
     # forecast without re-typing; keep any watch button above it.
@@ -802,7 +801,6 @@ async def _fm_match_run(context, q, uid: int, lang: str, it) -> None:
 
     mb_odds = await odds_task if odds_task else {}
     real_data = ""
-    context.user_data.pop("enrichment_note", None)
     if enr_task is not None:
         try:
             enr = await enr_task
@@ -811,9 +809,6 @@ async def _fm_match_run(context, q, uid: int, lang: str, it) -> None:
             enr = None
         if enr is not None and enr.verified:
             real_data = enr.prompt_text()
-            note = _enrichment_gap_note(uid, enr.missing_fields)
-            if note:
-                context.user_data["enrichment_note"] = note
         # else: no verified fixture → has_real_data stays False, so the lean
         # no-data prompt already appends ONE honest "(оценочно)" marker. We no
         # longer also append enr_football_unavailable — that produced two

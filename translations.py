@@ -51,9 +51,6 @@ T = {
 "promo_code": "🎁 Sənin promokodun: {code}",
 "promo_codes_title": "🎁 Partnyorlarımızdan bonus kodları:",
 "menu_match_of_day": "🔥 Günün matçı",
-"fc_basis": "📐 Real əmsallar və mövcud məlumatlar əsasında · 18+, maliyyə məsləhəti deyil",
-"bot_winrate": "🎯 ProqnozAI: istifadəçi rəylərinə görə {pct}% dəqiq (30 gün)",
-"bot_winrate_building": "🎯 Dəqiqlik statistikası toplanır",
 "profile_streak": "🔥 Seriya: {n} gün ardıcıl",
 "profile_accuracy": "🎯 Dəqiqlik: {total} proqnozdan {wins} ({pct}%)",
 "profile_rate_hint": "🎯 Dəqiqliyi görmək üçün proqnozları qiymətləndir (👍/👎)",
@@ -86,9 +83,6 @@ T = {
 "ev_matches_title":       "⚽ Matçlar — {name}:",
 "ev_filter_empty":        "Bu filtrə uyğun matç yoxdur.",
 "enr_football_unavailable": "ℹ️ Bu matç üçün doğrulanmış futbol məlumatı yoxdur — proqnoz əmsallara əsaslanır.",
-"enr_standings_unavailable": "ℹ️ Turnir cədvəli əlçatan deyil.",
-"enr_lineups_unavailable": "ℹ️ Heyətlər hələ məlum deyil.",
-"enr_injuries_unavailable": "ℹ️ Zədə/diskvalifikasiya məlumatı əlçatan deyil.",
 "enr_unverified":         "ℹ️ Matç doğrulanmadı — yalnız əmsallar göstərilir.",
 "system_prompt": """Sən idman analitikisən. Qısa və aydın yaz. İstənilən idmanı analiz et.
 
@@ -190,9 +184,6 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "promo_code": "🎁 Твой промокод: {code}",
 "promo_codes_title": "🎁 Ваши бонусы от партнёров:",
 "menu_match_of_day": "🔥 Матч дня",
-"fc_basis": "📐 Оценка по реальным коэффициентам и доступным данным · 18+, не финансовый совет",
-"bot_winrate": "🎯 ProqnozAI: {pct}% верных по оценкам пользователей (30 дн.)",
-"bot_winrate_building": "🎯 Копим статистику точности",
 "profile_streak": "🔥 Серия: {n} дн. подряд",
 "profile_accuracy": "🎯 Точность: {wins} из {total} ({pct}%)",
 "profile_rate_hint": "🎯 Оценивай прогнозы (👍/👎), чтобы видеть точность",
@@ -225,9 +216,6 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "ev_matches_title":       "⚽ Матчи — {name}:",
 "ev_filter_empty":        "По этому фильтру матчей нет.",
 "enr_football_unavailable": "ℹ️ Проверенные футбольные данные для этого матча недоступны — прогноз на основе коэффициентов.",
-"enr_standings_unavailable": "ℹ️ Турнирная таблица недоступна.",
-"enr_lineups_unavailable": "ℹ️ Составы пока неизвестны.",
-"enr_injuries_unavailable": "ℹ️ Данные о травмах/дисквалификациях недоступны.",
 "enr_unverified":         "ℹ️ Матч не удалось подтвердить — показаны только коэффициенты.",
 "system_prompt": """Ты — спортивный аналитик. Пиши коротко и по делу. Анализируй любой спорт.
 
@@ -329,9 +317,6 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "promo_code": "🎁 Your promo code: {code}",
 "promo_codes_title": "🎁 Your partner bonus codes:",
 "menu_match_of_day": "🔥 Match of the day",
-"fc_basis": "📐 Based on real odds and available data · 18+, not financial advice",
-"bot_winrate": "🎯 ProqnozAI: {pct}% correct by user ratings (30d)",
-"bot_winrate_building": "🎯 Building accuracy stats",
 "profile_streak": "🔥 Streak: {n} days in a row",
 "profile_accuracy": "🎯 Accuracy: {wins} of {total} ({pct}%)",
 "profile_rate_hint": "🎯 Rate forecasts (👍/👎) to see your accuracy",
@@ -364,9 +349,6 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "ev_matches_title":       "⚽ Matches — {name}:",
 "ev_filter_empty":        "No matches for this filter.",
 "enr_football_unavailable": "ℹ️ Verified football data is unavailable for this match — the forecast is based on the odds.",
-"enr_standings_unavailable": "ℹ️ League standings are unavailable.",
-"enr_lineups_unavailable": "ℹ️ Lineups are not yet available.",
-"enr_injuries_unavailable": "ℹ️ Injury/suspension data is unavailable.",
 "enr_unverified":         "ℹ️ The match could not be verified — showing odds only.",
 "system_prompt": """You are a sports analyst. Be brief and direct. Analyse any sport.
 
@@ -461,9 +443,6 @@ Draw — XX% | X.XX  (if applicable)
 "promo_code": "🎁 Promo kodun: {code}",
 "promo_codes_title": "🎁 Ortaklarımızdan bonus kodları:",
 "menu_match_of_day": "🔥 Günün maçı",
-"fc_basis": "📐 Gerçek oranlar ve mevcut verilere dayalı · 18+, finansal tavsiye değildir",
-"bot_winrate": "🎯 ProqnozAI: kullanıcı oylarına göre %{pct} doğru (30 gün)",
-"bot_winrate_building": "🎯 Doğruluk istatistiği toplanıyor",
 "profile_streak": "🔥 Seri: {n} gün üst üste",
 "profile_accuracy": "🎯 Doğruluk: {total} tahminden {wins} ({pct}%)",
 "profile_rate_hint": "🎯 Doğruluğu görmek için tahminleri oyla (👍/👎)",
@@ -498,9 +477,6 @@ Draw — XX% | X.XX  (if applicable)
 "ev_matches_title":       "⚽ Maçlar — {name}:",
 "ev_filter_empty":        "Bu filtreye uygun maç yok.",
 "enr_football_unavailable": "ℹ️ Bu maç için doğrulanmış futbol verisi yok — tahmin oranlara dayanıyor.",
-"enr_standings_unavailable": "ℹ️ Puan durumu mevcut değil.",
-"enr_lineups_unavailable": "ℹ️ Kadrolar henüz belli değil.",
-"enr_injuries_unavailable": "ℹ️ Sakatlık/ceza verisi mevcut değil.",
 "enr_unverified":         "ℹ️ Maç doğrulanamadı — yalnızca oranlar gösteriliyor.",
 "system_prompt": """Sen spor analistisin. Kısa ve net yaz. Her sporu analiz et.
 
@@ -596,9 +572,6 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "promo_code": "🎁 Сенің промокодың: {code}",
 "promo_codes_title": "🎁 Серіктестерден бонус кодтары:",
 "menu_match_of_day": "🔥 Күн матчы",
-"fc_basis": "📐 Нақты коэффициенттер мен қолжетімді деректерге негізделген · 18+, қаржылық кеңес емес",
-"bot_winrate": "🎯 ProqnozAI: пайдаланушы бағасы бойынша {pct}% дәл (30 күн)",
-"bot_winrate_building": "🎯 Дәлдік статистикасы жиналуда",
 "profile_streak": "🔥 Серия: {n} күн қатарынан",
 "profile_accuracy": "🎯 Дәлдік: {total} болжамнан {wins} ({pct}%)",
 "profile_rate_hint": "🎯 Дәлдікті көру үшін болжамдарды бағала (👍/👎)",
@@ -633,9 +606,6 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "ev_matches_title":       "⚽ Матчтар — {name}:",
 "ev_filter_empty":        "Бұл сүзгі бойынша матч жоқ.",
 "enr_football_unavailable": "ℹ️ Бұл матч бойынша расталған футбол деректері жоқ — болжам коэффициенттерге негізделген.",
-"enr_standings_unavailable": "ℹ️ Турнир кестесі қолжетімсіз.",
-"enr_lineups_unavailable": "ℹ️ Құрамдар әзірге белгісіз.",
-"enr_injuries_unavailable": "ℹ️ Жарақат/дисквалификация деректері қолжетімсіз.",
 "enr_unverified":         "ℹ️ Матчты растау мүмкін болмады — тек коэффициенттер көрсетілген.",
 "system_prompt": """Сен спорт аналитикісің. Қысқа және нақты жаз. Кез келген спортты талда.
 
@@ -731,9 +701,6 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "promo_code": "🎁 Sizning promokodingiz: {code}",
 "promo_codes_title": "🎁 Hamkorlardan bonus kodlari:",
 "menu_match_of_day": "🔥 Kun o'yini",
-"fc_basis": "📐 Haqiqiy koeffitsiyentlar va mavjud ma'lumotlarga asoslangan · 18+, moliyaviy maslahat emas",
-"bot_winrate": "🎯 ProqnozAI: foydalanuvchi baholariga ko'ra {pct}% to'g'ri (30 kun)",
-"bot_winrate_building": "🎯 Aniqlik statistikasi yig'ilmoqda",
 "profile_streak": "🔥 Seriya: {n} kun ketma-ket",
 "profile_accuracy": "🎯 Aniqlik: {total} bashoratdan {wins} ({pct}%)",
 "profile_rate_hint": "🎯 Aniqlikni ko'rish uchun bashoratlarni baholang (👍/👎)",
@@ -768,9 +735,6 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "ev_matches_title":       "⚽ Matchlar — {name}:",
 "ev_filter_empty":        "Bu filtr bo'yicha o'yin yo'q.",
 "enr_football_unavailable": "ℹ️ Bu o'yin uchun tasdiqlangan futbol ma'lumotlari yo'q — bashorat koeffitsientlarga asoslangan.",
-"enr_standings_unavailable": "ℹ️ Turnir jadvali mavjud emas.",
-"enr_lineups_unavailable": "ℹ️ Tarkiblar hali ma'lum emas.",
-"enr_injuries_unavailable": "ℹ️ Jarohat/diskvalifikatsiya ma'lumotlari mavjud emas.",
 "enr_unverified":         "ℹ️ O'yinni tasdiqlab bo'lmadi — faqat koeffitsientlar ko'rsatilmoqda.",
 "system_prompt": """Sen sport analitikisisan. Qisqa va aniq yoz. Har qanday sportni tahlil qil.
 
@@ -866,9 +830,6 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "promo_code": "🎁 رمزك الترويجي: {code}",
 "promo_codes_title": "🎁 أكواد المكافآت من شركائنا:",
 "menu_match_of_day": "🔥 مباراة اليوم",
-"fc_basis": "📐 يستند إلى الاحتمالات الحقيقية والبيانات المتاحة · 18+، ليست نصيحة مالية",
-"bot_winrate": "🎯 ProqnozAI: دقة {pct}% حسب تقييمات المستخدمين (30 يومًا)",
-"bot_winrate_building": "🎯 نجمع إحصائيات الدقة",
 "profile_streak": "🔥 سلسلة: {n} يوم متتالٍ",
 "profile_accuracy": "🎯 الدقة: {wins} من {total} ({pct}%)",
 "profile_rate_hint": "🎯 قيّم التوقعات (👍/👎) لرؤية دقتك",
@@ -903,9 +864,6 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "ev_matches_title":       "⚽ المباريات — {name}:",
 "ev_filter_empty":        "لا توجد مباريات لهذا الفلتر.",
 "enr_football_unavailable": "ℹ️ لا تتوفر بيانات كرة قدم موثّقة لهذه المباراة — يعتمد التوقع على الأرباح.",
-"enr_standings_unavailable": "ℹ️ جدول الترتيب غير متوفر.",
-"enr_lineups_unavailable": "ℹ️ التشكيلات غير متوفرة بعد.",
-"enr_injuries_unavailable": "ℹ️ بيانات الإصابات/الإيقافات غير متوفرة.",
 "enr_unverified":         "ℹ️ تعذّر التحقق من المباراة — يتم عرض الأرباح فقط.",
 "system_prompt": """أنت محلل رياضي. اكتب بإيجاز ووضوح. حلّل أي رياضة.
 

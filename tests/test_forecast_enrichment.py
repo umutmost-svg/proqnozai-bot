@@ -103,9 +103,8 @@ async def test_football_high_enrichment_attaches_verified_data(monkeypatch, temp
     assert any("VERIFIED FOOTBALL DATA" in t for t in texts)
     assert "ODDS" in texts
     assert ctx.user_data["has_real_data"] is True
-    # Honest note for the one unavailable verified block appears in the reply
-    # (the bot-winrate line is now appended after it).
-    assert fc.tr(uid, "enr_standings_unavailable") in bot.status_msg.text
+    # No service footer is appended any more: the reply ends on the forecast.
+    assert "enrichment_note" not in ctx.user_data
 
 
 async def test_football_unverified_keeps_odds_no_fallback(monkeypatch, temp_db):
@@ -126,9 +125,7 @@ async def test_football_unverified_keeps_odds_no_fallback(monkeypatch, temp_db):
     assert not any("VERIFIED FOOTBALL DATA" in t for t in texts)
     assert "ODDS" in texts  # odds preserved
     assert ctx.user_data["has_real_data"] is False  # no factual fallback
-    # The deterministic enr_football_unavailable note is no longer appended —
-    # honesty is now carried by the lean no-data prompt's single "(оценочно)"
-    # marker (see test_forecast_prompt), avoiding two trailing disclaimers.
+    # No deterministic note is appended under the forecast at all.
     assert fc.tr(uid, "enr_football_unavailable") not in bot.status_msg.text
     assert "enrichment_note" not in ctx.user_data
 
@@ -180,17 +177,3 @@ async def test_non_football_skips_enrichment(monkeypatch, temp_db):
     assert "LEGACY-DATA" in texts
 
 
-def test_enrichment_gap_note_maps_blocks(temp_db):
-    uid = 910005
-    temp_db.db_ensure(uid, "u", "en")
-    note = fc._enrichment_gap_note(uid, ["recent_home", "standings", "lineups"])
-    assert fc.tr(uid, "enr_standings_unavailable") in note
-    assert fc.tr(uid, "enr_lineups_unavailable") in note
-    # recent_home is not a user-facing gap key.
-    assert "recent_home" not in note
-
-
-def test_enrichment_gap_note_none_when_no_user_blocks(temp_db):
-    uid = 910006
-    temp_db.db_ensure(uid, "u", "en")
-    assert fc._enrichment_gap_note(uid, ["recent_home", "stats_away"]) is None
