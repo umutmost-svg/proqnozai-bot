@@ -18,7 +18,7 @@ from html.parser import HTMLParser
 
 from db import (db_segment_uids, db_create_broadcast, db_due_broadcasts,
                 db_claim_broadcast, db_broadcast_progress, db_finish_broadcast,
-                db_get_broadcast)
+                db_get_broadcast, db_release_stale_broadcasts)
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +284,11 @@ async def scheduler(application) -> None:
     Sends are serialised deliberately: two concurrent campaigns would share the
     same Telegram rate limit and both would be throttled."""
     await asyncio.sleep(15)  # let the bot finish starting up
+    # A row still marked 'running' at startup belongs to a process that no
+    # longer exists; until it is cleared, no later broadcast can be claimed.
+    freed = db_release_stale_broadcasts()
+    if freed:
+        logger.warning("released %s broadcast(s) interrupted by a restart", freed)
     while True:
         try:
             if not state["running"]:

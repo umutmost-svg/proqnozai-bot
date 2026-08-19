@@ -555,6 +555,96 @@ def db_promo_funnel() -> dict:
                 claimed_7d=claimed_7d, users=users)
 
 
+# ─── Growth, value and preferences ────────────────────────────────────────────
+
+def db_user_growth(days: int = 30) -> dict:
+    """New registrations per day plus the running total.
+
+    The cumulative line needs a starting point, so the count of everyone who
+    joined before the window comes along with the series — otherwise the curve
+    would start at zero and misread as "the bot lost all its users"."""
+    cutoff = f"-{int(days)} days"
+    rows = _all("SELECT date(joined_at), COUNT(*) FROM users "
+                "WHERE is_registered=1 AND date(joined_at) >= date('now', ?) "
+                "GROUP BY 1 ORDER BY 1", (cutoff,))
+    before = _one("SELECT COUNT(*) FROM users WHERE is_registered=1 "
+                  "AND date(joined_at) < date('now', ?)", (cutoff,)) or 0
+    daily, total = [], before
+    for day, n in rows:
+        total += n
+        daily.append([day, n, total])
+    return dict(before=before, daily=daily)
+
+
+def db_sports_split() -> list[list]:
+    """What people picked in onboarding.
+
+    This is a stated preference, not observed behaviour: the forecast flow does
+    not record which sport a request was for, so it must not be presented as
+    "most requested"."""
+    rows = _all("SELECT sports, COUNT(*) FROM users "
+                "WHERE is_registered=1 AND sports != '' GROUP BY 1 ORDER BY 2 DESC")
+    return [[r[0], r[1]] for r in rows]
+
+
+def db_hourly_activity(days: int = 14, tz_offset: int = 3) -> list[list]:
+    """Events per hour of the day, shifted to the admin's timezone.
+
+    Written for the broadcast scheduler: the point is to see when the audience
+    is actually awake before picking a send time."""
+    rows = _all(
+        "SELECT CAST(strftime('%H', datetime(created_at, ?)) AS INTEGER), COUNT(*) "
+        "FROM requests WHERE created_at >= datetime('now', ?) GROUP BY 1",
+        (f"{int(tz_offset):+d} hours", f"-{int(days)} days"))
+    by_hour = dict(rows)
+    return [[h, by_hour.get(h, 0)] for h in range(24)]
+
+
+def db_user_value() -> dict:
+    """Proxy LTV.
+
+    The bot takes no money, so there is no revenue per user to average. What it
+    does have is the chain that leads to revenue: a user lives for N days, asks
+    for N forecasts, and some of them click through to a partner. Those are
+    reported as they are. A cash figure appears only when PARTNER_CPA is set —
+    what one partner click is worth — and is then clearly a projection built on
+    that number, not measured income."""
+    with con() as c:
+        def one(sql, p=()):
+            r = c.execute(sql, p).fetchone()
+            return (r[0] if r else 0) or 0
+
+        users = one("SELECT COUNT(*) FROM users WHERE is_registered=1")
+        forecasts = one("SELECT COUNT(*) FROM requests WHERE msg_type='FORECAST'")
+        clicks = one("SELECT COUNT(*) FROM partner_clicks")
+        clickers = one("SELECT COUNT(DISTINCT user_id) FROM partner_clicks")
+        # Lifespan of users who did come back at least once; counting the
+        # single-visit crowd as "0 days" would drown the signal.
+        lifespan = one(
+            "SELECT AVG(julianday(last_active) - julianday(joined_at)) FROM users "
+            "WHERE is_registered=1 AND last_active != '' "
+            "AND julianday(last_active) - julianday(joined_at) >= 1")
+        promo_users = one("SELECT COUNT(DISTINCT user_id) FROM promo_claims")
+
+    try:
+        cpa = float(os.environ.get("PARTNER_CPA", "0") or 0)
+    except ValueError:
+        cpa = 0.0
+
+    per_user = (clicks / users) if users else 0.0
+    return dict(
+        users=users,
+        forecasts_per_user=round(forecasts / users, 1) if users else 0.0,
+        clicks_per_user=round(per_user, 2),
+        click_conversion=round(clickers / users * 100) if users else 0,
+        avg_lifespan_days=round(lifespan, 1) if lifespan else 0.0,
+        promo_conversion=round(promo_users / users * 100) if users else 0,
+        cpa=cpa,
+        revenue_per_user=round(per_user * cpa, 2) if cpa else 0.0,
+        revenue_total=round(clicks * cpa, 2) if cpa else 0.0,
+    )
+
+
 # ─── Broadcasts ───────────────────────────────────────────────────────────────
 # Every broadcast — immediate or scheduled — is a row here. Two reasons it is not
 # just in-memory state: a scheduled send has to survive a redeploy (Railway
@@ -633,14 +723,38 @@ def db_due_broadcasts() -> list[dict]:
 def db_claim_broadcast(bid: int) -> bool:
     """Atomically move one pending broadcast to 'running'.
 
-    The UPDATE only matches while the row is still pending, so two schedulers
-    (a redeploy overlap, a stray worker) cannot both start the same send —
-    exactly one of them sees rowcount 1."""
+    Two conditions in one statement, so the check and the write cannot be
+    separated by another thread:
+
+      * the row is still pending — two schedulers (a redeploy overlap, a stray
+        worker) cannot both start the same send;
+      * nothing else is running — two campaigns started within the same instant
+        from the dashboard would otherwise both pass an in-memory "is anything
+        running?" check, then send to overlapping segments and fight over the
+        same Telegram rate limit.
+
+    A refused claim is not an error: the row stays pending and the scheduler
+    picks it up once the current campaign finishes."""
     with con() as c:
         cur = c.execute(
             "UPDATE broadcasts SET status='running', started_at=datetime('now') "
-            "WHERE id=? AND status='pending'", (int(bid),))
+            "WHERE id=? AND status='pending' "
+            "AND NOT EXISTS (SELECT 1 FROM broadcasts WHERE status='running')",
+            (int(bid),))
         return cur.rowcount == 1
+
+
+def db_release_stale_broadcasts() -> int:
+    """Fail any broadcast left 'running' by a process that died.
+
+    Sending only ever happens inside the worker, so at worker startup a running
+    row can only be the remains of a crash or a redeploy mid-send. Left alone it
+    would block every later claim forever (see the NOT EXISTS above)."""
+    with con() as c:
+        cur = c.execute(
+            "UPDATE broadcasts SET status='failed', finished_at=datetime('now'), "
+            "error='прервано рестартом' WHERE status='running'")
+        return cur.rowcount
 
 
 def db_broadcast_progress(bid: int, total: int, ok: int, fail: int) -> None:

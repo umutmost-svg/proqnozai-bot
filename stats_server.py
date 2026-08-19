@@ -37,7 +37,8 @@ from db import (con, _all, like_escape, db_log_partner_click,
                 db_feedback_coverage, db_forecast_health, db_churn,
                 db_promo_funnel, db_partner_clicks, db_segment_size,
                 db_list_broadcasts, db_cancel_broadcast, db_claim_broadcast,
-                db_broadcast_metrics,
+                db_broadcast_metrics, db_user_growth, db_sports_split,
+                db_hourly_activity, db_user_value,
                 db_list_partners, db_get_partner, db_partner_add,
                 db_partner_update, db_partner_archive,
                 db_list_promo_codes, db_set_promo_code, db_promo_edit,
@@ -247,6 +248,10 @@ def _collect():
         "promo":              db_promo_funnel(),
         "partners":           db_partner_clicks(),
         "broadcasts":         db_broadcast_metrics(),
+        "growth":             db_user_growth(),
+        "sports":             db_sports_split(),
+        "hourly":             db_hourly_activity(),
+        "value":              db_user_value(),
     })
     data["repeat_pct"] = (round(data["repeat_users"] / data["users_with_activity"] * 100)
                           if data["users_with_activity"] else 0)
@@ -502,10 +507,18 @@ class _Handler(BaseHTTPRequestHandler):
 
         # Immediate: claim and hand it to the bot loop. Fire-and-forget so the
         # dashboard never waits; progress is read via GET /broadcast/status.
+        #
+        # The claim is the real gate, not the in-memory check above: this server
+        # is threaded, so two submissions can both get past that flag before the
+        # first coroutine has even started. Whoever loses the claim stays queued
+        # and the scheduler starts it once the running campaign ends.
         if db_claim_broadcast(info["id"]):
             asyncio.run_coroutine_threadsafe(
                 bcast.run_broadcast(_bot_app.bot, info["id"]), _bot_loop)
-        self._send(200, json.dumps(info).encode(), "application/json")
+            self._send(200, json.dumps(info).encode(), "application/json")
+        else:
+            self._send(202, json.dumps({**info, "queued": True}).encode(),
+                       "application/json")
 
     def _read_json(self):
         """Parsed JSON body, or None when it isn't valid JSON."""

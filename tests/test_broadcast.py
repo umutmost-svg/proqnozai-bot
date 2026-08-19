@@ -116,10 +116,21 @@ def test_utc_to_admin_shifts_by_three_hours():
 
 @pytest.fixture()
 def two_users(temp_db):
+    """Two recipients and an empty broadcast queue.
+
+    The temp DB is shared across the session and a claim now refuses while any
+    row is 'running', so a test that leaves one behind would block every test
+    after it. Each test owns the table."""
+    def _wipe():
+        with temp_db.con() as c:
+            c.execute("DELETE FROM broadcasts")
+    _wipe()
     for uid in (910001, 910002):
         temp_db.db_ensure(uid, f"u{uid}", "ru")
         temp_db.db_set(uid, "is_registered", 1)
-    return temp_db
+        temp_db.db_set(uid, "is_blocked", 0)
+    yield temp_db
+    _wipe()
 
 
 def test_queue_persists_the_broadcast(two_users):
@@ -258,3 +269,37 @@ def test_broadcast_metrics_summarise_reach(two_users, monkeypatch):
     assert m["campaigns"] >= 1
     assert m["ok"] >= 1 and m["fail"] >= 1
     assert 0 < m["delivery_pct"] <= 100
+
+
+# ─── Serialisation of concurrent sends (Codex audit finding) ──────────────────
+
+def test_a_second_campaign_cannot_start_while_one_runs(two_users):
+    """The stats server is threaded, so two immediate submissions can both pass
+    an in-memory "is anything running?" check. The claim itself has to be the
+    gate, or both campaigns send at once and fight over the rate limit."""
+    first, _ = bc.queue("Первая", "all")
+    second, _ = bc.queue("Вторая", "all")
+    assert two_users.db_claim_broadcast(first["id"]) is True
+    assert two_users.db_claim_broadcast(second["id"]) is False
+    # Refused, not lost: it stays queued for the scheduler.
+    assert two_users.db_get_broadcast(second["id"])["status"] == "pending"
+
+
+def test_the_queued_campaign_runs_after_the_first_finishes(two_users, monkeypatch):
+    monkeypatch.setattr(bc, "SEND_DELAY", 0)
+    first, _ = bc.queue("Первая", "all")
+    second, _ = bc.queue("Вторая", "all")
+    two_users.db_claim_broadcast(first["id"])
+    _run(bc.run_broadcast(_FakeBot(), first["id"]))
+    assert two_users.db_claim_broadcast(second["id"]) is True
+
+
+def test_a_broadcast_interrupted_by_a_restart_is_released(two_users):
+    """Otherwise its 'running' row blocks every later claim forever."""
+    info, _ = bc.queue("Привет", "all")
+    two_users.db_claim_broadcast(info["id"])
+    assert two_users.db_release_stale_broadcasts() >= 1
+    assert two_users.db_get_broadcast(info["id"])["status"] == "failed"
+
+    nxt, _ = bc.queue("Следующая", "all")
+    assert two_users.db_claim_broadcast(nxt["id"]) is True
