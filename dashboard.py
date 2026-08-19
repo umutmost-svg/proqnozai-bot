@@ -614,6 +614,60 @@ _STATS_BODY = r"""
   </div>
   {% endif %}
 
+  {% set v = d.value|default({}) %}
+  {% if v %}
+  <div class="sec"><h2>Ценность пользователя</h2></div>
+  <div class="grid g5">
+    <div class="card stat">
+      <span class="ico">⏳</span>
+      <div class="label">Срок жизни</div>
+      <div class="value">{{ v.avg_lifespan_days }}<small> дн.</small></div>
+      <div class="sub">среднее у вернувшихся хотя бы раз</div>
+    </div>
+    <div class="card stat">
+      <span class="ico">📊</span>
+      <div class="label">Прогнозов на пользователя</div>
+      <div class="value">{{ v.forecasts_per_user }}</div>
+      <div class="sub">за всё время, на зарегистрированного</div>
+    </div>
+    <div class="card stat">
+      <span class="ico">🤝</span>
+      <div class="label">Кликов на пользователя</div>
+      <div class="value">{{ v.clicks_per_user }}</div>
+      <div class="sub">дошли до партнёра {{ v.click_conversion }}% людей</div>
+    </div>
+    <div class="card stat">
+      <span class="ico">🎁</span>
+      <div class="label">Взяли промокод</div>
+      <div class="value {{ 'ok' if v.promo_conversion >= 10 else 'warn' }}">{{ v.promo_conversion }}%</div>
+      <div class="sub">от зарегистрированных</div>
+    </div>
+    <div class="card stat">
+      <span class="ico">💰</span>
+      <div class="label">Доход на пользователя</div>
+      {% if v.cpa %}
+      <div class="value ok">{{ v.revenue_per_user }}</div>
+      <div class="sub">всего {{ v.revenue_total }} · при ставке {{ v.cpa }} за клик</div>
+      {% else %}
+      <div class="value muted" style="font-size:20px">—</div>
+      <div class="sub">задайте PARTNER_CPA, чтобы считать деньги</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="sec"><h2>Рост</h2></div>
+  <div class="grid g3">
+    <div class="card span3">
+      <h3>📈 Рост пользователей за 30 дней</h3>
+      <div class="chart"><canvas id="growthChart"></canvas></div>
+      <div class="sub" style="margin-top:8px">
+        Столбцы — новые за день, линия — всего в базе
+        {% if gr.before %}(на начало периода было {{ gr.before }}){% endif %}
+      </div>
+    </div>
+  </div>
+
   <div class="sec"><h2>Аналитика</h2></div>
   <div class="grid g3">
     <div class="card span2">
@@ -635,6 +689,30 @@ _STATS_BODY = r"""
     <div class="card span3">
       <h3>📈 Точность (win-rate) за 14 дней, %</h3>
       <div class="chart sm"><canvas id="winrateChart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h3>⚽ Любимые виды спорта</h3>
+      {% set sp = d.sports|default([]) %}
+      {% set sp_total = (sp|sum(attribute=1)) or 1 %}
+      {% for name, cnt in sp %}
+      <div style="margin-bottom:9px">
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span>{{ SPORT_NAMES.get(name, name) }}</span>
+          <span><b>{{ cnt }}</b> <span class="muted">{{ (cnt / sp_total * 100)|round|int }}%</span></span>
+        </div>
+        <div class="bar-wrap"><div class="bar" style="width:{{ (cnt / sp_total * 100)|round|int }}%"></div></div>
+      </div>
+      {% else %}
+      <div class="empty">Никто ещё не выбрал вид спорта</div>
+      {% endfor %}
+      <div class="sub" style="margin-top:10px">Выбор в онбординге, а не факт запросов</div>
+    </div>
+
+    <div class="card span2">
+      <h3>🕒 Когда люди активны (МСК, 14 дней)</h3>
+      <div class="chart sm"><canvas id="hourChart"></canvas></div>
+      <div class="sub" style="margin-top:8px">Лучшее время для рассылки — пик этого графика</div>
     </div>
   </div>
 
@@ -718,9 +796,14 @@ let langData    = {{ lang_values|tojson }};
 let fbData      = {{ fb_data|tojson }};
 let winrateLabels = {{ winrate_labels|tojson }};
 let winrateData   = {{ winrate_values|tojson }};
+let growthLabels  = {{ growth_labels|tojson }};
+let growthNew     = {{ growth_new|tojson }};
+let growthTotal   = {{ growth_total|tojson }};
+let hourLabels    = {{ hour_labels|tojson }};
+let hourData      = {{ hour_values|tojson }};
 
 const COLORS = ['#6c63ff','#38bdf8','#22c55e','#f59e0b','#ef4444','#a78bfa','#fb923c'];
-let lineChart, langChart, barChart, feedbackChart, winrateChart;
+let lineChart, langChart, barChart, feedbackChart, winrateChart, growthChart, hourChart;
 
 function cssVar(n){ return getComputedStyle(document.body).getPropertyValue(n).trim(); }
 
@@ -785,6 +868,37 @@ function makeCharts(){
     options:{responsive:true,maintainAspectRatio:false,plugins:donutLegend,cutout:'68%'}
   });
 
+  // Growth: daily intake as bars, the running total as a line on its own axis.
+  // One axis for both would flatten the bars into nothing once the base grows.
+  growthChart = new Chart(document.getElementById('growthChart'), {
+    type:'bar',
+    data:{labels:growthLabels,datasets:[
+      {label:'Новые за день',data:growthNew,order:2,
+       backgroundColor:cssVar('--accent')+'cc',borderRadius:5,maxBarThickness:22,yAxisID:'y'},
+      {label:'Всего',data:growthTotal,type:'line',order:1,yAxisID:'y1',
+       borderColor:cssVar('--ok'),backgroundColor:'transparent',
+       borderWidth:2,pointRadius:0,tension:.35}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{display:true,position:'bottom',
+        labels:{color:cssVar('--muted'),boxWidth:10,usePointStyle:true,font:{size:11}}}},
+      scales:{
+        x:{grid:{display:false},ticks:{color:cssVar('--muted'),maxTicksLimit:10}},
+        y:{grid:{color:cssVar('--border')},ticks:{color:cssVar('--muted'),precision:0},
+           beginAtZero:true,title:{display:false}},
+        y1:{position:'right',grid:{display:false},beginAtZero:true,
+            ticks:{color:cssVar('--muted'),precision:0}}
+      }}
+  });
+
+  hourChart = new Chart(document.getElementById('hourChart'), {
+    type:'bar',
+    data:{labels:hourLabels,datasets:[{label:'События',data:hourData,
+      backgroundColor:cssVar('--info')+'cc',borderRadius:4,maxBarThickness:16}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:noLegend,scales:axes()}
+  });
+
   winrateChart = new Chart(document.getElementById('winrateChart'), {
     type:'line',
     data:{labels:winrateLabels,datasets:[{label:'Win-rate %',data:winrateData,
@@ -796,7 +910,8 @@ function makeCharts(){
 
 function updateCharts(){
   if(!chartsAvailable()) return;
-  [lineChart,langChart,barChart,feedbackChart,winrateChart].forEach(c=>{ if(c) c.destroy(); });
+  [lineChart,langChart,barChart,feedbackChart,winrateChart,growthChart,hourChart]
+    .forEach(c=>{ if(c) c.destroy(); });
   setTimeout(makeCharts, 40);
 }
 makeCharts();
@@ -823,6 +938,12 @@ async function refreshData(){
     fbData=[fbw, fbt-fbw, Math.max(0,(x.forecasts_real_total||0)-fbt)];
     winrateLabels=(x.winrate_daily||[]).map(r=>r[0].slice(5));
     winrateData=(x.winrate_daily||[]).map(r=> r[2] ? Math.round(r[1]/r[2]*100) : 0);
+    const gd=(x.growth||{}).daily||[];
+    growthLabels=gd.map(r=>r[0].slice(5));
+    growthNew=gd.map(r=>r[1]);
+    growthTotal=gd.map(r=>r[2]);
+    hourLabels=(x.hourly||[]).map(r=>String(r[0]).padStart(2,'0'));
+    hourData=(x.hourly||[]).map(r=>r[1]);
     updateCharts();
     setText('stamp', '🔄 ' + new Date().toLocaleTimeString('ru-RU'));
   }catch(e){}
@@ -845,6 +966,12 @@ TEMPLATE = _CHIP + TEMPLATE
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
+# Onboarding stores the sport as a key; the dashboard is the only place that has
+# to turn it back into a word. Anything unknown falls through to the raw key.
+SPORT_NAMES = {"football": "⚽ Футбол", "ufc": "🥊 UFC/MMA", "nba": "🏀 Баскетбол",
+               "tennis": "🎾 Теннис", "hockey": "🏒 Хоккей", "all": "🏆 Все виды"}
+
+
 # Numeric keys the template compares or divides. A backend that is older than
 # the dashboard (the two deploy independently) simply omits the newest ones, and
 # an Undefined in an arithmetic comparison raises mid-render — which the auth
@@ -892,7 +1019,8 @@ def index():
     for key in _NUM_DEFAULTS:
         raw.setdefault(key, 0)
     for key in ("langs", "top_users", "recent_users", "recent_forecasts",
-                "daily", "forecasts_daily", "winrate_daily", "by_action", "retention"):
+                "daily", "forecasts_daily", "winrate_daily", "by_action", "retention",
+                "sports", "hourly"):
         raw.setdefault(key, [])
 
     fb_total = raw.get("fb_total", 0)
@@ -920,6 +1048,16 @@ def index():
     winrate_labels = [r[0][5:] for r in wr]
     winrate_values = [round(r[1] / r[2] * 100) if r[2] else 0 for r in wr]
 
+    growth = raw.get("growth", {}) or {}
+    growth_daily = growth.get("daily", [])
+    growth_labels = [r[0][5:] for r in growth_daily]
+    growth_new    = [r[1] for r in growth_daily]
+    growth_total  = [r[2] for r in growth_daily]
+
+    hourly = raw.get("hourly", [])
+    hour_labels = [f"{r[0]:02d}" for r in hourly]
+    hour_values = [r[1] for r in hourly]
+
     deltas = {
         "users":     _delta(raw.get("users_week", 0), raw.get("users_prev_week", 0)),
         "dau":       _delta(raw.get("users_active_today", 0), raw.get("users_active_yday", 0)),
@@ -942,6 +1080,9 @@ def index():
         lang_labels=lang_labels, lang_values=lang_values,
         fb_data=[fb_wins, fb_lose, fb_unrated],
         winrate_labels=winrate_labels, winrate_values=winrate_values,
+        growth_labels=growth_labels, growth_new=growth_new, growth_total=growth_total,
+        hour_labels=hour_labels, hour_values=hour_values, gr=growth,
+        SPORT_NAMES=SPORT_NAMES,
         page="stats", subtitle="Онлайн · обновление каждые 45с", stamp=stamp,
     )
 
