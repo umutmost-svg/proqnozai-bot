@@ -295,11 +295,96 @@ def test_a_shared_code_cannot_be_set_over_a_pool(clean):
     assert clean.db_promo_mode("Mostbet") == "pool"
 
 
-def test_a_pool_cannot_be_imported_over_a_shared_code(clean):
+def test_a_pool_cannot_be_imported_over_a_LIVE_shared_code(clean):
     clean.db_set_promo_code("Mostbet", "SINGLE", 100)
     with pytest.raises(ValueError):
         clean.db_promo_pool_import("Mostbet", _batch(5))
     assert clean.db_promo_pool_codes("Mostbet") == []
+
+
+# ── switching modes through the dashboard ────────────────────────────────────
+# "Удалить промокод" in the dashboard ARCHIVES the campaign: the row stays, so
+# a guard that looks only at `mode` refuses the very next step and leaves the
+# operator with no way out -- removing it is exactly what they just did.
+
+def test_a_pool_imports_over_an_ARCHIVED_shared_code(clean):
+    clean.db_set_promo_code("Mostbet", "WELCOME", 100)
+    clean.db_claim_promos(760001)
+    clean.db_promo_archive("Mostbet")           # the dashboard's "Удалить промокод"
+    assert clean.db_list_promo_codes() == []    # and the UI shows no promo
+    result = clean.db_promo_pool_import("Mostbet", _batch(200))
+    assert result["added"] == 200
+    assert clean.db_promo_mode("Mostbet") == "pool"
+
+
+def test_the_pool_that_replaces_an_archived_campaign_is_live(clean):
+    """It must not inherit the archived flag, or the import would appear to
+    work and then never issue anything."""
+    clean.db_set_promo_code("Mostbet", "WELCOME", 100)
+    clean.db_promo_archive("Mostbet")
+    clean.db_promo_pool_import("Mostbet", ["FRESH-1"])
+    row = clean.db_list_promo_codes()[0]
+    assert row["is_active"] is True and row["is_archived"] is False
+    assert clean.db_claim_promos(760010) == [{"partner": "Mostbet", "code": "FRESH-1"}]
+
+
+def test_the_old_shared_claims_survive_the_switch(clean):
+    clean.db_set_promo_code("Mostbet", "WELCOME", 100)
+    clean.db_claim_promos(760020)
+    clean.db_promo_archive("Mostbet")
+    clean.db_promo_pool_import("Mostbet", ["FRESH-1"])
+    with clean.con() as c:
+        assert c.execute("SELECT COUNT(*) FROM promo_claims WHERE code='WELCOME'"
+                         ).fetchone()[0] == 1
+
+
+def test_the_holder_of_the_old_shared_code_gets_a_pool_code_too(clean):
+    """Different campaign, so the user who held the retired code is entitled to
+    one from the new pool."""
+    clean.db_set_promo_code("Mostbet", "WELCOME", 100)
+    clean.db_claim_promos(760030)
+    clean.db_promo_archive("Mostbet")
+    clean.db_promo_pool_import("Mostbet", ["FRESH-1"])
+    assert clean.db_claim_promos(760030) == [{"partner": "Mostbet", "code": "FRESH-1"}]
+
+
+def test_a_shared_code_can_be_set_over_an_ARCHIVED_pool(clean):
+    """The mirror of the same dead end."""
+    clean.db_promo_pool_import("Mostbet", _batch(5))
+    clean.db_claim_promos(760040)
+    clean.db_promo_archive("Mostbet")
+    clean.db_set_promo_code("Mostbet", "SINGLE", 100)
+    row = clean.db_list_promo_codes()[0]
+    assert row["mode"] == "shared" and row["is_archived"] is False
+    # The never-issued codes go; the one already in a user's chat stays.
+    assert len(clean.db_promo_pool_codes("Mostbet")) == 1
+
+
+def test_a_shared_code_cannot_be_set_over_a_LIVE_pool(clean):
+    clean.db_promo_pool_import("Mostbet", _batch(5))
+    with pytest.raises(ValueError):
+        clean.db_set_promo_code("Mostbet", "SINGLE", 100)
+
+
+def test_readding_a_shared_code_after_archiving_is_live(clean):
+    """Predates the pool: db_set_promo_code carried is_archived across, so a
+    code re-added from the dashboard was created already archived -- invisible
+    and never issued."""
+    clean.db_set_promo_code("Mostbet", "OLD", 5)
+    clean.db_promo_archive("Mostbet")
+    clean.db_set_promo_code("Mostbet", "NEW", 5)
+    row = clean.db_list_promo_codes()[0]
+    assert row["is_archived"] is False and row["is_active"] is True
+    assert clean.db_claim_promos(760050)[0]["code"] == "NEW"
+
+
+def test_a_merely_deactivated_campaign_still_stays_off(clean):
+    """The deliberate half of the rule: rotating a code must not silently
+    re-enable a campaign the operator switched off."""
+    clean.db_set_promo_code("Mostbet", "OLD", 5)
+    clean.db_promo_set_active("Mostbet", False)
+    clean.db_set_promo_code("Mostbet", "NEW", 5)
+    assert clean.db_list_promo_codes() == []
 
 
 def test_editing_a_pools_code_or_cap_is_refused(clean):
@@ -373,6 +458,35 @@ def test_clearing_the_pool_does_not_archive_the_partner(server, clean):
                   headers=_hdr(), timeout=10)
     assert [name for name, _url in clean.db_active_partners()] == ["Mostbet"]
     assert clean.db_promo_mode("Mostbet") == "pool"
+
+
+def test_the_dashboards_own_sequence_works_end_to_end(server, clean):
+    """Exactly what the operator does: a partner with a shared code, then
+    "Удалить промокод", then "Загрузить коды". This used to fail on the last
+    step with "remove it before importing a pool"."""
+    pid = clean.db_partner_add("Mostbet", "https://mb.example")
+    httpx.patch(f"{server}/partners/{pid}",
+                json={"promo_code": "WELCOME", "promo_limit": 100},
+                headers=_hdr(), timeout=10)
+    httpx.request("DELETE", f"{server}/partners/{pid}/promo", headers=_hdr(), timeout=10)
+    r = httpx.post(f"{server}/partners/{pid}/promo/pool",
+                   json={"codes": "\n".join(_batch(200))}, headers=_hdr(), timeout=10)
+    assert r.status_code == 200, r.text
+    assert r.json()["added"] == 200
+    promo = httpx.get(f"{server}/partners", headers=_hdr(),
+                      timeout=10).json()["partners"][0]["promo"]
+    assert promo["mode"] == "pool" and promo["max_uses"] == 200
+
+
+def test_a_live_shared_code_still_blocks_the_import_over_http(server, clean):
+    pid = clean.db_partner_add("Mostbet", "https://mb.example")
+    httpx.patch(f"{server}/partners/{pid}",
+                json={"promo_code": "WELCOME", "promo_limit": 100},
+                headers=_hdr(), timeout=10)
+    r = httpx.post(f"{server}/partners/{pid}/promo/pool",
+                   json={"codes": _batch(5)}, headers=_hdr(), timeout=10)
+    assert r.status_code == 400
+    assert "live shared promo code" in r.json()["error"]
 
 
 def test_a_bad_import_is_a_400_with_the_reason(server, clean):

@@ -945,13 +945,27 @@ def db_set_promo_code(partner: str, code: str, max_uses: int) -> None:
         prev = c.execute("SELECT is_active, is_archived, mode FROM promo_campaign "
                          "WHERE partner=?", (partner,)).fetchone()
         if prev and prev[2] == "pool":
-            # Replacing the campaign row would leave the partner's imported
-            # codes with nothing pointing at them: still in promo_pool, never
-            # issued again, invisible in every readout.
-            raise ValueError(
-                f"partner '{partner}' runs a code pool -- remove the pool "
-                "before setting a single shared code")
+            if not prev[1]:
+                # Replacing a LIVE pool would leave the partner's imported codes
+                # with nothing pointing at them: still in promo_pool, never
+                # issued again, invisible in every readout.
+                raise ValueError(
+                    f"partner '{partner}' runs a live code pool -- remove the "
+                    "pool before setting a single shared code")
+            # Archived pool: the operator already retired it, so let the shared
+            # code take over and take the never-issued codes with it. Claimed
+            # rows stay -- the holder still has that string in their chat.
+            c.execute("DELETE FROM promo_pool WHERE partner=? AND user_id IS NULL",
+                      (partner,))
         is_active, is_archived = prev[:2] if prev else (1, 0)
+        if is_archived:
+            # Archived means retired, and the dashboard already shows the
+            # partner as having no promo. Carrying the flag onto a code the
+            # operator has just set would create a campaign that is invisible
+            # AND never issued -- they would add a code and see nothing happen.
+            # Deactivated is different and still carried across below: that is
+            # a switch the operator can see and flip back.
+            is_active, is_archived = 1, 0
         c.execute("DELETE FROM promo_campaign WHERE partner=?", (partner,))
         c.execute("INSERT INTO promo_campaign "
                   "(partner, code, max_uses, is_active, is_archived, mode) "
@@ -1139,14 +1153,23 @@ def db_promo_pool_import(partner: str, codes) -> dict:
 
     with con() as c:
         c.execute("BEGIN IMMEDIATE")
-        row = c.execute("SELECT mode FROM promo_campaign WHERE partner=?",
+        row = c.execute("SELECT mode, is_archived FROM promo_campaign WHERE partner=?",
                         (partner,)).fetchone()
         if row and row[0] != "pool":
-            # Converting silently would strand the shared code's claims: they
-            # are counted against a cap this campaign no longer has.
-            raise ValueError(
-                f"partner '{partner}' already has a shared promo code -- "
-                "remove it before importing a pool")
+            if not row[1]:
+                # Converting a LIVE campaign silently would strand the shared
+                # code's claims: they are counted against a cap this campaign
+                # would no longer have.
+                raise ValueError(
+                    f"partner '{partner}' already has a live shared promo code -- "
+                    "remove it before importing a pool")
+            # An archived campaign is one the operator already retired, and the
+            # dashboard shows the partner as having no promo at all. Refusing
+            # here was a dead end: "remove it" is exactly what they had done.
+            # Same rule _apply_promo_patch already follows -- archived counts as
+            # absent. The claims stay in promo_claims either way.
+            c.execute("DELETE FROM promo_campaign WHERE partner=?", (partner,))
+            row = None
         if not row:
             # max_uses is derived from the pool for a pool campaign; the column
             # is kept at 0 so a stale value can never be mistaken for the cap.
