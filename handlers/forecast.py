@@ -154,20 +154,20 @@ def partner_url(label: str, url: str, uid: int) -> str:
 
 
 def _partner_list_kb(uid: int) -> InlineKeyboardMarkup:
-    """One link button per configured partner."""
-    from config import PARTNERS
+    """One link button per active partner, read live from the DB."""
+    from db import db_active_partners
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(label or tr(uid, "partners_btn"),
                                url=partner_url(label, url, uid))]
-         for label, url in PARTNERS])
+         for label, url in db_active_partners()])
 
 
 async def _send_partner_list(uid: int, send) -> None:
     """Show the partner list. Shared by the menu button and the inline button
     under a forecast, so both record the same PARTNERS_OPEN event and render
     the same thing. `send(text, reply_markup=...)` is an async sender."""
-    from config import PARTNERS
-    if not PARTNERS:
+    from db import db_active_partners
+    if not db_active_partners():
         return
     db_log_req(uid, REQ_PARTNERS_OPEN)
     await send(tr(uid, "partners_text"), reply_markup=_partner_list_kb(uid))
@@ -401,9 +401,9 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     # and the partner list. Partners only on a forecast that was actually
     # produced — offering bookmakers under an error message would be
     # tone-deaf — and only when any are configured.
-    from config import PARTNERS
+    from db import db_active_partners
     actions = [InlineKeyboardButton(tr(uid, "ev_more_matches"), callback_data="fm_restart")]
-    if produced and PARTNERS:
+    if produced and db_active_partners():
         actions.append(InlineKeyboardButton(tr(uid, "partners_cta_btn"),
                                             callback_data="partners_show"))
     rows.append(actions)

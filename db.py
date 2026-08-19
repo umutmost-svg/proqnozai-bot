@@ -131,7 +131,35 @@ def db_init():
             claimed_at TEXT DEFAULT (datetime('now')),
             PRIMARY KEY (user_id, code)
         );
+        CREATE TABLE IF NOT EXISTS partners (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            url         TEXT NOT NULL,
+            is_active   INTEGER DEFAULT 1,
+            is_archived INTEGER DEFAULT 0,
+            sort_order  INTEGER DEFAULT 0,
+            created_at  TEXT DEFAULT (datetime('now')),
+            updated_at  TEXT DEFAULT (datetime('now'))
+        );
+        -- Every name a partner has EVER had. The click redirect is /r/<name>,
+        -- and those URLs live in Telegram messages forever, so a rename must
+        -- not turn yesterday's button into a 404. Old names keep resolving to
+        -- the partner's current URL.
+        CREATE TABLE IF NOT EXISTS partner_aliases (
+            name       TEXT PRIMARY KEY,
+            partner_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
         """)
+        # Backfill for tables created before partner_aliases existed.
+        # OR IGNORE, never OR REPLACE: an alias written by a rename is
+        # authoritative, and re-running this on every startup used to hand the
+        # name back to whichever partner happened to sort last — including an
+        # archived one, silently redirecting users to the wrong site after a
+        # restart. Live partners are ordered first so they win a name an
+        # archived partner also carries.
+        c.execute("INSERT OR IGNORE INTO partner_aliases (name, partner_id) "
+                  "SELECT name, id FROM partners ORDER BY is_archived, id")
         for stmt in (
             "ALTER TABLE users ADD COLUMN tz_offset INTEGER DEFAULT 0",
             # Link odds alerts back to the live-subscription fixture so they can
@@ -150,11 +178,19 @@ def db_init():
             # Promo codes are per partner now, each with its own cap. A row
             # written before this carries partner='' and keeps working.
             "ALTER TABLE promo_campaign ADD COLUMN partner TEXT DEFAULT ''",
+            # Dashboard-managed promo lifecycle. A row written before this
+            # existed defaults to active/unarchived, i.e. exactly the old
+            # "a row exists ⇒ the code is live" behaviour.
+            "ALTER TABLE promo_campaign ADD COLUMN is_active INTEGER DEFAULT 1",
+            "ALTER TABLE promo_campaign ADD COLUMN is_archived INTEGER DEFAULT 0",
         ):
             try:
                 c.execute(stmt)
             except sqlite3.OperationalError:
                 pass  # column already exists
+    # Partners moved from env into the DB; seed once from whatever env already
+    # had, then never again — see _bootstrap_partners_from_env.
+    _bootstrap_partners_from_env()
 
 
 def db_flag_done(key: str) -> bool:
@@ -443,7 +479,10 @@ def db_promo_funnel() -> dict:
     """Promo campaigns as a funnel: of the users who could claim, how many did.
     Aggregated across partners, with the per-partner breakdown alongside — that
     is the monetization step, so it gets its own conversion figure."""
-    codes = db_list_promo_codes()
+    # include_inactive: a campaign switched off or archived in the dashboard
+    # keeps its claims, and those claims are history. Counting only the live
+    # ones made past monetization silently vanish from the report.
+    codes = db_list_promo_codes(include_inactive=True)
     eligible = _one("SELECT COUNT(*) FROM users WHERE is_registered=1 AND is_blocked=0") or 0
     if not codes:
         return dict(partners=[], max_uses=0, claimed=0, remaining=0,
@@ -658,6 +697,205 @@ def db_bot_winrate(days: int = 30) -> dict | None:
     return result
 
 
+# ─── Partners (DB is the source of truth; env is bootstrap only) ──────────────
+# Partner name/URL used to live in the PARTNERS env var, which meant every
+# change needed a redeploy and the two processes each parsed their own copy.
+# They now live here: the bot reads the active rows on every render, so a change
+# saved from the dashboard is visible to the very next user with no restart.
+PARTNER_NAME_MAX = 64
+PARTNER_URL_MAX = 500
+PROMO_CODE_MAX = 64
+PROMO_MAX_USES_CAP = 10_000_000
+
+# Anything outside this set is refused: `javascript:`, `data:` and `file:` in a
+# partner button would run in the user's client or read their disk, and the
+# admin UI is not a place to smuggle them in.
+_ALLOWED_URL_SCHEMES = ("http://", "https://")
+
+
+def validate_partner_name(name) -> str:
+    """Trimmed name, or ValueError. Non-empty and bounded — the name is a
+    button label, a promo join key and a redirect path segment."""
+    name = (name or "").strip() if isinstance(name, str) else ""
+    if not name:
+        raise ValueError("partner name must not be empty")
+    if len(name) > PARTNER_NAME_MAX:
+        raise ValueError(f"partner name must be at most {PARTNER_NAME_MAX} characters")
+    return name
+
+
+def validate_partner_url(url) -> str:
+    """Trimmed http(s) URL, or ValueError."""
+    url = (url or "").strip() if isinstance(url, str) else ""
+    if not url:
+        raise ValueError("partner URL must not be empty")
+    if len(url) > PARTNER_URL_MAX:
+        raise ValueError(f"partner URL must be at most {PARTNER_URL_MAX} characters")
+    if not url.lower().startswith(_ALLOWED_URL_SCHEMES):
+        raise ValueError("partner URL must start with http:// or https://")
+    from urllib.parse import urlparse as _urlparse
+    parsed = _urlparse(url)
+    if not parsed.netloc:
+        raise ValueError("partner URL is malformed")
+    return url
+
+
+def _partner_row(row) -> dict:
+    return dict(id=row[0], name=row[1], url=row[2], is_active=bool(row[3]),
+                is_archived=bool(row[4]), created_at=row[5], updated_at=row[6])
+
+
+_PARTNER_COLS = "id, name, url, is_active, is_archived, created_at, updated_at"
+
+
+def db_list_partners(include_archived: bool = False) -> list[dict]:
+    """Every partner, for the admin UI. Archived ones are hidden by default."""
+    sql = f"SELECT {_PARTNER_COLS} FROM partners"
+    if not include_archived:
+        sql += " WHERE is_archived=0"
+    sql += " ORDER BY sort_order, id"
+    return [_partner_row(r) for r in _all(sql)]
+
+
+def db_get_partner(pid: int) -> dict | None:
+    row = _all(f"SELECT {_PARTNER_COLS} FROM partners WHERE id=?", (int(pid),))
+    return _partner_row(row[0]) if row else None
+
+
+def db_active_partners() -> list[tuple[str, str]]:
+    """(label, url) for every partner the bot should show right now.
+
+    This is THE runtime source for partner buttons — read fresh on each render
+    rather than cached in a module constant, which is what makes a dashboard
+    edit take effect without a restart. The table holds a handful of rows, so
+    the query is far cheaper than the Telegram round-trip around it."""
+    rows = _all("SELECT name, url FROM partners "
+                "WHERE is_active=1 AND is_archived=0 ORDER BY sort_order, id")
+    return [(r[0], r[1]) for r in rows]
+
+
+def db_partner_link_targets() -> dict:
+    """Every name that has ever pointed at a partner → that partner's CURRENT
+    URL, archived partners included.
+
+    This is what the click redirect resolves against. It is deliberately wider
+    than db_active_partners(): a Telegram message sent months ago carries
+    /r/<whatever the partner was called then>, and a dead link is worse than a
+    link to a partner we stopped advertising."""
+    rows = _all("SELECT a.name, p.url FROM partner_aliases a "
+                "JOIN partners p ON p.id = a.partner_id")
+    return {name: url for name, url in rows}
+
+
+def _partner_name_taken(c, name: str, exclude_id: int | None = None) -> bool:
+    """Names must be unique among live partners: the name is the key promo
+    codes and click stats are recorded against."""
+    sql = "SELECT 1 FROM partners WHERE name=? AND is_archived=0"
+    params: list = [name]
+    if exclude_id is not None:
+        sql += " AND id!=?"
+        params.append(int(exclude_id))
+    return bool(c.execute(sql, params).fetchone())
+
+
+def db_partner_add(name: str, url: str, is_active: bool = True) -> int:
+    """Create a partner. Returns the new id; ValueError on invalid input."""
+    name = validate_partner_name(name)
+    url = validate_partner_url(url)
+    with con() as c:
+        if _partner_name_taken(c, name):
+            raise ValueError(f"partner '{name}' already exists")
+        nxt = c.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM partners").fetchone()[0]
+        cur = c.execute(
+            "INSERT INTO partners (name, url, is_active, sort_order) VALUES (?,?,?,?)",
+            (name, url, 1 if is_active else 0, nxt))
+        pid = cur.lastrowid
+        # OR REPLACE: if an older, renamed-away partner still owns this alias,
+        # the live partner takes it over — /r/<name> should reach whoever is
+        # actually called that now.
+        c.execute("INSERT OR REPLACE INTO partner_aliases (name, partner_id) VALUES (?,?)",
+                  (name, pid))
+        return pid
+
+
+def db_partner_update(pid: int, name=None, url=None, is_active=None) -> bool:
+    """Patch one partner. Only the fields passed are touched.
+
+    Renaming carries the partner's promo code and click history along, so the
+    promo stays attached and the numbers don't silently split in two."""
+    sets, params = [], []
+    old = db_get_partner(pid)
+    if not old:
+        return False
+    if name is not None:
+        name = validate_partner_name(name)
+        sets.append("name=?"); params.append(name)
+    if url is not None:
+        url = validate_partner_url(url)
+        sets.append("url=?"); params.append(url)
+    if is_active is not None:
+        sets.append("is_active=?"); params.append(1 if is_active else 0)
+    if not sets:
+        return False
+    sets.append("updated_at=datetime('now')")
+    params.append(int(pid))
+    with con() as c:
+        if name is not None and _partner_name_taken(c, name, exclude_id=pid):
+            raise ValueError(f"partner '{name}' already exists")
+        c.execute(f"UPDATE partners SET {', '.join(sets)} WHERE id=?", params)
+        if name is not None and name != old["name"]:
+            c.execute("UPDATE promo_campaign SET partner=? WHERE partner=?", (name, old["name"]))
+            c.execute("UPDATE partner_clicks SET partner=? WHERE partner=?", (name, old["name"]))
+            # The OLD alias row is deliberately left in place: buttons already
+            # sent to users point at /r/<old name> and must keep working.
+            c.execute("INSERT OR REPLACE INTO partner_aliases (name, partner_id) VALUES (?,?)",
+                      (name, int(pid)))
+    return True
+
+
+def db_partner_archive(pid: int) -> bool:
+    """Soft-delete. The row stays so click history and promo claims recorded
+    against the name keep resolving; the bot stops showing it immediately."""
+    with con() as c:
+        cur = c.execute("UPDATE partners SET is_archived=1, is_active=0, "
+                        "updated_at=datetime('now') WHERE id=? AND is_archived=0", (int(pid),))
+        return bool(cur.rowcount)
+
+
+def _bootstrap_partners_from_env() -> int:
+    """One-time import of the PARTNERS / PARTNERS_URL env value into the table.
+
+    Runs only when BOTH hold: the flag was never set, and the table is empty.
+    That makes it idempotent and makes the DB authoritative forever after — an
+    admin who edits a URL, or removes every partner, will not have the old env
+    value come back on the next restart. Returns how many rows were imported."""
+    if db_flag_done("partners_env_bootstrap"):
+        return 0
+    existing = _one("SELECT COUNT(*) FROM partners") or 0
+    if existing:
+        db_flag_mark("partners_env_bootstrap")
+        return 0
+    from config import PARTNERS as _ENV_PARTNERS
+    imported = 0
+    for label, url in list(_ENV_PARTNERS or []):
+        try:
+            name = validate_partner_name(label or _url_host(url))
+            db_partner_add(name, url)
+            imported += 1
+        except ValueError as e:
+            logger.warning(f"partner bootstrap skipped an entry: {e}")
+    db_flag_mark("partners_env_bootstrap")
+    if imported:
+        logger.info(f"partner bootstrap imported {imported} partner(s) from env")
+    return imported
+
+
+def _url_host(url: str) -> str:
+    """Fallback label for a bare URL with no name in front of it."""
+    from urllib.parse import urlparse as _urlparse
+    return _urlparse(url or "").netloc or "partner"
+
+
 # ─── Promo campaign (one shared code, capped total uses) ──────────────────────
 def db_set_promo_code(partner: str, code: str, max_uses: int) -> None:
     """Set (or replace) ONE partner's promo code and its own use cap.
@@ -666,7 +904,10 @@ def db_set_promo_code(partner: str, code: str, max_uses: int) -> None:
     Topaz's code. Claims are tracked per code, so replacing a partner's code
     starts that partner's count fresh while the others keep theirs."""
     partner = (partner or "").strip()
-    code = code.strip()
+    # Validate here, not only at the API edge: an empty code would be handed to
+    # users as a blank string, and a negative cap makes `available` meaningless.
+    code = validate_promo_code(code)
+    max_uses = validate_promo_max_uses(max_uses)
     with con() as c:
         # Claims are keyed by the code string (promo_claims PK), so two partners
         # sharing one code would share a claim count and a cap. Refuse rather
@@ -675,9 +916,15 @@ def db_set_promo_code(partner: str, code: str, max_uses: int) -> None:
                           (code, partner)).fetchone()
         if clash:
             raise ValueError(f"code '{code}' is already used by partner '{clash[0]}'")
+        # Rotating a code must not silently re-enable a campaign the admin
+        # deactivated, so the lifecycle flags survive the replace.
+        prev = c.execute("SELECT is_active, is_archived FROM promo_campaign WHERE partner=?",
+                         (partner,)).fetchone()
+        is_active, is_archived = prev if prev else (1, 0)
         c.execute("DELETE FROM promo_campaign WHERE partner=?", (partner,))
-        c.execute("INSERT INTO promo_campaign (partner, code, max_uses) VALUES (?,?,?)",
-                  (partner, code, int(max_uses)))
+        c.execute("INSERT INTO promo_campaign (partner, code, max_uses, is_active, is_archived) "
+                  "VALUES (?,?,?,?,?)",
+                  (partner, code, int(max_uses), is_active, is_archived))
 
 
 def db_delete_promo_code(partner: str) -> bool:
@@ -688,14 +935,109 @@ def db_delete_promo_code(partner: str) -> bool:
         return bool(cur.rowcount)
 
 
-def db_list_promo_codes() -> list[dict]:
-    """Every configured code with how much of its cap is used."""
-    rows = _all("SELECT partner, code, max_uses FROM promo_campaign ORDER BY partner")
+def db_promo_edit(partner: str, code=None, max_uses=None, is_active=None) -> bool:
+    """Dashboard edit of one partner's campaign, preserving its usage count.
+
+    Deliberately NOT the same as db_set_promo_code: that one is a campaign
+    rotation (/setpromo) and starts the count fresh, which is the right thing
+    when a partner issues a genuinely new batch. Editing from the dashboard is
+    a correction — a typo in the code, a raised cap — so the claims move across
+    to the new string and `used` stays put. Existing holders keep their claim,
+    so nobody can take a second one.
+
+    INSERT OR IGNORE + DELETE (rather than UPDATE) because promo_claims is keyed
+    (user_id, code): a plain UPDATE would hit the primary key if any row for the
+    target code already exists."""
+    partner = (partner or "").strip()
+    with con() as c:
+        row = c.execute("SELECT code, max_uses FROM promo_campaign WHERE partner=?",
+                        (partner,)).fetchone()
+        if not row:
+            return False
+        old_code, old_max = row
+        sets, params = [], []
+        if code is not None:
+            code = validate_promo_code(code)
+            clash = c.execute("SELECT partner FROM promo_campaign WHERE code=? AND partner!=?",
+                              (code, partner)).fetchone()
+            if clash:
+                raise ValueError(f"code '{code}' is already used by partner '{clash[0]}'")
+            if code != old_code:
+                c.execute("INSERT OR IGNORE INTO promo_claims (user_id, code, claimed_at) "
+                          "SELECT user_id, ?, claimed_at FROM promo_claims WHERE code=?",
+                          (code, old_code))
+                c.execute("DELETE FROM promo_claims WHERE code=?", (old_code,))
+            sets.append("code=?"); params.append(code)
+        if max_uses is not None:
+            sets.append("max_uses=?"); params.append(validate_promo_max_uses(max_uses))
+        if is_active is not None:
+            sets.append("is_active=?"); params.append(1 if is_active else 0)
+        if not sets:
+            return False
+        sets.append("updated_at=datetime('now')")
+        params.append(partner)
+        c.execute(f"UPDATE promo_campaign SET {', '.join(sets)} WHERE partner=?", params)
+    return True
+
+
+def validate_promo_code(code) -> str:
+    if not isinstance(code, str):
+        raise ValueError("promo code must be text")
+    code = code.strip()
+    if not code:
+        raise ValueError("promo code must not be empty")
+    if len(code) > PROMO_CODE_MAX:
+        raise ValueError(f"promo code must be at most {PROMO_CODE_MAX} characters")
+    return code
+
+
+def validate_promo_max_uses(max_uses) -> int:
+    try:
+        value = int(max_uses)
+    except (TypeError, ValueError):
+        raise ValueError("cap must be a whole number") from None
+    if value < 0:
+        raise ValueError("cap must be 0 or more")
+    if value > PROMO_MAX_USES_CAP:
+        raise ValueError(f"cap must be at most {PROMO_MAX_USES_CAP}")
+    return value
+
+
+def db_promo_set_active(partner: str, active: bool) -> bool:
+    """Enable/disable one campaign without touching its code or its claims."""
+    with con() as c:
+        cur = c.execute("UPDATE promo_campaign SET is_active=?, updated_at=datetime('now') "
+                        "WHERE partner=?", (1 if active else 0, (partner or "").strip()))
+        return bool(cur.rowcount)
+
+
+def db_promo_archive(partner: str) -> bool:
+    """Soft-delete a campaign. Claims stay, so a user who already holds the code
+    keeps it and the historical numbers stay honest; the bot stops issuing it."""
+    with con() as c:
+        cur = c.execute("UPDATE promo_campaign SET is_archived=1, is_active=0, "
+                        "updated_at=datetime('now') WHERE partner=? AND is_archived=0",
+                        ((partner or "").strip(),))
+        return bool(cur.rowcount)
+
+
+def db_list_promo_codes(include_inactive: bool = False) -> list[dict]:
+    """Configured codes with how much of each cap is used.
+
+    Defaults to the ISSUABLE set — active and unarchived — because that is what
+    every runtime caller means: the menu button, the claim gate and the funnel
+    should all ignore a campaign the admin switched off. The dashboard passes
+    include_inactive=True to manage the full list."""
+    sql = "SELECT partner, code, max_uses, is_active, is_archived FROM promo_campaign"
+    if not include_inactive:
+        sql += " WHERE is_active=1 AND is_archived=0"
+    sql += " ORDER BY partner"
     out = []
-    for partner, code, max_uses in rows:
+    for partner, code, max_uses, is_active, is_archived in _all(sql):
         claimed = _one("SELECT COUNT(*) FROM promo_claims WHERE code=?", (code,)) or 0
         out.append(dict(partner=partner, code=code, max_uses=max_uses,
-                        claimed=claimed, available=max(0, max_uses - claimed)))
+                        claimed=claimed, available=max(0, max_uses - claimed),
+                        is_active=bool(is_active), is_archived=bool(is_archived)))
     return out
 
 
@@ -713,7 +1055,8 @@ def db_claim_promos(uid) -> list[dict]:
     with con() as c:
         c.execute("BEGIN IMMEDIATE")
         rows = c.execute(
-            "SELECT partner, code, max_uses FROM promo_campaign ORDER BY partner").fetchall()
+            "SELECT partner, code, max_uses FROM promo_campaign "
+            "WHERE is_active=1 AND is_archived=0 ORDER BY partner").fetchall()
         for partner, code, max_uses in rows:
             already = c.execute("SELECT 1 FROM promo_claims WHERE user_id=? AND code=?",
                                 (uid, code)).fetchone()

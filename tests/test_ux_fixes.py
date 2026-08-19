@@ -284,10 +284,10 @@ class _StatusMsg:
 
 
 @pytest.fixture
-def forecast_env(monkeypatch):
+def forecast_env(monkeypatch, partners):
     import config
     monkeypatch.setattr(config, "APIFOOTBALL_KEY", "")
-    monkeypatch.setattr(config, "PARTNERS", [])
+    partners([])
 
     called = []
 

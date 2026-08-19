@@ -151,10 +151,17 @@ def test_coverage_denominator_is_not_the_capped_history(temp_db):
 
 # ─── partner clicks are attributable, not inventable ──────────────────────────
 
+def _seed_targets(monkeypatch, mapping):
+    """Pin the redirect map. It is fetched from the worker now, so a test that
+    is about signatures pre-loads it instead of standing up a fake worker."""
+    import time as _time
+    monkeypatch.setattr(dash, "_PARTNER_TARGETS", dict(mapping))
+    monkeypatch.setattr(dash, "_PARTNER_TARGETS_AT", _time.monotonic())
+
+
 @pytest.fixture
 def partner_env(monkeypatch):
-    monkeypatch.setenv("PARTNERS", "Mostbet | https://mostbet.example")
-    monkeypatch.setattr(dash, "_PARTNER_TARGETS", {})
+    _seed_targets(monkeypatch, {"Mostbet": "https://mostbet.example"})
     yield
     monkeypatch.setattr(dash, "_PARTNER_TARGETS", {})
 
@@ -194,8 +201,7 @@ def test_unsigned_click_is_not_recorded(client, partner_env, recorded):
 
 def test_signature_is_bound_to_the_partner(client, partner_env, recorded, monkeypatch):
     """A signature minted for one partner must not count for another."""
-    monkeypatch.setenv("PARTNERS", "Mostbet | https://a.example;Topaz | https://b.example")
-    monkeypatch.setattr(dash, "_PARTNER_TARGETS", {})
+    _seed_targets(monkeypatch, {"Mostbet": "https://a.example", "Topaz": "https://b.example"})
     from partner_links import sign_click
     sig = sign_click(TOKEN, "Mostbet", 42)
     assert client.get(f"/r/Topaz?u=42&s={sig}").status_code == 302

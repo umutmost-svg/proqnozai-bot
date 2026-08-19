@@ -46,6 +46,29 @@ def temp_db():
 
 
 @pytest.fixture()
+def partners(temp_db):
+    """Exclusive control of the `partners` table for one test.
+
+    Partners are DB-backed now, and the temp DB is shared across the session,
+    so a test that cares about the exact partner list has to start from an empty
+    table and leave it empty. Call the fixture to seed: partners([("A", url)]).
+    """
+    def _clear():
+        with temp_db.con() as c:
+            c.execute("DELETE FROM partners")
+
+    def _seed(entries=()):
+        _clear()
+        for name, url in entries:
+            temp_db.db_partner_add(name, url)
+        return temp_db.db_active_partners()
+
+    _clear()
+    yield _seed
+    _clear()
+
+
+@pytest.fixture()
 def clean_mostbet_cache():
     from config import mostbet_cache
     mostbet_cache.clear()
