@@ -31,7 +31,31 @@ ADMIN_ID        = int(os.environ.get("ADMIN_ID", "0"))
 # MUST be an admin/member of it. PROMO_CHANNEL_URL is the public link for the
 # "open channel" button (derived from @name when omitted). Empty channel ⇒ the
 # promo feature stays hidden.
-PROMO_CHANNEL     = os.environ.get("PROMO_CHANNEL", "").strip()
+def _normalize_channel(raw: str) -> str:
+    """Coerce what an operator actually types into a getChatMember target.
+
+    Railway values arrive verbatim, and every one of these is a real way to get
+    "Chat not found" from Telegram while looking correct in the dashboard:
+    quotes kept from a copy-paste, a full t.me link, or a bare username with no
+    "@". A "-100…" id is passed through untouched — that is already the target
+    form for a private channel."""
+    value = (raw or "").strip().strip('"').strip("'").strip()
+    if not value:
+        return ""
+    for prefix in ("https://t.me/", "http://t.me/", "t.me/", "telegram.me/"):
+        if value.lower().startswith(prefix):
+            value = value[len(prefix):].strip("/")
+            break
+    if value.startswith("+") or value.startswith("joinchat/"):
+        # A private invite link identifies no chat getChatMember can resolve;
+        # it belongs in PROMO_CHANNEL_URL, not here.
+        return ""
+    if value.startswith("-") or value.startswith("@"):
+        return value
+    return f"@{value}"
+
+
+PROMO_CHANNEL     = _normalize_channel(os.environ.get("PROMO_CHANNEL", ""))
 PROMO_CHANNEL_URL = os.environ.get("PROMO_CHANNEL_URL", "").strip()
 # "Our partners" menu button. Configure via PARTNERS as "Label | https://url"
 # entries separated by ';' (newlines also work), e.g.
