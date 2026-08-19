@@ -2,13 +2,28 @@ from datetime import datetime, timezone, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from config import MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR, PROMO_CHANNEL
+from config import (MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR,
+                    PROMO_CHANNEL, PROMO_CHANNEL_URL)
 from db import db_lang, db_get_tz, db_list_promo_codes, db_active_partners
 from security import sec_blocked, rate_check, nav_rate_check, record_viol
 from translations import T, tr
 
 
 SUPPORT_URL = "https://t.me/AIproqnoz_support"
+
+
+def channel_url() -> str:
+    """Public link to the channel, or "" when there is nothing to link to.
+
+    PROMO_CHANNEL_URL wins because PROMO_CHANNEL may be a "-100…" id (a private
+    channel), which has no public address; a "@name" channel can be linked
+    without configuring anything else. Lives here rather than in promo.py so the
+    menu button and the subscription gate resolve the same link."""
+    if PROMO_CHANNEL_URL:
+        return PROMO_CHANNEL_URL
+    if PROMO_CHANNEL.startswith("@"):
+        return f"https://t.me/{PROMO_CHANNEL[1:]}"
+    return ""
 
 # ─── Callback rate-limit gates ─────────────────────────────────────────────────
 # Users the bot is CURRENTLY generating a forecast for. One expensive
@@ -116,6 +131,11 @@ def main_menu(uid):
     # dashboard changes the menu for the next user, with no restart.
     if db_active_partners():
         rows.append([tl["menu_partners"]])
+    # A reply-keyboard button cannot BE a link (only inline buttons carry a
+    # url), so this one opens a message that holds the link. Shown only when
+    # there is an address to open — an id-only private channel has none.
+    if channel_url():
+        rows.append([tl["menu_channel"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 
