@@ -977,6 +977,15 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == tl["menu_partners"]:
         await _send_partner_list(uid, update.message.reply_text)
         return
+    if text == tl["menu_channel"]:
+        from handlers.utils import channel_url
+        url = channel_url()
+        if url:
+            await update.message.reply_text(
+                tr(uid, "channel_intro"),
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(tr(uid, "promo_open_channel"), url=url)]]))
+        return
     if text == tl["menu_forecast"]:
         await forecast_menu_start(update, context); return
     if text == LANG_BTN:

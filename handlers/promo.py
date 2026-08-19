@@ -15,7 +15,8 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from config import PROMO_CHANNEL, PROMO_CHANNEL_URL, ADMIN_ID
+from config import PROMO_CHANNEL, ADMIN_ID
+from handlers.utils import channel_url
 from db import (db_is_reg, db_claim_promos, db_list_promo_codes,
                 db_set_promo_code, db_delete_promo_code)
 from translations import tr
@@ -23,14 +24,6 @@ from translations import tr
 logger = logging.getLogger(__name__)
 
 _OK_STATUS = {"member", "administrator", "creator"}
-
-
-def _channel_url() -> str:
-    if PROMO_CHANNEL_URL:
-        return PROMO_CHANNEL_URL
-    if PROMO_CHANNEL.startswith("@"):
-        return f"https://t.me/{PROMO_CHANNEL[1:]}"
-    return ""
 
 
 async def _is_subscribed(context, uid) -> bool | None:
@@ -49,7 +42,7 @@ async def _is_subscribed(context, uid) -> bool | None:
 
 def _subscribe_kb(uid) -> InlineKeyboardMarkup:
     rows = []
-    url = _channel_url()
+    url = channel_url()
     if url:
         rows.append([InlineKeyboardButton(tr(uid, "promo_open_channel"), url=url)])
     rows.append([InlineKeyboardButton(tr(uid, "promo_check_btn"), callback_data="promo_check")])
