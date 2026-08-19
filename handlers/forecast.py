@@ -4,7 +4,6 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from urllib.parse import quote, urlparse
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -21,7 +20,6 @@ from enrichment import enrich_football_match
 from match_validation import (MatchRef, validate_match, forecast_readiness,
                               INSUFFICIENT, PARTIAL)
 from priority_config import normalize_participant_tokens
-from partner_links import sign_click
 from event_list import (
     normalize_fixture, select_visible, group_by_sport, group_by_league,
     paginate, PAGE_SIZE,
@@ -32,7 +30,8 @@ from mostbet import (
     _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
 )
-from handlers.utils import LANG_BTN, lang_kb, cb_guard, cb_release, nav_guard
+from handlers.utils import (LANG_BTN, lang_kb, cb_guard, cb_release, nav_guard,
+                            partner_url)
 from handlers.forecast_kb import (
     _user_tz, _fmt_kickoff, _parse_index, _country_flag,
     _build_sport_kb, _build_league_kb, _build_match_kb, _build_day_kb, _build_country_kb,
@@ -132,25 +131,6 @@ _DATA_NOTE = {
     "uz": "\n\nMUHIM: Haqiqiy o'yin ma'lumotlari mavjud. Faqat shular asosida forma va H2H tahlili. Natijalarni o'ylab topma.",
     "ar": "\n\nمهم: بيانات المباريات الحقيقية متوفرة. استخدمها فقط لتحليل الشكل والمواجهات. لا تخترع نتائج.",
 }
-
-
-def partner_url(label: str, url: str, uid: int) -> str:
-    """The URL a partner button points at.
-
-    With PARTNER_REDIRECT_BASE set, it points at our own redirect so the click
-    can be counted before the user is forwarded on. Unset — the default — it is
-    the partner's URL verbatim, which is untrackable but cannot be broken by
-    our own dashboard being down."""
-    from config import PARTNER_REDIRECT_BASE, DASHBOARD_TOKEN
-    if not PARTNER_REDIRECT_BASE:
-        return url
-    name = quote(label or urlparse(url).netloc or "partner", safe="")
-    # The user id is signed: the redirect is a public URL, so an unsigned id
-    # could be swapped for anyone else's or invented outright.
-    sig = sign_click(DASHBOARD_TOKEN, name, uid)
-    if not sig:
-        return f"{PARTNER_REDIRECT_BASE}/r/{name}"      # unattributed, still works
-    return f"{PARTNER_REDIRECT_BASE}/r/{name}?u={uid}&s={sig}"
 
 
 def _partner_list_kb(uid: int) -> InlineKeyboardMarkup:

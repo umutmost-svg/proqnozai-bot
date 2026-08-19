@@ -1,4 +1,5 @@
 from datetime import datetime, timezone, timedelta
+from urllib.parse import quote, urlparse
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
@@ -10,6 +11,30 @@ from translations import T, tr
 
 
 SUPPORT_URL = "https://t.me/AIproqnoz_support"
+
+
+def partner_url(label: str, url: str, uid: int) -> str:
+    """The URL a partner link points at.
+
+    With PARTNER_REDIRECT_BASE set, it points at our own redirect so the click
+    can be counted before the user is forwarded on. Unset — the default — it is
+    the partner's URL verbatim, which is untrackable but cannot be broken by
+    our own dashboard being down.
+
+    Lives here rather than in forecast.py because the promo message links the
+    same partners the partner list does, and a second copy would be a second
+    set of click numbers."""
+    from config import PARTNER_REDIRECT_BASE, DASHBOARD_TOKEN
+    from partner_links import sign_click
+    if not PARTNER_REDIRECT_BASE:
+        return url
+    name = quote(label or urlparse(url).netloc or "partner", safe="")
+    # The user id is signed: the redirect is a public URL, so an unsigned id
+    # could be swapped for anyone else's or invented outright.
+    sig = sign_click(DASHBOARD_TOKEN, name, uid)
+    if not sig:
+        return f"{PARTNER_REDIRECT_BASE}/r/{name}"      # unattributed, still works
+    return f"{PARTNER_REDIRECT_BASE}/r/{name}?u={uid}&s={sig}"
 
 
 def channel_url() -> str:
