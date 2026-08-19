@@ -131,6 +131,24 @@ def db_init():
             claimed_at TEXT DEFAULT (datetime('now')),
             PRIMARY KEY (user_id, code)
         );
+        -- A pool campaign hands every user a DIFFERENT single-use code, so the
+        -- codes cannot live in promo_campaign (one row per partner) -- they get
+        -- their own table, with the holder written onto the row itself.
+        CREATE TABLE IF NOT EXISTS promo_pool (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            partner    TEXT NOT NULL,
+            code       TEXT NOT NULL UNIQUE,
+            user_id    INTEGER,
+            claimed_at TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_promo_pool_free
+            ON promo_pool(partner, user_id);
+        -- One code per user per partner, enforced by the database rather than
+        -- by the claim path alone: a partial unique index still allows many
+        -- rows with user_id IS NULL (the free codes).
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_pool_holder
+            ON promo_pool(partner, user_id) WHERE user_id IS NOT NULL;
         CREATE TABLE IF NOT EXISTS partners (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             name        TEXT NOT NULL,
@@ -183,6 +201,11 @@ def db_init():
             # "a row exists ⇒ the code is live" behaviour.
             "ALTER TABLE promo_campaign ADD COLUMN is_active INTEGER DEFAULT 1",
             "ALTER TABLE promo_campaign ADD COLUMN is_archived INTEGER DEFAULT 0",
+            # 'shared' = one code with a use cap (the original behaviour, and
+            # what every existing row is). 'pool' = a batch of unique
+            # single-use codes in promo_pool. The default keeps a legacy row
+            # working untouched.
+            "ALTER TABLE promo_campaign ADD COLUMN mode TEXT DEFAULT 'shared'",
         ):
             try:
                 c.execute(stmt)
@@ -845,6 +868,7 @@ def db_partner_update(pid: int, name=None, url=None, is_active=None) -> bool:
         c.execute(f"UPDATE partners SET {', '.join(sets)} WHERE id=?", params)
         if name is not None and name != old["name"]:
             c.execute("UPDATE promo_campaign SET partner=? WHERE partner=?", (name, old["name"]))
+            c.execute("UPDATE promo_pool SET partner=? WHERE partner=?", (name, old["name"]))
             c.execute("UPDATE partner_clicks SET partner=? WHERE partner=?", (name, old["name"]))
             # The OLD alias row is deliberately left in place: buttons already
             # sent to users point at /r/<old name> and must keep working.
@@ -918,20 +942,38 @@ def db_set_promo_code(partner: str, code: str, max_uses: int) -> None:
             raise ValueError(f"code '{code}' is already used by partner '{clash[0]}'")
         # Rotating a code must not silently re-enable a campaign the admin
         # deactivated, so the lifecycle flags survive the replace.
-        prev = c.execute("SELECT is_active, is_archived FROM promo_campaign WHERE partner=?",
-                         (partner,)).fetchone()
-        is_active, is_archived = prev if prev else (1, 0)
+        prev = c.execute("SELECT is_active, is_archived, mode FROM promo_campaign "
+                         "WHERE partner=?", (partner,)).fetchone()
+        if prev and prev[2] == "pool":
+            # Replacing the campaign row would leave the partner's imported
+            # codes with nothing pointing at them: still in promo_pool, never
+            # issued again, invisible in every readout.
+            raise ValueError(
+                f"partner '{partner}' runs a code pool -- remove the pool "
+                "before setting a single shared code")
+        is_active, is_archived = prev[:2] if prev else (1, 0)
         c.execute("DELETE FROM promo_campaign WHERE partner=?", (partner,))
-        c.execute("INSERT INTO promo_campaign (partner, code, max_uses, is_active, is_archived) "
-                  "VALUES (?,?,?,?,?)",
+        c.execute("INSERT INTO promo_campaign "
+                  "(partner, code, max_uses, is_active, is_archived, mode) "
+                  "VALUES (?,?,?,?,?,'shared')",
                   (partner, code, int(max_uses), is_active, is_archived))
 
 
 def db_delete_promo_code(partner: str) -> bool:
-    """Remove one partner's code. Returns whether anything was removed."""
+    """Remove one partner's campaign. Returns whether anything was removed.
+
+    For a pool campaign the UNCLAIMED codes go with it -- they can never be
+    issued again once the campaign row is gone, so leaving them would be dead
+    weight that a later import would report as duplicates. Codes already handed
+    to a user stay: that is history, and the holder still has the string."""
+    partner = (partner or "").strip()
     with con() as c:
-        cur = c.execute("DELETE FROM promo_campaign WHERE partner=?",
-                        ((partner or "").strip(),))
+        mode = c.execute("SELECT mode FROM promo_campaign WHERE partner=?",
+                         (partner,)).fetchone()
+        cur = c.execute("DELETE FROM promo_campaign WHERE partner=?", (partner,))
+        if mode and mode[0] == "pool":
+            c.execute("DELETE FROM promo_pool WHERE partner=? AND user_id IS NULL",
+                      (partner,))
         return bool(cur.rowcount)
 
 
@@ -950,11 +992,18 @@ def db_promo_edit(partner: str, code=None, max_uses=None, is_active=None) -> boo
     target code already exists."""
     partner = (partner or "").strip()
     with con() as c:
-        row = c.execute("SELECT code, max_uses FROM promo_campaign WHERE partner=?",
+        row = c.execute("SELECT code, max_uses, mode FROM promo_campaign WHERE partner=?",
                         (partner,)).fetchone()
         if not row:
             return False
-        old_code, old_max = row
+        old_code, old_max, mode = row
+        if mode == "pool" and (code is not None or max_uses is not None):
+            # Both are derived from promo_pool for this kind of campaign, so an
+            # edit here would be written and then ignored. Toggling is_active
+            # stays available: that lives on the campaign row for both modes.
+            raise ValueError(
+                f"partner '{partner}' runs a code pool -- its code list and "
+                "size are managed through the pool, not as a single code")
         sets, params = [], []
         if code is not None:
             code = validate_promo_code(code)
@@ -1021,6 +1070,129 @@ def db_promo_archive(partner: str) -> bool:
         return bool(cur.rowcount)
 
 
+# --- Promo pool (a batch of unique single-use codes) --------------------------
+# A shared campaign is one code many users may claim, capped by max_uses. A pool
+# campaign is the mirror image: N distinct codes, each valid for exactly one
+# user, which is what a partner means when it hands over a list of vouchers.
+# The lifecycle (is_active / is_archived / which partner) stays in
+# promo_campaign so enable, disable and archive keep working unchanged; only the
+# codes themselves move to promo_pool.
+PROMO_POOL_BATCH_MAX = 5_000
+
+
+def db_promo_mode(partner: str) -> str | None:
+    """'shared', 'pool', or None when the partner has no campaign at all."""
+    return _one("SELECT mode FROM promo_campaign WHERE partner=?",
+                ((partner or "").strip(),))
+
+
+def _pool_counts(c, partner: str) -> tuple[int, int]:
+    """(total, claimed) for one partner's pool, on an open connection."""
+    total = c.execute("SELECT COUNT(*) FROM promo_pool WHERE partner=?",
+                      (partner,)).fetchone()[0]
+    claimed = c.execute("SELECT COUNT(*) FROM promo_pool "
+                        "WHERE partner=? AND user_id IS NOT NULL",
+                        (partner,)).fetchone()[0]
+    return total, claimed
+
+
+def db_promo_pool_import(partner: str, codes) -> dict:
+    """Add a partner's list of single-use codes, and report what happened.
+
+    Import is additive and idempotent: re-importing a list that overlaps an
+    earlier batch adds only the genuinely new codes. `code` is UNIQUE across the
+    whole table, so a code already sitting in ANOTHER partner's pool is reported
+    as a duplicate rather than silently moved -- claims are keyed by the code
+    string, and two partners sharing one would share a holder.
+
+    Returns counts plus the offending values, so the dashboard can tell the
+    admin exactly which lines of their paste were dropped and why. Nothing is
+    written unless every code parses: a partial import of a 200-line paste is
+    far harder to reason about than a refusal."""
+    partner = (partner or "").strip()
+    if not partner:
+        raise ValueError("partner is required")
+    if isinstance(codes, str):
+        codes = codes.replace(",", "\n").splitlines()
+    try:
+        raw = list(codes)
+    except TypeError:
+        raise ValueError("codes must be a list or a block of text") from None
+    if len(raw) > PROMO_POOL_BATCH_MAX:
+        raise ValueError(f"at most {PROMO_POOL_BATCH_MAX} codes at a time")
+
+    # Validate the whole batch first (all-or-nothing), then dedupe inside the
+    # paste itself while preserving order, so "added" matches what the admin
+    # sees on screen.
+    cleaned, seen, repeated_in_batch = [], set(), 0
+    for item in raw:
+        if isinstance(item, str) and not item.strip():
+            continue                       # blank lines in a paste are not input
+        code = validate_promo_code(item)
+        if code in seen:
+            repeated_in_batch += 1
+            continue
+        seen.add(code)
+        cleaned.append(code)
+    if not cleaned:
+        raise ValueError("no codes to import")
+
+    with con() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute("SELECT mode FROM promo_campaign WHERE partner=?",
+                        (partner,)).fetchone()
+        if row and row[0] != "pool":
+            # Converting silently would strand the shared code's claims: they
+            # are counted against a cap this campaign no longer has.
+            raise ValueError(
+                f"partner '{partner}' already has a shared promo code -- "
+                "remove it before importing a pool")
+        if not row:
+            # max_uses is derived from the pool for a pool campaign; the column
+            # is kept at 0 so a stale value can never be mistaken for the cap.
+            c.execute("INSERT INTO promo_campaign "
+                      "(partner, code, max_uses, is_active, is_archived, mode) "
+                      "VALUES (?,'',0,1,0,'pool')", (partner,))
+        before = c.execute("SELECT COUNT(*) FROM promo_pool WHERE partner=?",
+                           (partner,)).fetchone()[0]
+        c.executemany("INSERT OR IGNORE INTO promo_pool (partner, code) VALUES (?,?)",
+                      [(partner, code) for code in cleaned])
+        total, claimed = _pool_counts(c, partner)
+        added = total - before
+    return dict(added=added,
+                duplicates=len(cleaned) - added + repeated_in_batch,
+                total=total, claimed=claimed, available=total - claimed)
+
+
+def db_promo_pool_remove_free(partner: str) -> int:
+    """Drop a partner's UNCLAIMED codes; returns how many went.
+
+    Claimed rows are never touched -- a user holding a code keeps it, and the
+    historical count stays honest. This is the pool equivalent of lowering a cap
+    to zero, for retiring a batch the partner has withdrawn."""
+    with con() as c:
+        cur = c.execute("DELETE FROM promo_pool WHERE partner=? AND user_id IS NULL",
+                        ((partner or "").strip(),))
+        return cur.rowcount
+
+
+def db_promo_pool_stats(partner: str) -> dict:
+    """total / claimed / available for one partner's pool."""
+    with con() as c:
+        total, claimed = _pool_counts(c, (partner or "").strip())
+    return dict(total=total, claimed=claimed, available=total - claimed)
+
+
+def db_promo_pool_codes(partner: str, only_free: bool = False) -> list[dict]:
+    """The pool itself, for an export or an audit. Newest last."""
+    sql = ("SELECT code, user_id, claimed_at FROM promo_pool WHERE partner=?")
+    if only_free:
+        sql += " AND user_id IS NULL"
+    sql += " ORDER BY id"
+    return [dict(code=code, user_id=user_id, claimed_at=claimed_at)
+            for code, user_id, claimed_at in _all(sql, ((partner or "").strip(),))]
+
+
 def db_list_promo_codes(include_inactive: bool = False) -> list[dict]:
     """Configured codes with how much of each cap is used.
 
@@ -1028,16 +1200,26 @@ def db_list_promo_codes(include_inactive: bool = False) -> list[dict]:
     every runtime caller means: the menu button, the claim gate and the funnel
     should all ignore a campaign the admin switched off. The dashboard passes
     include_inactive=True to manage the full list."""
-    sql = "SELECT partner, code, max_uses, is_active, is_archived FROM promo_campaign"
+    sql = ("SELECT partner, code, max_uses, is_active, is_archived, mode "
+           "FROM promo_campaign")
     if not include_inactive:
         sql += " WHERE is_active=1 AND is_archived=0"
     sql += " ORDER BY partner"
     out = []
-    for partner, code, max_uses, is_active, is_archived in _all(sql):
-        claimed = _one("SELECT COUNT(*) FROM promo_claims WHERE code=?", (code,)) or 0
+    for partner, code, max_uses, is_active, is_archived, mode in _all(sql):
+        if mode == "pool":
+            # The cap of a pool IS its size, and `code` is meaningless: every
+            # holder has a different string. Both are derived here so no caller
+            # has to know which kind of campaign it is looking at.
+            with con() as c:
+                max_uses, claimed = _pool_counts(c, partner)
+            code = ""
+        else:
+            claimed = _one("SELECT COUNT(*) FROM promo_claims WHERE code=?", (code,)) or 0
         out.append(dict(partner=partner, code=code, max_uses=max_uses,
                         claimed=claimed, available=max(0, max_uses - claimed),
-                        is_active=bool(is_active), is_archived=bool(is_archived)))
+                        is_active=bool(is_active), is_archived=bool(is_archived),
+                        mode=mode or "shared"))
     return out
 
 
@@ -1055,9 +1237,12 @@ def db_claim_promos(uid) -> list[dict]:
     with con() as c:
         c.execute("BEGIN IMMEDIATE")
         rows = c.execute(
-            "SELECT partner, code, max_uses FROM promo_campaign "
+            "SELECT partner, code, max_uses, mode FROM promo_campaign "
             "WHERE is_active=1 AND is_archived=0 ORDER BY partner").fetchall()
-        for partner, code, max_uses in rows:
+        for partner, code, max_uses, mode in rows:
+            if mode == "pool":
+                granted += _claim_from_pool(c, uid, partner)
+                continue
             already = c.execute("SELECT 1 FROM promo_claims WHERE user_id=? AND code=?",
                                 (uid, code)).fetchone()
             if already:
@@ -1071,6 +1256,37 @@ def db_claim_promos(uid) -> list[dict]:
                       (uid, code))
             granted.append(dict(partner=partner, code=code))
     return granted
+
+
+def _claim_from_pool(c, uid, partner: str) -> list[dict]:
+    """Take one free code out of a partner's pool and put it in this user's name.
+
+    Idempotent PER PARTNER rather than per code: the user does not know which of
+    the 200 codes is theirs, so asking twice has to return the one they already
+    hold instead of burning a second. An empty pool yields nothing at all, which
+    is deliberately the same outcome the bot already renders for a spent cap --
+    the partner simply drops out of the reply, silently.
+
+    Runs inside the caller's BEGIN IMMEDIATE, so the SELECT-then-UPDATE pair
+    cannot interleave with another claimer; the `user_id IS NULL` guard on the
+    UPDATE is a second line of defence, not the primary one."""
+    mine = c.execute("SELECT code FROM promo_pool WHERE partner=? AND user_id=?",
+                     (partner, uid)).fetchone()
+    if mine:
+        return [dict(partner=partner, code=mine[0])]
+    free = c.execute("SELECT id, code FROM promo_pool "
+                     "WHERE partner=? AND user_id IS NULL ORDER BY id LIMIT 1",
+                     (partner,)).fetchone()
+    if not free:
+        return []                            # pool exhausted; other partners aren't
+    pool_id, code = free
+    c.execute("UPDATE promo_pool SET user_id=?, claimed_at=datetime('now') "
+              "WHERE id=? AND user_id IS NULL", (uid, pool_id))
+    # Mirrored into promo_claims so the funnel, the 7-day count and the distinct
+    # -user metric see a pooled claim exactly like a shared one.
+    c.execute("INSERT OR IGNORE INTO promo_claims (user_id, code) VALUES (?,?)",
+              (uid, code))
+    return [dict(partner=partner, code=code)]
 
 
 def db_promo_stats() -> list[dict]:
