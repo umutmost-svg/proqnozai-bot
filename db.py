@@ -131,6 +131,40 @@ def db_init():
             claimed_at TEXT DEFAULT (datetime('now')),
             PRIMARY KEY (user_id, code)
         );
+        -- One row per broadcast — immediate ones included, so the dashboard has
+        -- a history to measure. `run_at` is UTC; a scheduled row waits here
+        -- until the worker's scheduler picks it up, which is what makes a
+        -- delayed send survive a redeploy.
+        CREATE TABLE IF NOT EXISTS broadcasts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            text        TEXT NOT NULL,
+            segment     TEXT DEFAULT 'all',
+            buttons     TEXT DEFAULT '',
+            parse_mode  TEXT DEFAULT 'HTML',
+            no_preview  INTEGER DEFAULT 0,
+            run_at      TEXT DEFAULT '',
+            status      TEXT DEFAULT 'pending',
+            total       INTEGER DEFAULT 0,
+            ok          INTEGER DEFAULT 0,
+            fail        INTEGER DEFAULT 0,
+            error       TEXT DEFAULT '',
+            created_at  TEXT DEFAULT (datetime('now')),
+            started_at  TEXT DEFAULT '',
+            finished_at TEXT DEFAULT ''
+        );
+
+        -- Dashboard metrics scan these columns on every poll; without the
+        -- indexes each panel is a full table scan of `requests`, which is the
+        -- largest table and the one that keeps growing.
+        CREATE INDEX IF NOT EXISTS idx_requests_created    ON requests(created_at);
+        CREATE INDEX IF NOT EXISTS idx_requests_type_created ON requests(msg_type, created_at);
+        CREATE INDEX IF NOT EXISTS idx_requests_user       ON requests(user_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_users_joined        ON users(joined_at);
+        CREATE INDEX IF NOT EXISTS idx_users_last_active   ON users(last_active);
+        CREATE INDEX IF NOT EXISTS idx_fh_created          ON forecast_history(created_at);
+        CREATE INDEX IF NOT EXISTS idx_partner_clicks_created ON partner_clicks(created_at);
+        CREATE INDEX IF NOT EXISTS idx_promo_claims_at     ON promo_claims(claimed_at);
+        CREATE INDEX IF NOT EXISTS idx_broadcasts_status   ON broadcasts(status, run_at);
         """)
         for stmt in (
             "ALTER TABLE users ADD COLUMN tz_offset INTEGER DEFAULT 0",
@@ -457,6 +491,144 @@ def db_promo_funnel() -> dict:
                 remaining=max(0, max_uses - claimed), eligible=eligible,
                 conversion=round(users / eligible * 100) if eligible else 0,
                 claimed_7d=claimed_7d, users=users)
+
+
+# ─── Broadcasts ───────────────────────────────────────────────────────────────
+# Every broadcast — immediate or scheduled — is a row here. Two reasons it is not
+# just in-memory state: a scheduled send has to survive a redeploy (Railway
+# restarts the worker on every deploy), and the history is the only place the
+# dashboard can measure reach from.
+
+BROADCAST_SEGMENTS = ("all", "act:active", "act:churn", "act:sleep", "act:never")
+
+
+def db_segment_uids(seg: str) -> list[int]:
+    """Recipients of a broadcast segment. An unknown segment resolves to an
+    empty list — never to "everyone", so a typo cannot mass-mail the base."""
+    base = "SELECT user_id FROM users WHERE is_registered=1 AND is_blocked=0"
+    if seg == "all":
+        rows = _all(base)
+    elif seg.startswith("lang:"):
+        rows = _all(base + " AND lang=?", (seg[5:],))
+    elif seg.startswith("sport:"):
+        rows = _all(base + " AND sports=?", (seg[6:],))
+    elif seg == "act:active":
+        rows = _all(base + " AND last_active != '' AND date(last_active) >= date('now', '-7 days')")
+    elif seg == "act:churn":
+        rows = _all(base + " AND last_active != '' AND date(last_active) < date('now', '-7 days')"
+                         " AND date(last_active) >= date('now', '-30 days')")
+    elif seg == "act:sleep":
+        rows = _all(base + " AND last_active != '' AND date(last_active) < date('now', '-30 days')")
+    elif seg == "act:never":
+        rows = _all(base + " AND (last_active IS NULL OR last_active='')")
+    else:
+        rows = []
+    return [r[0] for r in rows]
+
+
+def db_segment_size(seg: str) -> int:
+    """Recipient count without materialising the id list — the dashboard asks
+    for this on every segment change."""
+    return len(db_segment_uids(seg))
+
+
+def _broadcast_row(r) -> dict:
+    return dict(id=r[0], text=r[1], segment=r[2], buttons=r[3], parse_mode=r[4],
+                no_preview=r[5], run_at=r[6], status=r[7], total=r[8], ok=r[9],
+                fail=r[10], error=r[11], created_at=r[12], started_at=r[13],
+                finished_at=r[14])
+
+
+_BROADCAST_COLS = ("id, text, segment, buttons, parse_mode, no_preview, run_at, status, "
+                   "total, ok, fail, error, created_at, started_at, finished_at")
+
+
+def db_create_broadcast(text: str, segment: str, buttons: str = "",
+                        parse_mode: str = "HTML", no_preview: int = 0,
+                        run_at: str = "") -> int:
+    """Queue a broadcast. `run_at` is UTC 'YYYY-MM-DD HH:MM:SS'; empty means the
+    scheduler picks it up on its next tick (i.e. as soon as possible)."""
+    with con() as c:
+        cur = c.execute(
+            "INSERT INTO broadcasts (text, segment, buttons, parse_mode, no_preview, run_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (text, segment, buttons, parse_mode, int(bool(no_preview)), run_at or ""))
+        return cur.lastrowid
+
+
+def db_get_broadcast(bid: int) -> dict | None:
+    rows = _all(f"SELECT {_BROADCAST_COLS} FROM broadcasts WHERE id=?", (int(bid),))
+    return _broadcast_row(rows[0]) if rows else None
+
+
+def db_due_broadcasts() -> list[dict]:
+    """Pending broadcasts whose time has come (an empty run_at means now)."""
+    rows = _all(f"SELECT {_BROADCAST_COLS} FROM broadcasts WHERE status='pending' "
+                "AND (run_at='' OR run_at <= datetime('now')) ORDER BY id")
+    return [_broadcast_row(r) for r in rows]
+
+
+def db_claim_broadcast(bid: int) -> bool:
+    """Atomically move one pending broadcast to 'running'.
+
+    The UPDATE only matches while the row is still pending, so two schedulers
+    (a redeploy overlap, a stray worker) cannot both start the same send —
+    exactly one of them sees rowcount 1."""
+    with con() as c:
+        cur = c.execute(
+            "UPDATE broadcasts SET status='running', started_at=datetime('now') "
+            "WHERE id=? AND status='pending'", (int(bid),))
+        return cur.rowcount == 1
+
+
+def db_broadcast_progress(bid: int, total: int, ok: int, fail: int) -> None:
+    _run("UPDATE broadcasts SET total=?, ok=?, fail=? WHERE id=?",
+         (total, ok, fail, int(bid)))
+
+
+def db_finish_broadcast(bid: int, ok: int, fail: int, error: str = "") -> None:
+    _run("UPDATE broadcasts SET status=?, ok=?, fail=?, error=?, "
+         "finished_at=datetime('now') WHERE id=?",
+         ("failed" if error else "done", ok, fail, error[:300], int(bid)))
+
+
+def db_cancel_broadcast(bid: int) -> bool:
+    """Cancel a broadcast that has not started. A running one is left alone:
+    its messages are already out and cannot be recalled."""
+    with con() as c:
+        cur = c.execute(
+            "UPDATE broadcasts SET status='canceled', finished_at=datetime('now') "
+            "WHERE id=? AND status='pending'", (int(bid),))
+        return cur.rowcount == 1
+
+
+def db_list_broadcasts(limit: int = 20) -> list[dict]:
+    """Scheduled first (soonest first), then history (newest first)."""
+    rows = _all(
+        f"SELECT {_BROADCAST_COLS} FROM broadcasts "
+        "ORDER BY CASE WHEN status IN ('pending','running') THEN 0 ELSE 1 END, "
+        "CASE WHEN status IN ('pending','running') THEN run_at END ASC, id DESC "
+        "LIMIT ?", (int(limit),))
+    return [_broadcast_row(r) for r in rows]
+
+
+def db_broadcast_metrics(days: int = 30) -> dict:
+    """Reach of the last `days` of broadcasts, plus what is still queued."""
+    with con() as c:
+        row = c.execute(
+            "SELECT COUNT(*), COALESCE(SUM(ok),0), COALESCE(SUM(fail),0) FROM broadcasts "
+            "WHERE status IN ('done','failed') AND created_at >= datetime('now', ?)",
+            (f"-{int(days)} days",)).fetchone()
+        pending = c.execute(
+            "SELECT COUNT(*) FROM broadcasts WHERE status='pending'").fetchone()[0]
+        nxt = c.execute(
+            "SELECT run_at FROM broadcasts WHERE status='pending' AND run_at!='' "
+            "ORDER BY run_at LIMIT 1").fetchone()
+    sent, ok, fail = row[0] or 0, row[1] or 0, row[2] or 0
+    delivered = ok + fail
+    return dict(campaigns=sent, ok=ok, fail=fail, pending=pending,
+                next_run_at=nxt[0] if nxt else "",
+                delivery_pct=round(ok / delivered * 100) if delivered else 0)
 
 
 # ─── Partner click tracking ───────────────────────────────────────────────────

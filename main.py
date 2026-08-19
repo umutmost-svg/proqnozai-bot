@@ -176,6 +176,10 @@ def main():
         asyncio.create_task(check_odds_changes(application))
         asyncio.create_task(_broadcast_menu_update(application))
         asyncio.create_task(_publish_commands(application))
+        # Delayed broadcasts live in the DB, so anything scheduled before a
+        # redeploy is still waiting here and starts at its time.
+        from broadcast import scheduler as broadcast_scheduler
+        asyncio.create_task(broadcast_scheduler(application))
 
     app.post_init = post_init
 
