@@ -1,7 +1,10 @@
 """
-Proqnozai Bot Dashboard — improved version.
+Proqnozai Bot Dashboard — Flask web process.
 Auth: HTTP Basic Auth (login: admin, password: DASHBOARD_TOKEN)
 Stats source: bot's internal stats server (stats_server.py via Railway private network)
+
+The web process has no database of its own: every number and every action goes
+to the worker over HTTP.
 """
 import base64
 import hashlib
@@ -187,251 +190,329 @@ def require_auth(f):
     return wrapper
 
 
-# ─── Template ─────────────────────────────────────────────────────────────────
-TEMPLATE = r"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Proqnozai — Дашборд</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<style>
-/* ── Themes ── */
-:root {
-  --bg:#0f1117; --bg2:#1a1d27; --border:#2a2d3a;
+# ─── Shared look ──────────────────────────────────────────────────────────────
+# One stylesheet and one header for all three pages. They used to carry three
+# divergent copies, so every visual fix had to be made three times and never
+# was — the users page had already drifted to a different button, table and
+# spacing scale than the dashboard it links to.
+BASE_CSS = r"""
+:root{
+  --bg:#0d0f16; --surface:#151824; --surface2:#1b1f2e; --border:#272b3b;
   --accent:#6c63ff; --accent2:#a78bfa;
-  --green:#22c55e; --red:#ef4444; --yellow:#f59e0b; --blue:#38bdf8;
-  --text:#e2e8f0; --muted:#94a3b8;
-  --card-shadow: 0 2px 12px rgba(0,0,0,.35);
+  --ok:#22c55e; --bad:#ef4444; --warn:#f59e0b; --info:#38bdf8;
+  --text:#e7ecf3; --muted:#8e9bb3;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  --radius:14px;
 }
 [data-theme="light"]{
-  --bg:#f1f5f9; --bg2:#ffffff; --border:#e2e8f0;
-  --accent:#6c63ff; --accent2:#7c3aed;
-  --text:#0f172a; --muted:#64748b;
-  --card-shadow: 0 2px 12px rgba(0,0,0,.08);
+  --bg:#f5f7fb; --surface:#ffffff; --surface2:#f2f5fa; --border:#e3e8f0;
+  --accent:#5b53f0; --accent2:#7c3aed;
+  --text:#111827; --muted:#5f6b80;
+  --shadow:0 1px 2px rgba(16,24,40,.06), 0 10px 24px -14px rgba(16,24,40,.25);
 }
 [data-theme="ocean"]{
-  --bg:#0c1929; --bg2:#112236; --border:#1e3a5f;
-  --accent:#38bdf8; --accent2:#0ea5e9;
-  --text:#e0f2fe; --muted:#7dd3fc;
-  --card-shadow: 0 2px 12px rgba(0,0,0,.4);
+  --bg:#08131f; --surface:#0f1e30; --surface2:#132639; --border:#1e3a5f;
+  --accent:#38bdf8; --accent2:#0ea5e9; --text:#e0f2fe; --muted:#7fb6d8;
 }
 [data-theme="forest"]{
-  --bg:#0a1612; --bg2:#122218; --border:#1e3a28;
-  --accent:#22c55e; --accent2:#16a34a;
-  --text:#dcfce7; --muted:#86efac;
-  --card-shadow: 0 2px 12px rgba(0,0,0,.4);
+  --bg:#08130f; --surface:#101f18; --surface2:#152a20; --border:#1e3a28;
+  --accent:#34d399; --accent2:#16a34a; --text:#dcfce7; --muted:#86b39a;
 }
 
 *{box-sizing:border-box;margin:0;padding:0;}
-body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;transition:background .3s,color .3s;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  background:var(--bg); color:var(--text); font-size:14px; line-height:1.5;
+  font-family:system-ui,-apple-system,'Segoe UI',Inter,Roboto,sans-serif;
+  font-variant-numeric:tabular-nums;
+  transition:background .2s,color .2s;
+}
+a{color:inherit;}
 
 /* ── Header ── */
-header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;backdrop-filter:blur(8px);}
-.logo{display:flex;align-items:center;gap:10px;}
-.logo-icon{font-size:22px;}
-.logo h1{font-size:17px;font-weight:700;color:var(--accent);}
-.logo small{color:var(--muted);font-size:11px;margin-left:8px;}
-.header-right{display:flex;align-items:center;gap:12px;}
-.refresh-badge{background:var(--border);color:var(--muted);font-size:11px;padding:4px 10px;border-radius:99px;}
-.theme-btn{background:none;border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s;}
-.theme-btn:hover{border-color:var(--accent);color:var(--accent);}
-.theme-btn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+header{
+  background:color-mix(in srgb, var(--surface) 88%, transparent);
+  border-bottom:1px solid var(--border); padding:10px 20px;
+  display:flex; align-items:center; justify-content:space-between; gap:16px;
+  position:sticky; top:0; z-index:100; backdrop-filter:blur(10px); flex-wrap:wrap;
+}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;}
+.brand .mark{
+  width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-size:16px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+}
+.brand h1{font-size:15px;font-weight:700;letter-spacing:-.01em;}
+.brand small{display:block;color:var(--muted);font-size:11px;font-weight:500;}
+.nav{display:flex;gap:4px;background:var(--surface2);padding:4px;border-radius:11px;border:1px solid var(--border);}
+.nav a{
+  padding:6px 12px;border-radius:8px;font-size:13px;font-weight:600;
+  color:var(--muted);text-decoration:none;transition:.15s;white-space:nowrap;
+}
+.nav a:hover{color:var(--text);}
+.nav a.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow);}
+.tools{display:flex;align-items:center;gap:8px;}
+.stamp{color:var(--muted);font-size:11px;background:var(--surface2);border:1px solid var(--border);
+  padding:5px 10px;border-radius:99px;white-space:nowrap;}
+.themes{display:flex;gap:2px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:3px;}
+.themes button{background:none;border:none;cursor:pointer;font-size:13px;padding:4px 7px;border-radius:7px;line-height:1;}
+.themes button.on{background:var(--surface);box-shadow:var(--shadow);}
 
 /* ── Layout ── */
-.container{max-width:1280px;margin:0 auto;padding:24px 20px;}
-.section-title{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:28px 0 12px;font-weight:700;display:flex;align-items:center;gap:8px;}
-.section-title::after{content:'';flex:1;height:1px;background:var(--border);}
-
-/* ── Grid ── */
-.grid{display:grid;gap:14px;}
-.g2{grid-template-columns:repeat(2,1fr);}
-.g3{grid-template-columns:repeat(3,1fr);}
-.g4{grid-template-columns:repeat(4,1fr);}
-.g5{grid-template-columns:repeat(5,1fr);}
-@media(max-width:900px){.g5,.g4{grid-template-columns:repeat(2,1fr);}}
-@media(max-width:600px){.g5,.g4,.g3,.g2{grid-template-columns:1fr;}}
+.container{max-width:1320px;margin:0 auto;padding:22px 20px 40px;}
+.sec{display:flex;align-items:center;gap:10px;margin:26px 0 12px;}
+.sec h2{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);}
+.sec::after{content:'';flex:1;height:1px;background:var(--border);}
+.grid{display:grid;gap:12px;}
+.g2{grid-template-columns:repeat(2,1fr);} .g3{grid-template-columns:repeat(3,1fr);}
+.g4{grid-template-columns:repeat(4,1fr);} .g5{grid-template-columns:repeat(5,1fr);}
+.span2{grid-column:span 2;} .span3{grid-column:span 3;}
+@media(max-width:1100px){.g5,.g4{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:820px){.g5,.g4,.g3,.g2{grid-template-columns:1fr;}.span2,.span3{grid-column:span 1;}}
 
 /* ── Cards ── */
-.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:18px;box-shadow:var(--card-shadow);transition:border-color .2s;}
-.chart-fallback{color:var(--muted);font-size:13px;padding:24px 8px;text-align:center;}
-.card:hover{border-color:var(--accent);}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:16px 18px;box-shadow:var(--shadow);}
+.card h3{font-size:13px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:7px;}
+.label{color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;}
+.value{font-size:29px;font-weight:750;letter-spacing:-.02em;line-height:1.15;margin:6px 0 2px;}
+.value small{font-size:16px;font-weight:600;color:var(--muted);}
+.sub{color:var(--muted);font-size:12px;}
+.ok{color:var(--ok);} .bad{color:var(--bad);} .warn{color:var(--warn);}
+.acc{color:var(--accent);} .info{color:var(--info);} .muted{color:var(--muted);}
+.stat{position:relative;}
+.stat .ico{position:absolute;right:14px;top:14px;font-size:20px;opacity:.22;}
 
-/* ── Stat cards ── */
-.stat-card{position:relative;overflow:hidden;}
-.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent2));}
-.stat-label{color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;}
-.stat-value{font-size:32px;font-weight:800;line-height:1;margin-bottom:4px;}
-.stat-sub{color:var(--muted);font-size:12px;}
-.stat-icon{position:absolute;right:16px;top:16px;font-size:28px;opacity:.15;}
-.green{color:var(--green);} .red{color:var(--red);}
-.yellow{color:var(--yellow);} .accent{color:var(--accent);} .blue{color:var(--blue);}
-.muted{color:var(--muted);}
+/* ── Delta chips ── */
+.delta{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;
+  padding:2px 7px;border-radius:7px;vertical-align:middle;margin-left:6px;}
+.d-up{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok);}
+.d-down{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad);}
+.d-flat{background:var(--surface2);color:var(--muted);}
 
-/* ── Progress bar ── */
-.bar-wrap{background:var(--border);border-radius:4px;height:6px;margin-top:8px;overflow:hidden;}
-.bar{border-radius:4px;height:6px;transition:width .6s ease;}
-.bar-accent{background:linear-gradient(90deg,var(--accent),var(--accent2));}
-.bar-green{background:var(--green);}
+/* ── Bars ── */
+.bar-wrap{background:var(--surface2);border-radius:99px;height:7px;overflow:hidden;margin-top:8px;}
+.bar{height:7px;border-radius:99px;transition:width .6s ease;background:linear-gradient(90deg,var(--accent),var(--accent2));}
+.bar.green{background:var(--ok);} .bar.warn{background:var(--warn);}
 
-/* ── Table ── */
+/* ── Tables ── */
 table{width:100%;border-collapse:collapse;}
-th{color:var(--muted);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.08em;padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);}
-td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;transition:background .15s;}
-tr:hover td{background:rgba(108,99,255,.05);}
-tr:last-child td{border-bottom:none;}
+th{color:var(--muted);font-weight:700;font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  padding:9px 10px;text-align:left;border-bottom:1px solid var(--border);}
+td{padding:9px 10px;border-bottom:1px solid var(--border);font-size:13px;}
+tbody tr:last-child td,tr:last-child td{border-bottom:none;}
+tr:hover td{background:color-mix(in srgb,var(--accent) 6%,transparent);}
+.tbl-wrap{overflow-x:auto;}
 
-/* ── Badges ── */
-.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;}
-.badge-win{background:#14532d;color:var(--green);}
-.badge-lose{background:#450a0a;color:var(--red);}
-.badge-none{background:var(--border);color:var(--muted);}
-.badge-lang{background:rgba(108,99,255,.15);color:var(--accent);font-size:10px;padding:2px 7px;}
+/* ── Badges & buttons ── */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:99px;
+  font-size:11px;font-weight:700;background:var(--surface2);color:var(--muted);}
+.badge.win{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok);}
+.badge.lose{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad);}
+.badge.lang{background:color-mix(in srgb,var(--accent) 15%,transparent);color:var(--accent);}
+.btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);
+  padding:8px 14px;border-radius:10px;cursor:pointer;font-size:13px;font-weight:600;
+  text-decoration:none;display:inline-flex;align-items:center;gap:6px;transition:.15s;font-family:inherit;}
+.btn:hover{border-color:var(--accent);color:var(--accent);}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+.btn.primary:hover{background:var(--accent2);border-color:var(--accent2);color:#fff;}
+.btn.danger{color:var(--bad);}
+.btn.danger:hover{border-color:var(--bad);}
+.btn:disabled{opacity:.5;cursor:not-allowed;}
+.btn.sm{padding:5px 10px;font-size:12px;border-radius:8px;}
 
-/* ── KPI row ── */
-.kpi-delta{font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;margin-left:6px;}
-.kpi-up{background:#14532d;color:var(--green);}
-.kpi-zero{background:var(--border);color:var(--muted);}
+/* ── Forms ── */
+label.f{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--muted);margin:0 0 6px;}
+input,select,textarea{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);
+  border-radius:10px;padding:10px 12px;font-size:14px;font-family:inherit;outline:none;transition:border-color .15s;}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);}
+textarea{min-height:170px;resize:vertical;line-height:1.55;}
+.field{margin-bottom:16px;}
+.row{display:flex;gap:10px;align-items:center;}
+.chk{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);cursor:pointer;}
+.chk input{width:auto;}
 
-/* ── Chart containers ── */
-.chart-wrap{position:relative;height:200px;}
-.chart-wrap-sm{position:relative;height:160px;}
+/* ── Charts ── */
+.chart{position:relative;height:210px;}
+.chart.sm{height:165px;}
+.chart-fallback{color:var(--muted);font-size:13px;padding:24px 8px;text-align:center;}
 
-/* ── Rank number ── */
-.rank{width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;}
-.rank-1{background:linear-gradient(135deg,#f59e0b,#fbbf24);color:#000;}
-.rank-2{background:linear-gradient(135deg,#94a3b8,#cbd5e1);color:#000;}
-.rank-3{background:linear-gradient(135deg,#b45309,#d97706);color:#fff;}
-.rank-n{background:var(--border);color:var(--muted);}
+/* ── Rank pills ── */
+.rank{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;background:var(--surface2);color:var(--muted);}
+.rank.r1{background:linear-gradient(135deg,#f59e0b,#fbbf24);color:#000;}
+.rank.r2{background:linear-gradient(135deg,#94a3b8,#cbd5e1);color:#000;}
+.rank.r3{background:linear-gradient(135deg,#b45309,#d97706);color:#fff;}
 
-/* ── Footer ── */
-footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-top:1px solid var(--border);margin-top:32px;}
+/* ── Misc ── */
+.pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);
+  animation:pulse 2s infinite;}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 45%,transparent);}
+  70%{box-shadow:0 0 0 7px transparent;}100%{box-shadow:0 0 0 0 transparent;}}
+.empty{color:var(--muted);font-size:13px;padding:22px;text-align:center;}
+footer{text-align:center;color:var(--muted);font-size:11px;padding:26px;border-top:1px solid var(--border);margin-top:30px;}
+"""
 
-/* ── Pulse dot ── */
-.pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(34,197,94,.4);animation:pulse 2s infinite;}
-@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.4);}70%{box-shadow:0 0 0 8px rgba(34,197,94,0);}100%{box-shadow:0 0 0 0 rgba(34,197,94,0);}}
-</style>
-</head>
-<body data-theme="dark">
+# Nav is one string with the current page marked, so a new page is added once.
+HEADER = r"""
 <header>
-  <div class="logo">
-    <span class="logo-icon">⚽</span>
+  <div class="brand">
+    <span class="mark">⚽</span>
     <div>
-      <h1>Proqnozai Bot</h1>
-      <small><span class="pulse"></span> &nbsp;Онлайн · Обновление каждые 60с</small>
+      <h1>Proqnozai</h1>
+      <small><span class="pulse"></span> {{ subtitle }}</small>
     </div>
   </div>
-  <div class="header-right">
-    <a href="/" class="theme-btn" style="text-decoration:none">📊 Статистика</a>
-    <a href="/users" class="theme-btn" style="text-decoration:none">👥 Пользователи</a>
-    <a href="/partners" class="theme-btn" style="text-decoration:none">🤝 Партнёры</a>
-    <a href="/broadcast" class="theme-btn" style="text-decoration:none">📢 Рассылка</a>
-    <span class="refresh-badge">{{ generated_at }}</span>
-    <button class="theme-btn active" onclick="setTheme('dark')">🌙 Тёмная</button>
-    <button class="theme-btn" onclick="setTheme('light')">☀️ Светлая</button>
-    <button class="theme-btn" onclick="setTheme('ocean')">🌊 Океан</button>
-    <button class="theme-btn" onclick="setTheme('forest')">🌿 Лес</button>
+  <nav class="nav">
+    <a href="/" class="{{ 'on' if page=='stats' else '' }}">📊 Статистика</a>
+    <a href="/users" class="{{ 'on' if page=='users' else '' }}">👥 Пользователи</a>
+    <a href="/partners" class="{{ 'on' if page=='partners' else '' }}">🤝 Партнёры</a>
+    <a href="/broadcast" class="{{ 'on' if page=='broadcast' else '' }}">📢 Рассылка</a>
+  </nav>
+  <div class="tools">
+    <span class="stamp" id="stamp">{{ stamp }}</span>
+    <div class="themes">
+      <button data-t="dark" onclick="setTheme('dark')">🌙</button>
+      <button data-t="light" onclick="setTheme('light')">☀️</button>
+      <button data-t="ocean" onclick="setTheme('ocean')">🌊</button>
+      <button data-t="forest" onclick="setTheme('forest')">🌿</button>
+    </div>
   </div>
 </header>
+"""
 
+THEME_JS = r"""
+function markTheme(t){
+  document.querySelectorAll('.themes button').forEach(b=>b.classList.toggle('on', b.dataset.t===t));
+}
+function setTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  localStorage.setItem('theme',t); markTheme(t);
+  if (typeof updateCharts === 'function') updateCharts();
+}
+(function(){
+  const saved = localStorage.getItem('theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', saved);
+  document.addEventListener('DOMContentLoaded', ()=>markTheme(saved));
+})();
+"""
+
+
+def _page(body: str, title: str) -> str:
+    """Wrap page-specific markup in the shared shell."""
+    return (
+        '<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        f'<title>{title}</title>'
+        "{% block head %}{% endblock %}"
+        f"<style>{BASE_CSS}</style></head><body>"
+        f"<script>{THEME_JS}</script>"
+        f"{HEADER}{body}</body></html>"
+    )
+
+
+# ─── Stats page ───────────────────────────────────────────────────────────────
+_STATS_BODY = r"""
 <div class="container">
 
-  <!-- ── KPI ── -->
-  <div class="section-title">Ключевые показатели</div>
+  <div class="sec"><h2>Ключевые показатели</h2></div>
   <div class="grid g5">
-    <div class="card stat-card">
-      <span class="stat-icon">👥</span>
-      <div class="stat-label">Всего пользователей</div>
-      <div class="stat-value accent" id="k_users">{{ d.users_total }}</div>
-      <div class="stat-sub">{{ d.users_blocked }} заблокировано</div>
+    <div class="card stat">
+      <span class="ico">👥</span>
+      <div class="label">Пользователи</div>
+      <div class="value acc" id="k_users">{{ d.users_total }}</div>
+      <div class="sub">+{{ d.users_week }} за неделю {{ chip(dl.users) }} · {{ d.users_blocked }} в блоке</div>
     </div>
-    <div class="card stat-card">
-      <span class="stat-icon">✨</span>
-      <div class="stat-label">Новых сегодня</div>
-      <div class="stat-value green" id="k_new">+{{ d.users_today }}</div>
-      <div class="stat-sub">+{{ d.users_week }} за неделю</div>
+    <div class="card stat">
+      <span class="ico">✨</span>
+      <div class="label">Новые сегодня</div>
+      <div class="value ok" id="k_new">+{{ d.users_today }}</div>
+      <div class="sub">неделя {{ d.users_week }} · до этого {{ d.users_prev_week }}</div>
     </div>
-    <div class="card stat-card">
-      <span class="stat-icon">🔥</span>
-      <div class="stat-label">Активны сегодня (DAU)</div>
-      <div class="stat-value" id="k_dau">{{ d.users_active_today }}</div>
-      <div class="stat-sub">{{ d.users_active_week }} за неделю (WAU)</div>
+    <div class="card stat">
+      <span class="ico">🔥</span>
+      <div class="label">Активны сегодня</div>
+      <div class="value" id="k_dau">{{ d.users_active_today }}</div>
+      <div class="sub">вчера {{ d.users_active_yday }} {{ chip(dl.dau) }} · WAU {{ d.users_active_week }}</div>
     </div>
-    <div class="card stat-card">
-      <span class="stat-icon">📊</span>
-      <div class="stat-label">Прогнозов всего</div>
-      <div class="stat-value accent" id="k_forecasts">{{ d.forecasts_real_total|default(d.forecasts_total) }}</div>
-      <div class="stat-sub">{{ d.forecasts_today }} сегодня</div>
+    <div class="card stat">
+      <span class="ico">📊</span>
+      <div class="label">Прогнозы</div>
+      <div class="value acc" id="k_forecasts">{{ d.forecasts_real_total }}</div>
+      <div class="sub">сегодня {{ d.forecasts_real_today }} · неделя {{ d.forecasts_week }} {{ chip(dl.forecasts) }}</div>
     </div>
-    <div class="card stat-card">
-      <span class="stat-icon">🎯</span>
-      <div class="stat-label">Точность (feedback)</div>
-      <div class="stat-value {% if d.fb_pct >= 60 %}green{% elif d.fb_pct >= 40 %}yellow{% else %}red{% endif %}">{{ d.fb_pct }}%</div>
-      <div class="stat-sub">{{ d.fb_wins }} побед / {{ d.fb_total }} оценок</div>
-      <div class="bar-wrap"><div class="bar bar-{% if d.fb_pct >= 60 %}green{% else %}accent{% endif %}" style="width:{{ d.fb_pct }}%"></div></div>
+    <div class="card stat">
+      <span class="ico">🎯</span>
+      <div class="label">Точность (оценки)</div>
+      <div class="value {{ 'ok' if d.fb_pct >= 60 else 'warn' if d.fb_pct >= 40 else 'bad' }}" id="k_acc">{{ d.fb_pct }}%</div>
+      <div class="sub">{{ d.fb_wins }} побед из {{ d.fb_total }} оценок</div>
+      <div class="bar-wrap"><div class="bar {{ 'green' if d.fb_pct >= 60 else '' }}" style="width:{{ d.fb_pct }}%"></div></div>
     </div>
   </div>
 
-  <!-- ── Запросы и live ── -->
-  <div class="grid g3" style="margin-top:14px;">
-    <div class="card stat-card">
-      <span class="stat-icon">📨</span>
-      <div class="stat-label">Запросов всего</div>
-      <div class="stat-value">{{ d.reqs_total }}</div>
-      <div class="stat-sub">{{ d.reqs_today }} сегодня · {{ d.reqs_week }} за неделю</div>
+  <div class="grid g4" style="margin-top:12px">
+    <div class="card stat">
+      <span class="ico">📨</span>
+      <div class="label">Запросов всего</div>
+      <div class="value" id="k_reqs">{{ d.reqs_total }}</div>
+      <div class="sub">сегодня {{ d.reqs_today }} · неделя {{ d.reqs_week }} {{ chip(dl.reqs) }}</div>
     </div>
-    <div class="card stat-card">
-      <span class="stat-icon">📡</span>
-      <div class="stat-label">Live-подписок</div>
-      <div class="stat-value yellow">{{ d.live_subs }}</div>
-      <div class="stat-sub">{{ d.live_matches }} уникальных матчей</div>
+    <div class="card stat">
+      <span class="ico">🔁</span>
+      <div class="label">Возвращаются</div>
+      <div class="value {{ 'ok' if d.repeat_pct >= 40 else 'warn' }}">{{ d.repeat_pct }}%</div>
+      <div class="sub">{{ d.repeat_users }} из {{ d.users_with_activity }} что-то делали дважды</div>
+      <div class="bar-wrap"><div class="bar" style="width:{{ d.repeat_pct }}%"></div></div>
     </div>
-    <div class="card stat-card">
-      <span class="stat-icon">🌍</span>
-      <div class="stat-label">Языков</div>
-      <div class="stat-value">{{ d.langs|length }}</div>
-      <div class="stat-sub">
-        {% for l in d.langs[:4] %}<span class="badge badge-lang">{{ l[0] }} {{ l[1] }}</span> {% endfor %}
+    <div class="card stat">
+      <span class="ico">📡</span>
+      <div class="label">Live-подписки</div>
+      <div class="value warn">{{ d.live_subs }}</div>
+      <div class="sub">{{ d.live_matches }} уникальных матчей</div>
+    </div>
+    <div class="card stat">
+      <span class="ico">📢</span>
+      <div class="label">Рассылки (30 дней)</div>
+      <div class="value">{{ bc.ok|default(0) }}<small> доставлено</small></div>
+      <div class="sub">
+        {{ bc.campaigns|default(0) }} кампаний · доставка {{ bc.delivery_pct|default(0) }}%
+        {% if bc.pending %}· <span class="acc">запланировано {{ bc.pending }}</span>{% endif %}
       </div>
     </div>
   </div>
 
-  <!-- ── Продуктовые метрики ── -->
-  {% set f  = d.funnel|default({}) %}
-  {% set e  = d.engagement|default({}) %}
-  {% set fh = d.forecast_health|default({}) %}
-  {% set fc = d.feedback_coverage|default({}) %}
-  {% set pr = d.promo|default({}) %}
-  {% set pt = d.partners|default({}) %}
+  {% set f = d.funnel|default({}) %}{% set e = d.engagement|default({}) %}
+  {% set fh = d.forecast_health|default({}) %}{% set fc = d.feedback_coverage|default({}) %}
+  {% set pr = d.promo|default({}) %}{% set pt = d.partners|default({}) %}
   {% set ch = d.churn|default({}) %}
   {% if e %}
-  <div class="section-title">Продукт</div>
+  <div class="sec"><h2>Продукт</h2></div>
   <div class="grid g4">
-    <div class="card stat-card">
-      <div class="stat-label">DAU / WAU / MAU</div>
-      <div class="stat-value">{{ e.dau }}<span class="muted" style="font-size:18px"> / {{ e.wau }} / {{ e.mau }}</span></div>
-      <div class="stat-sub">Липучесть DAU/MAU: <b class="{{ 'green' if e.stickiness >= 20 else 'yellow' }}">{{ e.stickiness }}%</b></div>
+    <div class="card">
+      <div class="label">DAU / WAU / MAU</div>
+      <div class="value">{{ e.dau }}<small> / {{ e.wau }} / {{ e.mau }}</small></div>
+      <div class="sub">Липучесть DAU/MAU: <b class="{{ 'ok' if e.stickiness >= 20 else 'warn' }}">{{ e.stickiness }}%</b></div>
     </div>
-    <div class="card stat-card">
-      <div class="stat-label">Прогнозов всего</div>
-      <div class="stat-value">{{ d.forecasts_real_total|default(0) }}</div>
-      <div class="stat-sub">сегодня {{ d.forecasts_real_today|default(0) }} · на активного за неделю {{ e.forecasts_per_wau }}</div>
+    <div class="card">
+      <div class="label">Прогнозов на активного</div>
+      <div class="value">{{ e.forecasts_per_wau }}</div>
+      <div class="sub">за неделю на одного WAU</div>
     </div>
-    <div class="card stat-card">
-      <div class="stat-label">Успешность генерации</div>
-      <div class="stat-value {{ 'green' if fh.ok_pct|default(0) >= 95 else 'red' }}">{{ fh.ok_pct|default(0) }}%</div>
-      <div class="stat-sub">за 7 дней: {{ fh.ok|default(0) }} из {{ fh.total|default(0) }} · сбоев {{ fh.failed|default(0) }}</div>
+    <div class="card">
+      <div class="label">Успешность генерации</div>
+      <div class="value {{ 'ok' if fh.ok_pct|default(0) >= 95 else 'bad' }}">{{ fh.ok_pct|default(0) }}%</div>
+      <div class="sub">7 дней: {{ fh.ok|default(0) }} из {{ fh.total|default(0) }} · сбоев {{ fh.failed|default(0) }}</div>
     </div>
-    <div class="card stat-card">
-      <div class="stat-label">Время генерации</div>
-      <div class="stat-value">{{ (fh.p50_ms|default(0) / 1000)|round(1) }}<span class="muted" style="font-size:18px"> с</span></div>
-      <div class="stat-sub">медиана · среднее {{ (fh.avg_ms|default(0) / 1000)|round(1) }} с</div>
+    <div class="card">
+      <div class="label">Время генерации</div>
+      <div class="value">{{ (fh.p50_ms|default(0) / 1000)|round(1) }}<small> с</small></div>
+      <div class="sub">медиана · среднее {{ (fh.avg_ms|default(0) / 1000)|round(1) }} с</div>
     </div>
   </div>
 
-  <div class="grid g2" style="margin-top:14px">
+  <div class="grid g3" style="margin-top:12px">
     <div class="card">
-      <div class="stat-label" style="margin-bottom:12px">Воронка активации</div>
+      <h3>🚪 Воронка активации</h3>
       {% set base = f.started|default(1) or 1 %}
       {% for name, val in [('Пришли', f.started|default(0)), ('Зарегистрировались', f.registered|default(0)),
                            ('Прошли онбординг', f.onboarded|default(0)), ('Получили прогноз', f.forecasted|default(0))] %}
@@ -439,33 +520,37 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-t
         <div style="display:flex;justify-content:space-between;font-size:13px">
           <span>{{ name }}</span><span><b>{{ val }}</b> <span class="muted">{{ (val / base * 100)|round|int }}%</span></span>
         </div>
-        <div class="bar-wrap"><div class="bar bar-accent" style="width:{{ (val / base * 100)|round|int }}%"></div></div>
+        <div class="bar-wrap"><div class="bar" style="width:{{ (val / base * 100)|round|int }}%"></div></div>
       </div>
       {% endfor %}
     </div>
 
-    <div class="card">
-      <div class="stat-label" style="margin-bottom:12px">Удержание по когортам</div>
+    <div class="card span2">
+      <h3>📅 Удержание по когортам</h3>
+      <div class="tbl-wrap">
       <table>
         <tr><th>Дата</th><th>Когорта</th><th>D1</th><th>D7</th><th>D30</th></tr>
         {% for r in (d.retention|default([]))[:7] %}
         <tr><td>{{ r.day }}</td><td>{{ r.size }}</td>
-            <td>{% if r.d1 is none %}<span class="muted">—</span>{% else %}{{ r.d1 }}%{% endif %}</td>
-            <td>{% if r.d7 is none %}<span class="muted">—</span>{% else %}{{ r.d7 }}%{% endif %}</td>
-            <td>{% if r.d30 is none %}<span class="muted">—</span>{% else %}{{ r.d30 }}%{% endif %}</td></tr>
+            {% for v in [r.d1, r.d7, r.d30] %}
+            <td>{% if v is none %}<span class="muted">—</span>
+                {% else %}<span class="{{ 'ok' if v >= 30 else 'warn' if v >= 10 else 'bad' }}">{{ v }}%</span>{% endif %}</td>
+            {% endfor %}
+        </tr>
         {% else %}
-        <tr><td colspan="5" class="muted">Пока нет данных</td></tr>
+        <tr><td colspan="5" class="empty">Пока нет данных</td></tr>
         {% endfor %}
       </table>
+      </div>
     </div>
   </div>
 
-  <div class="grid g3" style="margin-top:14px">
+  <div class="grid g4" style="margin-top:12px">
     <div class="card">
-      <div class="stat-label" style="margin-bottom:10px">Партнёры (30 дней)</div>
-      <div class="stat-value" style="font-size:26px">{{ pt.total|default(0) }}</div>
-      <div class="stat-sub" style="margin-bottom:10px">
-        кликов · уникальных {{ pt.unique_users|default(0) }} · открывали список {{ pt.opened_list|default(0) }}
+      <h3>🤝 Партнёры (30 дней)</h3>
+      <div class="value" style="font-size:24px">{{ pt.total|default(0) }}</div>
+      <div class="sub" style="margin-bottom:10px">
+        кликов · уникальных {{ pt.unique_users|default(0) }}
         {% if pt.opened_list|default(0) %}· конверсия {{ pt.click_through }}%{% endif %}
       </div>
       {% if pt.by_partner|default([]) %}
@@ -476,195 +561,158 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-t
         {% endfor %}
       </table>
       {% else %}
-      <div class="muted" style="font-size:12px">Трекинг кликов выключен (PARTNER_REDIRECT_BASE не задан)</div>
+      <div class="sub">Трекинг кликов выключен (PARTNER_REDIRECT_BASE не задан)</div>
       {% endif %}
     </div>
 
     <div class="card">
-      <div class="stat-label" style="margin-bottom:10px">Промокоды</div>
+      <h3>🎁 Промокоды</h3>
       {% if pr.partners %}
-      <div class="stat-value" style="font-size:26px">{{ pr.claimed }}<span class="muted" style="font-size:16px"> / {{ pr.max_uses }}</span></div>
-      <div class="bar-wrap"><div class="bar bar-green" style="width:{{ (pr.claimed / (pr.max_uses or 1) * 100)|round|int }}%"></div></div>
-      <div class="stat-sub" style="margin:8px 0 10px">
-        получили {{ pr.users }} чел. · за неделю {{ pr.claimed_7d }} · конверсия от базы {{ pr.conversion }}%
+      <div class="value" style="font-size:24px">{{ pr.claimed }}<small> / {{ pr.max_uses }}</small></div>
+      <div class="bar-wrap"><div class="bar green" style="width:{{ (pr.claimed / (pr.max_uses or 1) * 100)|round|int }}%"></div></div>
+      <div class="sub" style="margin:8px 0 10px">
+        получили {{ pr.users }} чел. · за неделю {{ pr.claimed_7d }} · конверсия {{ pr.conversion }}%
       </div>
       <table>
         <tr><th>Партнёр</th><th>Код</th><th>Выдано</th></tr>
         {% for c in pr.partners %}
-        <tr><td>{{ c.partner or '—' }}</td><td>{{ c.code }}</td>
-            <td>{{ c.claimed }}/{{ c.max_uses }}</td></tr>
+        <tr><td>{{ c.partner or '—' }}</td><td>{{ c.code }}</td><td>{{ c.claimed }}/{{ c.max_uses }}</td></tr>
         {% endfor %}
       </table>
       {% else %}
-      <div class="muted" style="font-size:12px">Активных кампаний нет</div>
+      <div class="sub">Активных кампаний нет</div>
       {% endif %}
     </div>
 
     <div class="card">
-      <div class="stat-label" style="margin-bottom:10px">Отток и обратная связь</div>
-      <div class="stat-sub" style="line-height:1.9">
-        Активны за 7 дней: <b class="green">{{ ch.active_7d|default(0) }}</b><br>
-        Молчат 7–30 дней: <b class="yellow">{{ ch.silent_7_30|default(0) }}</b><br>
-        Молчат больше 30: <b class="red">{{ ch.silent_30|default(0) }}</b><br>
+      <h3>💤 Отток и оценки</h3>
+      <div class="sub" style="line-height:2">
+        Активны за 7 дней: <b class="ok">{{ ch.active_7d|default(0) }}</b><br>
+        Молчат 7–30 дней: <b class="warn">{{ ch.silent_7_30|default(0) }}</b><br>
+        Молчат больше 30: <b class="bad">{{ ch.silent_30|default(0) }}</b><br>
         Ни одного действия: <b class="muted">{{ ch.never|default(0) }}</b><br>
-        Оценено прогнозов: <b>{{ fc.pct|default(0) }}%</b> <span class="muted">({{ fc.rated|default(0) }} из {{ fc.total|default(0) }})</span>
+        Оценено прогнозов: <b>{{ fc.pct|default(0) }}%</b>
+        <span class="muted">({{ fc.rated|default(0) }} из {{ fc.total|default(0) }})</span>
       </div>
+    </div>
+
+    <div class="card">
+      <h3>🧭 Действия за неделю</h3>
+      {% set acts = d.by_action|default([]) %}
+      {% set act_total = (acts|sum(attribute=1)) or 1 %}
+      {% for name, cnt in acts[:6] %}
+      <div style="margin-bottom:9px">
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span class="muted">{{ name }}</span><b>{{ cnt }}</b>
+        </div>
+        <div class="bar-wrap"><div class="bar" style="width:{{ (cnt / act_total * 100)|round|int }}%"></div></div>
+      </div>
+      {% else %}
+      <div class="empty">Нет событий за неделю</div>
+      {% endfor %}
     </div>
   </div>
   {% endif %}
 
-  <!-- ── Графики ── -->
-  <div class="section-title">Аналитика</div>
+  <div class="sec"><h2>Аналитика</h2></div>
   <div class="grid g3">
-
-    <div class="card" style="grid-column: span 2;">
-      <div style="font-weight:600;margin-bottom:12px;">📈 Запросы за 14 дней</div>
-      <div class="chart-wrap">
-        <canvas id="lineChart"></canvas>
-      </div>
+    <div class="card span2">
+      <h3>📈 Запросы за 14 дней</h3>
+      <div class="chart"><canvas id="lineChart"></canvas></div>
     </div>
-
     <div class="card">
-      <div style="font-weight:600;margin-bottom:12px;">🌍 Языки пользователей</div>
-      <div class="chart-wrap">
-        <canvas id="langChart"></canvas>
-      </div>
+      <h3>🌍 Языки</h3>
+      <div class="chart"><canvas id="langChart"></canvas></div>
     </div>
-
-    <div class="card" style="grid-column: span 2;">
-      <div style="font-weight:600;margin-bottom:12px;">📊 Прогнозы по дням</div>
-      <div class="chart-wrap-sm">
-        <canvas id="barChart"></canvas>
-      </div>
+    <div class="card span2">
+      <h3>📊 Прогнозы по дням</h3>
+      <div class="chart sm"><canvas id="barChart"></canvas></div>
     </div>
-
     <div class="card">
-      <div style="font-weight:600;margin-bottom:12px;">🎯 Результаты прогнозов</div>
-      <div class="chart-wrap-sm">
-        <canvas id="feedbackChart"></canvas>
-      </div>
+      <h3>🎯 Результаты прогнозов</h3>
+      <div class="chart sm"><canvas id="feedbackChart"></canvas></div>
     </div>
-
-    <div class="card" style="grid-column: span 3;">
-      <div style="font-weight:600;margin-bottom:12px;">📈 Точность (win-rate) за 14 дней, %</div>
-      <div class="chart-wrap-sm">
-        <canvas id="winrateChart"></canvas>
-      </div>
-    </div>
-
-  </div>
-
-  <!-- ── Топ пользователей ── -->
-  <div class="section-title">Топ пользователей</div>
-  <div class="card">
-    <table>
-      <tr><th></th><th>Пользователь</th><th>ID</th><th>Запросов</th><th>Последняя активность</th></tr>
-      {% for u in d.top_users %}
-      <tr>
-        <td>
-          {% if loop.index == 1 %}<span class="rank rank-1">1</span>
-          {% elif loop.index == 2 %}<span class="rank rank-2">2</span>
-          {% elif loop.index == 3 %}<span class="rank rank-3">3</span>
-          {% else %}<span class="rank rank-n">{{ loop.index }}</span>{% endif %}
-        </td>
-        <td><strong>{{ u[1] or u[2] or '—' }}</strong></td>
-        <td class="muted">{{ u[0] }}</td>
-        <td><span class="accent" style="font-weight:700;">{{ u[3] }}</span></td>
-        <td class="muted">{{ (u[4] or '')[:16] }}</td>
-      </tr>
-      {% endfor %}
-    </table>
-  </div>
-
-  <!-- ── Последние события ── -->
-  <div class="grid g2">
-    <div>
-      <div class="section-title">Новые пользователи</div>
-      <div class="card">
-        <table>
-          <tr><th>Пользователь</th><th>Язык</th><th>Дата</th></tr>
-          {% for u in d.recent_users %}
-          <tr>
-            <td><strong>{{ u[1] or u[2] or u[0] }}</strong></td>
-            <td><span class="badge badge-lang">{{ u[3] }}</span></td>
-            <td class="muted">{{ (u[4] or '')[:16] }}</td>
-          </tr>
-          {% endfor %}
-        </table>
-      </div>
-    </div>
-    <div>
-      <div class="section-title">Последние прогнозы</div>
-      <div class="card">
-        <table>
-          <tr><th>Пользователь</th><th>Матч</th><th>Результат</th></tr>
-          {% for f in d.recent_forecasts %}
-          <tr>
-            <td><strong>{{ f[1] or f[0] }}</strong></td>
-            <td class="muted">{{ (f[2] or '?')[:22] }}</td>
-            <td>
-              {% if f[3] == 1 %}<span class="badge badge-win">✓ Победа</span>
-              {% elif f[3] == 0 %}<span class="badge badge-lose">✗ Проигрыш</span>
-              {% else %}<span class="badge badge-none">— Нет</span>{% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </table>
-      </div>
+    <div class="card span3">
+      <h3>📈 Точность (win-rate) за 14 дней, %</h3>
+      <div class="chart sm"><canvas id="winrateChart"></canvas></div>
     </div>
   </div>
 
-  <!-- ── Языки детально ── -->
-  <div class="section-title">Распределение по языкам</div>
-  <div class="card">
-    {% set total_lang = namespace(v=0) %}
-    {% for l in d.langs %}{% set total_lang.v = total_lang.v + l[1] %}{% endfor %}
-    <table>
-      <tr><th>Язык</th><th>Пользователей</th><th>Доля</th><th></th></tr>
-      {% for l in d.langs %}
-      {% set pct = ((l[1] / total_lang.v * 100)|round(1)) if total_lang.v else 0 %}
-      <tr>
-        <td><span class="badge badge-lang">{{ l[0] }}</span></td>
-        <td><strong>{{ l[1] }}</strong></td>
-        <td class="muted">{{ pct }}%</td>
-        <td style="width:220px">
-          <div class="bar-wrap"><div class="bar bar-accent" style="width:{{ pct }}%"></div></div>
-        </td>
-      </tr>
-      {% endfor %}
-    </table>
+  <div class="sec"><h2>Люди</h2></div>
+  <div class="grid g3">
+    <div class="card span2">
+      <h3>🏆 Топ пользователей</h3>
+      <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>Пользователь</th><th>ID</th><th>Запросов</th><th>Последняя активность</th></tr>
+        {% for u in d.top_users %}
+        <tr>
+          <td><span class="rank {{ 'r1' if loop.index==1 else 'r2' if loop.index==2 else 'r3' if loop.index==3 else '' }}">{{ loop.index }}</span></td>
+          <td><strong>{{ u[1] or u[2] or '—' }}</strong></td>
+          <td class="muted">{{ u[0] }}</td>
+          <td><b class="acc">{{ u[3] }}</b></td>
+          <td class="muted">{{ (u[4] or '')[:16] }}</td>
+        </tr>
+        {% else %}<tr><td colspan="5" class="empty">Пока пусто</td></tr>{% endfor %}
+      </table>
+      </div>
+    </div>
+    <div class="card">
+      <h3>✨ Новые пользователи</h3>
+      <table>
+        {% for u in d.recent_users %}
+        <tr>
+          <td><strong>{{ u[1] or u[2] or u[0] }}</strong></td>
+          <td><span class="badge lang">{{ u[3] }}</span></td>
+          <td class="muted">{{ (u[4] or '')[:16] }}</td>
+        </tr>
+        {% else %}<tr><td class="empty">Пока пусто</td></tr>{% endfor %}
+      </table>
+    </div>
   </div>
 
+  <div class="grid g2" style="margin-top:12px">
+    <div class="card">
+      <h3>🕐 Последние прогнозы</h3>
+      <table>
+        {% for f in d.recent_forecasts %}
+        <tr>
+          <td><strong>{{ f[1] or f[0] }}</strong></td>
+          <td class="muted">{{ (f[2] or '?')[:24] }}</td>
+          <td>
+            {% if f[3] == 1 %}<span class="badge win">✓ Победа</span>
+            {% elif f[3] == 0 %}<span class="badge lose">✗ Проигрыш</span>
+            {% else %}<span class="badge">— Нет оценки</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}<tr><td class="empty">Пока пусто</td></tr>{% endfor %}
+      </table>
+    </div>
+    <div class="card">
+      <h3>🌍 Распределение по языкам</h3>
+      {% set total_lang = (d.langs|sum(attribute=1)) or 1 %}
+      <table>
+        {% for l in d.langs %}
+        {% set pct = (l[1] / total_lang * 100)|round(1) %}
+        <tr>
+          <td><span class="badge lang">{{ l[0] }}</span></td>
+          <td><strong>{{ l[1] }}</strong></td>
+          <td class="muted">{{ pct }}%</td>
+          <td style="width:45%"><div class="bar-wrap"><div class="bar" style="width:{{ pct }}%"></div></div></td>
+        </tr>
+        {% else %}<tr><td class="empty">Пока пусто</td></tr>{% endfor %}
+      </table>
+    </div>
+  </div>
 </div>
 
-<footer>Proqnozai Bot Dashboard · Обновляется автоматически каждые 60 секунд</footer>
+<footer>Proqnozai Bot Dashboard · данные обновляются автоматически каждые 45 секунд</footer>
 
 <script>
-// ── Theme switcher ──────────────────────────────────────────────────────────
-function setTheme(t) {
-  document.body.setAttribute('data-theme', t);
-  localStorage.setItem('theme', t);
-  document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
-  updateCharts();
-}
-(function(){
-  const saved = localStorage.getItem('theme') || 'dark';
-  document.body.setAttribute('data-theme', saved);
-  document.querySelectorAll('.theme-btn').forEach(b => {
-    if(b.textContent.includes(saved === 'dark' ? '🌙' : saved === 'light' ? '☀️' : saved === 'ocean' ? '🌊' : '🌿'))
-      b.classList.add('active');
-    else b.classList.remove('active');
-  });
-})();
-
-function cssVar(name) {
-  return getComputedStyle(document.body).getPropertyValue(name).trim();
-}
-
-// ── Chart data ──────────────────────────────────────────────────────────────
 let dailyLabels = {{ daily_labels|tojson }};
 let dailyData   = {{ daily_values|tojson }};
+let fcLabels    = {{ fc_labels|tojson }};
+let fcData      = {{ fc_values|tojson }};
 let langLabels  = {{ lang_labels|tojson }};
 let langData    = {{ lang_values|tojson }};
 let fbData      = {{ fb_data|tojson }};
@@ -672,142 +720,89 @@ let winrateLabels = {{ winrate_labels|tojson }};
 let winrateData   = {{ winrate_values|tojson }};
 
 const COLORS = ['#6c63ff','#38bdf8','#22c55e','#f59e0b','#ef4444','#a78bfa','#fb923c'];
-
 let lineChart, langChart, barChart, feedbackChart, winrateChart;
 
-// Chart.js is loaded from a CDN. If that host is unreachable the global is
-// undefined, and the first Chart.* access used to throw — killing the rest of
-// this script along with auto-refresh, the theme toggle and user search. The
-// numbers, tables and controls do not need the library, so a missing Chart
-// costs the graphs only.
-function chartsAvailable() { return typeof Chart !== 'undefined'; }
+function cssVar(n){ return getComputedStyle(document.body).getPropertyValue(n).trim(); }
 
-function noteChartsUnavailable() {
-  document.querySelectorAll('canvas').forEach(cv => {
-    const note = document.createElement('div');
-    note.className = 'chart-fallback';
-    note.textContent = 'Графики недоступны: не загрузилась библиотека Chart.js.';
-    if (cv.parentNode) cv.parentNode.replaceChild(note, cv);
+// Chart.js comes from a CDN. If that host is unreachable the global is
+// undefined, and touching Chart.* used to throw — taking auto-refresh, the
+// theme toggle and everything else on the page down with it. The numbers and
+// tables don't need the library, so a missing Chart costs only the graphs.
+function chartsAvailable(){ return typeof Chart !== 'undefined'; }
+function noteChartsUnavailable(){
+  document.querySelectorAll('canvas').forEach(cv=>{
+    const note=document.createElement('div');
+    note.className='chart-fallback';
+    note.textContent='Графики недоступны: не загрузилась библиотека Chart.js.';
+    if(cv.parentNode) cv.parentNode.replaceChild(note,cv);
   });
 }
 
-function makeCharts() {
-  if (!chartsAvailable()) { noteChartsUnavailable(); return; }
-  const gridColor = () => cssVar('--border');
-  const textColor = () => cssVar('--muted');
-  const accent    = () => cssVar('--accent');
+function axes(maxY){
+  return {
+    x:{grid:{display:false},ticks:{color:cssVar('--muted'),maxTicksLimit:7}},
+    y:{grid:{color:cssVar('--border')},ticks:{color:cssVar('--muted'),precision:0},
+       beginAtZero:true, max:maxY}
+  };
+}
+const noLegend={legend:{display:false}};
+const donutLegend={legend:{position:'bottom',labels:{color:cssVar('--muted'),padding:10,font:{size:11},boxWidth:10,usePointStyle:true}}};
 
-  Chart.defaults.color = textColor();
-  Chart.defaults.borderColor = gridColor();
+function makeCharts(){
+  if(!chartsAvailable()){ noteChartsUnavailable(); return; }
+  Chart.defaults.color = cssVar('--muted');
+  Chart.defaults.borderColor = cssVar('--border');
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
 
-  // Line chart — requests per day
   lineChart = new Chart(document.getElementById('lineChart'), {
-    type: 'line',
-    data: {
-      labels: dailyLabels,
-      datasets: [{
-        label: 'Запросы',
-        data: dailyData,
-        borderColor: accent(),
-        backgroundColor: accent() + '22',
-        borderWidth: 2,
-        pointRadius: 3,
-        fill: true,
-        tension: 0.4,
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { grid: { color: gridColor() }, ticks: { color: textColor(), maxTicksLimit: 7 } },
-        y: { grid: { color: gridColor() }, ticks: { color: textColor() }, beginAtZero: true }
-      }
-    }
+    type:'line',
+    data:{labels:dailyLabels,datasets:[{label:'Запросы',data:dailyData,
+      borderColor:cssVar('--accent'),backgroundColor:cssVar('--accent')+'22',
+      borderWidth:2,pointRadius:2,pointHoverRadius:5,fill:true,tension:.35}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:noLegend,scales:axes()}
   });
 
-  // Donut — languages
   langChart = new Chart(document.getElementById('langChart'), {
-    type: 'doughnut',
-    data: {
-      labels: langLabels,
-      datasets: [{ data: langData, backgroundColor: COLORS, borderWidth: 2, borderColor: cssVar('--bg2') }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { color: textColor(), padding: 10, font: { size: 11 } } } },
-      cutout: '65%'
-    }
+    type:'doughnut',
+    data:{labels:langLabels,datasets:[{data:langData,backgroundColor:COLORS,
+      borderWidth:2,borderColor:cssVar('--surface')}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:donutLegend,cutout:'68%'}
   });
 
-  // Bar — same daily data as second view
+  // Forecast volume — its own series, not a second view of the request count.
   barChart = new Chart(document.getElementById('barChart'), {
-    type: 'bar',
-    data: {
-      labels: dailyLabels,
-      datasets: [{
-        label: 'Запросы',
-        data: dailyData,
-        backgroundColor: accent() + 'cc',
-        borderRadius: 6,
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { grid: { display: false }, ticks: { color: textColor(), maxTicksLimit: 7 } },
-        y: { grid: { color: gridColor() }, ticks: { color: textColor() }, beginAtZero: true }
-      }
-    }
+    type:'bar',
+    data:{labels:fcLabels,datasets:[{label:'Прогнозы',data:fcData,
+      backgroundColor:cssVar('--accent')+'cc',borderRadius:6,maxBarThickness:26}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:noLegend,scales:axes()}
   });
 
-  // Donut — feedback
   feedbackChart = new Chart(document.getElementById('feedbackChart'), {
-    type: 'doughnut',
-    data: {
-      labels: ['Победы', 'Проигрыши', 'Без оценки'],
-      datasets: [{ data: fbData, backgroundColor: ['#22c55e','#ef4444','#374151'], borderWidth: 2, borderColor: cssVar('--bg2') }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { color: textColor(), padding: 10, font: { size: 11 } } } },
-      cutout: '65%'
-    }
+    type:'doughnut',
+    data:{labels:['Победы','Проигрыши','Без оценки'],datasets:[{data:fbData,
+      backgroundColor:[cssVar('--ok'),cssVar('--bad'),cssVar('--border')],
+      borderWidth:2,borderColor:cssVar('--surface')}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:donutLegend,cutout:'68%'}
   });
 
-  // Line — win-rate trend
   winrateChart = new Chart(document.getElementById('winrateChart'), {
-    type: 'line',
-    data: {
-      labels: winrateLabels,
-      datasets: [{
-        label: 'Win-rate %', data: winrateData,
-        borderColor: cssVar('--green'), backgroundColor: cssVar('--green') + '22',
-        borderWidth: 2, pointRadius: 3, fill: true, tension: 0.4,
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { grid: { display: false }, ticks: { color: textColor(), maxTicksLimit: 7 } },
-        y: { grid: { color: gridColor() }, ticks: { color: textColor() }, beginAtZero: true, max: 100 }
-      }
-    }
+    type:'line',
+    data:{labels:winrateLabels,datasets:[{label:'Win-rate %',data:winrateData,
+      borderColor:cssVar('--ok'),backgroundColor:cssVar('--ok')+'22',
+      borderWidth:2,pointRadius:2,fill:true,tension:.35}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:noLegend,scales:axes(100)}
   });
 }
 
-function updateCharts() {
-  if (!chartsAvailable()) return;   // nothing to redraw; the rest still refreshes
-  [lineChart, langChart, barChart, feedbackChart, winrateChart].forEach(c => { if(c) c.destroy(); });
-  setTimeout(makeCharts, 50);
+function updateCharts(){
+  if(!chartsAvailable()) return;
+  [lineChart,langChart,barChart,feedbackChart,winrateChart].forEach(c=>{ if(c) c.destroy(); });
+  setTimeout(makeCharts, 40);
 }
-
 makeCharts();
 
-// ── AJAX auto-refresh (no page reload, keeps theme & scroll) ─────────────────
-function setText(id, v){ const el = document.getElementById(id); if(el) el.textContent = v; }
+// ── AJAX refresh: keeps theme, scroll and the open page state ────────────────
+function setText(id,v){ const el=document.getElementById(id); if(el) el.textContent=v; }
 async function refreshData(){
   try{
     const r = await fetch('/api/data'); if(!r.ok) return;
@@ -816,27 +811,67 @@ async function refreshData(){
     setText('k_new', '+' + (x.users_today||0));
     setText('k_dau', x.users_active_today);
     setText('k_forecasts', x.forecasts_real_total ?? x.forecasts_total);
-    const fbt = x.fb_total||0, fbw = x.fb_wins||0;
+    setText('k_reqs', x.reqs_total);
+    const fbt=x.fb_total||0, fbw=x.fb_wins||0;
     setText('k_acc', (fbt ? Math.round(fbw/fbt*100) : 0) + '%');
-    dailyLabels = (x.daily||[]).map(r=>r[0].slice(5));
-    dailyData   = (x.daily||[]).map(r=>r[1]);
-    langLabels  = (x.langs||[]).map(r=>r[0]);
-    langData    = (x.langs||[]).map(r=>r[1]);
-    fbData      = [fbw, fbt-fbw, Math.max(0,(x.forecasts_total||0)-fbt)];
-    winrateLabels = (x.winrate_daily||[]).map(r=>r[0].slice(5));
-    winrateData   = (x.winrate_daily||[]).map(r=> r[2] ? Math.round(r[1]/r[2]*100) : 0);
+    dailyLabels=(x.daily||[]).map(r=>r[0].slice(5));
+    dailyData=(x.daily||[]).map(r=>r[1]);
+    fcLabels=(x.forecasts_daily||[]).map(r=>r[0].slice(5));
+    fcData=(x.forecasts_daily||[]).map(r=>r[1]);
+    langLabels=(x.langs||[]).map(r=>r[0]);
+    langData=(x.langs||[]).map(r=>r[1]);
+    fbData=[fbw, fbt-fbw, Math.max(0,(x.forecasts_real_total||0)-fbt)];
+    winrateLabels=(x.winrate_daily||[]).map(r=>r[0].slice(5));
+    winrateData=(x.winrate_daily||[]).map(r=> r[2] ? Math.round(r[1]/r[2]*100) : 0);
     updateCharts();
-    const badge = document.querySelector('.refresh-badge');
-    if(badge) badge.textContent = '🔄 ' + new Date().toLocaleTimeString('ru-RU');
+    setText('stamp', '🔄 ' + new Date().toLocaleTimeString('ru-RU'));
   }catch(e){}
 }
 setInterval(refreshData, 45000);
 </script>
-</body>
-</html>"""
+"""
+
+TEMPLATE = _page(_STATS_BODY, "Proqnozai — Дашборд").replace(
+    "{% block head %}{% endblock %}",
+    '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>')
+
+
+# A delta chip, rendered from the dict _delta() produces. A macro rather than
+# five copies of the same conditional markup.
+_CHIP = r"""
+{% macro chip(d) %}{% if d and d.show %}<span class="delta {{ d.cls }}">{{ d.arrow }}{{ d.pct }}%</span>{% endif %}{% endmacro %}
+"""
+TEMPLATE = _CHIP + TEMPLATE
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
+# Numeric keys the template compares or divides. A backend that is older than
+# the dashboard (the two deploy independently) simply omits the newest ones, and
+# an Undefined in an arithmetic comparison raises mid-render — which the auth
+# wrapper then reports as a 401. Defaults keep a partial payload renderable.
+_NUM_DEFAULTS = (
+    "users_total", "users_today", "users_week", "users_prev_week", "users_blocked",
+    "users_active_today", "users_active_yday", "users_active_week",
+    "reqs_total", "reqs_today", "reqs_week", "reqs_prev_week",
+    "forecasts_total", "forecasts_today", "forecasts_real_total", "forecasts_real_today",
+    "forecasts_week", "forecasts_prev_week", "repeat_users", "repeat_pct",
+    "users_with_activity", "live_subs", "live_matches", "fb_total", "fb_wins",
+)
+
+
+def _delta(cur: int, prev: int) -> dict:
+    """Week-over-week change as a renderable chip.
+
+    Hidden when there is no baseline: "+100%" against a first week of zero says
+    nothing, and a chip that is always green stops being read."""
+    if not prev:
+        return {"show": False}
+    pct = round((cur - prev) / prev * 100)
+    return {"show": True, "pct": abs(pct),
+            "cls": "d-up" if pct > 0 else "d-down" if pct < 0 else "d-flat",
+            "arrow": "↑" if pct > 0 else "↓" if pct < 0 else "→"}
+
+
 @app.route("/")
 @require_auth
 def index():
@@ -854,28 +889,46 @@ def index():
         logger.warning("stats backend unavailable for '/': %s", _safe_err(e))
         return _BACKEND_DOWN_PAGE, 503
 
+    for key in _NUM_DEFAULTS:
+        raw.setdefault(key, 0)
+    for key in ("langs", "top_users", "recent_users", "recent_forecasts",
+                "daily", "forecasts_daily", "winrate_daily", "by_action", "retention"):
+        raw.setdefault(key, [])
+
     fb_total = raw.get("fb_total", 0)
     fb_wins  = raw.get("fb_wins", 0)
     fb_lose  = fb_total - fb_wins
     raw["fb_pct"] = round(fb_wins / fb_total * 100) if fb_total else 0
 
-    daily       = raw.get("daily", [])
+    daily        = raw.get("daily", [])
     daily_labels = [r[0][5:] for r in daily]
     daily_values = [r[1] for r in daily]
+
+    fc_daily  = raw.get("forecasts_daily", [])
+    fc_labels = [r[0][5:] for r in fc_daily]
+    fc_values = [r[1] for r in fc_daily]
 
     langs       = raw.get("langs", [])
     lang_labels = [r[0] for r in langs]
     lang_values = [r[1] for r in langs]
 
-    forecasts_total = raw.get("forecasts_total", 0)
-    fb_unrated = max(0, forecasts_total - fb_total)
+    # Unrated = forecasts actually produced minus the ones anyone rated. The
+    # event log is the denominator; forecast_history keeps only 10 rows per user.
+    fb_unrated = max(0, raw.get("forecasts_real_total", 0) - fb_total)
 
     wr = raw.get("winrate_daily", [])
     winrate_labels = [r[0][5:] for r in wr]
     winrate_values = [round(r[1] / r[2] * 100) if r[2] else 0 for r in wr]
 
+    deltas = {
+        "users":     _delta(raw.get("users_week", 0), raw.get("users_prev_week", 0)),
+        "dau":       _delta(raw.get("users_active_today", 0), raw.get("users_active_yday", 0)),
+        "reqs":      _delta(raw.get("reqs_week", 0), raw.get("reqs_prev_week", 0)),
+        "forecasts": _delta(raw.get("forecasts_week", 0), raw.get("forecasts_prev_week", 0)),
+    }
+
     from datetime import datetime, timezone
-    generated_at = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    stamp = datetime.now(timezone.utc).strftime("%d.%m %H:%M UTC")
 
     class D:
         pass
@@ -883,12 +936,13 @@ def index():
     d.__dict__.update(raw)
 
     return render_template_string(
-        TEMPLATE, d=d,
+        TEMPLATE, d=d, dl=deltas, bc=raw.get("broadcasts", {}),
         daily_labels=daily_labels, daily_values=daily_values,
+        fc_labels=fc_labels, fc_values=fc_values,
         lang_labels=lang_labels, lang_values=lang_values,
         fb_data=[fb_wins, fb_lose, fb_unrated],
         winrate_labels=winrate_labels, winrate_values=winrate_values,
-        generated_at=generated_at,
+        page="stats", subtitle="Онлайн · обновление каждые 45с", stamp=stamp,
     )
 
 
@@ -897,6 +951,18 @@ def _auth_headers() -> dict:
     access logs and browser history. The worker still accepts ?token= so the two
     services can be redeployed in either order."""
     return {"X-Dashboard-Token": STATS_TOKEN} if STATS_TOKEN else {}
+
+
+def _proxy_get(path: str, params: dict | None = None, timeout: int = 8) -> Response:
+    """Pass a worker GET through to the browser. Every /api/* read does the same
+    three things — call, forward, degrade — so they say it once."""
+    try:
+        resp = httpx.get(f"{_BOT_BASE}{path}", params=params,
+                         headers=_auth_headers(), timeout=timeout)
+        return Response(resp.text, mimetype="application/json", status=resp.status_code)
+    except Exception as e:
+        logger.warning("stats backend unavailable for %s: %s", path, _safe_err(e))
+        return _backend_error_json()
 
 
 @app.route("/api/data")
@@ -915,8 +981,45 @@ def api_data():
 @app.route("/api/broadcast/status")
 @require_auth
 def api_broadcast_status():
+    return _proxy_get("/broadcast/status")
+
+
+@app.route("/api/broadcast/list")
+@require_auth
+def api_broadcast_list():
+    """The worker stores UTC; the operator reads Moscow time. Converting here
+    keeps one timezone rule in the web process instead of two in JavaScript."""
     try:
-        resp = httpx.get(f"{_BOT_BASE}/broadcast/status", headers=_auth_headers(), timeout=8)
+        resp = httpx.get(f"{_BOT_BASE}/broadcast/list", headers=_auth_headers(), timeout=8)
+        if resp.status_code != 200:
+            return Response(resp.text, mimetype="application/json", status=resp.status_code)
+        items = (resp.json() or {}).get("items", [])
+        for it in items:
+            it["run_at_local"] = _msk(it.get("run_at", ""))
+            it["created_at_local"] = _msk(it.get("created_at", ""))
+        return Response(json.dumps({"items": items}, ensure_ascii=False),
+                        mimetype="application/json")
+    except Exception as e:
+        logger.warning("stats backend unavailable for API route: %s", _safe_err(e))
+        return _backend_error_json()
+
+
+@app.route("/api/segment/size")
+@require_auth
+def api_segment_size():
+    return _proxy_get("/segment/size", params={"s": request.args.get("s", "all")})
+
+
+@app.route("/api/broadcast/cancel", methods=["POST"])
+@require_auth
+def api_broadcast_cancel():
+    if not csrf_ok():
+        logger.warning("broadcast cancel rejected: CSRF check failed")
+        return Response("CSRF check failed", 403)
+    body = request.get_json(silent=True) or {}
+    try:
+        resp = httpx.post(f"{_BOT_BASE}/broadcast/cancel", headers=_auth_headers(),
+                          json={"id": body.get("id")}, timeout=8)
         return Response(resp.text, mimetype="application/json", status=resp.status_code)
     except Exception as e:
         logger.warning("stats backend unavailable for API route: %s", _safe_err(e))
@@ -926,14 +1029,7 @@ def api_broadcast_status():
 @app.route("/api/users/search")
 @require_auth
 def api_users_search():
-    q = request.args.get("q", "").strip()
-    try:
-        resp = httpx.get(f"{_BOT_BASE}/users/search", params={"q": q},
-                         headers=_auth_headers(), timeout=8)
-        return Response(resp.text, mimetype="application/json", status=resp.status_code)
-    except Exception as e:
-        logger.warning("stats backend unavailable for API route: %s", _safe_err(e))
-        return _backend_error_json()
+    return _proxy_get("/users/search", params={"q": request.args.get("q", "").strip()})
 
 
 @app.route("/api/users/block", methods=["POST"])
@@ -1043,79 +1139,112 @@ def api_promo_archive_by_name():
                            request.get_json(silent=True) or {})
 
 
-@app.route("/partners")
-@require_auth
-def partners_page():
-    return render_template_string(PARTNERS_TEMPLATE, csrf=csrf_token())
+
+# ─── Users page ───────────────────────────────────────────────────────────────
+_USERS_BODY = r"""
+<div class="container" style="max-width:1020px">
+  <div class="card">
+    <h3>🔍 Поиск пользователя</h3>
+    <div class="row">
+      <input id="q" placeholder="ID, @username или имя..." onkeydown="if(event.key==='Enter')doSearch()">
+      <button class="btn primary" onclick="doSearch()">Найти</button>
+    </div>
+  </div>
+  <div id="result" style="margin-top:14px"><div class="empty">Введите запрос для поиска пользователей.</div></div>
+</div>
+<script>
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function doSearch(){
+  const q = document.getElementById('q').value.trim();
+  const box = document.getElementById('result');
+  if(!q){ box.innerHTML = '<div class="empty">Введите запрос.</div>'; return; }
+  box.innerHTML = '<div class="empty">Поиск…</div>';
+  try{
+    const r = await fetch('/api/users/search?q=' + encodeURIComponent(q));
+    const data = await r.json();
+    const users = data.users || [];
+    if(!users.length){ box.innerHTML = '<div class="empty">Ничего не найдено.</div>'; return; }
+    let html = '<div class="card tbl-wrap"><table><tr><th>ID</th><th>Имя</th><th>Username</th><th>Язык</th><th>Запросов</th><th>Статус</th><th></th></tr>';
+    for(const u of users){
+      const b = u.is_blocked;
+      html += '<tr>'
+        + '<td class="muted">'+esc(u.user_id)+'</td>'
+        + '<td><strong>'+esc(u.display_name||'—')+'</strong></td>'
+        + '<td class="muted">@'+esc(u.username||'-')+'</td>'
+        + '<td><span class="badge lang">'+esc(u.lang||'')+'</span></td>'
+        + '<td>'+esc(u.total_requests||0)+'</td>'
+        + '<td>'+(b?'<span class="badge lose">🚫 Заблокирован</span>':'<span class="badge win">✅ Активен</span>')+'</td>'
+        + '<td><button class="btn sm '+(b?'':'danger')+'" onclick="toggleBlock('+Number(u.user_id)+','+(b?0:1)+')">'
+        + (b?'Разблокировать':'Заблокировать')+'</button></td></tr>';
+    }
+    box.innerHTML = html + '</table></div>';
+  }catch(e){ box.innerHTML = '<div class="empty">Ошибка загрузки.</div>'; }
+}
+async function toggleBlock(uid, blocked){
+  try{
+    await fetch('/api/users/block', {method:'POST',
+      headers:{'Content-Type':'application/json','X-CSRF-Token':'{{ csrf }}'},
+      body: JSON.stringify({user_id: uid, blocked: blocked})});
+    doSearch();
+  }catch(e){ alert('Не удалось изменить статус'); }
+}
+</script>
+"""
+
+USERS_TEMPLATE = _page(_USERS_BODY, "Proqnozai — Пользователи").replace(
+    "{% block head %}{% endblock %}", "")
 
 
 @app.route("/users")
 @require_auth
 def users_page():
-    return render_template_string(USERS_TEMPLATE, csrf=csrf_token())
+    return render_template_string(USERS_TEMPLATE, csrf=csrf_token(),
+                                  page="users", subtitle="Управление доступом",
+                                  stamp="")
 
 
-PARTNERS_TEMPLATE = r"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Proqnozai — Партнёры и промокоды</title>
-<style>
-:root{--bg:#0f1117;--bg2:#1a1d27;--border:#2a2d3a;--accent:#6c63ff;--green:#22c55e;--red:#ef4444;--yellow:#f59e0b;--text:#e2e8f0;--muted:#94a3b8;}
-*{box-sizing:border-box;margin:0;padding:0;}
-body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;}
-header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
-.logo h1{font-size:17px;color:var(--accent);}
-.btn{background:none;border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;text-decoration:none;display:inline-block;}
-.btn:hover{border-color:var(--accent);color:var(--accent);}
-.btn:disabled{opacity:.5;cursor:not-allowed;}
-.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600;}
-.btn-danger{border-color:var(--red);color:var(--red);}
-.container{max-width:920px;margin:28px auto;padding:0 20px;}
-.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;gap:12px;flex-wrap:wrap;}
-.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:14px;}
-.card.off{opacity:.62;}
+
+# ─── Partners page ────────────────────────────────────────────────────────────
+# The markup and script are the partner manager as shipped; only the shell (CSS,
+# header, nav) is the shared one, so this page stops looking like a different
+# product from the rest of the dashboard.
+_PARTNERS_EXTRA_CSS = r"""
+/* ── Partners page ── */
+.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:12px;flex-wrap:wrap;}
+.card.off{opacity:.6;}
 .row1{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}
 .pname{font-size:16px;font-weight:700;}
-.badge{padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;white-space:nowrap;}
-.b-on{background:#14532d;color:var(--green);}
-.b-off{background:var(--border);color:var(--muted);}
-.b-warn{background:#452c0a;color:var(--yellow);}
+.b-on{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok);}
+.b-off{background:var(--surface2);color:var(--muted);}
+.b-warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn);}
 .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-top:14px;}
 .f-label{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;}
 .f-val{font-size:13px;word-break:break-all;}
 .actions{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;}
-label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 5px;}
-input,textarea{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px 12px;font-size:14px;outline:none;font-family:inherit;}
-input:focus,textarea:focus{border-color:var(--accent);}
-textarea{resize:vertical;min-height:120px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;}
-.pool-note{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-top:12px;font-size:12px;color:var(--muted);}
+.pool-note{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:12px;font-size:12px;color:var(--muted);}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 @media(max-width:560px){.grid2{grid-template-columns:1fr;}}
-.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:16px;z-index:50;}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:16px;z-index:200;}
 .modal-bg.open{display:flex;}
-.modal{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:22px;max-width:520px;width:100%;max-height:90vh;overflow:auto;}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:22px;
+  max-width:540px;width:100%;max-height:90vh;overflow:auto;box-shadow:var(--shadow);}
 .modal h2{font-size:16px;margin-bottom:6px;}
-.msg{margin-top:14px;padding:10px 12px;border-radius:8px;font-size:13px;display:none;}
-.msg.err{display:block;background:#450a0a;color:#fca5a5;}
-.msg.ok{display:block;background:#14532d;color:#86efac;}
-.hint{color:var(--muted);text-align:center;padding:40px;}
-.muted{color:var(--muted);}
+.msg{margin-top:14px;padding:10px 12px;border-radius:10px;font-size:13px;display:none;}
+.msg.err{display:block;background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad);}
+.msg.ok{display:block;background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok);}
+.hint{color:var(--muted);text-align:center;padding:34px;}
+/* Their markup predates the shared button classes; keep the old names working
+   rather than rewriting several hundred lines of generated HTML. */
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;}
+.btn-primary:hover{background:var(--accent2);border-color:var(--accent2);color:#fff;}
+.btn-danger{border-color:var(--bad);color:var(--bad);}
+.card{margin-bottom:14px;}
+label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 5px;}
 .chk{display:flex;align-items:center;gap:8px;margin-top:14px;}
-.chk input{width:auto;}
 .chk span{font-size:13px;color:var(--text);}
-</style>
-</head>
-<body>
-<header>
-  <div class="logo"><h1>⚽ Proqnozai — Партнёры и промокоды</h1></div>
-  <div>
-    <a href="/" class="btn">📊 Статистика</a>
-    <a href="/users" class="btn">👥 Пользователи</a>
-    <a href="/broadcast" class="btn">📢 Рассылка</a>
-  </div>
-</header>
+"""
+
+_PARTNERS_BODY = r"""
 <div class="container">
   <div class="toolbar">
     <div class="muted">Изменения применяются сразу — перезапуск бота не нужен.</div>
@@ -1456,264 +1585,371 @@ function copyCode(id){ const p = byId(id); if(p && p.promo) copyText(p.promo.cod
 
 load();
 </script>
-</body>
-</html>
 """
 
+PARTNERS_TEMPLATE = _page(_PARTNERS_BODY, "Proqnozai — Партнёры").replace(
+    "{% block head %}{% endblock %}", "<style>" + _PARTNERS_EXTRA_CSS + "</style>")
 
-USERS_TEMPLATE = r"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Proqnozai — Пользователи</title>
-<style>
-:root{--bg:#0f1117;--bg2:#1a1d27;--border:#2a2d3a;--accent:#6c63ff;--green:#22c55e;--red:#ef4444;--text:#e2e8f0;--muted:#94a3b8;}
-*{box-sizing:border-box;margin:0;padding:0;}
-body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;}
-header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;}
-.logo h1{font-size:17px;color:var(--accent);}
-.btn{background:none;border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;text-decoration:none;display:inline-block;}
-.btn:hover{border-color:var(--accent);color:var(--accent);}
-.container{max-width:980px;margin:32px auto;padding:0 20px;}
-.search{display:flex;gap:10px;margin-bottom:24px;}
-input{flex:1;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:11px 14px;font-size:14px;outline:none;}
-input:focus{border-color:var(--accent);}
-.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent);padding:11px 22px;font-weight:600;}
-table{width:100%;border-collapse:collapse;background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
-th{color:var(--muted);font-size:11px;text-transform:uppercase;padding:12px;text-align:left;border-bottom:1px solid var(--border);}
-td{padding:12px;border-bottom:1px solid var(--border);font-size:13px;}
-tr:last-child td{border-bottom:none;}
-.badge{padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700;}
-.b-ok{background:#14532d;color:var(--green);}
-.b-blk{background:#450a0a;color:var(--red);}
-.act{cursor:pointer;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;color:#fff;}
-.a-block{background:var(--red);}
-.a-unblock{background:var(--green);}
-.muted{color:var(--muted);}
-.hint{color:var(--muted);text-align:center;padding:30px;}
-</style>
-</head>
-<body>
-<header>
-  <div class="logo"><h1>⚽ Proqnozai — Пользователи</h1></div>
-  <div>
-    <a href="/" class="btn">📊 Статистика</a>
-    <a href="/partners" class="btn">🤝 Партнёры</a>
-    <a href="/broadcast" class="btn">📢 Рассылка</a>
+
+@app.route("/partners")
+@require_auth
+def partners_page():
+    return render_template_string(PARTNERS_TEMPLATE, csrf=csrf_token(),
+                                  page="partners", subtitle="Партнёры и промокоды",
+                                  stamp="")
+
+
+# ─── Broadcast page ───────────────────────────────────────────────────────────
+_BROADCAST_BODY = r"""
+<div class="container" style="max-width:1180px">
+
+  {% if result %}
+  <div class="card" style="margin-bottom:14px;border-color:{{ 'var(--ok)' if result.ok else 'var(--bad)' }}">
+    {% if result.ok %}
+      {% if result.scheduled %}🗓 Рассылка запланирована на <b>{{ result.when }}</b> (МСК) для
+        <b>{{ result.recipients }}</b> чел. Её можно отменить в списке ниже до момента отправки.
+      {% else %}🚀 Рассылка запущена для <b>{{ result.recipients }}</b> чел. Прогресс — ниже.{% endif %}
+    {% else %}❌ {{ result.error }}{% endif %}
   </div>
-</header>
-<div class="container">
-  <div class="search">
-    <input id="q" placeholder="ID, @username или имя..." onkeydown="if(event.key==='Enter')doSearch()">
-    <button class="btn btn-primary" onclick="doSearch()">🔍 Найти</button>
-  </div>
-  <div id="result"><div class="hint">Введите запрос для поиска пользователей.</div></div>
-</div>
-<script>
-async function doSearch(){
-  const q = document.getElementById('q').value.trim();
-  const box = document.getElementById('result');
-  if(!q){ box.innerHTML = '<div class="hint">Введите запрос.</div>'; return; }
-  box.innerHTML = '<div class="hint">Поиск...</div>';
-  try{
-    const r = await fetch('/api/users/search?q=' + encodeURIComponent(q));
-    const data = await r.json();
-    const users = data.users || [];
-    if(!users.length){ box.innerHTML = '<div class="hint">Ничего не найдено.</div>'; return; }
-    let html = '<table><tr><th>ID</th><th>Имя</th><th>Username</th><th>Язык</th><th>Запросов</th><th>Статус</th><th></th></tr>';
-    for(const u of users){
-      const blocked = u.is_blocked;
-      html += '<tr>'
-        + '<td class="muted">'+u.user_id+'</td>'
-        + '<td><strong>'+(u.display_name||'—')+'</strong></td>'
-        + '<td class="muted">@'+(u.username||'-')+'</td>'
-        + '<td>'+(u.lang||'')+'</td>'
-        + '<td>'+(u.total_requests||0)+'</td>'
-        + '<td>'+(blocked?'<span class="badge b-blk">🚫 Блок</span>':'<span class="badge b-ok">✅ Активен</span>')+'</td>'
-        + '<td><button class="act '+(blocked?'a-unblock':'a-block')+'" onclick="toggleBlock('+u.user_id+','+(blocked?0:1)+')">'+(blocked?'Разблокировать':'Заблокировать')+'</button></td>'
-        + '</tr>';
-    }
-    html += '</table>';
-    box.innerHTML = html;
-  }catch(e){ box.innerHTML = '<div class="hint">Ошибка: '+e+'</div>'; }
-}
-async function toggleBlock(uid, blocked){
-  try{
-    await fetch('/api/users/block', {method:'POST',
-      headers:{'Content-Type':'application/json','X-CSRF-Token':'{{ csrf }}'},
-      body: JSON.stringify({user_id: uid, blocked: blocked})});
-    doSearch();
-  }catch(e){ alert('Ошибка: '+e); }
-}
-</script>
-</body>
-</html>"""
+  {% endif %}
 
+  <div class="grid g2" style="align-items:start">
+    <!-- ── Composer ── -->
+    <div class="card">
+      <h3>📢 Новая рассылка</h3>
+      <form id="bform" method="POST" action="/broadcast">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="buttons" id="buttonsJson" value="">
 
-BROADCAST_TEMPLATE = r"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Proqnozai — Рассылка</title>
-<style>
-:root{--bg:#0f1117;--bg2:#1a1d27;--border:#2a2d3a;--accent:#6c63ff;--accent2:#a78bfa;--green:#22c55e;--red:#ef4444;--text:#e2e8f0;--muted:#94a3b8;}
-[data-theme="light"]{--bg:#f1f5f9;--bg2:#ffffff;--border:#e2e8f0;--accent:#6c63ff;--text:#0f172a;--muted:#64748b;}
-[data-theme="ocean"]{--bg:#0c1929;--bg2:#112236;--border:#1e3a5f;--accent:#38bdf8;--text:#e0f2fe;--muted:#7dd3fc;}
-[data-theme="forest"]{--bg:#0a1612;--bg2:#122218;--border:#1e3a28;--accent:#22c55e;--text:#dcfce7;--muted:#86efac;}
-*{box-sizing:border-box;margin:0;padding:0;}
-body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;}
-header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;}
-.logo{display:flex;align-items:center;gap:10px;}
-.logo h1{font-size:17px;font-weight:700;color:var(--accent);}
-.header-right{display:flex;align-items:center;gap:12px;}
-.btn{background:none;border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s;text-decoration:none;display:inline-block;}
-.btn:hover{border-color:var(--accent);color:var(--accent);}
-.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent);padding:10px 24px;font-size:14px;font-weight:600;}
-.btn-primary:hover{background:var(--accent2);border-color:var(--accent2);color:#fff;}
-.container{max-width:760px;margin:40px auto;padding:0 20px;}
-.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.3);}
-h2{font-size:20px;font-weight:700;margin-bottom:6px;}
-.sub{color:var(--muted);font-size:13px;margin-bottom:24px;}
-label{display:block;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px;}
-select,textarea{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;transition:border-color .2s;outline:none;margin-bottom:20px;}
-select:focus,textarea:focus{border-color:var(--accent);}
-textarea{min-height:160px;resize:vertical;}
-.char-count{text-align:right;font-size:11px;color:var(--muted);margin-top:-16px;margin-bottom:20px;}
-.alert{padding:16px 20px;border-radius:8px;margin-bottom:24px;font-size:14px;}
-.alert-success{background:#14532d;border:1px solid #16a34a;color:#86efac;}
-.alert-error{background:#450a0a;border:1px solid #b91c1c;color:#fca5a5;}
-.preview-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:13px;color:var(--muted);min-height:60px;white-space:pre-wrap;margin-bottom:20px;}
-.seg-count{display:inline-block;background:rgba(108,99,255,.15);color:var(--accent);border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;margin-left:8px;}
-.divider{border:none;border-top:1px solid var(--border);margin:24px 0;}
-</style>
-</head>
-<body data-theme="dark">
-<header>
-  <div class="logo">
-    <span style="font-size:22px">⚽</span>
-    <h1>Proqnozai Bot</h1>
-  </div>
-  <div class="header-right">
-    <a href="/" class="btn">📊 Статистика</a>
-    <a href="/users" class="btn">👥 Пользователи</a>
-    <a href="/broadcast" class="btn" style="border-color:var(--accent);color:var(--accent)">📢 Рассылка</a>
-    <button class="btn" onclick="setTheme('dark')">🌙</button>
-    <button class="btn" onclick="setTheme('light')">☀️</button>
-    <button class="btn" onclick="setTheme('ocean')">🌊</button>
-    <button class="btn" onclick="setTheme('forest')">🌿</button>
-  </div>
-</header>
+        <div class="field">
+          <label class="f" for="segment">Аудитория <span id="segSize" class="badge"></span></label>
+          <select name="segment" id="segment" onchange="segChanged()">
+            <option value="all">👥 Все активные пользователи</option>
+            <optgroup label="По языку">
+              <option value="lang:az">🇦🇿 Azərbaycan</option>
+              <option value="lang:ru">🇷🇺 Русский</option>
+              <option value="lang:en">🇬🇧 English</option>
+              <option value="lang:tr">🇹🇷 Türkçe</option>
+              <option value="lang:kz">🇰🇿 Қазақша</option>
+              <option value="lang:uz">🇺🇿 O'zbek</option>
+              <option value="lang:ar">🇸🇦 العربية</option>
+            </optgroup>
+            <optgroup label="По виду спорта">
+              <option value="sport:football">⚽ Футбол</option>
+              <option value="sport:ufc">🥊 UFC/MMA</option>
+              <option value="sport:nba">🏀 Баскетбол</option>
+              <option value="sport:tennis">🎾 Теннис</option>
+              <option value="sport:hockey">🏒 Хоккей</option>
+              <option value="sport:all">🏆 Все виды</option>
+            </optgroup>
+            <optgroup label="По активности">
+              <option value="act:active">🟢 Активные (≤7 дней)</option>
+              <option value="act:churn">🟡 Отток (7–30 дней)</option>
+              <option value="act:sleep">🔴 Спящие (&gt;30 дней)</option>
+              <option value="act:never">⚪ Ни одного действия</option>
+            </optgroup>
+          </select>
+        </div>
 
-<div class="container">
-  <div class="card">
-    <h2>📢 Рассылка</h2>
-    <p class="sub">Отправить сообщение сегменту пользователей через Telegram-бота</p>
+        <div class="field">
+          <label class="f">Текст сообщения (HTML)</label>
+          <div class="row" style="gap:6px;margin-bottom:8px;flex-wrap:wrap">
+            <button type="button" class="btn sm" onclick="wrap('b')"><b>Ж</b></button>
+            <button type="button" class="btn sm" onclick="wrap('i')"><i>К</i></button>
+            <button type="button" class="btn sm" onclick="wrap('u')"><u>Ч</u></button>
+            <button type="button" class="btn sm" onclick="wrap('s')"><s>З</s></button>
+            <button type="button" class="btn sm" onclick="wrap('code')">&lt;/&gt;</button>
+            <button type="button" class="btn sm" onclick="insertLink()">🔗 Ссылка</button>
+            <button type="button" class="btn sm" onclick="insertTag('tg-spoiler')">🙈 Спойлер</button>
+          </div>
+          <textarea name="text" id="text" maxlength="4096" oninput="renderPreview()"
+                    placeholder="Привет! Сегодня разбираем <b>топ-матч</b> дня — <a href=&quot;https://t.me/…&quot;>смотреть</a>">{{ prefill or '' }}</textarea>
+          <div class="sub" style="text-align:right;margin-top:4px">
+            <span id="charCount">0</span> / 4096 · поддерживаются &lt;b&gt; &lt;i&gt; &lt;u&gt; &lt;s&gt; &lt;code&gt; &lt;a href&gt;
+          </div>
+        </div>
 
-    {% if result %}
-    <div class="alert alert-{{ 'success' if result.started > 0 else 'error' }}">
-      {% if result.started > 0 %}
-      🚀 Рассылка запущена для <strong>{{ result.started }}</strong> чел.
-      Отправка идёт в фоне (~20 сообщений/сек). Прогресс можно отслеживать в логах бота.
-      {% else %}
-      ❌ Не удалось запустить: {{ result.error or 'неизвестная ошибка' }}
-      {% endif %}
+        <div class="field">
+          <label class="f">Кнопки под сообщением</label>
+          <div id="buttons"></div>
+          <button type="button" class="btn sm" onclick="addButton()">＋ Добавить кнопку</button>
+          <div class="sub" style="margin-top:6px">До 8 кнопок, ссылка вида https://… или tg://…</div>
+        </div>
+
+        <div class="field">
+          <label class="f">Время отправки (МСК)</label>
+          <div class="row" style="flex-wrap:wrap">
+            <input type="datetime-local" name="run_at" id="runAt" style="flex:1;min-width:190px" onchange="renderSubmit()">
+            <button type="button" class="btn sm" onclick="preset(1)">+1 ч</button>
+            <button type="button" class="btn sm" onclick="preset(3)">+3 ч</button>
+            <button type="button" class="btn sm" onclick="presetTomorrow()">Завтра 10:00</button>
+            <button type="button" class="btn sm" onclick="clearTime()">Сейчас</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="chk"><input type="checkbox" name="no_preview" id="noPreview" onchange="renderPreview()"> Не показывать превью ссылок</label>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:18px 0">
+        <button type="submit" class="btn primary" id="submitBtn">📤 Отправить сейчас</button>
+        <span class="sub" style="margin-left:10px">Действие необратимо</span>
+      </form>
     </div>
-    {% endif %}
 
-    <div id="bcastProgress" style="display:none;margin-bottom:24px;">
-      <label>Прогресс рассылки</label>
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;height:14px;overflow:hidden;margin:6px 0;">
-        <div id="bcastBar" style="height:14px;width:0%;background:var(--accent);transition:width .4s;"></div>
+    <!-- ── Preview + progress + queue ── -->
+    <div>
+      <div class="card">
+        <h3>👀 Превью</h3>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:14px;
+                    padding:14px 16px;min-height:90px">
+          <div id="preview" style="font-size:14px;white-space:pre-wrap;word-break:break-word">
+            <span class="muted">Начните вводить текст…</span>
+          </div>
+          <div id="previewButtons" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+        <div id="previewError" class="sub bad" style="margin-top:8px"></div>
       </div>
-      <div id="bcastText" class="sub" style="margin:0;"></div>
+
+      <div class="card" id="progressCard" style="margin-top:14px;display:none">
+        <h3>⏳ Прогресс отправки</h3>
+        <div class="bar-wrap" style="height:10px"><div class="bar" id="bcastBar" style="height:10px;width:0%"></div></div>
+        <div class="sub" id="bcastText" style="margin-top:8px"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h3>🗓 Очередь и история</h3>
+        <div id="queue"><div class="empty">Загрузка…</div></div>
+      </div>
     </div>
-
-    <form method="POST" action="/broadcast" onsubmit="return confirmSend()">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label for="segment">Аудитория</label>
-      <select name="segment" id="segment" onchange="updateCount()">
-        <option value="all">👥 Все активные пользователи</option>
-        <optgroup label="По языку">
-          <option value="lang:az">🇦🇿 Azərbaycan</option>
-          <option value="lang:ru">🇷🇺 Русский</option>
-          <option value="lang:en">🇬🇧 English</option>
-          <option value="lang:tr">🇹🇷 Türkçe</option>
-          <option value="lang:kz">🇰🇿 Қазақша</option>
-          <option value="lang:uz">🇺🇿 O'zbek</option>
-          <option value="lang:ar">🇸🇦 العربية</option>
-        </optgroup>
-        <optgroup label="По активности">
-          <option value="act:active">🟢 Активные (≤7 дней)</option>
-          <option value="act:churn">🟡 Отток (7–30 дней)</option>
-          <option value="act:sleep">🔴 Спящие (>30 дней)</option>
-        </optgroup>
-      </select>
-
-      <label for="text">Текст сообщения</label>
-      <textarea name="text" id="text" placeholder="Введите текст рассылки..." oninput="updateCount()"
-                maxlength="4096">{{ prefill or '' }}</textarea>
-      <div class="char-count"><span id="charCount">0</span> / 4096 символов</div>
-
-      <label>Превью</label>
-      <div class="preview-box" id="preview">Начните вводить текст...</div>
-
-      <hr class="divider">
-      <button type="submit" class="btn btn-primary">📤 Отправить рассылку</button>
-      <span style="color:var(--muted);font-size:12px;margin-left:12px;">⚠️ Действие необратимо</span>
-    </form>
-  </div>
-
-  <div style="margin-top:16px;text-align:center;color:var(--muted);font-size:12px;">
-    Рассылка отправляется напрямую через бот · Лимит Telegram: 30 сообщений/сек
   </div>
 </div>
 
 <script>
-(function(){
-  const saved = localStorage.getItem('theme') || 'dark';
-  document.body.setAttribute('data-theme', saved);
-})();
-function setTheme(t){
-  document.body.setAttribute('data-theme',t);
-  localStorage.setItem('theme',t);
-}
-function updateCount(){
-  const t = document.getElementById('text').value;
-  document.getElementById('charCount').textContent = t.length;
-  document.getElementById('preview').textContent = t || 'Начните вводить текст...';
-}
-function confirmSend(){
-  const seg = document.getElementById('segment').options[document.getElementById('segment').selectedIndex].text;
-  const len = document.getElementById('text').value.trim().length;
-  if(!len){ alert('Введите текст'); return false; }
-  return confirm('Отправить рассылку?\nАудитория: ' + seg + '\n\nЭто действие необратимо.');
-}
-updateCount();
+const CSRF = '{{ csrf }}';
+const ta = document.getElementById('text');
 
-// ── Live broadcast progress ──────────────────────────────────────────────────
+// ── Formatting helpers ──────────────────────────────────────────────────────
+function insertTag(tag, attrs){
+  const s = ta.selectionStart, e = ta.selectionEnd, v = ta.value;
+  const open = '<' + tag + (attrs ? ' ' + attrs : '') + '>';
+  ta.value = v.slice(0,s) + open + v.slice(s,e) + '</' + tag + '>' + v.slice(e);
+  ta.focus();
+  ta.selectionStart = s + open.length; ta.selectionEnd = e + open.length;
+  renderPreview();
+}
+function wrap(tag){ insertTag(tag); }
+function insertLink(){
+  const url = prompt('Ссылка (https://… или tg://…)');
+  if(!url) return;
+  if(!/^(https?:\/\/|tg:\/\/)/.test(url)){ alert('Ссылка должна начинаться с http://, https:// или tg://'); return; }
+  insertTag('a', 'href="' + url.replace(/"/g,'&quot;') + '"');
+}
+
+// ── Buttons builder ─────────────────────────────────────────────────────────
+function addButton(text, url){
+  const box = document.getElementById('buttons');
+  if(box.children.length >= 8){ alert('Максимум 8 кнопок'); return; }
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.style.marginBottom = '8px';
+  row.innerHTML =
+    '<input placeholder="Текст кнопки" maxlength="64" style="flex:1">' +
+    '<input placeholder="https://…" style="flex:2">' +
+    '<button type="button" class="btn sm danger">✕</button>';
+  row.querySelectorAll('input').forEach(i=>i.addEventListener('input', renderPreview));
+  row.querySelector('button').onclick = ()=>{ row.remove(); renderPreview(); };
+  if(text) row.children[0].value = text;
+  if(url)  row.children[1].value = url;
+  box.appendChild(row);
+  renderPreview();
+}
+function collectButtons(){
+  // One button per row: Telegram allows several side by side, but a broadcast
+  // CTA reads better full width and it keeps the builder to one input pair.
+  return [...document.getElementById('buttons').children]
+    .map(r => ({text: r.children[0].value.trim(), url: r.children[1].value.trim()}))
+    .filter(b => b.text && b.url)
+    .map(b => [b]);
+}
+
+// ── Preview ─────────────────────────────────────────────────────────────────
+const ALLOWED = ['b','strong','i','em','u','ins','s','strike','del','a','code','pre','blockquote','span','tg-spoiler'];
+function previewHtml(src){
+  // Render only Telegram's own subset; anything else is shown as literal text,
+  // which is also how Telegram would reject it.
+  const escaped = src.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  return escaped.replace(
+    /&lt;(\/?)([a-z-]+)((?:\s+href="[^"]*")?)\s*&gt;/gi,
+    (m, slash, tag, attr) => {
+      if(!ALLOWED.includes(tag.toLowerCase())) return m;
+      if(tag.toLowerCase()==='a' && !slash){
+        const href = (attr.match(/href="([^"]*)"/i)||[])[1] || '';
+        if(!/^(https?:\/\/|tg:\/\/)/.test(href)) return m;
+        return '<a href="#" onclick="return false" style="color:var(--info)">';
+      }
+      return '<' + slash + tag + '>';
+    });
+}
+function renderPreview(){
+  const src = ta.value;
+  document.getElementById('charCount').textContent = src.length;
+  const box = document.getElementById('preview');
+  box.innerHTML = src ? previewHtml(src) : '<span class="muted">Начните вводить текст…</span>';
+
+  const pb = document.getElementById('previewButtons');
+  pb.innerHTML = '';
+  for(const row of collectButtons()){
+    const b = document.createElement('div');
+    b.textContent = row[0].text;
+    b.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:9px;'
+      + 'padding:8px;text-align:center;font-size:13px;font-weight:600;color:var(--info)';
+    pb.appendChild(b);
+  }
+  document.getElementById('previewError').textContent = checkHtml(src) || '';
+  renderSubmit();
+}
+function checkHtml(src){
+  // Cheap balance check so a broken tag is visible before the send, not after
+  // Telegram rejects the whole campaign. The worker validates again.
+  const stack = [];
+  const re = /<(\/?)([a-z-]+)(\s[^>]*)?>/gi;
+  let m;
+  while((m = re.exec(src))){
+    const tag = m[2].toLowerCase();
+    if(!ALLOWED.includes(tag)) return 'Тег <' + tag + '> не поддерживается Telegram';
+    if(m[1]){ if(stack.pop() !== tag) return 'Лишний или неверный закрывающий тег </' + tag + '>'; }
+    else stack.push(tag);
+  }
+  return stack.length ? 'Не закрыт тег <' + stack[stack.length-1] + '>' : '';
+}
+
+// ── Scheduling ──────────────────────────────────────────────────────────────
+function localValue(d){
+  const p = n => String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes());
+}
+// The input is Moscow time whatever the operator's own clock says, so presets
+// are computed in Moscow rather than from the browser's timezone.
+function mskNow(){
+  const now = new Date();
+  return new Date(now.getTime() + (now.getTimezoneOffset() + 180) * 60000);
+}
+function preset(h){ const d = mskNow(); d.setHours(d.getHours()+h); document.getElementById('runAt').value = localValue(d); renderSubmit(); }
+function presetTomorrow(){ const d = mskNow(); d.setDate(d.getDate()+1); d.setHours(10,0,0,0); document.getElementById('runAt').value = localValue(d); renderSubmit(); }
+function clearTime(){ document.getElementById('runAt').value=''; renderSubmit(); }
+function renderSubmit(){
+  const when = document.getElementById('runAt').value;
+  document.getElementById('submitBtn').textContent = when ? '🗓 Запланировать' : '📤 Отправить сейчас';
+}
+
+// ── Segment size ────────────────────────────────────────────────────────────
+async function segChanged(){
+  const seg = document.getElementById('segment').value;
+  const badge = document.getElementById('segSize');
+  badge.textContent = '…';
+  try{
+    const r = await fetch('/api/segment/size?s=' + encodeURIComponent(seg));
+    const d = await r.json();
+    badge.textContent = (d.size ?? '?') + ' получателей';
+  }catch(e){ badge.textContent = ''; }
+}
+
+// ── Submit ──────────────────────────────────────────────────────────────────
+document.getElementById('bform').addEventListener('submit', function(ev){
+  const err = checkHtml(ta.value);
+  if(!ta.value.trim()){ ev.preventDefault(); alert('Введите текст'); return; }
+  if(err){ ev.preventDefault(); alert(err); return; }
+  document.getElementById('buttonsJson').value = JSON.stringify(collectButtons());
+  const seg = document.getElementById('segment');
+  const when = document.getElementById('runAt').value;
+  const what = when ? 'Запланировать рассылку на ' + when.replace('T',' ') + ' (МСК)?'
+                    : 'Отправить рассылку прямо сейчас?';
+  if(!confirm(what + '\nАудитория: ' + seg.options[seg.selectedIndex].text)) ev.preventDefault();
+});
+
+// ── Progress + queue ────────────────────────────────────────────────────────
 async function pollBroadcast(){
   try{
     const r = await fetch('/api/broadcast/status'); if(!r.ok) return;
     const s = await r.json();
-    const box = document.getElementById('bcastProgress');
     const total = s.total||0, done = (s.ok||0)+(s.fail||0);
     if(s.running || (s.done && total)){
-      box.style.display = 'block';
+      document.getElementById('progressCard').style.display = 'block';
       const pct = total ? Math.round(done/total*100) : 0;
       document.getElementById('bcastBar').style.width = pct + '%';
       document.getElementById('bcastText').textContent =
         (s.running ? '⏳ Идёт рассылка' : '✅ Завершено') +
-        `: ${done}/${total} · ✅ ${s.ok||0} · ❌ ${s.fail||0}`;
+        `: ${done}/${total} · доставлено ${s.ok||0} · ошибок ${s.fail||0}`;
     }
   }catch(e){}
 }
+const STATUS = {pending:['Запланировано','badge'],running:['Отправляется','badge lang'],
+                done:['Отправлено','badge win'],failed:['Сбой','badge lose'],
+                canceled:['Отменено','badge']};
+async function loadQueue(){
+  const box = document.getElementById('queue');
+  try{
+    const r = await fetch('/api/broadcast/list');
+    const items = (await r.json()).items || [];
+    if(!items.length){ box.innerHTML = '<div class="empty">Рассылок пока не было.</div>'; return; }
+    let html = '<div class="tbl-wrap"><table>';
+    for(const b of items){
+      const [label, cls] = STATUS[b.status] || [b.status,'badge'];
+      const when = b.run_at_local || b.created_at_local || '';
+      const text = (b.text||'').replace(/<[^>]+>/g,'').slice(0,46);
+      html += '<tr><td><span class="'+cls+'">'+label+'</span></td>'
+        + '<td><div style="font-size:13px">'+esc(text)+'…</div>'
+        + '<div class="sub">'+esc(when)+' · '+esc(b.segment)+'</div></td>'
+        + '<td class="sub">'+(b.status==='pending' ? '' : (b.ok||0)+'/'+(b.total||0))+'</td>'
+        + '<td>'+(b.status==='pending'
+            ? '<button class="btn sm danger" onclick="cancelBcast('+Number(b.id)+')">Отменить</button>' : '')+'</td></tr>';
+    }
+    box.innerHTML = html + '</table></div>';
+  }catch(e){ box.innerHTML = '<div class="empty">Не удалось загрузить список.</div>'; }
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function cancelBcast(id){
+  if(!confirm('Отменить запланированную рассылку?')) return;
+  try{
+    await fetch('/api/broadcast/cancel', {method:'POST',
+      headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},
+      body: JSON.stringify({id})});
+    loadQueue();
+  }catch(e){ alert('Не удалось отменить'); }
+}
+
+renderPreview(); segChanged(); loadQueue(); pollBroadcast();
 setInterval(pollBroadcast, 2000);
-pollBroadcast();
+setInterval(loadQueue, 15000);
 </script>
-</body>
-</html>"""
+"""
+
+BROADCAST_TEMPLATE = _page(_BROADCAST_BODY, "Proqnozai — Рассылка").replace(
+    "{% block head %}{% endblock %}", "")
+
+
+def _broadcast_result(resp_status: int, data: dict) -> dict:
+    """Worker response → what the page shows the operator."""
+    if resp_status in (200, 202):
+        return {"ok": True, "scheduled": bool(data.get("scheduled")),
+                "recipients": data.get("recipients", data.get("started", 0)),
+                "when": _msk(data.get("run_at", ""))}
+    if resp_status == 409:
+        return {"ok": False, "error": "Рассылка уже выполняется, дождитесь её окончания."}
+    return {"ok": False, "error": data.get("error") or f"Ошибка воркера (HTTP {resp_status})"}
+
+
+def _msk(utc_str: str) -> str:
+    """UTC 'YYYY-MM-DD HH:MM:SS' from the worker → Moscow time for the operator."""
+    if not utc_str:
+        return ""
+    from datetime import datetime, timedelta, timezone
+    try:
+        dt = datetime.strptime(utc_str[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return utc_str
+    return dt.astimezone(timezone(timedelta(hours=3))).strftime("%d.%m %H:%M")
 
 
 @app.route("/broadcast", methods=["GET", "POST"])
@@ -1727,32 +1963,38 @@ def broadcast():
             # A cross-site POST replaying the admin's Basic Auth credentials.
             logger.warning("broadcast rejected: CSRF check failed")
             return Response("CSRF check failed", 403)
+
         text    = (request.form.get("text") or "").strip()
         segment = request.form.get("segment", "all")
+        run_at  = (request.form.get("run_at") or "").strip()
         prefill = text
+        try:
+            buttons = json.loads(request.form.get("buttons") or "[]")
+        except ValueError:
+            buttons = []
 
         if not text:
-            result = {"started": 0, "error": "Пустой текст"}
+            result = {"ok": False, "error": "Пустой текст"}
         else:
             try:
                 resp = httpx.post(
                     BROADCAST_URL, headers=_auth_headers(),
-                    json={"text": text, "segment": segment},
+                    json={"text": text, "segment": segment, "buttons": buttons,
+                          "run_at": run_at,
+                          "no_preview": bool(request.form.get("no_preview"))},
                     timeout=15,
                 )
                 data = resp.json()
-                if resp.status_code == 200:
-                    result = data  # {"started": N}
-                elif resp.status_code == 409:
-                    result = {"started": 0, "error": "Рассылка уже выполняется, дождитесь её окончания."}
-                else:
-                    result = {"started": 0, "error": data.get("detail", f"HTTP {resp.status_code}")}
+                result = _broadcast_result(resp.status_code, data if isinstance(data, dict) else {})
+                if result["ok"]:
+                    prefill = ""   # accepted: don't re-offer the same message
             except Exception as e:
                 logger.warning("broadcast backend unavailable: %s", _safe_err(e))
-                result = {"started": 0, "error": "Сервис недоступен, попробуйте позже."}
+                result = {"ok": False, "error": "Сервис недоступен, попробуйте позже."}
 
     return render_template_string(BROADCAST_TEMPLATE, result=result, prefill=prefill,
-                                  csrf=csrf_token())
+                                  csrf=csrf_token(), page="broadcast",
+                                  subtitle="Сообщения пользователям бота", stamp="")
 
 
 @app.route("/health")

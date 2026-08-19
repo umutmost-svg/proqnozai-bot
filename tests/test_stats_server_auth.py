@@ -14,7 +14,8 @@ import pytest
 import stats_server as ss
 
 TOKEN = "offline-test-dashboard-token"
-PROTECTED_GET = ["/stats", "/broadcast/status", "/users/search?q=nobody"]
+PROTECTED_GET = ["/stats", "/broadcast/status", "/broadcast/list",
+                 "/segment/size?s=all", "/users/search?q=nobody"]
 
 
 @pytest.fixture
@@ -53,7 +54,7 @@ def test_header_auth_accepted_on_users_block(server, temp_db):
 
 # ─── the query-string token is dead ───────────────────────────────────────────
 
-@pytest.mark.parametrize("path", ["/stats", "/broadcast/status"])
+@pytest.mark.parametrize("path", ["/stats", "/broadcast/status", "/broadcast/list"])
 def test_query_token_is_rejected(server, path):
     """Regression: the token must not be usable from the URL, where proxies
     would log it."""
