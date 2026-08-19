@@ -177,3 +177,20 @@ def test_the_page_offers_the_button(dash_client):
     page = dash_client.get("/partners", headers=_login()).get_data(as_text=True)
     assert "archiveOrphan" in page
     assert "Без названия" in page
+
+
+def test_no_onclick_is_built_from_a_javascript_string():
+    """The regression this exists for: the orphan button interpolated
+    JSON.stringify(name) into onclick="...". For the unnamed campaign that is
+    two double quotes, which closed the attribute the browser was still
+    parsing — the handler simply never ran, and the button looked dead.
+
+    An onclick attribute is delimited by double quotes, so only values that
+    cannot contain one may be interpolated into it. Every button here passes
+    an index or an id for exactly that reason."""
+    import re
+    for template in (dash.PARTNERS_TEMPLATE, dash.USERS_TEMPLATE,
+                     dash.BROADCAST_TEMPLATE, dash.TEMPLATE):
+        for fragment in re.findall(r"onclick=\"[^\"]*", template):
+            assert "JSON.stringify" not in fragment, fragment
+            assert "esc(" not in fragment, fragment

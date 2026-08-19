@@ -1177,6 +1177,7 @@ textarea{resize:vertical;min-height:120px;font-family:ui-monospace,SFMono-Regula
 <script>
 const CSRF = '{{ csrf }}';
 let CACHE = [];
+let ORPHANS = [];
 
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -1196,6 +1197,7 @@ async function load(){
 
 function render(rows, orphans){
   const box = document.getElementById('list');
+  ORPHANS = orphans || [];
   if(!rows.length){
     box.innerHTML = '<div class="hint">Партнёров пока нет. Добавьте первого — он сразу появится в боте.</div>';
     return;
@@ -1236,7 +1238,8 @@ function render(rows, orphans){
       + '<button class="btn btn-danger" onclick="archivePartner(' + p.id + ')">🗑 В архив</button>'
       + '</div></div>';
   }
-  for(const o of (orphans || [])){
+  for(let oi = 0; oi < ORPHANS.length; oi++){
+    const o = ORPHANS[oi];
     const named = !!o.partner;
     const title = named ? esc(o.partner) : 'Без названия';
     const what = o.mode === 'pool' ? 'пул: ' + esc(o.max_uses) + ' кодов' : esc(o.code);
@@ -1250,7 +1253,7 @@ function render(rows, orphans){
           ? 'Выдаётся пользователям, но партнёра с таким названием нет. Добавьте его, чтобы управлять кодом на карточке партнёра.'
           : 'Досталась от старой версии: у кампании нет названия, поэтому она не привязана ни к одной карточке. Пользователям она выдаётся.')
       + '</div><div class="actions">'
-      + '<button class="btn btn-danger" onclick="archiveOrphan(' + JSON.stringify(o.partner) + ')">⏸ Отключить</button>'
+      + '<button class="btn btn-danger" onclick="archiveOrphan(' + oi + ')">⏸ Отключить</button>'
       + '</div></div>';
   }
   box.innerHTML = html;
@@ -1429,7 +1432,10 @@ function clearPool(id){
   send('DELETE', '/api/partners/' + id + '/promo/pool');
 }
 
-async function archiveOrphan(name){
+async function archiveOrphan(index){
+  const o = ORPHANS[index];
+  if(!o) return;
+  const name = o.partner;
   const shown = name || 'Без названия';
   if(!confirm('Отключить кампанию «' + shown + '»? Она перестанет выдаваться. Уже выданные коды у пользователей останутся.')) return;
   const r = await fetch('/api/promo/archive', {
