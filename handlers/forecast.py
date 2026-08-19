@@ -4,7 +4,6 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from urllib.parse import quote, urlparse
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -21,7 +20,6 @@ from enrichment import enrich_football_match
 from match_validation import (MatchRef, validate_match, forecast_readiness,
                               INSUFFICIENT, PARTIAL)
 from priority_config import normalize_participant_tokens
-from partner_links import sign_click
 from event_list import (
     normalize_fixture, select_visible, group_by_sport, group_by_league,
     paginate, PAGE_SIZE,
@@ -32,7 +30,8 @@ from mostbet import (
     _mostbet_load_matches, _is_within_week,
     mostbet_find_match, mostbet_get_odds, format_mostbet_odds,
 )
-from handlers.utils import LANG_BTN, lang_kb, cb_guard, cb_release, nav_guard
+from handlers.utils import (LANG_BTN, lang_kb, cb_guard, cb_release, nav_guard,
+                            partner_url)
 from handlers.forecast_kb import (
     _user_tz, _fmt_kickoff, _parse_index, _country_flag,
     _build_sport_kb, _build_league_kb, _build_match_kb, _build_day_kb, _build_country_kb,
@@ -134,40 +133,21 @@ _DATA_NOTE = {
 }
 
 
-def partner_url(label: str, url: str, uid: int) -> str:
-    """The URL a partner button points at.
-
-    With PARTNER_REDIRECT_BASE set, it points at our own redirect so the click
-    can be counted before the user is forwarded on. Unset — the default — it is
-    the partner's URL verbatim, which is untrackable but cannot be broken by
-    our own dashboard being down."""
-    from config import PARTNER_REDIRECT_BASE, DASHBOARD_TOKEN
-    if not PARTNER_REDIRECT_BASE:
-        return url
-    name = quote(label or urlparse(url).netloc or "partner", safe="")
-    # The user id is signed: the redirect is a public URL, so an unsigned id
-    # could be swapped for anyone else's or invented outright.
-    sig = sign_click(DASHBOARD_TOKEN, name, uid)
-    if not sig:
-        return f"{PARTNER_REDIRECT_BASE}/r/{name}"      # unattributed, still works
-    return f"{PARTNER_REDIRECT_BASE}/r/{name}?u={uid}&s={sig}"
-
-
 def _partner_list_kb(uid: int) -> InlineKeyboardMarkup:
-    """One link button per configured partner."""
-    from config import PARTNERS
+    """One link button per active partner, read live from the DB."""
+    from db import db_active_partners
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(label or tr(uid, "partners_btn"),
                                url=partner_url(label, url, uid))]
-         for label, url in PARTNERS])
+         for label, url in db_active_partners()])
 
 
 async def _send_partner_list(uid: int, send) -> None:
     """Show the partner list. Shared by the menu button and the inline button
     under a forecast, so both record the same PARTNERS_OPEN event and render
     the same thing. `send(text, reply_markup=...)` is an async sender."""
-    from config import PARTNERS
-    if not PARTNERS:
+    from db import db_active_partners
+    if not db_active_partners():
         return
     db_log_req(uid, REQ_PARTNERS_OPEN)
     await send(tr(uid, "partners_text"), reply_markup=_partner_list_kb(uid))
@@ -401,9 +381,9 @@ async def _generate_forecast(uid: int, context: ContextTypes.DEFAULT_TYPE, statu
     # and the partner list. Partners only on a forecast that was actually
     # produced — offering bookmakers under an error message would be
     # tone-deaf — and only when any are configured.
-    from config import PARTNERS
+    from db import db_active_partners
     actions = [InlineKeyboardButton(tr(uid, "ev_more_matches"), callback_data="fm_restart")]
-    if produced and PARTNERS:
+    if produced and db_active_partners():
         actions.append(InlineKeyboardButton(tr(uid, "partners_cta_btn"),
                                             callback_data="partners_show"))
     rows.append(actions)
@@ -976,6 +956,15 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await promo_cmd(update, context); return
     if text == tl["menu_partners"]:
         await _send_partner_list(uid, update.message.reply_text)
+        return
+    if text == tl["menu_channel"]:
+        from handlers.utils import channel_url
+        url = channel_url()
+        if url:
+            await update.message.reply_text(
+                tr(uid, "channel_intro"),
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(tr(uid, "promo_open_channel"), url=url)]]))
         return
     if text == tl["menu_forecast"]:
         await forecast_menu_start(update, context); return

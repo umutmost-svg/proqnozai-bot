@@ -172,8 +172,13 @@ def test_error_summary_never_includes_the_message():
 
 @pytest.fixture
 def partners_env(monkeypatch):
-    monkeypatch.setenv("PARTNERS", "Mostbet | https://mostbet.com;1xBet | https://1xbet.com")
-    monkeypatch.setattr(dash, "_PARTNER_TARGETS", {})   # drop the memoized map
+    """Redirect targets come from the worker now; pin them so these tests stay
+    about the redirect itself. The fetch and its invalidation are covered in
+    tests/test_partners_dashboard.py."""
+    import time as _time
+    monkeypatch.setattr(dash, "_PARTNER_TARGETS",
+                        {"Mostbet": "https://mostbet.com", "1xBet": "https://1xbet.com"})
+    monkeypatch.setattr(dash, "_PARTNER_TARGETS_AT", _time.monotonic())
     yield
     monkeypatch.setattr(dash, "_PARTNER_TARGETS", {})
 

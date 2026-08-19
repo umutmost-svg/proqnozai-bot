@@ -1,14 +1,54 @@
 from datetime import datetime, timezone, timedelta
+from urllib.parse import quote, urlparse
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from config import MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR, PROMO_CHANNEL, PARTNERS
-from db import db_lang, db_get_tz, db_list_promo_codes
+from config import (MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR,
+                    PROMO_CHANNEL, PROMO_CHANNEL_URL)
+from db import db_lang, db_get_tz, db_list_promo_codes, db_active_partners
 from security import sec_blocked, rate_check, nav_rate_check, record_viol
 from translations import T, tr
 
 
 SUPPORT_URL = "https://t.me/AIproqnoz_support"
+
+
+def partner_url(label: str, url: str, uid: int) -> str:
+    """The URL a partner link points at.
+
+    With PARTNER_REDIRECT_BASE set, it points at our own redirect so the click
+    can be counted before the user is forwarded on. Unset — the default — it is
+    the partner's URL verbatim, which is untrackable but cannot be broken by
+    our own dashboard being down.
+
+    Lives here rather than in forecast.py because the promo message links the
+    same partners the partner list does, and a second copy would be a second
+    set of click numbers."""
+    from config import PARTNER_REDIRECT_BASE, DASHBOARD_TOKEN
+    from partner_links import sign_click
+    if not PARTNER_REDIRECT_BASE:
+        return url
+    name = quote(label or urlparse(url).netloc or "partner", safe="")
+    # The user id is signed: the redirect is a public URL, so an unsigned id
+    # could be swapped for anyone else's or invented outright.
+    sig = sign_click(DASHBOARD_TOKEN, name, uid)
+    if not sig:
+        return f"{PARTNER_REDIRECT_BASE}/r/{name}"      # unattributed, still works
+    return f"{PARTNER_REDIRECT_BASE}/r/{name}?u={uid}&s={sig}"
+
+
+def channel_url() -> str:
+    """Public link to the channel, or "" when there is nothing to link to.
+
+    PROMO_CHANNEL_URL wins because PROMO_CHANNEL may be a "-100…" id (a private
+    channel), which has no public address; a "@name" channel can be linked
+    without configuring anything else. Lives here rather than in promo.py so the
+    menu button and the subscription gate resolve the same link."""
+    if PROMO_CHANNEL_URL:
+        return PROMO_CHANNEL_URL
+    if PROMO_CHANNEL.startswith("@"):
+        return f"https://t.me/{PROMO_CHANNEL[1:]}"
+    return ""
 
 # ─── Callback rate-limit gates ─────────────────────────────────────────────────
 # Users the bot is CURRENTLY generating a forecast for. One expensive
@@ -112,8 +152,15 @@ def main_menu(uid):
     if PROMO_CHANNEL and db_list_promo_codes():
         rows.insert(1, [tl["menu_get_promo"]])
     # "Our partners" only appears once at least one partner is configured.
-    if PARTNERS:
+    # Read from the DB on every render: a partner enabled or disabled in the
+    # dashboard changes the menu for the next user, with no restart.
+    if db_active_partners():
         rows.append([tl["menu_partners"]])
+    # A reply-keyboard button cannot BE a link (only inline buttons carry a
+    # url), so this one opens a message that holds the link. Shown only when
+    # there is an address to open — an id-only private channel has none.
+    if channel_url():
+        rows.append([tl["menu_channel"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 

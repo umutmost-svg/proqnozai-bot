@@ -73,7 +73,8 @@ def test_promo_stats_per_partner(temp_db):
     temp_db.db_claim_promos(1); temp_db.db_claim_promos(2)
     assert temp_db.db_list_promo_codes() == [
         {"partner": "Mostbet", "code": "S", "max_uses": 500,
-         "claimed": 2, "available": 498}]
+         "claimed": 2, "available": 498, "is_active": True, "is_archived": False,
+         "mode": "shared"}]
 
 
 # ─── Gate flow ────────────────────────────────────────────────────────────────

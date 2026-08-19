@@ -244,7 +244,11 @@ async def test_no_campaign_has_its_own_message(temp_db, monkeypatch):
     assert sent[0] == tr(uid, "promo_unavailable")
 
 
-async def test_missing_channel_config_does_not_error(temp_db, monkeypatch):
+async def test_missing_channel_config_says_unavailable_not_check_failed(
+        temp_db, monkeypatch):
+    """It used to answer "can't verify your subscription", which was a lie: no
+    channel is configured, so there is no subscription to verify and no amount
+    of retrying would have helped. The feature is simply off."""
     uid = 730601
     temp_db.db_ensure(uid, "u", "ru"); temp_db.db_set(uid, "is_registered", 1)
     _reset_promo(temp_db)
@@ -254,7 +258,8 @@ async def test_missing_channel_config_does_not_error(temp_db, monkeypatch):
     q = _Query(uid)
     await promo.promo_check_cb(types.SimpleNamespace(callback_query=q), ctx)
     assert q.answered
-    assert sent[0] == tr(uid, "promo_check_failed")
+    assert sent[0] == tr(uid, "promo_unavailable")
+    assert sent[0] != tr(uid, "promo_check_failed")
 
 
 @pytest.mark.parametrize("lang", sorted(db.SUPPORTED_LANGS))
@@ -284,10 +289,10 @@ class _StatusMsg:
 
 
 @pytest.fixture
-def forecast_env(monkeypatch):
+def forecast_env(monkeypatch, partners):
     import config
     monkeypatch.setattr(config, "APIFOOTBALL_KEY", "")
-    monkeypatch.setattr(config, "PARTNERS", [])
+    partners([])
 
     called = []
 
