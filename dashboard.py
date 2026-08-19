@@ -1031,6 +1031,18 @@ def api_promo_pool_clear(pid: int):
     return _partners_proxy("DELETE", f"/partners/{pid}/promo/pool")
 
 
+@app.route("/api/promo/archive", methods=["POST"])
+@require_auth
+def api_promo_archive_by_name():
+    """Archive a campaign that has no partner row to address it by — including
+    the unnamed one a legacy migration left behind."""
+    if not csrf_ok():
+        logger.warning("orphan promo archive rejected: CSRF check failed")
+        return Response("CSRF check failed", 403)
+    return _partners_proxy("POST", "/promo/archive",
+                           request.get_json(silent=True) or {})
+
+
 @app.route("/partners")
 @require_auth
 def partners_page():
@@ -1225,12 +1237,21 @@ function render(rows, orphans){
       + '</div></div>';
   }
   for(const o of (orphans || [])){
-    html += '<div class="card off"><div class="row1"><div class="pname">' + esc(o.partner)
+    const named = !!o.partner;
+    const title = named ? esc(o.partner) : 'Без названия';
+    const what = o.mode === 'pool' ? 'пул: ' + esc(o.max_uses) + ' кодов' : esc(o.code);
+    html += '<div class="card off"><div class="row1"><div class="pname">' + title
       + '</div><span class="badge b-warn">промокод без партнёра</span></div>'
-      + '<div class="fields"><div><div class="f-label">Промокод</div><div class="f-val">' + esc(o.code)
+      + '<div class="fields"><div><div class="f-label">Промокод</div><div class="f-val">' + what
       + '</div></div><div><div class="f-label">Выдано / лимит</div><div class="f-val">'
       + esc(o.claimed + ' / ' + o.max_uses) + '</div></div></div>'
-      + '<div class="muted" style="margin-top:12px;font-size:12px">Добавьте партнёра с этим названием, чтобы управлять кодом здесь.</div></div>';
+      + '<div class="muted" style="margin-top:12px;font-size:12px">'
+      + (named
+          ? 'Выдаётся пользователям, но партнёра с таким названием нет. Добавьте его, чтобы управлять кодом на карточке партнёра.'
+          : 'Досталась от старой версии: у кампании нет названия, поэтому она не привязана ни к одной карточке. Пользователям она выдаётся.')
+      + '</div><div class="actions">'
+      + '<button class="btn btn-danger" onclick="archiveOrphan(' + JSON.stringify(o.partner) + ')">⏸ Отключить</button>'
+      + '</div></div>';
   }
   box.innerHTML = html;
 }
@@ -1406,6 +1427,18 @@ function clearPool(id){
   const p = byId(id); if(!p) return;
   if(!confirm('Убрать невыданные коды партнёра «' + p.name + '»? Уже выданные коды у пользователей останутся.')) return;
   send('DELETE', '/api/partners/' + id + '/promo/pool');
+}
+
+async function archiveOrphan(name){
+  const shown = name || 'Без названия';
+  if(!confirm('Отключить кампанию «' + shown + '»? Она перестанет выдаваться. Уже выданные коды у пользователей останутся.')) return;
+  const r = await fetch('/api/promo/archive', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},
+    body: JSON.stringify({partner: name}),
+  });
+  if(!r.ok) alert('Не выполнено: HTTP ' + r.status);
+  await load();
 }
 
 function copyText(text){

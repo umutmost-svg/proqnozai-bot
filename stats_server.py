@@ -16,6 +16,7 @@ never a query parameter, which would put the secret in proxy access logs.
   PATCH  /partners/<id>        -> edit name / URL / active flag / campaign
   DELETE /partners/<id>        -> archive the partner and its campaign
   DELETE /partners/<id>/promo  -> archive only the campaign
+  POST   /promo/archive              -> archive a campaign by name (may be "")
   POST   /partners/<id>/promo/pool   -> import a batch of single-use codes
   DELETE /partners/<id>/promo/pool   -> drop the unclaimed codes
 """
@@ -134,8 +135,13 @@ def _partners_payload() -> dict:
     # /setpromo before the partner was added) would otherwise be invisible and
     # unmanageable from the dashboard.
     known = {p["name"] for p in db_list_partners(include_archived=True)}
+    # The `and p["partner"]` this filter used to start with hid the one kind of
+    # campaign that needs the dashboard most: a row migrated from before
+    # promos had a partner at all carries partner='', so it appeared nowhere,
+    # while still being handed to every user. It cannot be reached by
+    # /delpromo either — that command needs a name to pass.
     orphans = [p for p in promo_by_partner.values()
-               if p["partner"] and p["partner"] not in known and not p["is_archived"]]
+               if p["partner"] not in known and not p["is_archived"]]
     # `targets` carries EVERY name a partner has ever had, so the dashboard's
     # /r/<name> redirect keeps resolving links that were sent out before a
     # rename. `partners` alone would only know the current names.
@@ -360,7 +366,8 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path.startswith("/partners"):
             self._partner_write(parsed, "POST"); return
-        if parsed.path not in ("/broadcast", "/users/block", "/track/partner_click"):
+        if parsed.path not in ("/broadcast", "/users/block", "/track/partner_click",
+                              "/promo/archive"):
             self._send(404, b"not found"); return
 
         length = int(self.headers.get("Content-Length", 0))
@@ -371,6 +378,17 @@ class _Handler(BaseHTTPRequestHandler):
 
         if not _auth_ok(_token_from(self)):
             self._send(503 if not STATS_TOKEN else 401, b"dashboard token required"); return
+
+        if parsed.path == "/promo/archive":
+            # Keyed by NAME, not by partner id: an orphan campaign has no
+            # partner row to hang an id off, and the name may legitimately be
+            # the empty string. `partner` is therefore read as given, with no
+            # truthiness check anywhere along the way.
+            name = body.get("partner")
+            if not isinstance(name, str):
+                self._json(400, {"error": "partner name required"}); return
+            archived = db_promo_archive(name)
+            self._json(200, {"partner": name, "archived": archived}); return
 
         if parsed.path == "/track/partner_click":
             # The dashboard forwards a partner click here; it has no DB access
