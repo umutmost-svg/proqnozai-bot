@@ -11,14 +11,15 @@ same code and consume only one use). Admin sets the campaign with
 The bot must be an admin/member of PROMO_CHANNEL for getChatMember to work.
 """
 import logging
+from html import escape
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import PROMO_CHANNEL, ADMIN_ID
-from handlers.utils import channel_url
+from handlers.utils import channel_url, partner_url
 from db import (db_is_reg, db_claim_promos, db_list_promo_codes,
-                db_set_promo_code, db_delete_promo_code)
+                db_set_promo_code, db_delete_promo_code, db_active_partners)
 from translations import tr
 
 logger = logging.getLogger(__name__)
@@ -94,10 +95,23 @@ async def _run_promo(context, uid, reply) -> None:
     granted = db_claim_promos(uid)
     if not granted:
         await reply(tr(uid, "promo_empty")); return         # every cap reached
+    # The partner's name becomes a link to that partner, through the same
+    # tracked redirect its button uses — a code the user cannot act on without
+    # going and finding the site themselves is half a bonus. Partners with no
+    # live row (an archived one, or a campaign that never had a partner) stay
+    # as plain text rather than pointing nowhere.
+    targets = dict(db_active_partners())
     lines = [tr(uid, "promo_codes_title")]
     for item in granted:
-        name = item["partner"] or tr(uid, "partners_btn")
-        lines.append(f"{name} — <code>{item['code']}</code>")
+        partner = item["partner"]
+        label = escape(partner or tr(uid, "partners_btn"))
+        url = targets.get(partner)
+        if url:
+            href = escape(partner_url(partner, url, uid), quote=True)
+            label = f'<a href="{href}">{label}</a>'
+        # Names and codes are operator-set free text: an unescaped & or < would
+        # break the whole message, which is sent with parse_mode HTML.
+        lines.append(f"{label} — <code>{escape(item['code'])}</code>")
     await reply("\n\n".join(lines), parse_mode="HTML")
 
 
