@@ -240,14 +240,14 @@ def _update(uid, text):
         message=_Msg(text))
 
 
-async def test_opening_the_partner_list_is_logged(temp_db, monkeypatch):
+async def test_opening_the_partner_list_is_logged(temp_db, monkeypatch, partners):
     import config
     import handlers.forecast as fc
     from translations import T
 
     uid = 810900
     temp_db.db_ensure(uid, "u", "ru"); temp_db.db_set(uid, "is_registered", 1)
-    monkeypatch.setattr(config, "PARTNERS", [("Mostbet", "https://mostbet.com")])
+    partners([("Mostbet", "https://mostbet.com")])
     monkeypatch.setattr(config, "PARTNER_REDIRECT_BASE", "")
 
     upd = _update(uid, T["ru"]["menu_partners"])

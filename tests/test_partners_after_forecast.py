@@ -15,26 +15,29 @@ from translations import T
 
 # ─── the partner list keyboard ────────────────────────────────────────────────
 
-def test_list_has_one_button_per_partner(monkeypatch):
+def test_list_has_one_button_per_partner(monkeypatch, partners):
     import config
-    monkeypatch.setattr(config, "PARTNERS", [
-        ("Mostbet", "https://a.example"), ("Topaz", "https://b.example")])
+    partners([("Mostbet", "https://a.example"), ("Topaz", "https://b.example")])
     monkeypatch.setattr(config, "PARTNER_REDIRECT_BASE", "")
     kb = fc._partner_list_kb(1)
     assert [b.text for row in kb.inline_keyboard for b in row] == ["Mostbet", "Topaz"]
 
 
-def test_unnamed_partner_uses_the_generic_caption(temp_db, monkeypatch):
+def test_edited_url_is_live_without_a_restart(monkeypatch, temp_db, partners):
+    """The acceptance criterion: saving a new URL changes the very next button,
+    with nothing reloaded and no module constant re-read."""
     import config
-    temp_db.db_ensure(770001, "u", "ru")
-    monkeypatch.setattr(config, "PARTNERS", [("", "https://a.example")])
+    partners([("Mostbet", "https://old.example")])
     monkeypatch.setattr(config, "PARTNER_REDIRECT_BASE", "")
-    assert fc._partner_list_kb(770001).inline_keyboard[0][0].text == T["ru"]["partners_btn"]
+    assert fc._partner_list_kb(1).inline_keyboard[0][0].url == "https://old.example"
+    pid = temp_db.db_list_partners()[0]["id"]
+    temp_db.db_partner_update(pid, url="https://new.example")
+    assert fc._partner_list_kb(1).inline_keyboard[0][0].url == "https://new.example"
 
 
-def test_list_buttons_go_through_the_click_redirect_when_enabled(monkeypatch):
+def test_list_buttons_go_through_the_click_redirect_when_enabled(monkeypatch, partners):
     import config
-    monkeypatch.setattr(config, "PARTNERS", [("Mostbet", "https://a.example")])
+    partners([("Mostbet", "https://a.example")])
     monkeypatch.setattr(config, "PARTNER_REDIRECT_BASE", "https://dash.example")
     kb = fc._partner_list_kb(42)
     assert kb.inline_keyboard[0][0].url.startswith(
@@ -61,13 +64,13 @@ class _StatusMsg:
 
 
 @pytest.fixture
-def forecast_env(monkeypatch, temp_db):
+def forecast_env(monkeypatch, temp_db, partners):
     """Stub everything _generate_forecast reaches for except the code path."""
     import config
     monkeypatch.setattr(config, "APIFOOTBALL_KEY", "")
     monkeypatch.setattr(config, "PARTNER_REDIRECT_BASE", "")
-    monkeypatch.setattr(config, "PARTNERS", [
-        ("Mostbet", "https://a.example"), ("Topaz", "https://b.example")])
+    partners([("Mostbet", "https://a.example"), ("Topaz", "https://b.example")])
+    monkeypatch.seed_partners = partners
 
     async def _no_search(*a, **k):
         return []
@@ -127,10 +130,9 @@ async def test_failed_forecast_carries_no_partner_links(forecast_env, temp_db):
 
 
 async def test_forecast_unchanged_when_no_partners_configured(forecast_env, temp_db):
-    import config
     uid = 770102
     temp_db.db_ensure(uid, "u", "ru"); temp_db.db_set(uid, "is_registered", 1)
-    forecast_env.setattr(config, "PARTNERS", [])
+    forecast_env.seed_partners([])
 
     async def _reply(*a, **k):
         return "Прогноз"

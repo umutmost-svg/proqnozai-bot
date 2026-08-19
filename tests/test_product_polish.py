@@ -278,12 +278,12 @@ class _StatusMsg2:
 
 
 @pytest.fixture
-def captured_prompt(monkeypatch):
+def captured_prompt(monkeypatch, partners):
     """Capture the system prompt the handler actually sends."""
     import config
     import handlers.forecast as fc
     monkeypatch.setattr(config, "APIFOOTBALL_KEY", "")
-    monkeypatch.setattr(config, "PARTNERS", [])
+    partners([])
     seen = {}
 
     async def _claude(uid, content, sys_prompt, *a, **k):

@@ -164,7 +164,9 @@ async def promostats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/promostats — every partner's code, claimed / cap. Admin only."""
     if update.effective_user.id != ADMIN_ID:
         return
-    codes = db_list_promo_codes()
+    # include_inactive: this is the admin readout, so a campaign that was
+    # switched off in the dashboard must still be visible here.
+    codes = db_list_promo_codes(include_inactive=True)
     if not codes:
         await update.message.reply_text(
             "No promo codes. Add one: /setpromo PARTNER CODE MAX_USES")
@@ -172,6 +174,7 @@ async def promostats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["🎁 Promo codes:"]
     for c in codes:
         name = c["partner"] or "(no partner)"
+        state = "" if c["is_active"] and not c["is_archived"] else " · OFF"
         lines.append(f"{name}: {c['code']} — {c['claimed']}/{c['max_uses']} "
-                     f"(available {c['available']})")
+                     f"(available {c['available']}){state}")
     await update.message.reply_text("\n".join(lines))

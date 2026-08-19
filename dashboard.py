@@ -9,6 +9,7 @@ import hmac
 import json
 import logging
 import os
+import time
 from functools import wraps
 
 from urllib.parse import urlparse
@@ -61,33 +62,52 @@ DASH_USER     = os.environ.get("DASHBOARD_USER", "admin")
 # here; otherwise partner buttons link straight to the partner and this route is
 # simply unused. Deliberately unauthenticated — the visitor is a bot user
 # following a link, not an operator.
-_PARTNER_TARGETS = {}
+_PARTNER_TARGETS: dict = {}
+_PARTNER_TARGETS_AT = 0.0
+# Short enough that an edit made in another dashboard replica is picked up on
+# its own; irrelevant in the normal case, where saving invalidates immediately.
+_PARTNER_TARGETS_TTL = 30.0
+
+
+def _invalidate_partner_targets() -> None:
+    """Drop the redirect map so the next click re-reads it. Called after every
+    successful write, which is what makes a saved URL take effect at once."""
+    global _PARTNER_TARGETS, _PARTNER_TARGETS_AT
+    _PARTNER_TARGETS = {}
+    _PARTNER_TARGETS_AT = 0.0
 
 
 def _partner_targets() -> dict:
-    """name → destination URL, parsed from the same PARTNERS value the bot uses.
+    """name → destination URL, read from the worker (the DB is the source).
 
-    The dashboard has no database and no Telegram context, so the mapping comes
-    from the environment both services already share."""
-    global _PARTNER_TARGETS
-    if _PARTNER_TARGETS:
+    The dashboard has no database of its own, so it asks the worker. Archived
+    partners are included on purpose: their buttons live on in old Telegram
+    messages forever, and a dead link is worse than a link to a partner we no
+    longer advertise. On a worker error the previous map is kept — reaching the
+    partner must not depend on our own bookkeeping being up."""
+    global _PARTNER_TARGETS, _PARTNER_TARGETS_AT
+    now = time.monotonic()
+    if _PARTNER_TARGETS and now - _PARTNER_TARGETS_AT < _PARTNER_TARGETS_TTL:
         return _PARTNER_TARGETS
-    raw = os.environ.get("PARTNERS", "")
-    legacy = os.environ.get("PARTNERS_URL", "").strip()
-    out = {}
-    for chunk in raw.replace(";", "\n").split("\n"):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        label, _, url = chunk.partition("|")
-        url = (url or label).strip()
-        label = label.strip() if url != label.strip() else ""
-        if url.startswith(("http://", "https://")):
-            out[label or urlparse(url).netloc] = url
-    if not out and legacy.startswith(("http://", "https://")):
-        out[urlparse(legacy).netloc] = legacy
-    _PARTNER_TARGETS = out
-    return out
+    try:
+        resp = httpx.get(f"{_BOT_BASE}/partners", headers=_auth_headers(), timeout=5)
+        resp.raise_for_status()
+        payload = resp.json()
+        # `targets` includes former names, so a link sent before a rename still
+        # resolves. Fall back to the partner list if an older worker is still
+        # answering (the two services deploy independently).
+        rows = payload.get("targets")
+        if not isinstance(rows, dict):
+            rows = {p.get("name"): p.get("url") for p in payload.get("partners", [])}
+        out = {}
+        for name, url in rows.items():
+            if name and isinstance(url, str) and url.startswith(("http://", "https://")):
+                out[name] = url
+        _PARTNER_TARGETS = out
+        _PARTNER_TARGETS_AT = now
+    except Exception as e:
+        logger.warning("partner targets not refreshed: %s", _safe_err(e))
+    return _PARTNER_TARGETS
 
 
 @app.route("/r/<path:partner>")
@@ -304,6 +324,7 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:24px;border-t
   <div class="header-right">
     <a href="/" class="theme-btn" style="text-decoration:none">📊 Статистика</a>
     <a href="/users" class="theme-btn" style="text-decoration:none">👥 Пользователи</a>
+    <a href="/partners" class="theme-btn" style="text-decoration:none">🤝 Партнёры</a>
     <a href="/broadcast" class="theme-btn" style="text-decoration:none">📢 Рассылка</a>
     <span class="refresh-badge">{{ generated_at }}</span>
     <button class="theme-btn active" onclick="setTheme('dark')">🌙 Тёмная</button>
@@ -933,10 +954,355 @@ def api_users_block():
         return _backend_error_json()
 
 
+# ─── Partners & promo ─────────────────────────────────────────────────────────
+# Thin proxy, same shape as the user routes above: Basic Auth at the edge, CSRF
+# on writes, then one authenticated call to the worker, which owns the DB. Every
+# successful write drops the redirect map so a saved URL is live immediately.
+def _partners_proxy(method: str, path: str, json_body=None) -> Response:
+    try:
+        resp = httpx.request(method, f"{_BOT_BASE}{path}", headers=_auth_headers(),
+                             json=json_body, timeout=8)
+    except Exception as e:
+        logger.warning("stats backend unavailable for partners route: %s", _safe_err(e))
+        return _backend_error_json()
+    if method != "GET" and resp.status_code < 400:
+        _invalidate_partner_targets()
+    return Response(resp.text, mimetype="application/json", status=resp.status_code)
+
+
+@app.route("/api/partners")
+@require_auth
+def api_partners():
+    return _partners_proxy("GET", "/partners")
+
+
+@app.route("/api/partners", methods=["POST"])
+@require_auth
+def api_partners_create():
+    if not csrf_ok():
+        logger.warning("partner create rejected: CSRF check failed")
+        return Response("CSRF check failed", 403)
+    return _partners_proxy("POST", "/partners", request.get_json(silent=True) or {})
+
+
+@app.route("/api/partners/<int:pid>", methods=["PATCH"])
+@require_auth
+def api_partners_update(pid: int):
+    if not csrf_ok():
+        logger.warning("partner update rejected: CSRF check failed")
+        return Response("CSRF check failed", 403)
+    return _partners_proxy("PATCH", f"/partners/{pid}", request.get_json(silent=True) or {})
+
+
+@app.route("/api/partners/<int:pid>", methods=["DELETE"])
+@require_auth
+def api_partners_archive(pid: int):
+    if not csrf_ok():
+        logger.warning("partner archive rejected: CSRF check failed")
+        return Response("CSRF check failed", 403)
+    return _partners_proxy("DELETE", f"/partners/{pid}")
+
+
+@app.route("/api/partners/<int:pid>/promo", methods=["DELETE"])
+@require_auth
+def api_promo_archive(pid: int):
+    if not csrf_ok():
+        logger.warning("promo archive rejected: CSRF check failed")
+        return Response("CSRF check failed", 403)
+    return _partners_proxy("DELETE", f"/partners/{pid}/promo")
+
+
+@app.route("/partners")
+@require_auth
+def partners_page():
+    return render_template_string(PARTNERS_TEMPLATE, csrf=csrf_token())
+
+
 @app.route("/users")
 @require_auth
 def users_page():
     return render_template_string(USERS_TEMPLATE, csrf=csrf_token())
+
+
+PARTNERS_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Proqnozai — Партнёры и промокоды</title>
+<style>
+:root{--bg:#0f1117;--bg2:#1a1d27;--border:#2a2d3a;--accent:#6c63ff;--green:#22c55e;--red:#ef4444;--yellow:#f59e0b;--text:#e2e8f0;--muted:#94a3b8;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;}
+header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+.logo h1{font-size:17px;color:var(--accent);}
+.btn{background:none;border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;text-decoration:none;display:inline-block;}
+.btn:hover{border-color:var(--accent);color:var(--accent);}
+.btn:disabled{opacity:.5;cursor:not-allowed;}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600;}
+.btn-danger{border-color:var(--red);color:var(--red);}
+.container{max-width:920px;margin:28px auto;padding:0 20px;}
+.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;gap:12px;flex-wrap:wrap;}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:14px;}
+.card.off{opacity:.62;}
+.row1{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}
+.pname{font-size:16px;font-weight:700;}
+.badge{padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;white-space:nowrap;}
+.b-on{background:#14532d;color:var(--green);}
+.b-off{background:var(--border);color:var(--muted);}
+.b-warn{background:#452c0a;color:var(--yellow);}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-top:14px;}
+.f-label{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;}
+.f-val{font-size:13px;word-break:break-all;}
+.actions{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;}
+label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 5px;}
+input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px 12px;font-size:14px;outline:none;font-family:inherit;}
+input:focus{border-color:var(--accent);}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+@media(max-width:560px){.grid2{grid-template-columns:1fr;}}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:16px;z-index:50;}
+.modal-bg.open{display:flex;}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:22px;max-width:520px;width:100%;max-height:90vh;overflow:auto;}
+.modal h2{font-size:16px;margin-bottom:6px;}
+.msg{margin-top:14px;padding:10px 12px;border-radius:8px;font-size:13px;display:none;}
+.msg.err{display:block;background:#450a0a;color:#fca5a5;}
+.msg.ok{display:block;background:#14532d;color:#86efac;}
+.hint{color:var(--muted);text-align:center;padding:40px;}
+.muted{color:var(--muted);}
+.chk{display:flex;align-items:center;gap:8px;margin-top:14px;}
+.chk input{width:auto;}
+.chk span{font-size:13px;color:var(--text);}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><h1>⚽ Proqnozai — Партнёры и промокоды</h1></div>
+  <div>
+    <a href="/" class="btn">📊 Статистика</a>
+    <a href="/users" class="btn">👥 Пользователи</a>
+    <a href="/broadcast" class="btn">📢 Рассылка</a>
+  </div>
+</header>
+<div class="container">
+  <div class="toolbar">
+    <div class="muted">Изменения применяются сразу — перезапуск бота не нужен.</div>
+    <button class="btn btn-primary" onclick="openAdd()">+ Добавить партнёра</button>
+  </div>
+  <div id="list"><div class="hint">Загрузка...</div></div>
+</div>
+
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <h2 id="m-title">Партнёр</h2>
+    <div class="muted" style="font-size:12px">Промокод необязателен — оставьте пустым, если его нет.</div>
+    <input type="hidden" id="m-id">
+    <label>Название</label>
+    <input id="m-name" maxlength="64" placeholder="Mostbet">
+    <label>URL</label>
+    <input id="m-url" maxlength="500" placeholder="https://...">
+    <div class="grid2">
+      <div>
+        <label>Промокод</label>
+        <input id="m-code" maxlength="64" placeholder="PROQNOZ">
+      </div>
+      <div>
+        <label>Лимит выдач</label>
+        <input id="m-limit" type="number" min="0" step="1" placeholder="1000">
+      </div>
+    </div>
+    <div class="chk"><input type="checkbox" id="m-active" checked><span>Партнёр активен (виден в боте)</span></div>
+    <div class="chk"><input type="checkbox" id="m-promo-active" checked><span>Промокод активен (выдаётся)</span></div>
+    <div class="msg" id="m-msg"></div>
+    <div class="actions">
+      <button class="btn btn-primary" id="m-save" onclick="save()">Сохранить</button>
+      <button class="btn" onclick="closeModal()">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const CSRF = '{{ csrf }}';
+let CACHE = [];
+
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function load(){
+  const box = document.getElementById('list');
+  try{
+    const r = await fetch('/api/partners');
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    CACHE = (data.partners || []).filter(p => !p.is_archived);
+    render(CACHE, data.orphan_promos || []);
+  }catch(e){
+    box.innerHTML = '<div class="hint">Не удалось загрузить: ' + esc(e.message) + '</div>';
+  }
+}
+
+function render(rows, orphans){
+  const box = document.getElementById('list');
+  if(!rows.length){
+    box.innerHTML = '<div class="hint">Партнёров пока нет. Добавьте первого — он сразу появится в боте.</div>';
+    return;
+  }
+  let html = '';
+  for(const p of rows){
+    const pr = p.promo;
+    const usage = pr ? (pr.claimed + ' / ' + pr.max_uses) : '—';
+    const exhausted = pr && pr.available === 0;
+    let promoBadge = '';
+    if(pr && !pr.is_active) promoBadge = '<span class="badge b-off">промокод выключен</span>';
+    else if(exhausted) promoBadge = '<span class="badge b-warn">лимит исчерпан</span>';
+    html += '<div class="card' + (p.is_active ? '' : ' off') + '">'
+      + '<div class="row1"><div class="pname">' + esc(p.name) + '</div>'
+      + '<div style="display:flex;gap:6px;align-items:center">' + promoBadge
+      + '<span class="badge ' + (p.is_active ? 'b-on">● Активен' : 'b-off">○ Выключен') + '</span></div></div>'
+      + '<div class="fields">'
+      + '<div><div class="f-label">URL</div><div class="f-val">' + esc(p.url) + '</div></div>'
+      + '<div><div class="f-label">Промокод</div><div class="f-val">' + (pr ? esc(pr.code) : '<span class="muted">нет</span>') + '</div></div>'
+      + '<div><div class="f-label">Выдано / лимит</div><div class="f-val">' + esc(usage) + '</div></div>'
+      + '<div><div class="f-label">Клики (30д)</div><div class="f-val">' + esc(p.clicks || 0) + '</div></div>'
+      + '<div><div class="f-label">Обновлён</div><div class="f-val muted">' + esc(p.updated_at || '') + '</div></div>'
+      + '</div><div class="actions">'
+      + '<button class="btn" onclick="openEdit(' + p.id + ')">✏️ Изменить</button>'
+      + '<button class="btn" onclick="toggle(' + p.id + ',' + (p.is_active ? 'false' : 'true') + ')">'
+      + (p.is_active ? '⏸ Выключить' : '▶️ Включить') + '</button>'
+      + '<button class="btn" onclick="copyUrl(' + p.id + ')">🔗 Копировать URL</button>'
+      + (pr ? '<button class="btn" onclick="copyCode(' + p.id + ')">🎁 Копировать код</button>' : '')
+      + (pr ? '<button class="btn btn-danger" onclick="archivePromo(' + p.id + ')">Удалить промокод</button>' : '')
+      + '<button class="btn btn-danger" onclick="archivePartner(' + p.id + ')">🗑 В архив</button>'
+      + '</div></div>';
+  }
+  for(const o of (orphans || [])){
+    html += '<div class="card off"><div class="row1"><div class="pname">' + esc(o.partner)
+      + '</div><span class="badge b-warn">промокод без партнёра</span></div>'
+      + '<div class="fields"><div><div class="f-label">Промокод</div><div class="f-val">' + esc(o.code)
+      + '</div></div><div><div class="f-label">Выдано / лимит</div><div class="f-val">'
+      + esc(o.claimed + ' / ' + o.max_uses) + '</div></div></div>'
+      + '<div class="muted" style="margin-top:12px;font-size:12px">Добавьте партнёра с этим названием, чтобы управлять кодом здесь.</div></div>';
+  }
+  box.innerHTML = html;
+}
+
+function byId(id){ return CACHE.find(p => p.id === id); }
+
+function openAdd(){
+  document.getElementById('m-title').textContent = 'Новый партнёр';
+  document.getElementById('m-id').value = '';
+  document.getElementById('m-name').value = '';
+  document.getElementById('m-url').value = '';
+  document.getElementById('m-code').value = '';
+  document.getElementById('m-limit').value = '';
+  document.getElementById('m-active').checked = true;
+  document.getElementById('m-promo-active').checked = true;
+  showMsg('', '');
+  document.getElementById('modal').classList.add('open');
+}
+
+function openEdit(id){
+  const p = byId(id); if(!p) return;
+  document.getElementById('m-title').textContent = 'Партнёр: ' + p.name;
+  document.getElementById('m-id').value = p.id;
+  document.getElementById('m-name').value = p.name;
+  document.getElementById('m-url').value = p.url;
+  document.getElementById('m-code').value = p.promo ? p.promo.code : '';
+  document.getElementById('m-limit').value = p.promo ? p.promo.max_uses : '';
+  document.getElementById('m-active').checked = !!p.is_active;
+  document.getElementById('m-promo-active').checked = p.promo ? !!p.promo.is_active : true;
+  showMsg('', '');
+  document.getElementById('modal').classList.add('open');
+}
+
+function closeModal(){ document.getElementById('modal').classList.remove('open'); }
+
+function showMsg(text, kind){
+  const el = document.getElementById('m-msg');
+  el.className = 'msg' + (kind ? ' ' + kind : '');
+  el.textContent = text;
+}
+
+async function save(){
+  const btn = document.getElementById('m-save');
+  const id = document.getElementById('m-id').value;
+  const code = document.getElementById('m-code').value.trim();
+  const limitRaw = document.getElementById('m-limit').value.trim();
+  const body = {
+    name: document.getElementById('m-name').value.trim(),
+    url: document.getElementById('m-url').value.trim(),
+    is_active: document.getElementById('m-active').checked,
+  };
+  if(code){
+    body.promo_code = code;
+    body.promo_limit = limitRaw === '' ? 0 : Number(limitRaw);
+    body.promo_active = document.getElementById('m-promo-active').checked;
+  }
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Сохранение...';
+  showMsg('', '');
+  try{
+    const r = await fetch('/api/partners' + (id ? '/' + id : ''), {
+      method: id ? 'PATCH' : 'POST',
+      headers: {'Content-Type':'application/json','X-CSRF-Token':CSRF},
+      body: JSON.stringify(body),
+    });
+    if(!r.ok){
+      let detail = 'HTTP ' + r.status;
+      try{ const j = await r.json(); if(j.error) detail = j.error; }catch(_){}
+      showMsg('Не сохранено: ' + detail, 'err');
+      return;
+    }
+    showMsg('Сохранено.', 'ok');
+    await load();
+    setTimeout(closeModal, 400);
+  }catch(e){
+    showMsg('Не сохранено: ' + e.message, 'err');
+  }finally{
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+async function send(method, path){
+  const r = await fetch(path, {method: method, headers:{'X-CSRF-Token':CSRF}});
+  if(!r.ok) alert('Не выполнено: HTTP ' + r.status);
+  await load();
+}
+
+async function toggle(id, active){
+  const r = await fetch('/api/partners/' + id, {
+    method:'PATCH', headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},
+    body: JSON.stringify({is_active: active}),
+  });
+  if(!r.ok) alert('Не выполнено: HTTP ' + r.status);
+  await load();
+}
+
+function archivePartner(id){
+  const p = byId(id); if(!p) return;
+  if(!confirm('Отправить «' + p.name + '» в архив? Кнопка исчезнет из бота. История кликов и выданные промокоды сохранятся.')) return;
+  send('DELETE', '/api/partners/' + id);
+}
+
+function archivePromo(id){
+  const p = byId(id); if(!p) return;
+  if(!confirm('Удалить промокод партнёра «' + p.name + '»? Уже выданные коды у пользователей останутся.')) return;
+  send('DELETE', '/api/partners/' + id + '/promo');
+}
+
+function copyText(text){
+  if(navigator.clipboard) navigator.clipboard.writeText(text);
+  else window.prompt('Скопируйте:', text);
+}
+function copyUrl(id){ const p = byId(id); if(p) copyText(p.url); }
+function copyCode(id){ const p = byId(id); if(p && p.promo) copyText(p.promo.code); }
+
+load();
+</script>
+</body>
+</html>
+"""
 
 
 USERS_TEMPLATE = r"""<!DOCTYPE html>
@@ -977,6 +1343,7 @@ tr:last-child td{border-bottom:none;}
   <div class="logo"><h1>⚽ Proqnozai — Пользователи</h1></div>
   <div>
     <a href="/" class="btn">📊 Статистика</a>
+    <a href="/partners" class="btn">🤝 Партнёры</a>
     <a href="/broadcast" class="btn">📢 Рассылка</a>
   </div>
 </header>

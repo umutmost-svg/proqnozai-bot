@@ -2,8 +2,8 @@ from datetime import datetime, timezone, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from config import MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR, PROMO_CHANNEL, PARTNERS
-from db import db_lang, db_get_tz, db_list_promo_codes
+from config import MOSTBET_SRC_TZ, violations, SPAM_AFTER, SPAM_DUR, PROMO_CHANNEL
+from db import db_lang, db_get_tz, db_list_promo_codes, db_active_partners
 from security import sec_blocked, rate_check, nav_rate_check, record_viol
 from translations import T, tr
 
@@ -112,7 +112,9 @@ def main_menu(uid):
     if PROMO_CHANNEL and db_list_promo_codes():
         rows.insert(1, [tl["menu_get_promo"]])
     # "Our partners" only appears once at least one partner is configured.
-    if PARTNERS:
+    # Read from the DB on every render: a partner enabled or disabled in the
+    # dashboard changes the menu for the next user, with no restart.
+    if db_active_partners():
         rows.append([tl["menu_partners"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
