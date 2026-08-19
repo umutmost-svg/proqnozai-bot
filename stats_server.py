@@ -16,6 +16,8 @@ never a query parameter, which would put the secret in proxy access logs.
   PATCH  /partners/<id>        -> edit name / URL / active flag / campaign
   DELETE /partners/<id>        -> archive the partner and its campaign
   DELETE /partners/<id>/promo  -> archive only the campaign
+  POST   /partners/<id>/promo/pool   -> import a batch of single-use codes
+  DELETE /partners/<id>/promo/pool   -> drop the unclaimed codes
 """
 import asyncio
 import hmac
@@ -32,6 +34,7 @@ from db import (con, _all, like_escape, db_log_partner_click,
                 db_list_partners, db_get_partner, db_partner_add,
                 db_partner_update, db_partner_archive,
                 db_list_promo_codes, db_set_promo_code, db_promo_edit,
+                db_promo_pool_import, db_promo_pool_remove_free,
                 db_promo_archive, db_partner_link_targets,
                 validate_promo_code, validate_promo_max_uses)
 
@@ -122,6 +125,10 @@ def _partners_payload() -> dict:
                         "claimed": promo["claimed"],
                         "available": promo["available"],
                         "is_active": promo["is_active"],
+                        # 'shared' -> one code, max_uses is its cap.
+                        # 'pool'   -> `code` is empty and max_uses is the number
+                        # of imported single-use codes.
+                        "mode": promo.get("mode", "shared"),
                     }})
     # Codes whose partner row was archived or never existed (e.g. set through
     # /setpromo before the partner was added) would otherwise be invisible and
@@ -299,6 +306,18 @@ class _Handler(BaseHTTPRequestHandler):
             partner = db_get_partner(pid) if pid is not None else None
             if partner is None:
                 self._send(404, b"unknown partner"); return True
+
+            # The pool routes are checked before the generic ones below: a
+            # DELETE on .../promo/pool means "drop the unclaimed codes", and
+            # would otherwise fall through to archiving the whole partner.
+            if parsed.path.rstrip("/").endswith("/promo/pool"):
+                if method == "POST":
+                    result = db_promo_pool_import(partner["name"], body.get("codes"))
+                    self._json(200, result); return True
+                if method == "DELETE":
+                    removed = db_promo_pool_remove_free(partner["name"])
+                    self._json(200, {"removed": removed}); return True
+                self._send(405, b"method not allowed"); return True
 
             if method == "PATCH":
                 db_partner_update(pid,

@@ -27,23 +27,6 @@ TOKEN = "offline-test-dashboard-token"
 # ─── fixtures ─────────────────────────────────────────────────────────────────
 
 @pytest.fixture
-def clean(temp_db):
-    """Empty partners + promo tables, restored after the test. The temp DB is
-    shared across the session, so these tests have to own their rows."""
-    def _wipe():
-        with temp_db.con() as c:
-            c.execute("DELETE FROM partners")
-            c.execute("DELETE FROM promo_campaign")
-            c.execute("DELETE FROM promo_claims")
-            # Clicks too: other suites assert on click totals for the same
-            # partner names, and the temp DB is shared session-wide.
-            c.execute("DELETE FROM partner_clicks")
-    _wipe()
-    yield temp_db
-    _wipe()
-
-
-@pytest.fixture
 def server(monkeypatch, clean):
     monkeypatch.setattr(ss, "STATS_TOKEN", TOKEN)
     srv = ThreadingHTTPServer(("127.0.0.1", 0), ss._Handler)

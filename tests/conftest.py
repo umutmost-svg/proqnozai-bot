@@ -45,6 +45,24 @@ def temp_db():
     return db
 
 
+@pytest.fixture
+def clean(temp_db):
+    """Empty partners + promo tables, restored after the test. The temp DB is
+    shared across the session, so these tests have to own their rows."""
+    def _wipe():
+        with temp_db.con() as c:
+            c.execute("DELETE FROM partners")
+            c.execute("DELETE FROM promo_campaign")
+            c.execute("DELETE FROM promo_claims")
+            c.execute("DELETE FROM promo_pool")
+            # Clicks too: other suites assert on click totals for the same
+            # partner names, and the temp DB is shared session-wide.
+            c.execute("DELETE FROM partner_clicks")
+    _wipe()
+    yield temp_db
+    _wipe()
+
+
 @pytest.fixture()
 def partners(temp_db):
     """Exclusive control of the `partners` table for one test.

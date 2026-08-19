@@ -138,10 +138,12 @@ async def setpromo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         db_set_promo_code(partner, code, max_uses)
     except ValueError as e:
-        # Most likely the same code given to two partners: claims are keyed by
-        # the code string, so sharing one would merge their caps. Say so plainly
-        # instead of letting the error handler show a generic failure.
-        await update.message.reply_text(f"⚠️ {e}\nGive each partner its own code.")
+        # Usually the same code given to two partners: claims are keyed by the
+        # code string, so sharing one would merge their caps. Say so plainly
+        # instead of letting the error handler show a generic failure. A partner
+        # running a code pool lands here too, with its own explanation.
+        hint = "\nGive each partner its own code." if "already used by" in str(e) else ""
+        await update.message.reply_text(f"⚠️ {e}{hint}")
         return
     await update.message.reply_text(f"✅ {partner}: {code} · cap {max_uses}")
     await promostats_cmd(update, context)
@@ -175,6 +177,9 @@ async def promostats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for c in codes:
         name = c["partner"] or "(no partner)"
         state = "" if c["is_active"] and not c["is_archived"] else " · OFF"
-        lines.append(f"{name}: {c['code']} — {c['claimed']}/{c['max_uses']} "
+        # A pool campaign has no single code — every holder has a different
+        # string — so its size stands in for one.
+        what = "pool of single-use codes" if c.get("mode") == "pool" else c["code"]
+        lines.append(f"{name}: {what} — {c['claimed']}/{c['max_uses']} "
                      f"(available {c['available']}){state}")
     await update.message.reply_text("\n".join(lines))

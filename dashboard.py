@@ -1012,6 +1012,25 @@ def api_promo_archive(pid: int):
     return _partners_proxy("DELETE", f"/partners/{pid}/promo")
 
 
+@app.route("/api/partners/<int:pid>/promo/pool", methods=["POST"])
+@require_auth
+def api_promo_pool_import(pid: int):
+    if not csrf_ok():
+        logger.warning("promo pool import rejected: CSRF check failed")
+        return Response("CSRF check failed", 403)
+    return _partners_proxy("POST", f"/partners/{pid}/promo/pool",
+                           request.get_json(silent=True) or {})
+
+
+@app.route("/api/partners/<int:pid>/promo/pool", methods=["DELETE"])
+@require_auth
+def api_promo_pool_clear(pid: int):
+    if not csrf_ok():
+        logger.warning("promo pool clear rejected: CSRF check failed")
+        return Response("CSRF check failed", 403)
+    return _partners_proxy("DELETE", f"/partners/{pid}/promo/pool")
+
+
 @app.route("/partners")
 @require_auth
 def partners_page():
@@ -1056,8 +1075,10 @@ header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 
 .f-val{font-size:13px;word-break:break-all;}
 .actions{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;}
 label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 5px;}
-input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px 12px;font-size:14px;outline:none;font-family:inherit;}
-input:focus{border-color:var(--accent);}
+input,textarea{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px 12px;font-size:14px;outline:none;font-family:inherit;}
+input:focus,textarea:focus{border-color:var(--accent);}
+textarea{resize:vertical;min-height:120px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;}
+.pool-note{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-top:12px;font-size:12px;color:var(--muted);}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 @media(max-width:560px){.grid2{grid-template-columns:1fr;}}
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:16px;z-index:50;}
@@ -1100,7 +1121,7 @@ input:focus{border-color:var(--accent);}
     <input id="m-name" maxlength="64" placeholder="Mostbet">
     <label>URL</label>
     <input id="m-url" maxlength="500" placeholder="https://...">
-    <div class="grid2">
+    <div class="grid2" id="m-shared-fields">
       <div>
         <label>Промокод</label>
         <input id="m-code" maxlength="64" placeholder="PROQNOZ">
@@ -1110,12 +1131,33 @@ input:focus{border-color:var(--accent);}
         <input id="m-limit" type="number" min="0" step="1" placeholder="1000">
       </div>
     </div>
+    <div class="pool-note" id="m-pool-note" style="display:none">
+      У партнёра загружен пул одноразовых кодов — код и лимит берутся из него.
+      Управлять списком можно кнопкой «Загрузить коды» на карточке.
+    </div>
     <div class="chk"><input type="checkbox" id="m-active" checked><span>Партнёр активен (виден в боте)</span></div>
     <div class="chk"><input type="checkbox" id="m-promo-active" checked><span>Промокод активен (выдаётся)</span></div>
     <div class="msg" id="m-msg"></div>
     <div class="actions">
       <button class="btn btn-primary" id="m-save" onclick="save()">Сохранить</button>
       <button class="btn" onclick="closeModal()">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="pool-modal">
+  <div class="modal">
+    <h2 id="pool-title">Загрузить коды</h2>
+    <div class="muted" style="font-size:12px">Список от партнёра: по одному коду в строке
+      (или через запятую). Каждый код — на одну активацию. Повторная загрузка
+      добавляет только новые коды, дубли пропускаются.</div>
+    <input type="hidden" id="pool-id">
+    <label>Коды</label>
+    <textarea id="pool-codes" rows="10" placeholder="MB-0001&#10;MB-0002&#10;MB-0003"></textarea>
+    <div class="msg" id="pool-msg"></div>
+    <div class="actions">
+      <button class="btn btn-primary" id="pool-save" onclick="importPool()">Загрузить</button>
+      <button class="btn" onclick="closePool()">Отмена</button>
     </div>
   </div>
 </div>
@@ -1149,19 +1191,25 @@ function render(rows, orphans){
   let html = '';
   for(const p of rows){
     const pr = p.promo;
+    const isPool = !!pr && pr.mode === 'pool';
     const usage = pr ? (pr.claimed + ' / ' + pr.max_uses) : '—';
     const exhausted = pr && pr.available === 0;
+    const codeCell = !pr ? '<span class="muted">нет</span>'
+      : (isPool ? 'пул: ' + esc(pr.max_uses) + ' кодов по 1 активации'
+                : esc(pr.code));
     let promoBadge = '';
     if(pr && !pr.is_active) promoBadge = '<span class="badge b-off">промокод выключен</span>';
-    else if(exhausted) promoBadge = '<span class="badge b-warn">лимит исчерпан</span>';
+    else if(exhausted) promoBadge = '<span class="badge b-warn">' + (isPool ? 'коды закончились' : 'лимит исчерпан') + '</span>';
     html += '<div class="card' + (p.is_active ? '' : ' off') + '">'
       + '<div class="row1"><div class="pname">' + esc(p.name) + '</div>'
       + '<div style="display:flex;gap:6px;align-items:center">' + promoBadge
       + '<span class="badge ' + (p.is_active ? 'b-on">● Активен' : 'b-off">○ Выключен') + '</span></div></div>'
       + '<div class="fields">'
       + '<div><div class="f-label">URL</div><div class="f-val">' + esc(p.url) + '</div></div>'
-      + '<div><div class="f-label">Промокод</div><div class="f-val">' + (pr ? esc(pr.code) : '<span class="muted">нет</span>') + '</div></div>'
-      + '<div><div class="f-label">Выдано / лимит</div><div class="f-val">' + esc(usage) + '</div></div>'
+      + '<div><div class="f-label">Промокод</div><div class="f-val">' + codeCell + '</div></div>'
+      + '<div><div class="f-label">' + (isPool ? 'Выдано / всего' : 'Выдано / лимит')
+      + '</div><div class="f-val">' + esc(usage)
+      + (pr ? ' <span class="muted">(свободно ' + esc(pr.available) + ')</span>' : '') + '</div></div>'
       + '<div><div class="f-label">Клики (30д)</div><div class="f-val">' + esc(p.clicks || 0) + '</div></div>'
       + '<div><div class="f-label">Обновлён</div><div class="f-val muted">' + esc(p.updated_at || '') + '</div></div>'
       + '</div><div class="actions">'
@@ -1169,7 +1217,9 @@ function render(rows, orphans){
       + '<button class="btn" onclick="toggle(' + p.id + ',' + (p.is_active ? 'false' : 'true') + ')">'
       + (p.is_active ? '⏸ Выключить' : '▶️ Включить') + '</button>'
       + '<button class="btn" onclick="copyUrl(' + p.id + ')">🔗 Копировать URL</button>'
-      + (pr ? '<button class="btn" onclick="copyCode(' + p.id + ')">🎁 Копировать код</button>' : '')
+      + (pr && !isPool ? '<button class="btn" onclick="copyCode(' + p.id + ')">🎁 Копировать код</button>' : '')
+      + (!pr || isPool ? '<button class="btn" onclick="openPool(' + p.id + ')">📥 Загрузить коды</button>' : '')
+      + (isPool ? '<button class="btn btn-danger" onclick="clearPool(' + p.id + ')">Убрать невыданные</button>' : '')
       + (pr ? '<button class="btn btn-danger" onclick="archivePromo(' + p.id + ')">Удалить промокод</button>' : '')
       + '<button class="btn btn-danger" onclick="archivePartner(' + p.id + ')">🗑 В архив</button>'
       + '</div></div>';
@@ -1187,7 +1237,13 @@ function render(rows, orphans){
 
 function byId(id){ return CACHE.find(p => p.id === id); }
 
+function setPoolMode(on){
+  document.getElementById('m-shared-fields').style.display = on ? 'none' : '';
+  document.getElementById('m-pool-note').style.display = on ? '' : 'none';
+}
+
 function openAdd(){
+  setPoolMode(false);
   document.getElementById('m-title').textContent = 'Новый партнёр';
   document.getElementById('m-id').value = '';
   document.getElementById('m-name').value = '';
@@ -1202,12 +1258,14 @@ function openAdd(){
 
 function openEdit(id){
   const p = byId(id); if(!p) return;
+  setPoolMode(!!p.promo && p.promo.mode === 'pool');
   document.getElementById('m-title').textContent = 'Партнёр: ' + p.name;
   document.getElementById('m-id').value = p.id;
   document.getElementById('m-name').value = p.name;
   document.getElementById('m-url').value = p.url;
-  document.getElementById('m-code').value = p.promo ? p.promo.code : '';
-  document.getElementById('m-limit').value = p.promo ? p.promo.max_uses : '';
+  const pooled = !!p.promo && p.promo.mode === 'pool';
+  document.getElementById('m-code').value = (p.promo && !pooled) ? p.promo.code : '';
+  document.getElementById('m-limit').value = (p.promo && !pooled) ? p.promo.max_uses : '';
   document.getElementById('m-active').checked = !!p.is_active;
   document.getElementById('m-promo-active').checked = p.promo ? !!p.promo.is_active : true;
   showMsg('', '');
@@ -1225,6 +1283,8 @@ function showMsg(text, kind){
 async function save(){
   const btn = document.getElementById('m-save');
   const id = document.getElementById('m-id').value;
+  const existing = id ? byId(Number(id)) : null;
+  const isPool = !!existing && !!existing.promo && existing.promo.mode === 'pool';
   const code = document.getElementById('m-code').value.trim();
   const limitRaw = document.getElementById('m-limit').value.trim();
   const body = {
@@ -1232,7 +1292,11 @@ async function save(){
     url: document.getElementById('m-url').value.trim(),
     is_active: document.getElementById('m-active').checked,
   };
-  if(code){
+  if(isPool){
+    // The code list and its size come from the pool; only the on/off switch
+    // is editable here, and sending promo_code would be refused by the worker.
+    body.promo_active = document.getElementById('m-promo-active').checked;
+  }else if(code){
     body.promo_code = code;
     body.promo_limit = limitRaw === '' ? 0 : Number(limitRaw);
     body.promo_active = document.getElementById('m-promo-active').checked;
@@ -1289,6 +1353,59 @@ function archivePromo(id){
   const p = byId(id); if(!p) return;
   if(!confirm('Удалить промокод партнёра «' + p.name + '»? Уже выданные коды у пользователей останутся.')) return;
   send('DELETE', '/api/partners/' + id + '/promo');
+}
+
+function openPool(id){
+  const p = byId(id); if(!p) return;
+  document.getElementById('pool-title').textContent = 'Коды для: ' + p.name;
+  document.getElementById('pool-id').value = p.id;
+  document.getElementById('pool-codes').value = '';
+  poolMsg('', '');
+  document.getElementById('pool-modal').classList.add('open');
+}
+
+function closePool(){ document.getElementById('pool-modal').classList.remove('open'); }
+
+function poolMsg(text, kind){
+  const el = document.getElementById('pool-msg');
+  el.className = 'msg' + (kind ? ' ' + kind : '');
+  el.textContent = text;
+}
+
+async function importPool(){
+  const btn = document.getElementById('pool-save');
+  const id = document.getElementById('pool-id').value;
+  const codes = document.getElementById('pool-codes').value;
+  if(!codes.trim()){ poolMsg('Вставьте хотя бы один код.', 'err'); return; }
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Загрузка...';
+  poolMsg('', '');
+  try{
+    const r = await fetch('/api/partners/' + id + '/promo/pool', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},
+      body: JSON.stringify({codes: codes}),
+    });
+    let j = {};
+    try{ j = await r.json(); }catch(_){}
+    if(!r.ok){ poolMsg('Не загружено: ' + (j.error || ('HTTP ' + r.status)), 'err'); return; }
+    poolMsg('Добавлено ' + j.added + ', пропущено дублей ' + j.duplicates
+            + '. Всего в пуле ' + j.total + ', свободно ' + j.available + '.', 'ok');
+    document.getElementById('pool-codes').value = '';
+    await load();
+  }catch(e){
+    poolMsg('Не загружено: ' + e.message, 'err');
+  }finally{
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+function clearPool(id){
+  const p = byId(id); if(!p) return;
+  if(!confirm('Убрать невыданные коды партнёра «' + p.name + '»? Уже выданные коды у пользователей останутся.')) return;
+  send('DELETE', '/api/partners/' + id + '/promo/pool');
 }
 
 function copyText(text){
