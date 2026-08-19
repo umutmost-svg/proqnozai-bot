@@ -19,7 +19,7 @@ from handlers.live import watch_cb, matches_cmd
 from handlers.history import history_cmd, history_cb
 from handlers.compare import compare_cmd
 from handlers.promo import (promo_cmd, promo_check_cb, setpromo_cmd,
-                            promostats_cmd, delpromo_cmd)
+                            promostats_cmd, delpromo_cmd, promodiag_cmd)
 from handlers.admin import admin_cmd, adm_cb, handle_adm_msg, cancel_cmd, testapi_cmd
 from handlers.utils import SUPPORT_URL
 from translations import T
@@ -57,6 +57,7 @@ def register_handlers(app):
     app.add_handler(CommandHandler("setpromo",   setpromo_cmd))
     app.add_handler(CommandHandler("promostats", promostats_cmd))
     app.add_handler(CommandHandler("delpromo",   delpromo_cmd))
+    app.add_handler(CommandHandler("promodiag",  promodiag_cmd))
 
     app.add_handler(CallbackQueryHandler(lang_cb,       pattern=r"^lang_"))
     app.add_handler(CallbackQueryHandler(ob_cb,         pattern=r"^ob_"))
