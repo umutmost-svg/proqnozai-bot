@@ -20,7 +20,15 @@ async function holdSession(page: Page): Promise<Hold> {
   return { release: () => release() };
 }
 
-async function prepare(page: Page, width: number, opts: { lang?: 'ru' | 'az' | 'en'; reduceMotion?: boolean } = {}) {
+/**
+ * `telegram: false` — the test installs its own Telegram WebApp stub. Exactly one init
+ * script may assign window.Telegram: Playwright does not define the order of init scripts.
+ */
+async function prepare(
+  page: Page,
+  width: number,
+  opts: { lang?: 'ru' | 'az' | 'en'; reduceMotion?: boolean; telegram?: boolean } = {},
+) {
   await page.setViewportSize({ width, height: 844 });
   await page.addInitScript((o) => {
     localStorage.setItem(
@@ -32,7 +40,7 @@ async function prepare(page: Page, width: number, opts: { lang?: 'ru' | 'az' | '
   // Opened from Telegram: only a launch runs the session check the splash waits for
   // (outside Telegram the app is the demo and checks nothing). Unsigned stand-in; the
   // sign-in that follows a 401 from /api/me is answered at once by this stub.
-  await page.addInitScript(() => {
+  if (opts.telegram !== false) await page.addInitScript(() => {
     (window as unknown as { Telegram: unknown }).Telegram = {
       WebApp: {
         initData: 'query_id=AA&user=%7B%22id%22%3A501%7D&auth_date=1&hash=' + '0'.repeat(64),
@@ -238,7 +246,7 @@ test('return from the background: no stall, splash never comes back after boot',
 
 test('inside a Telegram WebView: ready() is called at once, splash respects safe areas', async ({ page }) => {
   const hold = await holdSession(page);
-  await prepare(page, 390);
+  await prepare(page, 390, { telegram: false });
   await page.addInitScript(() => {
     const calls: string[] = [];
     (window as unknown as { tgCalls: string[] }).tgCalls = calls;
@@ -294,7 +302,7 @@ test('short screen 360×640: the whole splash and the failed-view actions stay o
 });
 
 test('short screen with Telegram safe areas and a two-line offline hint: nothing overlaps', async ({ page }) => {
-  await prepare(page, 360);
+  await prepare(page, 360, { telegram: false });
   await page.setViewportSize({ width: 360, height: 640 });
   await holdSession(page);
   await page.addInitScript(() => {
@@ -332,7 +340,7 @@ test('short screen with Telegram safe areas and a two-line offline hint: nothing
 });
 
 test('short screen with Telegram safe areas: failed-view actions stay inside the safe area and work', async ({ page }) => {
-  await prepare(page, 360);
+  await prepare(page, 360, { telegram: false });
   await page.setViewportSize({ width: 360, height: 640 });
   await page.clock.install();
   await page.route('**/api/**', (r) =>
