@@ -96,6 +96,11 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 | `MINIAPP_SESSION_TTL_S` | `43200` (12 ч) | срок сессии; не больше 604800 (7 дней) |
 | `MINIAPP_LOGIN_RATE_LIMIT` / `_WINDOW_S` | `10` / `60` | входов с **проверенной подписью** одного Telegram-пользователя за окно |
 | `MINIAPP_COOKIE_SAMESITE` | `lax` | `lax` / `strict` / `none` (`none` только с Secure) |
+| `MINIAPP_MAX_SESSIONS_PER_USER` | `5` | активных сессий на пользователя; 1…5; новая отзывает старейшую |
+| `MINIAPP_LOGINS_ENABLED` | `true` | `false` — аварийно закрыть новые входы (503 `logins_disabled`); сессии работают |
+| `MINIAPP_STATIC_DIR` | — | собранный frontend (`dist`) на том же origin; в образе стенда `/app/static` |
+| `MINIAPP_CSP_MODE` | `enforce` | `report-only` — CSP только сообщает о нарушениях (первые проверки в клиентах) |
+| `MINIAPP_EDGE_SECRET` | — (**обязательна** при `MINIAPP_ENV=production`) | каждый запрос, кроме `GET /api/health`, обязан нести его в `X-Edge-Auth` (≥ 32 печатных ASCII) |
 
 Ошибочная конфигурация останавливает запуск (`SettingsError`). Значения
 секретов в сообщения не попадают.
@@ -114,6 +119,16 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
   - development (http на loopback): `sporai_session` без `Secure`, остальное
     то же.
 - Срок фиксированный: `MINIAPP_SESSION_TTL_S` от создания, без продления.
+- Не больше `MINIAPP_MAX_SESSIONS_PER_USER` (5) активных сессий на
+  пользователя. Новая сессия отзывает старейшие **в той же транзакции**
+  `BEGIN IMMEDIATE`, что и вставка: параллельные входы не превысят лимит.
+- Отзыв: `POST /api/auth/logout` (эта сессия), `POST /api/auth/logout-all`
+  (все сессии пользователя), CLI `miniapp-entrypoint admin revoke-user` /
+  `revoke-all` (см. `stand.md`). При любом отзыве, включая вытеснение,
+  сжигается initData затронутых сессий, созданных в окне свежести, чтобы
+  перезагрузка не вошла снова.
+- Закончившиеся сессии хранятся 7 дней для разбора инцидентов и удаляются при
+  каждом входе, отзыве, старте приложения и командой `admin purge`.
 - JWT и refresh-токенов нет.
 - Frontend не хранит ни токен, ни initData ни в localStorage, ни в
   sessionStorage. Это проверяют unit- и e2e-тесты. Единственная запись —
@@ -125,20 +140,25 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 
 ## API
 
-Все ответы `/api/*`, включая 404 и 500, идут с `Cache-Control: no-store`,
-`Pragma: no-cache`, `X-Content-Type-Options: nosniff`,
-`Referrer-Policy: no-referrer` и `X-Request-ID` (16 hex, генерирует сервер;
-присланный клиентом заголовок игнорируется). Ошибки имеют вид
+Все ответы, включая 404 и 500, идут с `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, `Permissions-Policy`, CSP (см. `stand.md`),
+в production — `Strict-Transport-Security`, и с `X-Request-ID` (16 hex, генерирует сервер;
+присланный клиентом заголовок игнорируется). `Cache-Control: no-store` +
+`Pragma: no-cache` — у всего, кроме хешированных файлов `/assets/*`
+(`public, max-age=31536000, immutable`). Ошибки имеют вид
 `{"error": "<code>"}` и не повторяют входные данные. `/docs` и
 `/openapi.json` отключены.
 
 | Метод и путь | Защита | Ответ |
 |---|---|---|
-| `GET /api/health` | — | `{"status":"ok"}` |
+| `GET /api/health` | — (освобождён от edge-секрета) | 200 `{"status":"ok"}` · 503 `{"status":"unavailable"}`, если БД не читается |
+| `POST /api/auth/session` при `MINIAPP_LOGINS_ENABLED=false` | Origin | 503 `{"error":"logins_disabled"}` |
 | `POST /api/auth/session` | Origin, `Content-Type: application/json`, ≤ 8 КиБ, тело ровно `{"init_data": "<string>"}`, лимит по проверенному `user.id` | 200 `{user, session:{expires_at, csrf_token}, created}` + cookie · 400 · 401 `init_data_invalid`/`init_data_expired`/`init_data_reused` · 403 `origin_not_allowed` · 413 · 415 · 429 + `Retry-After` |
 | `GET /api/me` | cookie | 200 `{user, session}` · 401 `unauthenticated`/`session_expired` (cookie очищается) |
 | `POST /api/me/language` | Origin, cookie, `X-CSRF-Token`, тело `{"lang":"az"\|"ru"\|"en"}` | 200 · 401 · 403 `csrf_failed` · 400 |
 | `POST /api/auth/logout` | Origin, `X-CSRF-Token` при неотозванной сессии в cookie; тело необязательно: `{"init_data": "<текущий запуск>"}` (тогда `application/json`, ≤ 8 КиБ) | 200 `{"ok":true}` + очистка cookie · 400 · 403 `csrf_failed` · 415 |
+| `POST /api/auth/logout-all` | Origin, **живая** сессия, `X-CSRF-Token`; необязательное тело `{"init_data": ...}` как у logout | 200 `{"ok":true,"revoked":N}` + очистка cookie · 401 · 403 `csrf_failed` · 400 · 415 |
+| неизвестный `/api/*` | — | 404 `{"error":"not_found"}` (никогда не отдаётся статикой) |
 | любой | — | 500 `{"error":"internal","request_id":"<id>"}` при непредвиденной ошибке |
 
 `user` в ответе — `{id, first_name, last_name, username, lang, lang_source}`.
@@ -310,97 +330,12 @@ AI-разбор остаются с отметкой «Демо». Обходо�
 - Access-лог uvicorn содержит метод, путь и код ответа. initData передаётся
   только в теле, cookie в access-лог не пишутся.
 
-## HTTPS-стенд: один origin
+## HTTPS-стенд
 
-Схема для закрытого тестового стенда. Railway и production не меняются;
-реальные значения — только в окружении стенда.
-
-```
-Telegram-клиент (WebView)
-        │ https://miniapp-stand.example.com      (один origin)
-        ▼
-edge: nginx — TLS termination, реальный IP клиента = TCP-пир
-        ├─ /api/*  → http://127.0.0.1:8000  (uvicorn, только loopback)
-        └─ /*      → frontend/dist (статические файлы)
-```
-
-- **Один origin.** Страница и `/api` отдаются с одного хоста по HTTPS.
-  `MINIAPP_TRUSTED_ORIGINS=https://miniapp-stand.example.com`,
-  `MINIAPP_ENV=production`. Cookie `__Host-sporai_session`, `Secure`,
-  `SameSite=Lax`, без `Domain`. CORS не нужен.
-- **TLS** завершается на nginx (сертификат Let's Encrypt). Между nginx и
-  uvicorn — loopback, поэтому `Secure`-cookie и `__Host-` корректны: браузер
-  видит только HTTPS.
-- **uvicorn:** `--host 127.0.0.1 --port 8000 --no-proxy-headers`, один
-  процесс. `--forwarded-allow-ips` не задаётся, тем более не `*`. Приложению
-  IP клиента не нужен.
-- **Реальный IP и лимиты по IP — на nginx.** nginx принимает соединение от
-  клиента напрямую, поэтому `$binary_remote_addr` — настоящий адрес. Клиентские
-  `X-Forwarded-For`/`X-Real-IP` nginx не доверяет: `real_ip_header` и
-  `set_real_ip_from` не используются, заголовки к backend не пробрасываются.
-- **Если перед стендом есть ещё один прокси или CDN** (Railway edge,
-  Cloudflare), его адреса заранее неизвестны или меняются. Тогда лимит по IP
-  настраивается **на этом внешнем уровне** (например, rate limiting rules
-  Cloudflare). `set_real_ip_from` с широкими диапазонами и
-  `--forwarded-allow-ips=*` не используются. Приложение в любом случае
-  ограничивает только проверенных пользователей.
-
-Пример конфигурации nginx (шаблон, не применён нигде):
-
-```nginx
-limit_req_zone $binary_remote_addr zone=miniapp_login:10m rate=20r/m;
-limit_req_zone $binary_remote_addr zone=miniapp_api:10m  rate=10r/s;
-
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name miniapp-stand.example.com;
-    ssl_certificate     /etc/letsencrypt/live/miniapp-stand.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/miniapp-stand.example.com/privkey.pem;
-
-    add_header Strict-Transport-Security "max-age=31536000" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://telegram.org; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors https://web.telegram.org" always;
-    add_header Referrer-Policy "no-referrer" always;
-    add_header X-Content-Type-Options "nosniff" always;
-
-    client_max_body_size 16k;
-
-    location = /api/auth/session {
-        limit_req zone=miniapp_login burst=10 nodelay;
-        limit_req_status 429;
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For "";
-        proxy_set_header X-Real-IP "";
-    }
-    location /api/ {
-        limit_req zone=miniapp_api burst=40 nodelay;
-        limit_req_status 429;
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For "";
-        proxy_set_header X-Real-IP "";
-    }
-    location / {
-        root /srv/miniapp/dist;
-        try_files $uri /index.html;
-    }
-}
-server {
-    listen 80;
-    server_name miniapp-stand.example.com;
-    return 301 https://$host$request_uri;
-}
-```
-
-- `add_header` внутри `location` с собственными `add_header` отменяет
-  заголовки уровня `server`. Здесь в `location` своих `add_header` нет.
-- CSP добавляется в конфигурацию хостинга **до** открытия стенда. Её нужно
-  проверить в Telegram-клиентах: шрифты и SVG собраны в `dist`, внешний
-  скрипт один — SDK Telegram.
-- Бот для стенда — отдельный тестовый бот (свой токен в окружении стенда),
-  Mini App подключается к нему через BotFather вручную. Это делается вне
-  этой задачи.
+Топология, CSP, защита от массовых запросов, Railway/Cloudflare, переменные,
+резервные копии, откат и ротация токена — в [`stand.md`](stand.md). Прежний
+шаблон с nginx на VPS заменён: стенд — отдельный проект Railway, один
+контейнер отдаёт frontend и `/api` с одного origin.
 
 ## Локальный запуск
 
@@ -450,13 +385,15 @@ HTTPS-адрес. Публичные туннели в M2 не использу�
   блокировать такие cookie совсем. Совместимость **не заявляется** и не
   выводится из проверки в локальном Chrome. Ослаблять настройки ради неё
   без отдельного решения нельзя;
-- поведение за nginx-стендом (HTTPS, `__Host-` cookie, лимиты nginx) и в
-  нескольких воркерах; схема выше — проект, не проверенная конфигурация;
+- поведение на стенде Railway за Cloudflare (HTTPS, `__Host-` cookie,
+  правила Cloudflare); контейнер проверен локально в Docker, без Railway и
+  без Cloudflare (`stand.md`, «Что проверено»);
 - сохранение сессии между открытиями и поведение logout внутри Telegram:
   сохраняется ли `sessionStorage` при перезагрузке WebView, работает ли
   `Telegram.WebApp.close()`, приходит ли новый initData при повторном открытии.
   Локально это проверено только на заглушке `window.Telegram.WebApp`;
-- CSP из шаблона выше в Telegram-клиентах.
+- CSP в Telegram-клиентах (в Chrome проверена Playwright-тестом
+  `e2e-auth/csp.spec.ts`, SDK Telegram там заглушён).
 
 ## Docker
 
@@ -480,6 +417,7 @@ manifests, оба `.env.example`. Не попали `.env`, `.venv`,
 `miniapp/.venv`, `frontend/node_modules`, `.git`, `bot.log`,
 `suspicious.log`, `__pycache__`, кэши.
 
-Схема production-сборки (Dockerfile, Procfile, Railway) не менялась.
-Mini App backend в production не развёрнут. Отдельный сервис и его сборка —
-задача M5.
+Схема production-сборки бота (корневой `Dockerfile`, `Procfile`, Railway) не
+менялась. Образ Mini App для стенда — отдельный `deploy/miniapp/Dockerfile`
+с тем же корневым `.dockerignore` (см. `stand.md`). В production Mini App не
+развёрнут.

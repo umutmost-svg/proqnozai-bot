@@ -5,6 +5,7 @@ import type { AuthApi } from '../auth/api';
 import { AuthController } from '../auth/controller';
 import { DemoDataProvider, type DemoOperation } from '../data/DemoDataProvider';
 import { STORAGE_KEY, type Settings } from '../settings/settings';
+import { BootTracker } from '../loading/boot';
 import { createTelegramAdapter } from '../telegram/telegram';
 import { fixedClock } from '../time/clock';
 
@@ -13,6 +14,7 @@ export const offlineAuthApi: AuthApi = {
   me: async () => ({ ok: false, error: 'unavailable' }),
   createSession: async () => ({ ok: false, error: 'unavailable' }),
   logout: async () => ({ ok: false, error: 'unavailable' }),
+  logoutAll: async () => ({ ok: false, error: 'unavailable' }),
   setLanguage: async () => ({ ok: false, error: 'unavailable' }),
 };
 
@@ -24,6 +26,7 @@ export function renderApp(
     settings?: Partial<Settings>;
     failOnce?: DemoOperation[];
     aiLatencyMs?: number;
+    latencyMs?: number;
     authApi?: AuthApi;
     initData?: string | null;
     strict?: boolean;
@@ -35,10 +38,11 @@ export function renderApp(
   const clock = fixedClock(TEST_NOW);
   const services = {
     clock,
-    data: new DemoDataProvider(clock, { latencyMs: 0, aiLatencyMs: opts.aiLatencyMs ?? 0, failOnce: opts.failOnce }),
+    data: new DemoDataProvider(clock, { latencyMs: opts.latencyMs ?? 0, aiLatencyMs: opts.aiLatencyMs ?? 0, failOnce: opts.failOnce }),
     telegram: createTelegramAdapter(undefined),
     auth: new AuthController(opts.authApi ?? offlineAuthApi, () => opts.initData ?? null),
     scrollMemory: new Map<string, number>(),
+    boot: new BootTracker(),
   };
   const app = <App services={services} />;
   return { ...render(opts.strict ? <StrictMode>{app}</StrictMode> : app), services };

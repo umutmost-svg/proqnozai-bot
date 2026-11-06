@@ -69,6 +69,25 @@ describe('auth in the app', () => {
     expect(api.createSession).not.toHaveBeenCalled();
   });
 
+  it('both sign-out buttons are disabled while one sign-out runs; no false failure', async () => {
+    const user = userEvent.setup();
+    let answer: (r: ReturnType<typeof ok<null>>) => void = () => {};
+    const api = scriptedApi({ me: [ok(SESSION)] });
+    api.logoutAll.mockImplementation(() => new Promise((r) => (answer = r)));
+    renderApp('#/profile', { authApi: api, initData: INIT });
+    const all = await screen.findByRole('button', { name: 'Выйти на всех устройствах' });
+    await user.click(all);
+    const single = screen.getByRole('button', { name: 'Выйти' });
+    expect(single).toBeDisabled();
+    expect(all).toBeDisabled();
+    await user.click(single);
+    expect(api.logout).not.toHaveBeenCalled();
+    expect(screen.queryByText('Не удалось выйти. Повторите.')).toBeNull();
+    answer(ok(null));
+    await waitFor(() => expect(status()).toBe('signed_out'));
+    expect(screen.queryByText('Не удалось выйти. Повторите.')).toBeNull();
+  });
+
   it('records an explicit language choice on the server', async () => {
     const user = userEvent.setup();
     const api = scriptedApi({ me: [ok(SESSION)], setLanguage: [ok(null)] });

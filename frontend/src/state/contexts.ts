@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { AuthController } from '../auth/controller';
+import type { BootTracker } from '../loading/boot';
 import type { SportsDataProvider } from '../data/provider';
 import type { Sport } from '../data/models';
 import type { Translate } from '../i18n';
@@ -16,6 +17,8 @@ export interface Services {
   auth: AuthController;
   /** Scroll offsets of scroll containers, keyed by route, kept for back navigation. */
   scrollMemory: Map<string, number>;
+  /** What the loading screen waits for: Telegram init, session check, first data. */
+  boot: BootTracker;
 }
 
 export interface SettingsState {

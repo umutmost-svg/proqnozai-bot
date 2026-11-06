@@ -13,7 +13,8 @@ variables). Запуск и проверки — в `frontend/README.md`.
 |------|------------|--------|
 | **M1** | Интерфейс и локальные сценарии на `DemoDataProvider`: главная, каталог, событие, AI-разбор (демо), профиль, язык, часовой пояс, анимации. Telegram-адаптер без авторизации. | ✅ реализован, только демо-данные |
 | **M2** | Серверная проверка Telegram `initData` (HMAC, `auth_date`), собственная сессия в HttpOnly-cookie, `/api/health`, `/api/auth/session`, `/api/me`, `/api/auth/logout`, Origin/CSRF/rate limit, состояния входа во frontend. Отдельный пакет `miniapp/` и своя БД. Подробно — `auth.md`. | ✅ реализован; проверен тестовым initData, не в реальном Telegram |
-| **M2+** | Проверка входа в Telegram iOS / Android / Web на HTTPS-стенде, выбор `SameSite` для Telegram Web, хостинг статики и API на одном origin, доверенный прокси для rate limit. | ⏳ |
+| **M2.5** | Подготовка закрытого HTTPS-стенда: лимит и отзыв сессий (`logout-all`, CLI), аварийное выключение входов, lock-файлы с хешами, образ `deploy/miniapp/Dockerfile` (frontend + `/api` на одном origin, volume, healthcheck), production CSP с e2e-проверкой, edge-секрет против обхода Cloudflare. Подробно — `stand.md`. | ✅ подготовлено, стенд не развёрнут |
+| **M2+** | Развёртывание стенда (Railway + Cloudflare), проверка входа в Telegram iOS / Android / Desktop / Web, выбор `SameSite` для Telegram Web. | ⏳ |
 | **M3** | Реальные спортивные данные и AI: провайдер данных поверх backend (те же интерфейсы `SportsDataProvider`), реальные расписания/счета/статистика, AI-разбор через существующий пайплайн бота с его правилами (без выдуманных фактов, пометка `PARTIAL`, отказ при `INSUFFICIENT`). | ⏳ |
 | **M4** | Избранное, история AI-разборов, уведомления и напоминания, любимые виды спорта, партнёры/промокоды, внешние переходы. | ⏳ |
 | **M5** | Интеграционные проверки на реальных устройствах (iOS/Android Telegram), нагрузка, мониторинг, закрытый пилот. | ⏳ |

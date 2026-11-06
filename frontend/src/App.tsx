@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthBootstrap } from './auth/useAuth';
 import { useGoBack } from './hooks/useGoBack';
+import { AppLoadingGate } from './loading/AppLoadingGate';
 import { AiScreen } from './screens/AiScreen';
 import { CatalogScreen } from './screens/CatalogScreen';
 import { EventScreen } from './screens/EventScreen';
@@ -16,17 +17,20 @@ const TAB_ROOTS = new Set(['/', '/matches', '/profile']);
 
 /** Keeps Telegram's native BackButton and viewport in sync with the router. */
 function TelegramBridge() {
-  const { telegram } = useServices();
+  const { telegram, boot } = useServices();
   const { pathname } = useLocation();
   const goBack = useGoBack('/');
   const navigate = useNavigate();
   useAuthBootstrap();
 
   useEffect(() => {
+    // ready() hides Telegram's own placeholder; our loading screen takes over.
     telegram.ready();
     telegram.expand();
-    return bindViewport(telegram);
-  }, [telegram]);
+    const unbind = bindViewport(telegram);
+    boot.markTelegramReady();
+    return unbind;
+  }, [telegram, boot]);
 
   useEffect(() => {
     if (TAB_ROOTS.has(pathname) && pathname === '/') telegram.hideBackButton();
@@ -62,7 +66,9 @@ export function App({ services }: { services: Services }) {
       {/* Hash routing: the Mini App is static files; no server rewrites needed. */}
       <HashRouter>
         <TelegramBridge />
-        <AppRoutes />
+        <AppLoadingGate>
+          <AppRoutes />
+        </AppLoadingGate>
       </HashRouter>
     </AppProviders>
   );

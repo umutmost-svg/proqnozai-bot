@@ -39,6 +39,8 @@ export interface AuthApi {
   createSession(initData: string): Promise<ApiResult<AuthSession>>;
   /** `initData`: the current launch, so the server burns it too (null outside Telegram). */
   logout(csrfToken: string, initData: string | null): Promise<ApiResult<null>>;
+  /** Ends every session of the user (all devices); burns the current launch too. */
+  logoutAll(csrfToken: string, initData: string | null): Promise<ApiResult<null>>;
   setLanguage(lang: Lang, csrfToken: string): Promise<ApiResult<null>>;
 }
 
@@ -76,14 +78,43 @@ function parseSession(raw: RawSession): AuthSession | null {
   };
 }
 
-export function createHttpAuthApi(fetchImpl: typeof fetch = (...a) => fetch(...a), base = '/api'): AuthApi {
+/**
+ * Upper bound for one API exchange (request + body). A WebView on a dead network
+ * can leave fetch pending for minutes; then nothing (the loading screen's retry
+ * included) could start a fresh session check.
+ */
+export const REQUEST_TIMEOUT_MS = 10_000;
+
+export function createHttpAuthApi(
+  fetchImpl: typeof fetch = (...a) => fetch(...a),
+  base = '/api',
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): AuthApi {
   async function call(path: string, init: RequestInit = {}): Promise<ApiResult<unknown>> {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Raced as well as aborted: a fetch that ignores the signal still cannot hang the app.
+    const timedOut = new Promise<ApiResult<unknown>>((resolve) => {
+      timer = setTimeout(() => {
+        controller?.abort();
+        resolve({ ok: false, error: 'unavailable' });
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([exchange(path, init, controller?.signal), timedOut]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function exchange(path: string, init: RequestInit, signal: AbortSignal | undefined): Promise<ApiResult<unknown>> {
     let response: Response;
     try {
       response = await fetchImpl(`${base}${path}`, {
         credentials: 'same-origin',
         cache: 'no-store',
         ...init,
+        signal,
         headers: { Accept: 'application/json', ...init.headers },
       });
     } catch {
@@ -115,16 +146,19 @@ export function createHttpAuthApi(fetchImpl: typeof fetch = (...a) => fetch(...a
   const postJson = (path: string, body: unknown, headers: Record<string, string> = {}) =>
     call(path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
 
+  async function endSession(path: string, csrfToken: string, initData: string | null): Promise<ApiResult<null>> {
+    const headers = { 'X-CSRF-Token': csrfToken };
+    const r = initData
+      ? await postJson(path, { init_data: initData }, headers)
+      : await call(path, { method: 'POST', headers });
+    return r.ok ? { ok: true, value: null } : r;
+  }
+
   return {
     me: async () => toSession(await call('/me')),
     createSession: async (initData) => toSession(await postJson('/auth/session', { init_data: initData })),
-    logout: async (csrfToken, initData) => {
-      const headers = { 'X-CSRF-Token': csrfToken };
-      const r = initData
-        ? await postJson('/auth/logout', { init_data: initData }, headers)
-        : await call('/auth/logout', { method: 'POST', headers });
-      return r.ok ? { ok: true, value: null } : r;
-    },
+    logout: (csrfToken, initData) => endSession('/auth/logout', csrfToken, initData),
+    logoutAll: (csrfToken, initData) => endSession('/auth/logout-all', csrfToken, initData),
     setLanguage: async (lang, csrfToken) => {
       const r = await postJson('/me/language', { lang }, { 'X-CSRF-Token': csrfToken });
       return r.ok ? { ok: true, value: null } : r;

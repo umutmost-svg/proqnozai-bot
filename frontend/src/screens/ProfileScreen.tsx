@@ -28,6 +28,17 @@ function AccountStatus() {
   const { state, auth } = useAuth();
   const { telegram } = useServices();
   const [logoutFailed, setLogoutFailed] = useState(false);
+  // Both sign-out buttons are off while one request runs: a tap the controller
+  // ignores must not be reported as a failed sign-out.
+  const [signingOut, setSigningOut] = useState(false);
+  const signOut = async (everywhere: boolean) => {
+    setSigningOut(true);
+    try {
+      setLogoutFailed(!(await auth.logout(everywhere)));
+    } finally {
+      setSigningOut(false);
+    }
+  };
   const verified = state.status === 'authenticated' ? state.session.user : null;
   // Only server-verified data is shown as the user's name; initDataUnsafe is not.
   const name = verified ? [verified.firstName, verified.lastName].filter(Boolean).join(' ') || verified.username : null;
@@ -55,9 +66,20 @@ function AccountStatus() {
         <button
           type="button"
           className={ui.secondary}
-          onClick={async () => setLogoutFailed(!(await auth.logout()))}
+          disabled={signingOut}
+          onClick={() => void signOut(false)}
         >
           {t('auth.logout')}
+        </button>
+      )}
+      {verified && (
+        <button
+          type="button"
+          className={ui.secondary}
+          disabled={signingOut}
+          onClick={() => void signOut(true)}
+        >
+          {t('auth.logoutAll')}
         </button>
       )}
     </section>

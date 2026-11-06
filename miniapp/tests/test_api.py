@@ -228,9 +228,11 @@ def test_concurrent_logins_create_one_user(settings: Settings, clock: FakeClock)
     def attempt(_: int) -> int:
         return login(TestClient(app), init_data).status_code
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        statuses = list(pool.map(attempt, range(8)))
-    assert statuses == [200] * 8
+    # Within the session cap: beyond it, eviction burns the shared launch (test_stand.py).
+    attempts = settings.max_sessions_per_user
+    with ThreadPoolExecutor(max_workers=attempts) as pool:
+        statuses = list(pool.map(attempt, range(attempts)))
+    assert statuses == [200] * attempts
     assert app.state.store.count_users() == 1
 
 

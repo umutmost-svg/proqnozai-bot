@@ -5,9 +5,11 @@ module creates no database, reads no env and starts nothing.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import secrets
+import sqlite3
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -16,23 +18,56 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
+from starlette.staticfiles import StaticFiles
 
 from miniapp.security import CsrfTokens, LoginRateLimiter, origin_allowed
 from miniapp.settings import Settings
-from miniapp.store import SUPPORTED_LANGS, InitDataConsumedError, Session, Store, User
+from miniapp.store import SUPPORTED_LANGS, BurnWindow, InitDataConsumedError, Session, Store, User
 from miniapp.telegram_auth import InitDataError, validate_init_data
 
 logger = logging.getLogger("miniapp")
 
 CSRF_HEADER = "X-CSRF-Token"
 REQUEST_ID_HEADER = "X-Request-ID"
+EDGE_SECRET_HEADER = "X-Edge-Auth"
+HEALTH_CACHE_S = 5
 _SECURITY_HEADERS = {
-    # Auth and personal responses must never be cached by the WebView or a proxy.
-    "Cache-Control": "no-store",
-    "Pragma": "no-cache",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
 }
+# Auth and personal responses must never be cached by the WebView or a proxy.
+_NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+# Vite puts content-hashed files under assets/: a new build gets new names.
+_IMMUTABLE = "public, max-age=31536000, immutable"
+# Telegram Web (K and A) embeds the Mini App in an iframe; mobile and desktop
+# clients use a native WebView, where frame-ancestors does not apply.
+TELEGRAM_FRAME_ANCESTORS = "https://web.telegram.org"
+TELEGRAM_SDK_ORIGIN = "https://telegram.org"
+
+
+def content_security_policy(production: bool) -> str:
+    """Policy for the built frontend: own files only, plus the Telegram SDK script.
+
+    No 'unsafe-inline' anywhere: the build has no inline scripts or <style>
+    blocks; React and the SDK change styles through CSSOM, which CSP allows.
+    """
+    directives = [
+        "default-src 'none'",
+        f"script-src 'self' {TELEGRAM_SDK_ORIGIN}",
+        "style-src 'self'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "manifest-src 'self'",
+        "base-uri 'none'",
+        "form-action 'none'",
+        "object-src 'none'",
+        f"frame-ancestors {TELEGRAM_FRAME_ANCESTORS}",
+    ]
+    if production:
+        directives.append("upgrade-insecure-requests")
+    return "; ".join(directives)
 
 
 class ApiError(Exception):
@@ -119,6 +154,7 @@ def create_app(
 ) -> FastAPI:
     store = store or Store(settings.db_path)
     store.init_schema()
+    store.purge_expired(int(clock()))
     csrf = CsrfTokens(settings.bot_token)
     limiter = LoginRateLimiter(settings.login_rate_limit, settings.login_rate_window_s, clock)
 
@@ -130,12 +166,31 @@ def create_app(
     def now() -> int:
         return int(clock())
 
+    production = settings.environment == "production"
+    csp_header = "Content-Security-Policy" + ("-Report-Only" if settings.csp_mode == "report-only" else "")
+    csp_value = content_security_policy(production)
+    edge_secret = settings.edge_secret.encode() if settings.edge_secret else None
+
+    def edge_allowed(request: Request) -> bool:
+        if edge_secret is None:
+            return True
+        # The platform healthcheck reaches the container directly, without the edge.
+        if request.method == "GET" and request.url.path == "/api/health":
+            return True
+        presented = request.headers.get(EDGE_SECRET_HEADER, "").encode()
+        return hmac.compare_digest(presented, edge_secret)
+
     @app.middleware("http")
     async def guard(request: Request, call_next: Callable[[Request], Any]) -> Response:
         # Server-generated id only: a client-supplied one could forge log lines.
         request_id = secrets.token_hex(8)
         try:
-            response: Response = await call_next(request)
+            if not edge_allowed(request):
+                # Reached past the edge (platform domain, direct address): no service.
+                logger.warning("event=edge_bypass_blocked request_id=%s", request_id)
+                response: Response = JSONResponse({"error": "forbidden"}, status_code=403)
+            else:
+                response = await call_next(request)
         except Exception as exc:
             # Handled here, not re-raised: Starlette's ServerErrorMiddleware would
             # re-raise to uvicorn, which logs the full traceback with the exception
@@ -145,6 +200,13 @@ def create_app(
                          request_id, type(exc).__name__, _error_site(exc))
             response = JSONResponse({"error": "internal", "request_id": request_id}, status_code=500)
         response.headers.update(_SECURITY_HEADERS)
+        if request.url.path.startswith("/assets/") and response.status_code == 200:
+            response.headers["Cache-Control"] = _IMMUTABLE
+        else:
+            response.headers.update(_NO_STORE)
+        response.headers[csp_header] = csp_value
+        if production:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         response.headers[REQUEST_ID_HEADER] = request_id
         return response
 
@@ -201,15 +263,36 @@ def create_app(
             "session": {"expires_at": _iso(session.expires_at), "csrf_token": csrf.for_session(token)},
         }
 
+    # The probe is exempt from the edge secret, so it is reachable around the edge:
+    # a success is reused for HEALTH_CACHE_S and a flood of probes stays off SQLite.
+    # Failures are never cached, so recovery shows up on the next probe.
+    health_ok_at: list[float] = []
+
     @app.get("/api/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    async def health() -> JSONResponse:
+        # Gates deploys: a release that cannot read its database never goes live.
+        if health_ok_at and 0 <= clock() - health_ok_at[0] < HEALTH_CACHE_S:
+            return JSONResponse({"status": "ok"})
+        try:
+            await run_in_threadpool(store.ping)
+        except sqlite3.Error as exc:
+            health_ok_at.clear()
+            logger.error("event=health_db_error type=%s", type(exc).__name__)
+            return JSONResponse({"status": "unavailable"}, status_code=503)
+        health_ok_at[:] = [clock()]
+        return JSONResponse({"status": "ok"})
+
+    def burn_window(ts: int) -> BurnWindow:
+        return BurnWindow.for_policy(ts, settings.init_data_max_age_s, settings.init_data_future_skew_s)
 
     @app.post("/api/auth/session")
     async def create_session(request: Request) -> JSONResponse:
         # Login CSRF: only our own page may post, and only with a JSON body,
         # which a cross-site form cannot produce without a CORS preflight we never answer.
         require_origin(request)
+        if not settings.logins_enabled:
+            # Emergency switch (MINIAPP_LOGINS_ENABLED=false): existing sessions keep working.
+            raise ApiError(503, "logins_disabled")
         body = await _read_json_object(request, settings.max_body_bytes, {"init_data"})
         init_data = body["init_data"]
         if not isinstance(init_data, str):
@@ -255,13 +338,15 @@ def create_app(
                 await run_in_threadpool(store.revoke_session, existing[0], ts, ts)
             token = secrets.token_urlsafe(32)
             try:
-                session = await run_in_threadpool(
+                session, evicted = await run_in_threadpool(
                     store.create_session, token, user.telegram_user_id, verified.signature_hash, ts,
-                    settings.session_ttl_s,
+                    settings.session_ttl_s, settings.max_sessions_per_user, burn_window(ts),
                 )
             except InitDataConsumedError:
                 logger.info("auth.rejected reason=reused_after_logout")
                 raise ApiError(401, "init_data_reused") from None
+            if evicted:
+                logger.info("auth.session_evicted user=%s count=%s", user.telegram_user_id, evicted)
             created = True
         logger.info("auth.session user=%s created=%s", user.telegram_user_id, created)
         response = JSONResponse({**session_payload(user, token, session), "created": created})
@@ -343,7 +428,7 @@ def create_app(
         ts = now()
         # Burned initData cannot be exchanged again while it is still fresh:
         # auth_date <= ts + skew, so it expires by ts + max_age + skew.
-        burn_until = ts + settings.init_data_max_age_s + settings.init_data_future_skew_s
+        burn_until = burn_window(ts).until
         # An expired (not revoked) session still identifies the user and its CSRF
         # token still verifies: the current launch must be burned in that case too.
         active = await unrevoked_session(request)
@@ -373,5 +458,41 @@ def create_app(
         response = JSONResponse({"ok": True})
         clear_session_cookie(response)
         return response
+
+    @app.post("/api/auth/logout-all")
+    async def logout_all(request: Request) -> JSONResponse:
+        """Ends every session of the user (all devices). Needs a live session + CSRF."""
+        require_origin(request)
+        active = await current_session(request)
+        if active is None:
+            raise ApiError(401, "unauthenticated")
+        token, session = active
+        if not csrf.verify(token, request.headers.get(CSRF_HEADER)):
+            raise ApiError(403, "csrf_failed")
+        launch = await read_launch(request)
+        launch_hash = launch_hash_to_burn(launch, session.user_id) if launch is not None else None
+        ts = now()
+        revoked = await run_in_threadpool(
+            store.revoke_user_sessions, session.user_id, ts, burn_window(ts),
+            [launch_hash] if launch_hash is not None else [],
+        )
+        logger.info("auth.logout_all user=%s revoked=%s", session.user_id, revoked)
+        response = JSONResponse({"ok": True, "revoked": revoked})
+        clear_session_cookie(response)
+        return response
+
+    static = StaticFiles(directory=settings.static_dir, html=True) if settings.static_dir is not None else None
+
+    async def fallback(scope: Any, receive: Any, send: Any) -> None:
+        # Router default: runs only when no route matched, not even by path alone,
+        # so a wrong method on an API path still gets 405. /api never reaches the
+        # static files. StaticFiles follows no symlinks and rejects path traversal.
+        path = scope.get("path", "")
+        if static is not None and scope["type"] == "http" and path != "/api" and not path.startswith("/api/"):
+            await static(scope, receive, send)
+            return
+        await JSONResponse({"error": "not_found"}, status_code=404)(scope, receive, send)
+
+    app.router.default = fallback
 
     return app

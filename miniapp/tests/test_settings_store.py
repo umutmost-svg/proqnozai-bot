@@ -23,6 +23,7 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
         "MINIAPP_BOT_TOKEN": TEST_BOT_TOKEN,
         "MINIAPP_DB_PATH": str(tmp_path / "m.db"),
         "MINIAPP_TRUSTED_ORIGINS": "https://App.Example.com:443, https://other.example.com:8443",
+        "MINIAPP_EDGE_SECRET": "s" * 40,
         **extra,
     }
 

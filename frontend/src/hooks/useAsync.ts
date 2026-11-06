@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useId, useState } from 'react';
+import { ServicesContext } from '../state/contexts';
 
 export type AsyncState<T> =
   | { status: 'loading' }
@@ -28,5 +29,14 @@ export function useAsync<T>(load: () => Promise<T>, key: string): AsyncState<T> 
 
   const retry = useCallback(() => setAttempt((a) => a + 1), []);
   const current: AsyncState<T> = state.key === `${key}#${attempt}` ? state.value : { status: 'loading' };
+
+  // Requests of the first screen are what the loading screen waits for (src/loading).
+  const boot = useContext(ServicesContext)?.boot;
+  const id = useId();
+  useEffect(() => (boot ? () => boot.forgetTask(id) : undefined), [boot, id]);
+  useEffect(() => {
+    boot?.reportTask(id, current.status === 'loading' ? 'pending' : current.status === 'success' ? 'done' : 'failed', retry);
+  }, [boot, id, current.status, retry]);
+
   return { ...current, retry };
 }

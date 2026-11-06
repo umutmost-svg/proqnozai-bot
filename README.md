@@ -97,6 +97,20 @@ Railway запускает два процесса из `Procfile`:
 примонтированный volume. По умолчанию (`.`) БД создаётся рядом с кодом —
 это подходит только для локальной разработки.
 
+### Mini App (отдельный сервис, не процессы бота)
+
+Mini App (`miniapp/`, `frontend/`) читает только свои переменные `MINIAPP_*`
+и никогда — `.env` бота. Полный список с значениями по умолчанию —
+`docs/miniapp/auth.md` («Настройки»), плейсхолдеры — `miniapp/.env.example`,
+переменные закрытого HTTPS-стенда — `docs/miniapp/stand.md`:
+`MINIAPP_BOT_TOKEN`, `MINIAPP_DB_PATH`, `MINIAPP_TRUSTED_ORIGINS`,
+`MINIAPP_ENV`, `MINIAPP_EDGE_SECRET`, `MINIAPP_CSP_MODE`,
+`MINIAPP_LOGINS_ENABLED`, `MINIAPP_MAX_SESSIONS_PER_USER`,
+`MINIAPP_STATIC_DIR`, `MINIAPP_SESSION_TTL_S`, `MINIAPP_INIT_DATA_MAX_AGE_S`,
+`MINIAPP_INIT_DATA_FUTURE_SKEW_S`, `MINIAPP_LOGIN_RATE_LIMIT`,
+`MINIAPP_LOGIN_RATE_WINDOW_S`, `MINIAPP_COOKIE_SAMESITE`,
+`MINIAPP_ALLOW_EPHEMERAL_DB` (только локальный Docker).
+
 ## Модели Claude (фактический роутинг)
 
 | Задача | Модель | Где |

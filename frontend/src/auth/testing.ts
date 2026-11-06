@@ -20,6 +20,7 @@ export function scriptedApi(script: Script) {
     me: vi.fn<AuthApi['me']>(() => next<AuthSession>('me')),
     createSession: vi.fn<AuthApi['createSession']>(() => next<AuthSession>('createSession')),
     logout: vi.fn<AuthApi['logout']>(() => next<null>('logout')),
+    logoutAll: vi.fn<AuthApi['logoutAll']>(() => next<null>('logoutAll')),
     setLanguage: vi.fn<AuthApi['setLanguage']>(() => next<null>('setLanguage')),
   } satisfies AuthApi;
 }

@@ -13,6 +13,7 @@ import { AuthController } from './auth/controller';
 import { createSessionStorageMarker } from './auth/signedOut';
 import { brand } from './config/brand';
 import { DemoDataProvider, type DemoOperation } from './data/DemoDataProvider';
+import { BootTracker } from './loading/boot';
 import { createTelegramAdapter } from './telegram/telegram';
 import { systemClock } from './time/clock';
 
@@ -32,6 +33,7 @@ const services = {
   // Created once per page, outside React: StrictMode cannot double-bootstrap it.
   auth: new AuthController(createHttpAuthApi(), () => telegram.initData(), createSessionStorageMarker()),
   scrollMemory: new Map<string, number>(),
+  boot: new BootTracker(),
 };
 
 createRoot(document.getElementById('root')!).render(

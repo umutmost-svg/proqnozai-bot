@@ -74,3 +74,51 @@ describe('HTTP auth API', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ init_data: 'auth_date=1&hash=ab' });
   });
 });
+
+describe('HTTP logout on all devices', () => {
+  it('posts to /api/auth/logout-all with CSRF and the current launch', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => json(200, { ok: true, revoked: 2 }));
+    expect(await createHttpAuthApi(fetchMock).logoutAll('c1', 'auth_date=1&hash=ab')).toEqual({ ok: true, value: null });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/auth/logout-all');
+    expect((init?.headers as Record<string, string>)['X-CSRF-Token']).toBe('c1');
+    expect(JSON.parse(String(init?.body))).toEqual({ init_data: 'auth_date=1&hash=ab' });
+  });
+});
+
+describe('HTTP API timeout', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('a request that never answers ends as unavailable and is aborted', async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const fetchMock = vi.fn<typeof fetch>((_, init) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>(() => {}); // hangs, ignores the signal
+    });
+    const pending = createHttpAuthApi(fetchMock, '/api', 10_000).me();
+    await vi.advanceTimersByTimeAsync(9_999);
+    let settled = false;
+    void pending.then(() => (settled = true));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toEqual({ ok: false, error: 'unavailable' });
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it('a body that never finishes is bounded too', async () => {
+    vi.useFakeTimers();
+    const hangingBody = { ok: true, status: 200, json: () => new Promise(() => {}) } as unknown as Response;
+    const pending = createHttpAuthApi(vi.fn<typeof fetch>(async () => hangingBody), '/api', 5_000).me();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await pending).toEqual({ ok: false, error: 'unavailable' });
+  });
+
+  it('a fast answer is not affected and leaves no timer behind', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>(async () => json(401, { error: 'unauthenticated' }));
+    expect(await createHttpAuthApi(fetchMock).me()).toEqual({ ok: false, error: 'unauthenticated' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});

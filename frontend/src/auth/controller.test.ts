@@ -212,3 +212,51 @@ describe('AuthController late responses', () => {
     expect(auth.getState().status).toBe('signed_out');
   });
 });
+
+describe('AuthController logout on all devices', () => {
+  it('calls logout-all with CSRF and the current launch, then signs out', async () => {
+    const marker = memoryMarker();
+    const api = scriptedApi({ me: [ok(SESSION)], logoutAll: [ok(null)] });
+    const auth = new AuthController(api, () => INIT, marker);
+    await auth.start();
+    expect(await auth.logout(true)).toBe(true);
+    expect(api.logoutAll).toHaveBeenCalledWith('csrf-test', INIT);
+    expect(api.logout).not.toHaveBeenCalled();
+    expect(auth.getState().status).toBe('signed_out');
+    expect(marker.saved.has(INIT)).toBe(true);
+  });
+
+  it('an unconfirmed logout-all is never shown as success', async () => {
+    const api = scriptedApi({ me: [ok(SESSION)], logoutAll: [fail('unavailable')] });
+    const auth = new AuthController(api, () => INIT);
+    await auth.start();
+    expect(await auth.logout(true)).toBe(false);
+    expect(auth.getState().status).toBe('authenticated');
+  });
+
+  it('logout-all with an ended session reports the expiry instead of success', async () => {
+    const marker = memoryMarker();
+    const api = scriptedApi({ me: [ok(SESSION)], logoutAll: [fail('session_expired')] });
+    const auth = new AuthController(api, () => INIT, marker);
+    await auth.start();
+    expect(await auth.logout(true)).toBe(false);
+    expect(auth.getState().status).toBe('session_expired');
+    expect(marker.saved.size).toBe(0);
+  });
+});
+
+describe('AuthController sign-out is serialized', () => {
+  it('a second tap while one sign-out is in flight does nothing', async () => {
+    let answer: (r: Awaited<ReturnType<AuthApi['logoutAll']>>) => void = () => {};
+    const api = scriptedApi({ me: [ok(SESSION)], logout: [ok(null)] });
+    api.logoutAll.mockImplementation(() => new Promise((r) => (answer = r)));
+    const auth = new AuthController(api, () => INIT);
+    await auth.start();
+    const all = auth.logout(true);
+    expect(await auth.logout()).toBe(false);
+    expect(api.logout).not.toHaveBeenCalled();
+    answer(ok(null));
+    expect(await all).toBe(true);
+    expect(auth.getState().status).toBe('signed_out');
+  });
+});

@@ -26,6 +26,7 @@ async function open(page: Page, route: string, width: number, lang: 'ru' | 'az' 
   await page.route('https://telegram.org/**', (r) => r.fulfill({ body: '', contentType: 'text/javascript' }));
   await page.clock.setFixedTime(FIXED_NOW);
   await page.goto(`/#${route}`);
+  await expect(page.getByTestId('app-loading-gate')).toHaveCount(0, { timeout: 15_000 });
   await expect(page.getByTestId('loading-state')).toHaveCount(0, { timeout: 10_000 });
   await expect(page.getByTestId('ai-loading')).toHaveCount(0, { timeout: 10_000 });
 }

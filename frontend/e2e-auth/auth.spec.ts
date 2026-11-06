@@ -80,7 +80,7 @@ test('sports data stays demo after sign-in', async ({ page }) => {
 test('logout → reload: no automatic sign-in; reopening the Mini App signs in again', async ({ page, context }) => {
   const posts = await openInFakeTelegram(page, signInitData({ id: 91003, first_name: 'Leaving' }));
   await expect(account(page)).toHaveAttribute('data-auth-status', 'authenticated');
-  await page.getByRole('button', { name: 'Выйти' }).click();
+  await page.getByRole('button', { name: 'Выйти', exact: true }).click();
   await expect(account(page)).toHaveAttribute('data-auth-status', 'signed_out');
   await expect(page.getByRole('button', { name: 'Закрыть Mini App' })).toBeVisible();
 
@@ -132,4 +132,23 @@ test('outside Telegram: demo mode, no sign-in attempt', async ({ page }) => {
   await page.goto('/#/profile');
   await expect(account(page)).toHaveAttribute('data-auth-status', 'outside_telegram');
   expect(posted).toBe(false);
+});
+
+test('logout on all devices ends the other device too; reload stays signed out', async ({ page, browser }) => {
+  await openInFakeTelegram(page, signInitData({ id: 91010, first_name: 'Phone' }));
+  await expect(account(page)).toHaveAttribute('data-auth-status', 'authenticated');
+
+  const other = await browser.newContext({ baseURL: page.url().split('#')[0] });
+  const laptop = await other.newPage();
+  await openInFakeTelegram(laptop, signInitData({ id: 91010, first_name: 'Laptop' }, { authDate: Math.floor(Date.now() / 1000) + 1 }));
+  await expect(account(laptop)).toHaveAttribute('data-auth-status', 'authenticated');
+
+  await laptop.getByRole('button', { name: 'Выйти на всех устройствах' }).click();
+  await expect(account(laptop)).toHaveAttribute('data-auth-status', 'signed_out');
+  await laptop.reload();
+  await expect(account(laptop)).toHaveAttribute('data-auth-status', 'signed_out');
+
+  const me = await page.request.get('/api/me');
+  expect(me.status()).toBe(401);
+  await other.close();
 });

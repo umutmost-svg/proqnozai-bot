@@ -30,6 +30,7 @@ export class AuthController {
   private started = false;
   /** Set by logout; this page never signs in again with its launch initData. */
   private signedOut = false;
+  private endingSession = false;
 
   constructor(
     private readonly api: AuthApi,
@@ -59,11 +60,30 @@ export class AuthController {
     return this.run();
   }
 
-  async logout(): Promise<boolean> {
-    if (this.state.status !== 'authenticated' || this.inflight) return false;
+  /** `everywhere`: end the sessions on all devices, not only this one. */
+  async logout(everywhere = false): Promise<boolean> {
+    if (this.state.status !== 'authenticated' || this.inflight || this.endingSession) return false;
+    // One sign-out at a time: a quick "this device" tap must not revoke the cookie
+    // that an "all devices" request still needs (it would end only this session).
+    this.endingSession = true;
+    try {
+      return await this.endSession(everywhere);
+    } finally {
+      this.endingSession = false;
+    }
+  }
+
+  private async endSession(everywhere: boolean): Promise<boolean> {
+    if (this.state.status !== 'authenticated') return false;
     const initData = this.initData();
-    const result = await this.api.logout(this.state.session.csrfToken, initData);
-    if (!result.ok && result.error !== 'unauthenticated' && result.error !== 'session_expired') return false;
+    const csrf = this.state.session.csrfToken;
+    const result = everywhere ? await this.api.logoutAll(csrf, initData) : await this.api.logout(csrf, initData);
+    if (!result.ok) {
+      const ended = result.error === 'unauthenticated' || result.error === 'session_expired';
+      // "All devices" was not confirmed by the server: never pretend it happened.
+      if (everywhere && ended) this.set({ status: 'session_expired' });
+      if (everywhere || !ended) return false;
+    }
     this.signedOut = true;
     if (initData) await this.marker.remember(initData);
     this.set({ status: 'signed_out' });

@@ -1,0 +1,406 @@
+/*
+ * Geometry from the 390 × 844 frames (Figma 123:91): stage 226 at y 242,
+ * status at y 518, track at y 615, dots at y 656, tagline 74 px above the bottom.
+ * The tagline is part of the flow (never overlaps); the failed view (not in
+ * Figma) is compact and scrolls inside the safe area instead of clipping.
+ * Absolute Figma positions are expressed as a centered column so 360 and 430 px
+ * widths keep the same composition.
+ *
+ * Motion (Figma note): 450 ms entrance · 1.8 s soft pulse + sweeping signal.
+ * Base styles are the static LOADING frame; animations only add motion on top,
+ * so turning animations off (data-motion="static", the global reduced-motion
+ * rules) leaves a correct still mark.
+ */
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
+  color: #17352d;
+  background: linear-gradient(105.04deg, #f9faec 7.35%, #e6f3e3 46.32%, #cfe9dc 80.88%);
+}
+
+.top {
+  position: absolute;
+  top: calc(var(--safe-top, 0px) + 35px);
+  left: calc(var(--safe-left, 0px) + 36px);
+  right: calc(var(--safe-right, 0px) + 36px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 1;
+}
+
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 2px;
+}
+
+.beta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 97px;
+  height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.62);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.center {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  /* With the 89 px tagline block below, top − bottom padding = 152 px puts the
+     423 px block at y 242 of 844, as in Figma. */
+  padding: calc(var(--safe-top, 0px) + 159px) 24px 7px;
+}
+
+/* Auto margins center the block and, unlike justify-content, never push it
+   above the top of a scroll container when it is taller than the space. */
+.content {
+  margin: auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.stageWrap {
+  position: relative;
+  width: 226px;
+  height: 226px;
+  flex: none;
+}
+
+.haloLime,
+.haloMint {
+  position: absolute;
+  display: block;
+  max-width: none;
+  pointer-events: none;
+}
+
+/* The asset carries the WAITING fill (0.42); opacity scales it to ENTER 0.18 / LOADING 0.30. */
+.haloLime {
+  left: -47px;
+  top: -87px;
+  width: 348px;
+  height: 348px;
+  opacity: 0.714;
+}
+
+.haloMint {
+  left: 156px;
+  top: 198px;
+  width: 210px;
+  height: 210px;
+}
+
+.stage {
+  position: relative;
+  width: 226px;
+  height: 226px;
+  border: 1.5px solid rgba(255, 255, 255, 0.82);
+  border-radius: 56px;
+  background: rgba(255, 255, 255, 0.38);
+  overflow: hidden;
+}
+
+.icon {
+  position: absolute;
+  left: 27.02px;
+  top: 27.02px;
+  width: 168.96px;
+  height: 168.96px;
+  border-radius: 38.94px;
+  overflow: hidden;
+  background: linear-gradient(120deg, #eaf3c6 5.86%, #cdeac6 46.12%, #a0cec9 79.06%);
+}
+
+.iconLight {
+  position: absolute;
+  left: -13.2px;
+  top: -33px;
+  display: block;
+  max-width: none;
+}
+
+.iconEdge {
+  position: absolute;
+  left: 7.59px;
+  top: 7.59px;
+  width: 153.78px;
+  height: 153.78px;
+  border: 0.66px solid rgba(255, 255, 255, 0.53);
+  border-radius: 33px;
+}
+
+.symbol {
+  position: absolute;
+  left: 33.66px;
+  top: 33.66px;
+  display: block;
+  max-width: none;
+}
+
+.status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-top: 50px;
+  max-width: 320px;
+  text-align: center;
+}
+
+.status p {
+  margin: 0;
+}
+
+.brand {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 29px;
+  line-height: 40px;
+}
+
+.message,
+.hint {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 15px;
+  line-height: 20px;
+  color: #688076;
+}
+
+.hint {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.failedTitle {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 17px;
+  line-height: 22px;
+}
+
+.track {
+  position: relative;
+  width: 216px;
+  height: 4px;
+  margin-top: 25px;
+  border-radius: 2px;
+  background: rgba(163, 205, 186, 0.37);
+  overflow: hidden;
+}
+
+.signal {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 88px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(62, 141, 118, 0.9);
+  transform: translateX(29px);
+}
+
+.dots {
+  position: relative;
+  width: 41px;
+  height: 9px;
+  margin-top: 37px;
+}
+
+.dotState {
+  position: absolute;
+  inset: 0;
+  display: block;
+  opacity: 0;
+}
+
+.dotState[data-step='1'] {
+  opacity: 1;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(100%, 280px);
+  margin-top: 28px;
+}
+
+.tagline {
+  flex: none;
+  margin: 0 24px calc(var(--safe-bottom, 0px) + 74px);
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 15px;
+  color: #688076;
+}
+
+/* --- motion ------------------------------------------------------------------ */
+
+@keyframes logo-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.93);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes halo-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.714;
+  }
+}
+
+/* LOADING (0.30) ↔ WAITING (0.42) glow, icon 169 ↔ 173 px. */
+@keyframes halo-pulse {
+  from {
+    opacity: 0.714;
+    transform: scale(1);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes icon-pulse {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.025);
+  }
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-88px);
+  }
+  to {
+    transform: translateX(216px);
+  }
+}
+
+/* One dot state is lit for a third of the cycle, then hands over to the next. */
+@keyframes dot-step {
+  0%,
+  30% {
+    opacity: 1;
+  }
+  36%,
+  97% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.screen[data-motion='full'] .stage {
+  animation: logo-enter 450ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.screen[data-motion='full'] .haloLime {
+  animation:
+    halo-enter 450ms ease-out both,
+    halo-pulse 900ms ease-in-out 450ms infinite alternate;
+}
+
+.screen[data-motion='full'] .icon {
+  animation: icon-pulse 900ms ease-in-out 450ms infinite alternate;
+}
+
+.screen[data-motion='full'] .signal {
+  animation: sweep 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.screen[data-motion='full'] .dotState {
+  animation: dot-step 1.8s linear infinite;
+}
+
+.screen[data-motion='full'] .dotState[data-step='2'] {
+  animation-delay: -1.2s;
+}
+
+.screen[data-motion='full'] .dotState[data-step='3'] {
+  animation-delay: -0.6s;
+}
+
+/* --- failed view: compact, scrollable, actions always reachable ------------- */
+
+.screen[data-view='failed'] .center {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: calc(var(--safe-top, 0px) + 84px) 24px calc(var(--safe-bottom, 0px) + 24px);
+}
+
+/* Decorative halos would extend the scroll area; the error view does without them. */
+.screen[data-view='failed'] .haloLime,
+.screen[data-view='failed'] .haloMint {
+  display: none;
+}
+
+.screen[data-view='failed'] .stageWrap {
+  width: 140px;
+  height: 140px;
+}
+
+.screen[data-view='failed'] .stage {
+  transform: scale(0.62);
+  transform-origin: top left;
+}
+
+.screen[data-view='failed'] .status {
+  margin-top: 28px;
+}
+
+/* Short viewports (360 × 640 and below): keep the loading view on screen. */
+@media (max-height: 700px) {
+  .center {
+    padding-top: calc(var(--safe-top, 0px) + 84px);
+  }
+
+  .status {
+    margin-top: 28px;
+    gap: 8px;
+  }
+
+  .track {
+    margin-top: 18px;
+  }
+
+  .dots {
+    margin-top: 22px;
+  }
+
+  .tagline {
+    margin-bottom: calc(var(--safe-bottom, 0px) + 24px);
+  }
+
+  /* A hint takes the tagline's place: the message matters more than the slogan. */
+  .screen:not([data-hint='none']) .tagline {
+    display: none;
+  }
+}
