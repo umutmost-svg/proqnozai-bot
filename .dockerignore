@@ -30,6 +30,7 @@ venv/
 **/*.sqlite
 **/*.sqlite3
 **/*.sqlite-*
+**/*.sqlite3-*
 **/*.bak
 **/*.backup
 **/backups/

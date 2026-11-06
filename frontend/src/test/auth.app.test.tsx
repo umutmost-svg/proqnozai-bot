@@ -3,7 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { fail, ok, scriptedApi, SESSION } from '../auth/testing';
 import { renderApp } from './renderApp';
 
-const INIT = 'query_id=AA&auth_date=1&hash=' + '0'.repeat(64);
+// A real launch always names its user (the server rejects initData without one); 501 = SESSION's user.
+const INIT = 'query_id=AA&user=%7B%22id%22%3A501%7D&auth_date=1&hash=' + '0'.repeat(64);
 
 const status = () => screen.getByTestId('account').getAttribute('data-auth-status');
 

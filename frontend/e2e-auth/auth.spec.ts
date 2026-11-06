@@ -152,3 +152,27 @@ test('logout on all devices ends the other device too; reload stays signed out',
   expect(me.status()).toBe(401);
   await other.close();
 });
+
+test('same browser context, another Telegram account: the old account is never shown and is signed out', async ({
+  context,
+}) => {
+  const first = await context.newPage();
+  await openInFakeTelegram(first, signInitData({ id: 91010, first_name: 'Alice', last_name: 'First', language_code: 'ru' }));
+  await expect(account(first)).toContainText('Alice First');
+  const aliceCookie = (await context.cookies()).find((c) => c.name === 'sporai_session')!.value;
+  await first.close();
+
+  // The same context (cookie of Alice still there) opens the Mini App as Bob.
+  const second = await context.newPage();
+  const posts = await openInFakeTelegram(second, signInitData({ id: 91011, first_name: 'Bob', last_name: 'Second', language_code: 'ru' }));
+  await expect(account(second)).toHaveAttribute('data-auth-status', 'authenticated');
+  await expect(account(second)).toContainText('Bob Second');
+  await expect(account(second)).not.toContainText('Alice');
+  expect(posts).toHaveLength(1); // the signed launch was exchanged on the server
+
+  // Alice's session was revoked by the server-side account switch, not just hidden.
+  const bobCookie = (await context.cookies()).find((c) => c.name === 'sporai_session')!.value;
+  expect(bobCookie).not.toBe(aliceCookie);
+  const alice = await second.request.get('/api/me', { headers: { Cookie: `sporai_session=${aliceCookie}` } });
+  expect(alice.status()).toBe(401);
+});

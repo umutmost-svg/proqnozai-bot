@@ -121,11 +121,23 @@ export class AuthController {
       return { status: 'signed_out' };
     }
 
-    // 1. An existing server session wins: no fresh initData needed.
+    // 1. An existing server session wins: no fresh initData needed — but only if it
+    //    belongs to the account of this launch. A browser context can keep another
+    //    account's cookie (Telegram Web, account switch); such a session is never shown.
     const me = await this.api.me();
-    if (me.ok) return { status: 'authenticated', session: me.value };
-
     const initData = this.initData();
+    if (me.ok) {
+      if (!initData || launchUserId(initData) === me.value.user.id) {
+        return { status: 'authenticated', session: me.value };
+      }
+      // Different (or unreadable) launch account: the server verifies the signed
+      // initData and replaces the other account's session (it revokes it).
+      if (this.signedOut) return { status: 'signed_out' };
+      const switched = await this.api.createSession(initData);
+      if (switched.ok) return { status: 'authenticated', session: switched.value };
+      return this.failure(switched.error, false);
+    }
+
     if (!initData) {
       if (me.error === 'session_expired') return { status: 'session_expired' };
       return { status: 'outside_telegram' };
@@ -158,5 +170,20 @@ export class AuthController {
   private set(next: AuthState) {
     this.state = next;
     this.listeners.forEach((l) => l());
+  }
+}
+
+/**
+ * Telegram user id named in the launch initData, read WITHOUT verifying it. Used only to
+ * decide whether an existing cookie session may be shown for this launch; a mismatch
+ * leads to the server-verified exchange, never to trusting these unsigned fields.
+ */
+function launchUserId(initData: string): number | null {
+  try {
+    const raw = new URLSearchParams(initData).get('user');
+    const id = raw ? (JSON.parse(raw) as { id?: unknown }).id : undefined;
+    return typeof id === 'number' && Number.isSafeInteger(id) ? id : null;
+  } catch {
+    return null;
   }
 }

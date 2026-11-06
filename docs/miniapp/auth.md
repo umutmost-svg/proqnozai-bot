@@ -71,8 +71,13 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 | нет `user`, невалидный JSON, дубли ключей, `NaN`; `id` — bool, дробь, строка, ≤ 0, > 2⁵³−1; неверные типы полей; `is_bot: true` | `missing_user` / `bad_user` |
 
 Наружу (HTTP 401) уходят только `init_data_invalid` или `init_data_expired`.
-В лог пишется только код причины. initData, токен бота, cookie и данные
-пользователя не попадают ни в исключения, ни в логи, ни в ответы.
+При отказе в лог пишется только код причины. initData, токен бота, cookie,
+имя, username и язык пользователя не попадают ни в исключения, ни в логи, ни
+в ответы. Единственное, что пишется о пользователе, — числовой Telegram ID в
+событиях успешной авторизации и операций (`auth.session`, `auth.logout`,
+`auth.logout_all`, `auth.session_evicted`, `auth.rate_limited`,
+`admin.revoke_user`): он нужен для разбора инцидентов и адресного отзыва
+сессий (`admin revoke-user`). Логи хранятся по политике хостинга стенда.
 
 Хотя бы один эталон проверен независимо: хэш в `REFERENCE_HASH` посчитан
 `openssl dgst -sha256 -mac HMAC`, а не Python-хелпером. Тестовый подписчик

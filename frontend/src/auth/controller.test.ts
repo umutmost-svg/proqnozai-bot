@@ -115,6 +115,52 @@ describe('AuthController bootstrap', () => {
   });
 });
 
+describe('AuthController: a cookie of another Telegram account', () => {
+  // The browser context keeps account A's cookie; the Mini App is opened by account B.
+  const OTHER: typeof SESSION = { ...SESSION, user: { ...SESSION.user, id: 777, firstName: 'Other' } };
+  const recordStates = (auth: AuthController) => {
+    const seen: ReturnType<AuthController['getState']>[] = [];
+    auth.subscribe(() => seen.push(auth.getState()));
+    return seen;
+  };
+  const shown = (seen: ReturnType<AuthController['getState']>[], id: number) =>
+    seen.some((s) => s.status === 'authenticated' && s.session.user.id === id);
+
+  it('never shows the other account; the signed launch is exchanged on the server', async () => {
+    const api = scriptedApi({ me: [ok(OTHER)], createSession: [ok(SESSION)] });
+    const auth = new AuthController(api, () => INIT); // INIT names user 501
+    const seen = recordStates(auth);
+    await auth.start();
+    expect(api.createSession).toHaveBeenCalledWith(INIT);
+    expect(auth.getState()).toEqual({ status: 'authenticated', session: SESSION });
+    expect(shown(seen, 777)).toBe(false);
+  });
+
+  it('if the exchange fails, the other account is still never shown', async () => {
+    const api = scriptedApi({ me: [ok(OTHER)], createSession: [fail('init_data_expired')] });
+    const auth = new AuthController(api, () => INIT);
+    const seen = recordStates(auth);
+    await auth.start();
+    expect(auth.getState().status).toBe('init_data_expired');
+    expect(shown(seen, 777)).toBe(false);
+  });
+
+  it('a launch whose user cannot be read goes through the server check too', async () => {
+    const api = scriptedApi({ me: [ok(SESSION)], createSession: [ok(SESSION)] });
+    const auth = new AuthController(api, () => 'query_id=AA&user=not-json&auth_date=1&hash=' + '0'.repeat(64));
+    await auth.start();
+    expect(api.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('outside Telegram (no launch) the cookie session is used as before', async () => {
+    const api = scriptedApi({ me: [ok(OTHER)] });
+    const auth = new AuthController(api, () => null);
+    await auth.start();
+    expect(auth.getState()).toEqual({ status: 'authenticated', session: OTHER });
+    expect(api.createSession).not.toHaveBeenCalled();
+  });
+});
+
 describe('AuthController logout and language', () => {
   it('logs out with the CSRF token and does not sign in again automatically', async () => {
     const api = scriptedApi({ me: [ok(SESSION)], logout: [ok(null)] });
