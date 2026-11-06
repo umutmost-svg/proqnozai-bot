@@ -1,5 +1,5 @@
 /**
- * Spor AI splash (Figma «Spor AI / Loading storyboard», 123:55): ENTER 0–450 ms,
+ * ProqnozAI splash (Figma «ProqnozAI / Loading storyboard», 123:55): ENTER 0–450 ms,
  * LOADING with a 1.8 s soft pulse, sweeping signal and three dots, WAITING.
  * Pure presentation: when it shows and what it says is decided by AppLoadingGate.
  * All motion is CSS; with reduced motion only the static mark and text remain.
@@ -52,7 +52,7 @@ export function AppLoadingScreen({ phase, subject, hint, view, reducedMotion, on
       data-hint={hint}
     >
       <div className={s.top} aria-hidden="true">
-        <span className={s.wordmark}>SPOR AI</span>
+        <span className={s.wordmark}>{brand.name.toUpperCase()}</span>
         <span className={s.beta}>BETA</span>
       </div>
 
@@ -65,7 +65,7 @@ export function AppLoadingScreen({ phase, subject, hint, view, reducedMotion, on
               <div className={s.icon}>
                 <img className={s.iconLight} src={iconLight} alt="" width={122.1} height={122.1} draggable={false} />
                 <span className={s.iconEdge} />
-                <img className={s.symbol} src={symbol} alt="" width={101.376} height={101.376} draggable={false} />
+                <img className={s.symbol} src={symbol} alt="" width={118.272} height={118.272} draggable={false} />
               </div>
             </div>
           </div>

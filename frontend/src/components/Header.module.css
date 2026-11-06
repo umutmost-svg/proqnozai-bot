@@ -20,14 +20,19 @@
   flex: 0 0 auto;
   width: 32px;
   height: 32px;
-  border-radius: 16px;
+  border-radius: 12px;
   background: var(--glass-solid);
   border: 1px solid var(--line-62);
-  font-family: var(--font-display);
-  font-weight: 500;
-  font-size: 22px;
-  line-height: 29px;
-  color: var(--text-strong);
+  overflow: hidden;
+}
+
+/* Figma «ProqnozAI P brand» (41:267): the 32 px symbol fills the 32 px tile edge to edge. */
+.symbol {
+  display: block;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  max-width: none;
 }
 
 .brand {

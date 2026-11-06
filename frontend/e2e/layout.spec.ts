@@ -136,3 +136,37 @@ test('works outside Telegram and shows demo marks', async ({ page }) => {
   await expect(page.getByText('ДЕМО', { exact: true })).toBeVisible();
   await expect(page.getByTestId('demo-footer')).toContainText('Демо · 8 ноября 2026');
 });
+
+for (const width of WIDTHS) {
+  test(`ProqnozAI header @${width}px: vector P fills the 32 px tile (Figma 41:267)`, async ({ page }) => {
+    await open(page, '/', width);
+    await expect(page.getByRole('heading', { level: 1, name: 'ProqnozAI' })).toBeVisible();
+    const geo = await page.evaluate(() => {
+      const img = document.querySelector<HTMLImageElement>('header img[src*="brand-symbol-32"]')!;
+      const tile = img.parentElement!;
+      const t = tile.getBoundingClientRect();
+      const i = img.getBoundingClientRect();
+      return {
+        loaded: img.complete && img.naturalWidth > 0,
+        tile: [t.width, t.height],
+        img: [i.width, i.height],
+        centerDelta: Math.abs(t.left + t.width / 2 - (i.left + i.width / 2)) + Math.abs(t.top + t.height / 2 - (i.top + i.height / 2)),
+        radius: getComputedStyle(tile).borderTopLeftRadius,
+        title: document.title,
+      };
+    });
+    expect(geo).toEqual({ loaded: true, tile: [32, 32], img: [32, 32], centerDelta: 0, radius: '12px', title: 'ProqnozAI' });
+    await page.locator('header').first().screenshot({ path: `test-results/screens/${width}-header.png`, animations: 'disabled' });
+  });
+}
+
+test('metadata: ProqnozAI title, description and an SVG favicon that is served', async ({ page }) => {
+  await open(page, '/', 390);
+  await expect(page).toHaveTitle('ProqnozAI');
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute('content', /ProqnozAI/);
+  const href = await page.locator('link[rel="icon"]').evaluate((l: HTMLLinkElement) => l.href);
+  const res = await page.request.get(href);
+  expect(res.status()).toBe(200);
+  expect(res.headers()['content-type']).toContain('image/svg+xml');
+  expect(await res.text()).toContain('Prediction monogram P');
+});

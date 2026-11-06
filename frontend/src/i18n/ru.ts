@@ -8,7 +8,7 @@ export const ru = {
   'common.retry': 'Повторить',
   'common.save': 'Сохранить',
   'common.later': 'Появится позже',
-  'loading.connecting': 'Подключаем Spor AI',
+  'loading.connecting': 'Подключаем ProqnozAI',
   'loading.data': 'Загружаем матчи',
   'loading.dataEvent': 'Загружаем матч',
   'loading.dataAnalysis': 'Готовим AI-разбор',

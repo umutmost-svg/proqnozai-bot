@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import backIcon from '../assets/figma/icon-back.svg';
 import bellIcon from '../assets/figma/icon-bell.svg';
+import brandSymbol from '../assets/figma/brand-symbol-32.svg';
 import { brand } from '../config/brand';
 import { useT } from '../state/contexts';
 import { useGoBack } from '../hooks/useGoBack';
@@ -27,7 +28,7 @@ export function Header(props: Props) {
     return (
       <header className={s.bar}>
         <span className={s.mark} aria-hidden="true">
-          {brand.mark}
+          <img className={s.symbol} src={brandSymbol} alt="" width={32} height={32} draggable={false} />
         </span>
         <h1 className={s.brand}>{brand.name}</h1>
         {langButton(s.langHome)}

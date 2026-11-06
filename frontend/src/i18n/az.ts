@@ -12,7 +12,7 @@ export const az: Dictionary = {
   'common.retry': 'Yenidən cəhd et',
   'common.save': 'Yadda saxla',
   'common.later': 'Tezliklə',
-  'loading.connecting': 'Spor AI-a qoşuluruq',
+  'loading.connecting': 'ProqnozAI-a qoşuluruq',
   'loading.data': 'Matçları yükləyirik',
   'loading.dataEvent': 'Matçı yükləyirik',
   'loading.dataAnalysis': 'AI təhlilini hazırlayırıq',

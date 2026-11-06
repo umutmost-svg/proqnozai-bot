@@ -1,4 +1,4 @@
-# Spor AI — Telegram Mini App (M1 + M2)
+# ProqnozAI — Telegram Mini App (M1 + M2)
 
 React + TypeScript + Vite, CSS Modules + общие CSS variables
 (`src/styles/tokens.css`). Работает полностью офлайн на `DemoDataProvider`:
@@ -33,7 +33,7 @@ npm run test:e2e:auth # вход через настоящий backend (miniapp/
 
 ```
 src/
-  config/brand.ts         # название и знак продукта (рабочее «Spor AI»)
+  config/brand.ts         # название продукта «ProqnozAI» (символ P — assets/figma/brand-symbol-*.svg)
   data/                   # модели по видам спорта, фикстуры, фильтры, DemoDataProvider
   i18n/                   # словари az / ru / en, форматирование дат
   settings/               # язык, часовой пояс, анимации — localStorage

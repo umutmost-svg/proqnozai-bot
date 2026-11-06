@@ -10,7 +10,7 @@ export const en: Dictionary = {
   'common.retry': 'Try again',
   'common.save': 'Save',
   'common.later': 'Coming later',
-  'loading.connecting': 'Connecting to Spor AI',
+  'loading.connecting': 'Connecting to ProqnozAI',
   'loading.data': 'Loading matches',
   'loading.dataEvent': 'Loading the match',
   'loading.dataAnalysis': 'Preparing the AI analysis',

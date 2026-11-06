@@ -61,7 +61,7 @@ for (const width of WIDTHS) {
     const splash = page.getByTestId('app-loading');
     await expect(splash).toBeVisible();
     await expect(splash).toHaveAttribute('data-phase', 'connecting');
-    await expect(splash).toContainText('Подключаем Spor AI');
+    await expect(splash).toContainText('Подключаем ProqnozAI');
     await page.waitForTimeout(500); // past the 450 ms entrance
     expect(await geometryProblems(page)).toEqual([]);
     // Figma 390 × 844: the logo stage starts at y 242 (same composition at every width).
@@ -69,6 +69,20 @@ for (const width of WIDTHS) {
       () => document.querySelector('[class*="stage_"]')!.getBoundingClientRect().top,
     );
     expect(Math.abs(stageTop - 242)).toBeLessThanOrEqual(2);
+    // Figma 123:55 LOADING frame: the 118.272 px P sits 25.74 px inside the 168.96 px app icon.
+    const sym = await page.evaluate(() => {
+      const img = document.querySelector<HTMLImageElement>('[data-testid="app-loading"] img[src*="loading-symbol"]')!;
+      const i = img.getBoundingClientRect();
+      const icon = img.parentElement!.getBoundingClientRect();
+      // The pulse scales the whole stage, so compare in icon units (168.96 px in Figma).
+      const k = icon.width / 168.96;
+      return { loaded: img.complete && img.naturalWidth > 0, size: i.width / k, dx: (i.left - icon.left) / k, dy: (i.top - icon.top) / k };
+    });
+    expect(sym.loaded).toBe(true);
+    expect(Math.abs(sym.size - 118.272)).toBeLessThan(0.5);
+    expect(Math.abs(sym.dx - 25.74)).toBeLessThan(0.5);
+    expect(Math.abs(sym.dy - 25.74)).toBeLessThan(0.5);
+    await expect(splash).toContainText('PROQNOZAI');
     await page.screenshot({ path: `test-results/loading/${width}-loading.png`, animations: 'disabled' });
 
     hold.release();
@@ -79,7 +93,7 @@ for (const width of WIDTHS) {
 }
 
 test('AZ and EN texts fit at 360px', async ({ page }) => {
-  for (const [lang, text] of [['az', 'Spor AI-a qoşuluruq'], ['en', 'Connecting to Spor AI']] as const) {
+  for (const [lang, text] of [['az', 'ProqnozAI-a qoşuluruq'], ['en', 'Connecting to ProqnozAI']] as const) {
     const hold = await holdSession(page);
     await prepare(page, 360, { lang });
     await page.goto('/');
@@ -130,7 +144,7 @@ test('system reduced motion: static mark and text, no animations at all', async 
   await page.goto('/');
   const splash = page.getByTestId('app-loading');
   await expect(splash).toHaveAttribute('data-motion', 'static');
-  await expect(splash).toContainText('Подключаем Spor AI');
+  await expect(splash).toContainText('Подключаем ProqnozAI');
   await expect(page.locator('[data-step]')).toHaveCount(0);
   const running = await page.evaluate(() =>
     document.querySelector('[data-testid="app-loading"]')!.getAnimations({ subtree: true }).length,

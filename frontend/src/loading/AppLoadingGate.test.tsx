@@ -48,7 +48,9 @@ describe('AppLoadingGate', () => {
     expect(splash()).toBeNull(); // plain cover only
     await advance(1);
     expect(splash()).toHaveAttribute('data-phase', 'connecting');
-    expect(screen.getByText('Подключаем Spor AI')).toBeInTheDocument();
+    expect(screen.getByText('Подключаем ProqnozAI')).toBeInTheDocument();
+    expect(splash()).toHaveTextContent('PROQNOZAI');
+    expect(splash()!.querySelector('img[src*="loading-symbol"]')).not.toBeNull();
     expect(document.querySelector('[inert]')).not.toBeNull(); // the app underneath is not reachable
 
     s.answer({ ok: false, error: 'unavailable' });
@@ -162,7 +164,7 @@ describe('AppLoadingGate', () => {
     await advance(SHOW_AFTER_MS);
     expect(splash()).toHaveAttribute('data-motion', 'static');
     expect(document.querySelectorAll('[data-step]')).toHaveLength(0);
-    expect(screen.getByText('Подключаем Spor AI')).toBeInTheDocument();
+    expect(screen.getByText('Подключаем ProqnozAI')).toBeInTheDocument();
   });
 
   it('full motion renders the sweeping signal and three dot states', async () => {
@@ -174,7 +176,7 @@ describe('AppLoadingGate', () => {
   });
 
   it('texts are localized (AZ, EN)', async () => {
-    for (const [lang, text] of [['az', 'Spor AI-a qoşuluruq'], ['en', 'Connecting to Spor AI']] as const) {
+    for (const [lang, text] of [['az', 'ProqnozAI-a qoşuluruq'], ['en', 'Connecting to ProqnozAI']] as const) {
       const s = slowSession();
       const { unmount } = renderApp('#/', { authApi: s.api, settings: { lang } });
       await advance(SHOW_AFTER_MS);

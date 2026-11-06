@@ -36,7 +36,7 @@
 .wordmark {
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: 15px;
+  font-size: 14px;
   letter-spacing: 2px;
 }
 
@@ -121,7 +121,7 @@
   top: 27.02px;
   width: 168.96px;
   height: 168.96px;
-  border-radius: 38.94px;
+  border-radius: 38.28px;
   overflow: hidden;
   background: linear-gradient(120deg, #eaf3c6 5.86%, #cdeac6 46.12%, #a0cec9 79.06%);
 }
@@ -146,8 +146,8 @@
 
 .symbol {
   position: absolute;
-  left: 33.66px;
-  top: 33.66px;
+  left: 25.74px;
+  top: 25.74px;
   display: block;
   max-width: none;
 }
@@ -169,8 +169,8 @@
 .brand {
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: 29px;
-  line-height: 40px;
+  font-size: 27px;
+  line-height: 37px;
 }
 
 .message,
