@@ -221,6 +221,16 @@ def test_login_as_other_user_replaces_session(client: TestClient, clock: FakeClo
     assert client.get("/api/me").status_code == 401  # old session revoked
 
 
+def test_account_switch_burns_the_old_accounts_launch(client: TestClient, clock: FakeClock) -> None:
+    old_launch = fresh(clock, {"id": 1})
+    assert login(client, old_launch).status_code == 200
+    logged_in(client, clock, {"id": 2})  # the device switches accounts: session 1 is revoked
+    clock.advance(5)  # past the switch second, still inside initData max age
+    client.cookies.clear()
+    replay = login(client, old_launch)
+    assert replay.status_code == 401 and replay.json() == {"error": "init_data_reused"}
+
+
 def test_concurrent_logins_create_one_user(settings: Settings, clock: FakeClock) -> None:
     app = create_app(settings, clock=clock)
     init_data = fresh(clock, {"id": 3003})

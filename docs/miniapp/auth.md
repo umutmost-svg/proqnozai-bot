@@ -327,15 +327,18 @@ AI-разбор остаются с отметкой «Демо». Обходо�
 - Учёт: алерт на появление и частоту строк `event=unhandled_error` в логах
   сервиса. Пользователь или тестировщик сообщает `request_id` из ответа, по
   нему находится строка лога.
-- Access-лог uvicorn содержит метод, путь и код ответа. initData передаётся
-  только в теле, cookie в access-лог не пишутся.
+- Access-лог uvicorn на стенде **выключен** (`--no-access-log` в
+  `deploy/miniapp/entrypoint.sh`): он пишет путь вместе с query string, а
+  запрос с initData или токеном в URL попал бы в лог. Вместо него —
+  структурные события приложения (`auth.*`, `request_id`) без данных запроса.
 
 ## HTTPS-стенд
 
-Топология, CSP, защита от массовых запросов, Railway/Cloudflare, переменные,
-резервные копии, откат и ротация токена — в [`stand.md`](stand.md). Прежний
-шаблон с nginx на VPS заменён: стенд — отдельный проект Railway, один
-контейнер отдаёт frontend и `/api` с одного origin.
+Топология, CSP, защита от массовых запросов, Cloudflare, переменные,
+резервные копии, откат и ротация токена — в [`stand.md`](stand.md). Один
+контейнер отдаёт frontend и `/api` с одного origin. Railway-шаги в
+`stand.md` — исходный план (историческое): Railway в проекте больше не
+используется, хостинг стенда требует пересмотра.
 
 ## Локальный запуск
 
@@ -385,8 +388,8 @@ HTTPS-адрес. Публичные туннели в M2 не использу�
   блокировать такие cookie совсем. Совместимость **не заявляется** и не
   выводится из проверки в локальном Chrome. Ослаблять настройки ради неё
   без отдельного решения нельзя;
-- поведение на стенде Railway за Cloudflare (HTTPS, `__Host-` cookie,
-  правила Cloudflare); контейнер проверен локально в Docker, без Railway и
+- поведение на стенде за Cloudflare (HTTPS, `__Host-` cookie, правила
+  Cloudflare); контейнер проверен локально в Docker, без облачного хостинга и
   без Cloudflare (`stand.md`, «Что проверено»);
 - сохранение сессии между открытиями и поведение logout внутри Telegram:
   сохраняется ли `sessionStorage` при перезагрузке WebView, работает ли
@@ -417,7 +420,8 @@ manifests, оба `.env.example`. Не попали `.env`, `.venv`,
 `miniapp/.venv`, `frontend/node_modules`, `.git`, `bot.log`,
 `suspicious.log`, `__pycache__`, кэши.
 
-Схема production-сборки бота (корневой `Dockerfile`, `Procfile`, Railway) не
-менялась. Образ Mini App для стенда — отдельный `deploy/miniapp/Dockerfile`
+Схема production-сборки бота (корневой `Dockerfile`, `Procfile`; production —
+DigitalOcean Droplet + Dokploy, приложения `bot` и `dashboard` из `main`) не
+менялась; корневой `.dockerignore` на образ бота не влияет функционально. Образ Mini App для стенда — отдельный `deploy/miniapp/Dockerfile`
 с тем же корневым `.dockerignore` (см. `stand.md`). В production Mini App не
 развёрнут.

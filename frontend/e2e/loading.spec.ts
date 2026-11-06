@@ -70,27 +70,30 @@ for (const width of WIDTHS) {
     );
     expect(Math.abs(stageTop - 242)).toBeLessThanOrEqual(2);
     // The Velocity V2 app icon (Figma 162:103) fills the 168.96 px icon slot of the LOADING frame,
-    // 27.02 px inside the 226 px stage; the pulse scales the stage, so compare in stage units.
+    // 27.02 px inside the 226 px stage. Layout values come from computed styles: the 1.8 s pulse
+    // scales the icon with a transform, so bounding boxes depend on the moment of measurement.
     const art = await page.evaluate(() => {
       const img = document.querySelector<HTMLImageElement>('[data-testid="app-loading"] img[src*="velocity-icon"]')!;
+      const icon = img.parentElement!;
+      const px = (el: Element, prop: 'width' | 'height' | 'left' | 'top') => parseFloat(getComputedStyle(el)[prop]);
       const i = img.getBoundingClientRect();
-      const stageEl = document.querySelector<HTMLElement>('[class*="stage_"]')!;
-      const st = stageEl.getBoundingClientRect();
-      const k = st.width / 226;
-      const border = parseFloat(getComputedStyle(stageEl).borderLeftWidth);
+      const box = icon.getBoundingClientRect();
       return {
         loaded: img.complete && img.naturalWidth > 0,
-        size: i.width / k,
-        square: Math.abs(i.width - i.height) < 0.01,
-        dx: (i.left - st.left) / k - border,
-        dy: (i.top - st.top) / k - border,
+        slot: [px(icon, 'left'), px(icon, 'top'), px(icon, 'width'), px(icon, 'height')],
+        art: [px(img, 'width'), px(img, 'height')],
+        // Same transform for both, so the image must cover its slot exactly at any pulse phase.
+        fill: [i.width / box.width, i.height / box.height, i.left - box.left, i.top - box.top],
       };
     });
     expect(art.loaded).toBe(true);
-    expect(art.square).toBe(true);
-    expect(Math.abs(art.size - 168.96)).toBeLessThan(0.5);
-    expect(Math.abs(art.dx - 27.02)).toBeLessThan(0.5);
-    expect(Math.abs(art.dy - 27.02)).toBeLessThan(0.5);
+    // Chrome lays out in 1/64 px, so 168.96 becomes 168.953: compare within 0.05 px.
+    [27.02, 27.02, 168.96, 168.96].forEach((v, k) => expect(Math.abs(art.slot[k]! - v)).toBeLessThan(0.05));
+    [168.96, 168.96].forEach((v, k) => expect(Math.abs(art.art[k]! - v)).toBeLessThan(0.05));
+    expect(Math.abs(art.fill[0]! - 1)).toBeLessThan(0.001);
+    expect(Math.abs(art.fill[1]! - 1)).toBeLessThan(0.001);
+    expect(Math.abs(art.fill[2]!)).toBeLessThan(0.5);
+    expect(Math.abs(art.fill[3]!)).toBeLessThan(0.5);
     await expect(splash).toContainText('PROQNOZAI');
     await page.screenshot({ path: `test-results/loading/${width}-loading.png`, animations: 'disabled' });
 

@@ -346,8 +346,10 @@ def create_app(
             created = False
         else:
             if existing is not None:
-                # The device switched Telegram accounts: the old session ends.
-                await run_in_threadpool(store.revoke_session, existing[0], ts, ts)
+                # The device switched Telegram accounts: the old session ends, and its
+                # launch stays burned for the whole initData validity window (as on logout),
+                # so the old account's still-fresh initData cannot sign in again.
+                await run_in_threadpool(store.revoke_session, existing[0], ts, burn_window(ts).until)
             token = secrets.token_urlsafe(32)
             try:
                 session, evicted = await run_in_threadpool(
