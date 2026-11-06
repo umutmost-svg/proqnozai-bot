@@ -5,6 +5,7 @@
  */
 import type { Lang } from '../i18n';
 import type { AuthApi, AuthFailure, AuthSession } from './api';
+import { noSignedOutMarker, type SignedOutMarker } from './signedOut';
 
 export type AuthState =
   | { status: 'checking' }
@@ -34,6 +35,8 @@ export class AuthController {
     private readonly api: AuthApi,
     /** Raw Telegram.WebApp.initData, or null outside Telegram. */
     private readonly initData: () => string | null,
+    /** Keeps "signed out" for this launch across a WebView reload. */
+    private readonly marker: SignedOutMarker = noSignedOutMarker,
   ) {}
 
   getState = (): AuthState => this.state;
@@ -58,9 +61,11 @@ export class AuthController {
 
   async logout(): Promise<boolean> {
     if (this.state.status !== 'authenticated' || this.inflight) return false;
-    const result = await this.api.logout(this.state.session.csrfToken);
+    const initData = this.initData();
+    const result = await this.api.logout(this.state.session.csrfToken, initData);
     if (!result.ok && result.error !== 'unauthenticated' && result.error !== 'session_expired') return false;
     this.signedOut = true;
+    if (initData) await this.marker.remember(initData);
     this.set({ status: 'signed_out' });
     return true;
   }
@@ -68,7 +73,10 @@ export class AuthController {
   /** Best-effort: the local setting stays the UI source of truth in M2. */
   async syncLanguage(lang: Lang): Promise<void> {
     if (this.state.status !== 'authenticated') return;
-    const result = await this.api.setLanguage(lang, this.state.session.csrfToken);
+    const session = this.state.session;
+    const result = await this.api.setLanguage(lang, session.csrfToken);
+    // A late answer must not overwrite a newer state (e.g. logout finished meanwhile).
+    if (this.state.status !== 'authenticated' || this.state.session !== session) return;
     if (!result.ok && (result.error === 'unauthenticated' || result.error === 'session_expired')) {
       this.set({ status: 'session_expired' });
     }
@@ -85,6 +93,14 @@ export class AuthController {
   }
 
   private async bootstrap(): Promise<AuthState> {
+    // 0. Signed out earlier in this launch (page reloaded): no requests at all.
+    //    Signing in again means reopening the Mini App, which brings new initData.
+    const launch = this.initData();
+    if (launch && (await this.marker.matches(launch))) {
+      this.signedOut = true;
+      return { status: 'signed_out' };
+    }
+
     // 1. An existing server session wins: no fresh initData needed.
     const me = await this.api.me();
     if (me.ok) return { status: 'authenticated', session: me.value };

@@ -172,6 +172,7 @@ export const ru = {
   'auth.unavailable': 'Сервер недоступен. Демо-данные работают без входа.',
   'auth.rateLimited': 'Слишком много попыток. Повторите через минуту.',
   'auth.signedOut': 'Вы вышли. Чтобы войти снова, откройте Mini App заново.',
+  'auth.close': 'Закрыть Mini App',
   'auth.logout': 'Выйти',
   'auth.logoutFailed': 'Не удалось выйти. Повторите.',
   'profile.title': 'Профиль',

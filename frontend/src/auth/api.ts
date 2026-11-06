@@ -37,7 +37,8 @@ export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: AuthFail
 export interface AuthApi {
   me(): Promise<ApiResult<AuthSession>>;
   createSession(initData: string): Promise<ApiResult<AuthSession>>;
-  logout(csrfToken: string): Promise<ApiResult<null>>;
+  /** `initData`: the current launch, so the server burns it too (null outside Telegram). */
+  logout(csrfToken: string, initData: string | null): Promise<ApiResult<null>>;
   setLanguage(lang: Lang, csrfToken: string): Promise<ApiResult<null>>;
 }
 
@@ -117,8 +118,11 @@ export function createHttpAuthApi(fetchImpl: typeof fetch = (...a) => fetch(...a
   return {
     me: async () => toSession(await call('/me')),
     createSession: async (initData) => toSession(await postJson('/auth/session', { init_data: initData })),
-    logout: async (csrfToken) => {
-      const r = await call('/auth/logout', { method: 'POST', headers: { 'X-CSRF-Token': csrfToken } });
+    logout: async (csrfToken, initData) => {
+      const headers = { 'X-CSRF-Token': csrfToken };
+      const r = initData
+        ? await postJson('/auth/logout', { init_data: initData }, headers)
+        : await call('/auth/logout', { method: 'POST', headers });
       return r.ok ? { ok: true, value: null } : r;
     },
     setLanguage: async (lang, csrfToken) => {

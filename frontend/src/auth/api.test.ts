@@ -54,11 +54,23 @@ describe('HTTP auth API', () => {
   it('sends the CSRF header on logout and never touches web storage', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => json(200, { ok: true }));
     const api = createHttpAuthApi(fetchMock);
-    expect(await api.logout('c1')).toEqual({ ok: true, value: null });
+    expect(await api.logout('c1', null)).toEqual({ ok: true, value: null });
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('/api/auth/logout');
     expect((init?.headers as Record<string, string>)['X-CSRF-Token']).toBe('c1');
+    expect(init?.body).toBeUndefined();
     expect(window.localStorage.length).toBe(0);
     expect(window.sessionStorage.length).toBe(0);
+  });
+
+  it('sends the current launch initData in the logout body so the server burns it', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => json(200, { ok: true }));
+    await createHttpAuthApi(fetchMock).logout('c1', 'auth_date=1&hash=ab');
+    const [, init] = fetchMock.mock.calls[0]!;
+    const headers = init?.headers as Record<string, string>;
+    expect(init?.method).toBe('POST');
+    expect(headers['Content-Type']).toBe('application/json');
+    expect(headers['X-CSRF-Token']).toBe('c1');
+    expect(JSON.parse(String(init?.body))).toEqual({ init_data: 'auth_date=1&hash=ab' });
   });
 });

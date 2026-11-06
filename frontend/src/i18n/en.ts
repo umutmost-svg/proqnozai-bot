@@ -174,6 +174,7 @@ export const en: Dictionary = {
   'auth.unavailable': 'Server unavailable. Demo data works without sign-in.',
   'auth.rateLimited': 'Too many attempts. Try again in a minute.',
   'auth.signedOut': 'You signed out. Reopen the Mini App to sign in again.',
+  'auth.close': 'Close Mini App',
   'auth.logout': 'Sign out',
   'auth.logoutFailed': 'Could not sign out. Try again.',
   'profile.title': 'Profile',

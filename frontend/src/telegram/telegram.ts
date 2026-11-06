@@ -18,6 +18,8 @@ export interface TelegramAdapter {
   /** True only when running inside a Telegram client with launch data. */
   readonly available: boolean;
   ready(): void;
+  /** Closes the Mini App (the only way to get new launch data). */
+  close(): void;
   expand(): void;
   showBackButton(): void;
   hideBackButton(): void;
@@ -50,6 +52,7 @@ export interface TelegramWebApp {
   contentSafeAreaInset?: WebAppInsets;
   isVersionAtLeast?: (version: string) => boolean;
   ready?: () => void;
+  close?: () => void;
   expand?: () => void;
   onEvent?: (event: string, handler: () => void) => void;
   offEvent?: (event: string, handler: () => void) => void;
@@ -89,6 +92,7 @@ export function createTelegramAdapter(webApp: TelegramWebApp | undefined): Teleg
   return {
     available,
     ready: () => app?.ready?.(),
+    close: () => app?.close?.(),
     expand: () => app?.expand?.(),
     showBackButton: () => {
       if (supports('6.1')) app?.BackButton?.show();

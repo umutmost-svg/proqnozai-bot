@@ -10,6 +10,7 @@ import './styles/global.css';
 import { App } from './App';
 import { createHttpAuthApi } from './auth/api';
 import { AuthController } from './auth/controller';
+import { createSessionStorageMarker } from './auth/signedOut';
 import { brand } from './config/brand';
 import { DemoDataProvider, type DemoOperation } from './data/DemoDataProvider';
 import { createTelegramAdapter } from './telegram/telegram';
@@ -29,7 +30,7 @@ const services = {
   data: new DemoDataProvider(systemClock, { failOnce }),
   telegram,
   // Created once per page, outside React: StrictMode cannot double-bootstrap it.
-  auth: new AuthController(createHttpAuthApi(), () => telegram.initData()),
+  auth: new AuthController(createHttpAuthApi(), () => telegram.initData(), createSessionStorageMarker()),
   scrollMemory: new Map<string, number>(),
 };
 

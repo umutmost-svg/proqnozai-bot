@@ -1,4 +1,6 @@
 import { AuthController } from './controller';
+import type { AuthApi } from './api';
+import type { SignedOutMarker } from './signedOut';
 import { fail, ok, scriptedApi, SESSION } from './testing';
 
 const INIT = 'query_id=AA&user=%7B%22id%22%3A501%7D&auth_date=1&hash=' + '0'.repeat(64);
@@ -119,7 +121,7 @@ describe('AuthController logout and language', () => {
     const auth = new AuthController(api, () => INIT);
     await auth.start();
     expect(await auth.logout()).toBe(true);
-    expect(api.logout).toHaveBeenCalledWith('csrf-test');
+    expect(api.logout).toHaveBeenCalledWith('csrf-test', INIT);
     expect(auth.getState().status).toBe('signed_out');
     await auth.start();
     await auth.retry();
@@ -142,5 +144,71 @@ describe('AuthController logout and language', () => {
     expect(api.setLanguage).toHaveBeenCalledWith('az', 'csrf-test');
     await auth.syncLanguage('en');
     expect(auth.getState().status).toBe('session_expired');
+  });
+});
+
+/** In-memory stand-in for the sessionStorage marker: shared between "page loads". */
+function memoryMarker(): SignedOutMarker & { saved: Set<string> } {
+  const saved = new Set<string>();
+  return { saved, matches: async (d) => saved.has(d), remember: async (d) => void saved.add(d) };
+}
+
+describe('AuthController logout survives a reload', () => {
+  it('after logout and reload, no bootstrap request is made', async () => {
+    const marker = memoryMarker();
+    const first = new AuthController(scriptedApi({ me: [ok(SESSION)], logout: [ok(null)] }), () => INIT, marker);
+    await first.start();
+    expect(await first.logout()).toBe(true);
+
+    // Reload: a new controller (new page), same launch initData, same storage.
+    const api = scriptedApi({ me: [fail('unauthenticated')], createSession: [ok(SESSION)] });
+    const reloaded = new AuthController(api, () => INIT, marker);
+    await reloaded.start();
+    expect(reloaded.getState().status).toBe('signed_out');
+    expect(api.me).not.toHaveBeenCalled();
+    expect(api.createSession).not.toHaveBeenCalled();
+    await reloaded.retry();
+    expect(api.createSession).not.toHaveBeenCalled();
+  });
+
+  it('a new launch (reopened Mini App) signs in normally', async () => {
+    const marker = memoryMarker();
+    marker.saved.add(INIT);
+    const api = scriptedApi({ me: [fail('unauthenticated')], createSession: [ok(SESSION)] });
+    const next = new AuthController(api, () => INIT.replace('auth_date=1', 'auth_date=2'), marker);
+    await next.start();
+    expect(next.getState().status).toBe('authenticated');
+    expect(api.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed logout leaves no marker', async () => {
+    const marker = memoryMarker();
+    const auth = new AuthController(scriptedApi({ me: [ok(SESSION)], logout: [fail('unavailable')] }), () => INIT, marker);
+    await auth.start();
+    expect(await auth.logout()).toBe(false);
+    expect(marker.saved.size).toBe(0);
+  });
+
+  it('outside Telegram logout sends no launch data', async () => {
+    const api = scriptedApi({ me: [ok(SESSION)], logout: [ok(null)] });
+    const auth = new AuthController(api, () => null, memoryMarker());
+    await auth.start();
+    await auth.logout();
+    expect(api.logout).toHaveBeenCalledWith('csrf-test', null);
+  });
+});
+
+describe('AuthController late responses', () => {
+  it('a language update answered after logout does not overwrite signed_out', async () => {
+    let answer: (r: Awaited<ReturnType<AuthApi['setLanguage']>>) => void = () => {};
+    const api = scriptedApi({ me: [ok(SESSION)], logout: [ok(null)] });
+    api.setLanguage.mockImplementation(() => new Promise((r) => (answer = r)));
+    const auth = new AuthController(api, () => INIT);
+    await auth.start();
+    const pending = auth.syncLanguage('az');
+    await auth.logout();
+    answer(fail('unauthenticated'));
+    await pending;
+    expect(auth.getState().status).toBe('signed_out');
   });
 });

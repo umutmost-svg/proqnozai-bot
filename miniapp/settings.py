@@ -18,6 +18,11 @@ SameSite = Literal["lax", "strict", "none"]
 
 _LOOPBACK_HOSTS = {"localhost"}
 
+# Upper bounds: a typo in env must stop the start, not quietly widen the replay window.
+MAX_INIT_DATA_AGE_S = 3600
+MAX_INIT_DATA_FUTURE_SKEW_S = 300
+MAX_SESSION_TTL_S = 7 * 86400
+
 
 class SettingsError(ValueError):
     """Invalid configuration. Messages never contain secret values."""
@@ -30,6 +35,18 @@ def _is_loopback(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def is_bot_database_path(path: Path) -> bool:
+    """True if the path, or the file it really points to, is the bot's `bot.db*`.
+
+    `resolve()` follows symlinks (of the file and of its parent directories);
+    names are compared case-insensitively because macOS file systems usually are.
+    Hard links and copies under another name are caught by Store.init_schema,
+    which refuses a file with foreign tables.
+    """
+    names = {path.name, path.expanduser().resolve().name}
+    return any(name.casefold().startswith("bot.db") for name in names)
 
 
 def normalize_origin(raw: str) -> str:
@@ -62,6 +79,7 @@ class Settings:
     session_ttl_s: int = 12 * 3600
     max_body_bytes: int = 8 * 1024
     max_init_data_chars: int = 4096
+    # Successful-signature logins per verified Telegram user per window.
     login_rate_limit: int = 10
     login_rate_window_s: int = 60
     cookie_samesite: SameSite = "lax"
@@ -69,7 +87,7 @@ class Settings:
     def __post_init__(self) -> None:
         if not self.bot_token or ":" not in self.bot_token:
             raise SettingsError("bot token is missing or malformed")
-        if self.db_path.name.startswith("bot.db"):
+        if is_bot_database_path(self.db_path):
             raise SettingsError("the Mini App must not use the bot database (bot.db)")
         if not self.trusted_origins:
             raise SettingsError("at least one trusted origin is required")
@@ -79,6 +97,11 @@ class Settings:
                 raise SettingsError(f"{name} must be positive")
         if self.init_data_future_skew_s < 0:
             raise SettingsError("init_data_future_skew_s must be >= 0")
+        for name, limit in (("init_data_max_age_s", MAX_INIT_DATA_AGE_S),
+                            ("init_data_future_skew_s", MAX_INIT_DATA_FUTURE_SKEW_S),
+                            ("session_ttl_s", MAX_SESSION_TTL_S)):
+            if getattr(self, name) > limit:
+                raise SettingsError(f"{name} must be <= {limit}")
         if self.environment not in ("production", "development"):
             raise SettingsError("environment must be 'production' or 'development'")
         if self.cookie_samesite not in ("lax", "strict", "none"):

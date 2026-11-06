@@ -28,6 +28,7 @@ async function openInFakeTelegram(page: Page, initData: string, hash = '#/profil
         initDataUnsafe: { user: { first_name: 'Unsafe Display', language_code: 'ru' } },
         isVersionAtLeast: () => false,
         ready: () => {},
+        close: () => {},
         expand: () => {},
       },
     };
@@ -76,16 +77,35 @@ test('sports data stays demo after sign-in', async ({ page }) => {
   await expect(account(page)).toHaveAttribute('data-auth-status', 'authenticated');
 });
 
-test('logout revokes the session; reopening with the same initData does not sign in', async ({ page }) => {
+test('logout → reload: no automatic sign-in; reopening the Mini App signs in again', async ({ page, context }) => {
   const posts = await openInFakeTelegram(page, signInitData({ id: 91003, first_name: 'Leaving' }));
   await expect(account(page)).toHaveAttribute('data-auth-status', 'authenticated');
   await page.getByRole('button', { name: 'Выйти' }).click();
   await expect(account(page)).toHaveAttribute('data-auth-status', 'signed_out');
+  await expect(page.getByRole('button', { name: 'Закрыть Mini App' })).toBeVisible();
 
+  // Reload of the same WebView (same launch initData): no bootstrap at all.
+  const afterReload: string[] = [];
+  page.on('request', (req) => {
+    if (req.url().includes('/api/')) afterReload.push(`${req.method()} ${new URL(req.url()).pathname}`);
+  });
   await page.reload();
   await expect(account(page)).toHaveAttribute('data-auth-status', 'signed_out');
   await page.waitForTimeout(1000);
-  expect(posts).toHaveLength(2); // one login, one rejected re-use; no loop
+  expect(posts).toHaveLength(1);
+  expect(afterReload).toEqual([]);
+  const storage = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }));
+  expect(storage).not.toContain('auth_date');
+  expect(storage).not.toContain('91003');
+
+  // Explicit sign-in again: the user reopens the Mini App and Telegram signs a new launch.
+  const reopened = await context.newPage();
+  const newPosts = await openInFakeTelegram(
+    reopened,
+    signInitData({ id: 91003, first_name: 'Back' }, { authDate: Math.floor(Date.now() / 1000) + 1 }),
+  );
+  await expect(account(reopened)).toHaveAttribute('data-auth-status', 'authenticated');
+  expect(newPosts).toHaveLength(1);
 });
 
 test('initData signed with another token is rejected once, without retries', async ({ page }) => {

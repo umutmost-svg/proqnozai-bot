@@ -176,6 +176,7 @@ export const az: Dictionary = {
   'auth.unavailable': 'Server əlçatan deyil. Demo məlumatlar girişsiz işləyir.',
   'auth.rateLimited': 'Həddindən çox cəhd. Bir dəqiqədən sonra yenidən cəhd edin.',
   'auth.signedOut': 'Hesabdan çıxdınız. Yenidən daxil olmaq üçün Mini App-i yenidən açın.',
+  'auth.close': 'Mini App-i bağla',
   'auth.logout': 'Çıxış',
   'auth.logoutFailed': 'Çıxmaq olmadı. Yenidən cəhd edin.',
   'profile.title': 'Profil',

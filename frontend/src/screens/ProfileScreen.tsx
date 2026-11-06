@@ -7,7 +7,7 @@ import { AppShell } from '../components/AppShell';
 import { Header } from '../components/Header';
 import ui from '../components/ui.module.css';
 import type { MessageKey } from '../i18n';
-import { useSettings } from '../state/contexts';
+import { useServices, useSettings } from '../state/contexts';
 import s from './ProfileScreen.module.css';
 
 const STATUS_TEXT: Record<AuthStatus, MessageKey> = {
@@ -26,6 +26,7 @@ const STATUS_TEXT: Record<AuthStatus, MessageKey> = {
 function AccountStatus() {
   const { t } = useSettings();
   const { state, auth } = useAuth();
+  const { telegram } = useServices();
   const [logoutFailed, setLogoutFailed] = useState(false);
   const verified = state.status === 'authenticated' ? state.session.user : null;
   // Only server-verified data is shown as the user's name; initDataUnsafe is not.
@@ -42,6 +43,12 @@ function AccountStatus() {
       {RETRYABLE.has(state.status) && (
         <button type="button" className={ui.secondary} onClick={() => void auth.retry()}>
           {t('common.retry')}
+        </button>
+      )}
+      {state.status === 'signed_out' && telegram.available && (
+        // Signing in again is explicit: reopening the Mini App brings new launch data.
+        <button type="button" className={ui.secondary} onClick={() => telegram.close()}>
+          {t('auth.close')}
         </button>
       )}
       {verified && (

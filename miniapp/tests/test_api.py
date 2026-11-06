@@ -279,6 +279,124 @@ def test_same_init_data_cannot_log_in_again_after_logout(client: TestClient, clo
     assert login(client, fresh(clock)).status_code == 200
 
 
+def logout_with_launch(client: TestClient, csrf: str, init_data: str, **headers: str):
+    return client.post("/api/auth/logout", content=json.dumps({"init_data": init_data}),
+                       headers={"Origin": ORIGIN, "X-CSRF-Token": csrf, "Content-Type": "application/json", **headers})
+
+
+def test_logout_burns_the_current_launch_not_only_the_first(client: TestClient, clock: FakeClock) -> None:
+    first = fresh(clock)
+    assert login(client, first).status_code == 200
+    clock.advance(1800)  # Mini App reopened later (session TTL here is 1 h): new launch, cookie reused
+    current = fresh(clock)
+    csrf = client.get("/api/me").json()["session"]["csrf_token"]
+    r = logout_with_launch(client, csrf, current)
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    # A reload of the same WebView must not silently sign in with the current launch.
+    r = login(client, current)
+    assert r.status_code == 401 and r.json() == {"error": "init_data_reused"}
+    # Explicit sign-in again = reopening the Mini App, i.e. a new signed launch.
+    clock.advance(5)
+    assert login(client, fresh(clock)).status_code == 200
+
+
+def test_logout_burn_is_bounded_in_time(client: TestClient, clock: FakeClock, settings: Settings) -> None:
+    current = fresh(clock)
+    csrf = login(client, current).json()["session"]["csrf_token"]
+    logout_with_launch(client, csrf, current)
+    clock.advance(settings.init_data_max_age_s + settings.init_data_future_skew_s + 1)
+    # The burned launch has expired by itself; nothing blocks a new launch.
+    assert login(client, current).json() == {"error": "init_data_expired"}
+    assert login(client, fresh(clock)).status_code == 200
+
+
+def test_logout_does_not_burn_another_users_launch(settings: Settings, clock: FakeClock) -> None:
+    app = create_app(settings, clock=clock)
+    a = TestClient(app)
+    csrf = logged_in(a, clock, {"id": 5001})["session"]["csrf_token"]
+    others = fresh(clock, {"id": 5002})
+    assert logout_with_launch(a, csrf, others).status_code == 200
+    assert a.get("/api/me").status_code == 401  # the session itself is revoked
+    assert login(TestClient(app), others).status_code == 200
+
+
+def test_logout_with_unusable_launch_still_logs_out(client: TestClient, clock: FakeClock) -> None:
+    csrf = logged_in(client, clock)["session"]["csrf_token"]
+    assert logout_with_launch(client, csrf, "a=1&hash=" + "0" * 64).status_code == 200
+    assert client.get("/api/me").status_code == 401
+
+
+def test_logout_body_is_strict(client: TestClient, clock: FakeClock) -> None:
+    csrf = logged_in(client, clock)["session"]["csrf_token"]
+    r = client.post("/api/auth/logout", content=b'{"init_data": 1}',
+                    headers={"Origin": ORIGIN, "X-CSRF-Token": csrf, "Content-Type": "application/json"})
+    assert r.status_code == 400
+    r = client.post("/api/auth/logout", content=b"init_data=x",
+                    headers={"Origin": ORIGIN, "X-CSRF-Token": csrf, "Content-Type": "text/plain"})
+    assert r.status_code == 415
+    assert client.get("/api/me").status_code == 200  # rejected requests change nothing
+
+
+def test_login_racing_a_logout_cannot_use_the_burned_launch(client: TestClient, clock: FakeClock,
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    launch = fresh(clock)
+    csrf = login(client, launch).json()["session"]["csrf_token"]
+    logout_with_launch(client, csrf, launch)
+    # Simulate the race: the early check ran before the logout committed.
+    monkeypatch.setattr(client.app.state.store, "is_init_data_consumed", lambda *_: False)
+    r = login(client, launch)
+    assert r.status_code == 401 and r.json() == {"error": "init_data_reused"}
+    assert COOKIE not in client.cookies
+    assert client.get("/api/me").status_code == 401
+
+
+def test_replaying_a_burned_launch_does_not_spend_the_login_budget(settings: Settings, clock: FakeClock) -> None:
+    app = create_app(settings, clock=clock)
+    c = TestClient(app)
+    launch = fresh(clock, {"id": 6100})
+    csrf = login(c, launch).json()["session"]["csrf_token"]
+    logout_with_launch(c, csrf, launch)
+    for _ in range(3 * settings.login_rate_limit):
+        assert login(TestClient(app), launch).json() == {"error": "init_data_reused"}
+    clock.advance(1)
+    assert login(TestClient(app), fresh(clock, {"id": 6100})).status_code == 200
+
+
+def test_logout_with_an_expired_session_still_burns_the_current_launch(client: TestClient, clock: FakeClock,
+                                                                       settings: Settings) -> None:
+    csrf = logged_in(client, clock)["session"]["csrf_token"]
+    token = client.cookies.get(COOKIE)
+    clock.advance(settings.session_ttl_s + 1)  # session expired while the page stayed open
+    current = fresh(clock)  # the launch the page runs in now (reopened), still fresh
+    client.cookies.set(COOKIE, token)
+    assert logout(client, None).status_code == 403  # CSRF still required
+    client.cookies.set(COOKIE, token)
+    assert logout_with_launch(client, csrf, current).status_code == 200
+    r = login(client, current)
+    assert r.status_code == 401 and r.json() == {"error": "init_data_reused"}
+
+
+def test_logout_after_the_browser_dropped_the_expired_cookie_burns_the_launch(
+        client: TestClient, clock: FakeClock, settings: Settings) -> None:
+    csrf = logged_in(client, clock)["session"]["csrf_token"]
+    clock.advance(settings.session_ttl_s + 1)
+    current = fresh(clock)
+    client.cookies.clear()  # Max-Age passed: the browser no longer sends the cookie
+    assert logout_with_launch(client, csrf, current).status_code == 200
+    r = login(client, current)
+    assert r.status_code == 401 and r.json() == {"error": "init_data_reused"}
+    clock.advance(1)
+    assert login(client, fresh(clock)).status_code == 200  # a new launch is not blocked
+
+
+def test_logout_without_session_burns_nothing_for_unsigned_or_foreign_origin(client: TestClient,
+                                                                            clock: FakeClock) -> None:
+    current = fresh(clock)
+    assert logout_with_launch(client, "x", "a=1&hash=" + "0" * 64).status_code == 200
+    assert logout_with_launch(client, "x", current, Origin="https://evil.example").status_code == 403
+    assert login(client, current).status_code == 200
+
+
 def test_logout_without_session_is_harmless(client: TestClient) -> None:
     r = logout(client, None)
     assert r.status_code == 200
@@ -338,16 +456,81 @@ def test_language_change_requires_csrf_and_valid_value(client: TestClient, clock
 
 # --- rate limit ---------------------------------------------------------------
 
-def test_login_rate_limit(settings: Settings, clock: FakeClock) -> None:
-    client = TestClient(create_app(settings, clock=clock))
-    bad = "a=1&hash=" + "0" * 64
-    for _ in range(settings.login_rate_limit):
-        assert login(client, bad).status_code == 401
-    r = login(client, fresh(clock))
+def _anonymous_login(app, init_data: str, **headers: str):
+    """A login from a fresh device (no cookie) through the same TCP peer."""
+    return login(TestClient(app), init_data, **headers)
+
+
+def test_unsigned_flood_behind_one_proxy_does_not_block_valid_logins(settings: Settings, clock: FakeClock) -> None:
+    # TestClient always connects from the same address, like every user behind one reverse proxy.
+    app = create_app(settings, clock=clock)
+    garbage = "a=1&hash=" + "0" * 64
+    forged_user = 'user={"id":777}&auth_date=1&hash=' + "f" * 64  # unsigned user_id
+    for _ in range(5 * settings.login_rate_limit):
+        assert _anonymous_login(app, garbage).status_code == 401
+        assert _anonymous_login(app, forged_user).status_code == 401
+    assert _anonymous_login(app, fresh(clock, {"id": 777, "first_name": "Victim"})).status_code == 200
+    assert _anonymous_login(app, fresh(clock, {"id": 778, "first_name": "Other"})).status_code == 200
+
+
+def test_login_rate_limit_is_per_verified_user(settings: Settings, clock: FakeClock) -> None:
+    app = create_app(settings, clock=clock)
+    user = {"id": 4100, "first_name": "Busy"}
+    for i in range(settings.login_rate_limit):
+        clock.advance(1)  # every launch has its own initData
+        assert _anonymous_login(app, fresh(clock, user), **{"X-Forwarded-For": f"10.0.0.{i}"}).status_code == 200
+    clock.advance(1)
+    # A new X-Forwarded-For (or X-Real-IP) value is not a new client: the header is ignored.
+    r = _anonymous_login(app, fresh(clock, user), **{"X-Forwarded-For": "203.0.113.9", "X-Real-IP": "203.0.113.9"})
     assert r.status_code == 429 and r.json() == {"error": "rate_limited"}
     assert int(r.headers["retry-after"]) >= 1
+    # Other users are not affected by this user's budget.
+    assert _anonymous_login(app, fresh(clock, {"id": 4101})).status_code == 200
     clock.advance(settings.login_rate_window_s)
-    assert login(client, fresh(clock)).status_code == 200
+    assert _anonymous_login(app, fresh(clock, user)).status_code == 200
+
+
+def test_forwarded_for_cannot_make_garbage_count_against_a_user(settings: Settings, clock: FakeClock) -> None:
+    app = create_app(settings, clock=clock)
+    for i in range(3 * settings.login_rate_limit):
+        r = _anonymous_login(app, f"user=%7B%22id%22%3A4200%7D&hash={'0' * 64}", **{"X-Forwarded-For": f"10.1.0.{i}"})
+        assert r.status_code == 401
+    assert _anonymous_login(app, fresh(clock, {"id": 4200})).status_code == 200
+
+
+# --- unexpected errors -------------------------------------------------------
+
+SENSITIVE = "initData=user%3D%7B%7D&hash=deadbeef token=7000000001:AAsecret cookie=abc"
+
+
+def test_unhandled_error_is_contained(client: TestClient, clock: FakeClock, caplog: pytest.LogCaptureFixture,
+                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    logged_in(client, clock)
+
+    def boom(_: int) -> None:
+        raise RuntimeError(SENSITIVE)
+
+    monkeypatch.setattr(client.app.state.store, "get_user", boom)
+    caplog.set_level(logging.DEBUG)
+    # TestClient re-raises anything that reaches the server: getting a response
+    # proves the exception did not propagate to uvicorn (which would log its text).
+    r = client.get("/api/me", headers={"X-Request-ID": "client-chosen\nfake log line"})
+    assert r.status_code == 500
+    request_id = r.headers["x-request-id"]
+    assert r.json() == {"error": "internal", "request_id": request_id}
+    assert len(request_id) == 16 and request_id != "client-chosen"
+    assert r.headers["cache-control"] == "no-store"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["referrer-policy"] == "no-referrer"
+    assert f"event=unhandled_error request_id={request_id} type=RuntimeError site=test_api.py:" in caplog.text
+    for leaked in ("AAsecret", "deadbeef", "initData=", "Traceback", "fake log line"):
+        assert leaked not in caplog.text and leaked not in r.text
+
+
+def test_every_response_has_a_request_id(client: TestClient) -> None:
+    a, b = client.get("/api/health"), client.get("/api/health")
+    assert a.headers["x-request-id"] != b.headers["x-request-id"]
+    assert client.get("/api/nope").headers["x-content-type-options"] == "nosniff"
 
 
 # --- secrets in logs ----------------------------------------------------------

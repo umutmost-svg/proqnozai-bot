@@ -11,6 +11,7 @@ function mockWebApp(overrides: Partial<TelegramWebApp> = {}) {
     contentSafeAreaInset: { top: 30, bottom: 0, left: 0, right: 0 },
     isVersionAtLeast: () => true,
     ready: vi.fn(),
+    close: vi.fn(),
     expand: vi.fn(),
     onEvent: (e: string, h: () => void) => void handlers.set(e, h),
     offEvent: (e: string) => void handlers.delete(e),
@@ -32,8 +33,10 @@ describe('Telegram adapter', () => {
     const tg = createTelegramAdapter(app);
     expect(tg.available).toBe(false);
     tg.ready();
+    tg.close();
     tg.showBackButton();
     expect(app.ready).not.toHaveBeenCalled();
+    expect(app.close).not.toHaveBeenCalled();
     expect(app.BackButton.show).not.toHaveBeenCalled();
     expect(tg.userFirstName()).toBeNull();
     expect(createTelegramAdapter(undefined).available).toBe(false);
@@ -44,6 +47,8 @@ describe('Telegram adapter', () => {
     const tg = createTelegramAdapter(app);
     tg.ready();
     tg.expand();
+    tg.close();
+    expect(app.close).toHaveBeenCalled();
     expect(app.ready).toHaveBeenCalled();
     expect(app.expand).toHaveBeenCalled();
     const off = tg.onBackButton(() => {});

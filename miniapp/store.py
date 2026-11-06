@@ -7,8 +7,9 @@ clock so tests control expiry.
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,17 @@ CREATE TABLE IF NOT EXISTS consumed_init_data (
     expires_at  INTEGER NOT NULL
 );
 """
+
+
+_OWN_TABLES = frozenset({"users", "sessions", "consumed_init_data", "sqlite_sequence"})
+
+
+class ForeignDatabaseError(RuntimeError):
+    """The configured file already holds tables that are not the Mini App's."""
+
+
+class InitDataConsumedError(Exception):
+    """The initData was burned by a logout; no session may be created from it."""
 
 
 def lang_from_telegram(code: str | None) -> Lang:
@@ -104,7 +116,16 @@ class Store:
 
     def init_schema(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # A hard link has its own name and, if the target is still empty, no foreign
+        # tables: refuse any multiply linked file instead (ours is never linked).
+        if self.path.exists() and os.stat(self.path).st_nlink > 1:
+            raise ForeignDatabaseError("the database file has several hard links")
         with self._connect() as conn:
+            # Read-only look before any write: a hard link or a copy of bot.db under
+            # another name would otherwise get our tables and WAL mode added to it.
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if tables - _OWN_TABLES:
+                raise ForeignDatabaseError("the database file is not a Mini App database")
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
 
@@ -156,6 +177,13 @@ class Store:
         session = Session(user_id=user_id, created_at=now, expires_at=now + ttl_s, revoked_at=None,
                           init_hash=digest(init_hash))
         with self._write() as conn:
+            # Checked inside the same IMMEDIATE transaction as the insert: a logout
+            # that burns this initData is serialized either fully before (rejected
+            # here) or fully after (it cannot see this session's token anyway).
+            if conn.execute(
+                "SELECT 1 FROM consumed_init_data WHERE init_hash = ? AND expires_at >= ?", (session.init_hash, now)
+            ).fetchone():
+                raise InitDataConsumedError
             conn.execute(
                 "INSERT INTO sessions (token_hash, user_id, created_at, expires_at, init_hash) VALUES (?, ?, ?, ?, ?)",
                 (digest(token), user_id, session.created_at, session.expires_at, session.init_hash),
@@ -173,8 +201,14 @@ class Store:
             ).fetchone()
         return Session(*row) if row else None
 
-    def revoke_session(self, token: str, now: int, consumed_until: int) -> bool:
-        """Revokes the session and burns the initData it was created from."""
+    def revoke_session(
+        self, token: str, now: int, consumed_until: int, also_consume: Iterable[str] = ()
+    ) -> bool:
+        """Revokes the session and burns the initData it was created from.
+
+        `also_consume`: received `hash` values of further verified initData of the
+        same user (the current launch), burned in the same transaction.
+        """
         with self._write() as conn:
             row = conn.execute(
                 "SELECT init_hash FROM sessions WHERE token_hash = ? AND revoked_at IS NULL", (digest(token),)
@@ -182,12 +216,26 @@ class Store:
             if row is None:
                 return False
             conn.execute("UPDATE sessions SET revoked_at = ? WHERE token_hash = ?", (now, digest(token)))
+            for init_hash in (row[0], *(digest(h) for h in also_consume)):
+                conn.execute(
+                    "INSERT INTO consumed_init_data (init_hash, expires_at) VALUES (?, ?) "
+                    "ON CONFLICT(init_hash) DO UPDATE SET expires_at = MAX(expires_at, excluded.expires_at)",
+                    (init_hash, consumed_until),
+                )
+            conn.execute("DELETE FROM consumed_init_data WHERE expires_at < ?", (now,))
+        return True
+
+    def consume_init_data(self, init_hash: str, now: int, until: int) -> None:
+        """Burns a received initData `hash` (no session involved)."""
+        with self._write() as conn:
             conn.execute(
                 "INSERT INTO consumed_init_data (init_hash, expires_at) VALUES (?, ?) "
                 "ON CONFLICT(init_hash) DO UPDATE SET expires_at = MAX(expires_at, excluded.expires_at)",
-                (row[0], consumed_until),
+                (digest(init_hash), until),
             )
-        return True
+            # Every burn path prunes expired burns, so the table stays bounded
+            # even when no new session is ever created.
+            conn.execute("DELETE FROM consumed_init_data WHERE expires_at < ?", (now,))
 
     def is_init_data_consumed(self, init_hash: str, now: int) -> bool:
         with self._connect() as conn:
