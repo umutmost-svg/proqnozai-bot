@@ -24,9 +24,11 @@ miniapp/
 ## Поток входа
 
 ```
-Telegram ──initData──▶ frontend
+Telegram ──initData──▶ frontend          (нет initData → демо, запросов нет)
 frontend  GET  /api/me                      (cookie, если есть)
-           ├─ 200 → вход подтверждён, initData не отправляется
+           ├─ 200, тот же user, что в запуске → вход подтверждён, initData не отправляется
+           ├─ 200, другой user (или user не читается) → POST /api/auth/session:
+           │       сервер проверяет подпись и отзывает сессию другого аккаунта
            └─ 401 → POST /api/auth/session {"init_data": "<raw>"}   (один раз)
                        backend: Origin → строгий JSON → HMAC → auth_date →
                                 user → лимит по user_id → upsert → сессия
@@ -36,7 +38,10 @@ frontend  GET  /api/me                      (cookie, если есть)
 Raw `Telegram.WebApp.initData` уходит только в теле POST, никогда в URL.
 `initDataUnsafe`, `user_id` из query, заголовков, localStorage и сам факт
 наличия SDK в расчёт не принимаются: `user_id` берётся только из проверенной
-подписи.
+подписи. Сравнение `user.id` из запуска с сессией делается без проверки
+подписи и только решает, можно ли показать уже существующую сессию; при
+расхождении решает сервер (обмен подписанного initData). Сессия другого
+аккаунта не показывается ни на миг, в том числе при неудачном обмене.
 
 ## Проверка initData
 
@@ -72,8 +77,10 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 
 Наружу (HTTP 401) уходят только `init_data_invalid` или `init_data_expired`.
 При отказе в лог пишется только код причины. initData, токен бота, cookie,
-имя, username и язык пользователя не попадают ни в исключения, ни в логи, ни
-в ответы. Единственное, что пишется о пользователе, — числовой Telegram ID в
+имя, username и язык пользователя не попадают ни в исключения, ни в логи.
+Ответы `/api/auth/session` и `/api/me` намеренно содержат профиль из
+проверенной подписи (`id`, имя, фамилия, username, язык) — только владельцу
+сессии. Единственное, что пишется о пользователе, — числовой Telegram ID в
 событиях успешной авторизации и операций (`auth.session`, `auth.logout`,
 `auth.logout_all`, `auth.session_evicted`, `auth.rate_limited`,
 `admin.revoke_user`): он нужен для разбора инцидентов и адресного отзыва
@@ -300,8 +307,8 @@ StrictMode и повторные эффекты не запускают втор
 | Состояние | Когда | Действие пользователя |
 |---|---|---|
 | `checking` | проверка или повторная попытка | — |
-| `authenticated` | `/api/me` 200 или успешный обмен | «Выйти» |
-| `outside_telegram` | нет initData (браузер); демо-режим M1 без входа | — |
+| `authenticated` | `/api/me` 200 для пользователя этого запуска или успешный обмен | «Выйти» |
+| `outside_telegram` | нет initData (браузер); демо-режим M1 без входа. Сессия не запрашивается, даже если в браузере осталась cookie | — |
 | `init_data_invalid` | подпись или формат отклонены | открыть Mini App заново |
 | `init_data_expired` | initData старше окна | открыть заново |
 | `session_expired` | cookie истекла и обновить её нечем | открыть заново |

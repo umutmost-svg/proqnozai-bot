@@ -29,6 +29,24 @@ async function prepare(page: Page, width: number, opts: { lang?: 'ru' | 'az' | '
     );
   }, opts);
   await page.route('https://telegram.org/**', (r) => r.fulfill({ body: '', contentType: 'text/javascript' }));
+  // Opened from Telegram: only a launch runs the session check the splash waits for
+  // (outside Telegram the app is the demo and checks nothing). Unsigned stand-in; the
+  // sign-in that follows a 401 from /api/me is answered at once by this stub.
+  await page.addInitScript(() => {
+    (window as unknown as { Telegram: unknown }).Telegram = {
+      WebApp: {
+        initData: 'query_id=AA&user=%7B%22id%22%3A501%7D&auth_date=1&hash=' + '0'.repeat(64),
+        initDataUnsafe: {},
+        isVersionAtLeast: () => false,
+        ready: () => {},
+        expand: () => {},
+        close: () => {},
+      },
+    };
+  });
+  await page.route('**/api/auth/session', (r) =>
+    r.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"init_data_invalid"}' }),
+  );
 }
 
 async function geometryProblems(page: Page) {

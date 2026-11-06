@@ -39,14 +39,11 @@ describe('AuthController bootstrap', () => {
     const auth = new AuthController(api, () => null);
     await auth.start();
     expect(auth.getState().status).toBe('outside_telegram');
+    expect(api.me).not.toHaveBeenCalled();
     expect(api.createSession).not.toHaveBeenCalled();
   });
 
   it('reports an expired session when it cannot be renewed', async () => {
-    const noTelegram = new AuthController(scriptedApi({ me: [fail('session_expired')] }), () => null);
-    await noTelegram.start();
-    expect(noTelegram.getState().status).toBe('session_expired');
-
     const staleLaunch = new AuthController(
       scriptedApi({ me: [fail('session_expired')], createSession: [fail('init_data_expired')] }),
       () => INIT,
@@ -152,12 +149,14 @@ describe('AuthController: a cookie of another Telegram account', () => {
     expect(api.createSession).toHaveBeenCalledTimes(1);
   });
 
-  it('outside Telegram (no launch) the cookie session is used as before', async () => {
+  it('outside Telegram (no launch) a live cookie session is never looked up or shown', async () => {
     const api = scriptedApi({ me: [ok(OTHER)] });
     const auth = new AuthController(api, () => null);
+    const seen = recordStates(auth);
     await auth.start();
-    expect(auth.getState()).toEqual({ status: 'authenticated', session: OTHER });
-    expect(api.createSession).not.toHaveBeenCalled();
+    expect(auth.getState().status).toBe('outside_telegram');
+    expect(api.me).not.toHaveBeenCalled();
+    expect(shown(seen, 777)).toBe(false);
   });
 });
 
@@ -235,12 +234,12 @@ describe('AuthController logout survives a reload', () => {
     expect(marker.saved.size).toBe(0);
   });
 
-  it('outside Telegram logout sends no launch data', async () => {
+  it('outside Telegram there is no session to sign out of', async () => {
     const api = scriptedApi({ me: [ok(SESSION)], logout: [ok(null)] });
     const auth = new AuthController(api, () => null, memoryMarker());
     await auth.start();
-    await auth.logout();
-    expect(api.logout).toHaveBeenCalledWith('csrf-test', null);
+    expect(await auth.logout()).toBe(false);
+    expect(api.logout).not.toHaveBeenCalled();
   });
 });
 

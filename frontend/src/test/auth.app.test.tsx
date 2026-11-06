@@ -45,7 +45,10 @@ describe('auth in the app', () => {
   });
 
   it('session expired is reported', async () => {
-    renderApp('#/profile', { authApi: scriptedApi({ me: [fail('session_expired')] }) });
+    renderApp('#/profile', {
+      authApi: scriptedApi({ me: [fail('session_expired')], createSession: [fail('init_data_expired')] }),
+      initData: INIT,
+    });
     await waitFor(() => expect(status()).toBe('session_expired'));
     expect(screen.getByTestId('auth-status')).toHaveTextContent('Сессия истекла');
   });

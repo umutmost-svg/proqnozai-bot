@@ -113,10 +113,13 @@ export class AuthController {
   }
 
   private async bootstrap(): Promise<AuthState> {
-    // 0. Signed out earlier in this launch (page reloaded): no requests at all.
+    // 0. Outside Telegram (no launch) the app is the M1 demo: no session is looked up,
+    //    so a cookie left by some Telegram account in this browser is never shown.
+    const initData = this.initData();
+    if (!initData) return { status: 'outside_telegram' };
+    //    Signed out earlier in this launch (page reloaded): no requests at all.
     //    Signing in again means reopening the Mini App, which brings new initData.
-    const launch = this.initData();
-    if (launch && (await this.marker.matches(launch))) {
+    if (await this.marker.matches(initData)) {
       this.signedOut = true;
       return { status: 'signed_out' };
     }
@@ -125,9 +128,8 @@ export class AuthController {
     //    belongs to the account of this launch. A browser context can keep another
     //    account's cookie (Telegram Web, account switch); such a session is never shown.
     const me = await this.api.me();
-    const initData = this.initData();
     if (me.ok) {
-      if (!initData || launchUserId(initData) === me.value.user.id) {
+      if (launchUserId(initData) === me.value.user.id) {
         return { status: 'authenticated', session: me.value };
       }
       // Different (or unreadable) launch account: the server verifies the signed
@@ -138,10 +140,6 @@ export class AuthController {
       return this.failure(switched.error, false);
     }
 
-    if (!initData) {
-      if (me.error === 'session_expired') return { status: 'session_expired' };
-      return { status: 'outside_telegram' };
-    }
     if (me.error === 'unavailable') return { status: 'unavailable' };
     if (me.error === 'rate_limited') return { status: 'rate_limited' };
     if (this.signedOut) return { status: 'signed_out' };

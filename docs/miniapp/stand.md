@@ -15,7 +15,7 @@
 - свой тестовый домен;
 - своя SQLite на своём volume.
 
-Production и его Railway-проект в этой работе не затрагиваются.
+Production (DigitalOcean + Dokploy) в этой работе не затрагивается.
 
 Авторизация и сессии подробно описаны в [`auth.md`](auth.md).
 

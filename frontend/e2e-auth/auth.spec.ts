@@ -176,3 +176,23 @@ test('same browser context, another Telegram account: the old account is never s
   const alice = await second.request.get('/api/me', { headers: { Cookie: `sporai_session=${aliceCookie}` } });
   expect(alice.status()).toBe(401);
 });
+
+test('a live session is never shown outside Telegram: the same browser without launch data is the demo', async ({
+  context,
+}) => {
+  const tg = await context.newPage();
+  await openInFakeTelegram(tg, signInitData({ id: 91020, first_name: 'Carol', last_name: 'Third', language_code: 'ru' }));
+  await expect(account(tg)).toContainText('Carol Third');
+  await tg.close();
+
+  const browserTab = await context.newPage(); // same cookie jar, no Telegram launch
+  const apiCalls: string[] = [];
+  browserTab.on('request', (r) => {
+    if (r.url().includes('/api/')) apiCalls.push(`${r.method()} ${new URL(r.url()).pathname}`);
+  });
+  await browserTab.route('https://telegram.org/**', (route) => route.abort());
+  await browserTab.goto('/#/profile');
+  await expect(account(browserTab)).toHaveAttribute('data-auth-status', 'outside_telegram');
+  await expect(account(browserTab)).not.toContainText('Carol');
+  expect(apiCalls).toEqual([]); // no session lookup at all
+});

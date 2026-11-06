@@ -3,6 +3,13 @@ import { createHttpAuthApi, REQUEST_TIMEOUT_MS, type ApiResult, type AuthApi, ty
 import { offlineAuthApi, renderApp } from '../test/renderApp';
 import { EXIT_MS, FAIL_AFTER_MS, SHOW_AFTER_MS, SLOW_AFTER_MS } from './AppLoadingGate';
 
+/**
+ * Opened from Telegram: a launch with initData, so the session check really runs
+ * (outside Telegram the app is the demo and checks no session at all).
+ */
+const LAUNCH = 'query_id=AA&user=%7B%22id%22%3A501%7D&auth_date=1&hash=' + '0'.repeat(64);
+const launchApp = (hash: string, opts: Parameters<typeof renderApp>[1] = {}) => renderApp(hash, { initData: LAUNCH, ...opts });
+
 /** A session check that answers only when the test says so. */
 function slowSession() {
   let answer: (r: ApiResult<AuthSession>) => void = () => {};
@@ -32,7 +39,7 @@ afterEach(() => {
 
 describe('AppLoadingGate', () => {
   it('a fast boot never shows the splash (no flash)', async () => {
-    renderApp('#/');
+    launchApp('#/');
     await advance(0);
     expect(gate()).toBeNull();
     await advance(5 * SHOW_AFTER_MS);
@@ -42,7 +49,7 @@ describe('AppLoadingGate', () => {
 
   it('shows the splash only after the delay, then leaves as soon as the session check ends', async () => {
     const s = slowSession();
-    renderApp('#/', { authApi: s.api });
+    launchApp('#/', { authApi: s.api });
     await advance(SHOW_AFTER_MS - 1);
     expect(gate()).not.toBeNull();
     expect(splash()).toBeNull(); // plain cover only
@@ -62,7 +69,7 @@ describe('AppLoadingGate', () => {
   });
 
   it('says which real phase it waits for: data after the session', async () => {
-    renderApp('#/', { latencyMs: 2000 });
+    launchApp('#/', { latencyMs: 2000 });
     await advance(SHOW_AFTER_MS);
     expect(splash()).toHaveAttribute('data-phase', 'data');
     expect(screen.getByText('Загружаем матчи')).toBeInTheDocument();
@@ -74,7 +81,7 @@ describe('AppLoadingGate', () => {
 
   it('long wait: hint, then a failed view with retry and continue — never endless', async () => {
     const s = slowSession();
-    renderApp('#/', { authApi: s.api });
+    launchApp('#/', { authApi: s.api });
     await advance(SLOW_AFTER_MS - 1);
     expect(screen.queryByTestId('app-loading-hint')).toBeNull();
     await advance(1);
@@ -99,7 +106,7 @@ describe('AppLoadingGate', () => {
 
   it('offline is said at once; back online clears it without restarting the wait', async () => {
     const s = slowSession();
-    renderApp('#/', { authApi: s.api });
+    launchApp('#/', { authApi: s.api });
     await advance(SHOW_AFTER_MS);
     online = false;
     act(() => void window.dispatchEvent(new Event('offline')));
@@ -114,7 +121,7 @@ describe('AppLoadingGate', () => {
   });
 
   it('a failed first request hands over to the screen error state with retry', async () => {
-    renderApp('#/', { latencyMs: 1000, failOnce: ['events'] });
+    launchApp('#/', { latencyMs: 1000, failOnce: ['events'] });
     await advance(SHOW_AFTER_MS);
     expect(splash()).not.toBeNull();
     await advance(1000);
@@ -130,7 +137,7 @@ describe('AppLoadingGate', () => {
 
   it('time in the background does not count toward the limit', async () => {
     const s = slowSession();
-    renderApp('#/', { authApi: s.api });
+    launchApp('#/', { authApi: s.api });
     await advance(FAIL_AFTER_MS - 1000);
     visibility = 'hidden';
     act(() => void document.dispatchEvent(new Event('visibilitychange')));
@@ -148,7 +155,7 @@ describe('AppLoadingGate', () => {
   });
 
   it('returning from the background after boot never shows the splash again', async () => {
-    renderApp('#/');
+    launchApp('#/');
     await advance(0);
     visibility = 'hidden';
     act(() => void document.dispatchEvent(new Event('visibilitychange')));
@@ -160,7 +167,7 @@ describe('AppLoadingGate', () => {
 
   it('reduced motion (in-app setting): static mark and text, no pulse, no signal, no dots', async () => {
     const s = slowSession();
-    renderApp('#/', { authApi: s.api, settings: { reduceMotion: true } });
+    launchApp('#/', { authApi: s.api, settings: { reduceMotion: true } });
     await advance(SHOW_AFTER_MS);
     expect(splash()).toHaveAttribute('data-motion', 'static');
     expect(document.querySelectorAll('[data-step]')).toHaveLength(0);
@@ -169,7 +176,7 @@ describe('AppLoadingGate', () => {
 
   it('full motion renders the sweeping signal and three dot states', async () => {
     const s = slowSession();
-    renderApp('#/', { authApi: s.api });
+    launchApp('#/', { authApi: s.api });
     await advance(SHOW_AFTER_MS);
     expect(splash()).toHaveAttribute('data-motion', 'full');
     expect(document.querySelectorAll('[data-step]')).toHaveLength(3);
@@ -178,7 +185,7 @@ describe('AppLoadingGate', () => {
   it('texts are localized (AZ, EN)', async () => {
     for (const [lang, text] of [['az', 'ProqnozAI-a qoşuluruq'], ['en', 'Connecting to ProqnozAI']] as const) {
       const s = slowSession();
-      const { unmount } = renderApp('#/', { authApi: s.api, settings: { lang } });
+      const { unmount } = launchApp('#/', { authApi: s.api, settings: { lang } });
       await advance(SHOW_AFTER_MS);
       expect(screen.getByText(text)).toBeInTheDocument();
       unmount();
@@ -186,7 +193,7 @@ describe('AppLoadingGate', () => {
   });
 
   it('works under StrictMode: the first screen data is still awaited', async () => {
-    renderApp('#/', { latencyMs: 2000, strict: true });
+    launchApp('#/', { latencyMs: 2000, strict: true });
     await advance(SHOW_AFTER_MS);
     expect(splash()).toHaveAttribute('data-phase', 'data');
     await advance(2000);
@@ -197,7 +204,7 @@ describe('AppLoadingGate', () => {
 
   it('a session check that never answers ends by the HTTP timeout, before the failed view', async () => {
     const hanging = vi.fn<typeof fetch>(() => new Promise<Response>(() => {}));
-    renderApp('#/', { authApi: createHttpAuthApi(hanging) });
+    launchApp('#/', { authApi: createHttpAuthApi(hanging) });
     await advance(SHOW_AFTER_MS);
     expect(splash()).toHaveAttribute('data-phase', 'connecting');
     await advance(REQUEST_TIMEOUT_MS - SHOW_AFTER_MS);
@@ -209,7 +216,7 @@ describe('AppLoadingGate', () => {
   });
 
   it('navigating while covered waits for the screen that is actually shown', async () => {
-    renderApp('#/event/fb-rm-fcb', { latencyMs: 2000 });
+    launchApp('#/event/fb-rm-fcb', { latencyMs: 2000 });
     await advance(SHOW_AFTER_MS);
     expect(splash()).toHaveAttribute('data-phase', 'data');
     act(() => {
@@ -227,7 +234,7 @@ describe('AppLoadingGate', () => {
 
   it('a flapping network neither restarts requests nor postpones the failed view', async () => {
     const s = slowSession();
-    renderApp('#/', { authApi: s.api });
+    launchApp('#/', { authApi: s.api });
     for (let i = 0; i < 5; i += 1) {
       await advance(2000);
       online = false;
@@ -246,7 +253,7 @@ describe('AppLoadingGate', () => {
       ['#/event/fb-rm-fcb', 'Загружаем матч'],
       ['#/event/fb-rm-fcb/ai', 'Готовим AI-разбор'],
     ] as const) {
-      const { unmount } = renderApp(hash, { latencyMs: 5000, aiLatencyMs: 5000 });
+      const { unmount } = launchApp(hash, { latencyMs: 5000, aiLatencyMs: 5000 });
       await advance(SHOW_AFTER_MS);
       expect(splash()).toHaveAttribute('data-phase', 'data');
       expect(within(splash()!).getByText(text)).toBeInTheDocument(); // exact text match
