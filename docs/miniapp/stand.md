@@ -5,6 +5,16 @@
 > Dokploy), поэтому Railway-шаги — исходный план, а не действующая инструкция.
 > Требования (отдельный сервер и тестовый бот, Cloudflare + edge secret, нет обходного
 > URL, постоянный volume для SQLite, бэкапы, откат) остаются в силе.
+>
+> **Не по хостингу и действует как есть:** CSP и заголовки; защита API (правила
+> Cloudflare и приложения); сессии, лимит, отзыв, аварийное выключение; тестовый бот;
+> проверки в Telegram; зависимости и сборка образа; настройка Cloudflare (общая часть).
+>
+> **Railway-специфичное, переписать после выбора хостинга** (до этого — не выполнять):
+> схема «Архитектура» (узел Railway edge), «Доверие к заголовкам и обход защиты»
+> (факты о Railway edge, `*.up.railway.app`, healthcheck), место хранения переменных,
+> ротация токена (шаги в Railway), healthcheck и алерты по логам, резервные копии
+> volume, откат кода, «Настройка Railway», «Что проверено» (пункты про Railway).
 
 Стенд нужен, чтобы проверить вход в настоящих Telegram-клиентах. Он
 изолирован от production:
@@ -437,11 +447,15 @@ production-проект бота. Настройки задаются в пан�
 
 ## Настройка Cloudflare
 
-1. Зона домена в Cloudflare. DNS: `CNAME <stand-sub>` → цель, которую
-   Railway показал для custom domain, **Proxied**.
-2. SSL/TLS → mode **Full** (не Flexible: тогда трафик до Railway идёт по
-   HTTP; не Full (strict): с Railway это не работает); Always Use HTTPS;
-   minimum TLS 1.2.
+1. Зона домена в Cloudflare. DNS: запись `<stand-sub>` на адрес/цель, которую
+   даёт выбранный хостинг стенда (A на IP сервера или CNAME на его custom
+   domain), **Proxied**.
+2. SSL/TLS: не **Flexible** (тогда трафик Cloudflare → сервер идёт по HTTP).
+   **Full (strict)**, если на сервере стенда сертификат, которому доверяет
+   Cloudflare (например, Cloudflare Origin Certificate или Let's Encrypt через
+   Dokploy/Traefik); иначе **Full** — выбрать по возможностям хостинга.
+   Always Use HTTPS; minimum TLS 1.2. Сервер принимает входящий HTTPS только
+   с IP-диапазонов Cloudflare (firewall хостинга), если хостинг это позволяет.
 3. Rules → Transform Rules → Modify Request Header: hostname равен
    `<stand-domain>` → **Set** `X-Edge-Auth` = значение
    `MINIAPP_EDGE_SECRET`.
