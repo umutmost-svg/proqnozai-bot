@@ -1,0 +1,8 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Icon / calendar">
+<rect width="24" height="24" rx="12" fill="white" fill-opacity="0.18"/>
+<rect x="0.5" y="0.5" width="23" height="23" rx="11.5" stroke="white" stroke-opacity="0.62"/>
+<path id="Vector" d="M6 5H18C19.6569 5 21 6.34315 21 8V18C21 19.6569 19.6569 21 18 21H6C4.34315 21 3 19.6569 3 18V8C3 6.34315 4.34315 5 6 5Z" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" stroke="#202A1E"/>
+<path id="Vector_2" d="M7 2V7M17 2V7M3 11H21M8 15H11M14 15H17" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" stroke="#202A1E"/>
+</g>
+</svg>

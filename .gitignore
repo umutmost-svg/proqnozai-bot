@@ -22,3 +22,15 @@ bot.db-shm
 .coverage
 htmlcov/
 coverage.xml
+
+# Mini App frontend
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+
+# Mini App backend (own venv and SQLite file)
+miniapp/.venv/
+miniapp/*.db
+miniapp/*.db-wal
+miniapp/*.db-shm

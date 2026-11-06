@@ -1,0 +1,202 @@
+/* SportTabs */
+.tabs {
+  display: flex;
+  gap: 4px;
+  height: 48px;
+  padding: 4px;
+  width: 100%;
+  border-radius: var(--radius-control);
+  background: var(--glass-16);
+}
+
+.tab {
+  /* Equal widths as in Figma, but never narrower than the label (long AZ/EN names, 360px). */
+  flex: 1 1 0;
+  min-width: max-content;
+  height: 40px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  font-weight: 500;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  transition: background-color 160ms ease;
+}
+
+.tabActive {
+  composes: tab;
+  background: var(--glass-solid);
+  font-weight: 700;
+  color: var(--text-title);
+}
+
+/* Horizontal strips: the only places with sideways scrolling. */
+.strip {
+  display: flex;
+  gap: 7px;
+  width: calc(100% + 2 * var(--page-x));
+  margin: 0 calc(-1 * var(--page-x));
+  padding: 0 var(--page-x);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  scroll-padding: 0 var(--page-x);
+  overscroll-behavior-x: contain;
+}
+
+.strip::-webkit-scrollbar {
+  display: none;
+}
+
+.tournaments {
+  composes: strip;
+  gap: 8px;
+}
+
+.date {
+  display: flex;
+  flex: 0 0 46px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 56px;
+  padding: 0;
+  border-radius: var(--radius-date);
+  border: 1px solid var(--line-55);
+  background: var(--glass-12);
+  white-space: nowrap;
+}
+
+.dateActive {
+  composes: date;
+  background: #fff;
+}
+
+.weekday {
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--text-muted-2);
+}
+
+.dayNum {
+  font-size: 17px;
+  line-height: 22px;
+  color: var(--text-date);
+}
+
+.dateActive .dayNum {
+  font-weight: 500;
+}
+
+.month {
+  display: flex;
+  flex: 0 0 50px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 56px;
+  font-weight: 500;
+  font-size: 9px;
+  line-height: 14px;
+  color: var(--text-muted-2);
+}
+
+.pill {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+  height: 48px;
+  padding: 10px 16px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-70);
+  background: var(--glass-12);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-date);
+  white-space: nowrap;
+}
+
+.pillActive {
+  composes: pill;
+  background: #fff;
+  font-weight: 500;
+}
+
+.logoSlot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+}
+
+/* SearchField */
+.search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--line-68);
+  background: var(--glass-08);
+  color: var(--text-muted-2);
+  font-size: 14px;
+  text-align: left;
+}
+
+.searchIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+}
+
+.searchInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font-size: 16px; /* >= 16px prevents iOS zoom on focus */
+  color: var(--text-primary);
+  outline: none;
+}
+
+.searchInput::placeholder {
+  color: var(--text-muted-2);
+  font-size: 14px;
+}
+
+.searchInput::-webkit-search-cancel-button {
+  display: none;
+}
+
+.clear {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--glass-30);
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-muted-3);
+}
+
+.searchLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

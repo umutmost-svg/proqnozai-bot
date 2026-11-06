@@ -1,0 +1,54 @@
+# Build context of the bot image (Dockerfile: COPY . .).
+# Excludes secrets, local state and generated files; keeps sources,
+# manifests, lock files and the placeholder .env.example files.
+
+# --- Secrets and local env files -------------------------------------------
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+*.p12
+secrets/
+.claude/
+
+# --- Dependencies and virtual environments --------------------------------
+**/node_modules/
+.venv/
+venv/
+**/.venv/
+**/venv/
+
+# --- Databases: SQLite files, WAL/SHM, journals, backups -------------------
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.db-journal
+**/*.sqlite
+**/*.sqlite3
+**/*.sqlite-*
+**/*.bak
+**/*.backup
+**/backups/
+
+# --- VCS and CI metadata ----------------------------------------------------
+.git/
+.gitignore
+
+# --- Caches, logs, test and build output -----------------------------------
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+**/*.log
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+**/.DS_Store

@@ -1,0 +1,166 @@
+.hero {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 18px;
+  border-radius: var(--radius-card);
+  background: var(--glass-18);
+  border: 1px solid var(--line-74);
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+}
+
+.competition {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+}
+
+.tournament {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted-3);
+  overflow-wrap: anywhere;
+}
+
+.competitors {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.competitor {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 108px;
+  min-width: 0;
+}
+
+.name {
+  width: 100%;
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 19px;
+  color: var(--text-primary);
+  text-align: center;
+  overflow-wrap: break-word;
+}
+
+/* A single very long word would otherwise break mid-word in the 100px column. */
+.nameLong {
+  composes: name;
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  flex: 0 1 90px;
+  min-width: 64px;
+  text-align: center;
+}
+
+.scoreMain {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 30px;
+  line-height: 39px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.phase {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-muted-3);
+}
+
+.breakdown {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted-3);
+  text-align: center;
+}
+
+.when {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted-3);
+  text-align: center;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+  padding: 4px;
+  border-radius: var(--radius-control);
+  background: var(--glass-16);
+}
+
+.tab {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 40px;
+  padding: 8px;
+  border: 0;
+  border-radius: 20px;
+  background: transparent;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabActive {
+  composes: tab;
+  background: var(--glass-strong);
+  font-weight: 700;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted-3);
+}
+
+.table th {
+  padding: 0 0 14px;
+  font-weight: 700;
+  text-align: left;
+  color: var(--text-primary);
+}
+
+.table td {
+  padding: 8px 0;
+}
+
+.table th:not(:first-child),
+.table td:not(:first-child) {
+  width: 56px;
+  text-align: center;
+}

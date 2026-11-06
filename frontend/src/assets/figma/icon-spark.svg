@@ -1,0 +1,14 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="17" height="17" viewBox="0 0 17 17" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Icon / spark">
+<g clip-path="url(#clip0_0_12)">
+<rect width="17" height="17" rx="8.5" fill="white" fill-opacity="0.18"/>
+<path id="Vector" d="M8.5 1.41667L10.2708 6.72917L15.5833 8.5L10.2708 10.2708L8.5 15.5833L6.72917 10.2708L1.41667 8.5L6.72917 6.72917L8.5 1.41667Z" stroke-width="1.20417" stroke-linecap="round" stroke-linejoin="round" stroke="#202A1E"/>
+</g>
+<rect x="0.5" y="0.5" width="16" height="16" rx="8" stroke="white" stroke-opacity="0.62"/>
+</g>
+<defs>
+<clipPath id="clip0_0_12">
+<rect width="17" height="17" rx="8.5" fill="white"/>
+</clipPath>
+</defs>
+</svg>
