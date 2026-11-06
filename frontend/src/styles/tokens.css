@@ -1,0 +1,56 @@
+/* Design tokens taken from the ProqnozAI "Light Glass" Figma frames. */
+:root {
+  --font-display: 'Manrope', system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+
+  --bg-top: #e9e9bf;
+  --bg-bottom: #b4cec6;
+
+  --text-strong: #141a14;
+  --text-title: #161d14;
+  --text-primary: #19231c;
+  --text-date: #19231b;
+  --text-muted: #4f5a45;
+  --text-muted-2: #4d5c4c;
+  --text-muted-3: #4c5c4e;
+  --text-footnote: #54604b;
+  --live: #b3261e;
+
+  --glass-08: rgba(255, 255, 255, 0.1);
+  --glass-12: rgba(255, 255, 255, 0.12);
+  --glass-16: rgba(255, 255, 255, 0.16);
+  --glass-18: rgba(255, 255, 255, 0.18);
+  --glass-20: rgba(255, 255, 255, 0.2);
+  --glass-24: rgba(255, 255, 255, 0.24);
+  --glass-30: rgba(255, 255, 255, 0.3);
+  --glass-35: rgba(255, 255, 255, 0.35);
+  --glass-solid: rgba(255, 255, 255, 0.9);
+  --glass-strong: rgba(255, 255, 255, 0.96);
+
+  --line-55: rgba(255, 255, 255, 0.55);
+  --line-62: rgba(255, 255, 255, 0.62);
+  --line-68: rgba(255, 255, 255, 0.68);
+  --line-70: rgba(255, 255, 255, 0.7);
+  --line-74: rgba(255, 255, 255, 0.74);
+
+  --blur: 2px;
+
+  --radius-screen: 30px;
+  --radius-hero: 34px;
+  --radius-card: 28px;
+  --radius-event: 30px;
+  --radius-control: 24px;
+  --radius-chip: 20px;
+  --radius-date: 18px;
+  --radius-pill: 999px;
+
+  --page-x: 20px;
+  --dock-height: 96px;
+
+  /* Telegram safe areas; the adapter overwrites these inside Telegram. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --app-height: 100dvh;
+}

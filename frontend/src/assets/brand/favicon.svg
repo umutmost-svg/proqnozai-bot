@@ -1,0 +1,25 @@
+<!-- ProqnozAI favicon: the Velocity V2 app icon (Figma 162:103); kept identical to velocity-icon.svg (unit test). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <!-- CSS linear-gradient(120deg) on a 512 square: line through the centre, length 512·(sin60°+cos60°). -->
+    <linearGradient id="pq-icon-bg" x1="-46.85" y1="81.15" x2="558.85" y2="430.85" gradientUnits="userSpaceOnUse">
+      <stop offset="0.058565" stop-color="#EAF3C6"/>
+      <stop offset="0.4612" stop-color="#CDEAC6"/>
+      <stop offset="0.79063" stop-color="#A0CEC9"/>
+    </linearGradient>
+    <clipPath id="pq-icon-clip">
+      <rect width="512" height="512" rx="116"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#pq-icon-clip)">
+    <rect width="512" height="512" fill="url(#pq-icon-bg)"/>
+    <circle cx="150" cy="90" r="190" fill="#E9F9A5" fill-opacity="0.15"/>
+  </g>
+  <!-- Figma inside stroke 2 px on a 470 px rect at 21 px, radius 101. -->
+  <rect x="22" y="22" width="468" height="468" rx="100" stroke="#FFFFFF" stroke-opacity="0.6" stroke-width="2"/>
+  <g transform="translate(94 94) scale(1.26)">
+    <path d="M42 63L111 132C115 136 119 136 123 132L211 46" stroke="#17352D" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M42 130L111 199C115 203 119 203 123 199L210 113" stroke="#17352D" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M158 165L210 113" stroke="#CBF765" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

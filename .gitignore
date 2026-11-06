@@ -1,8 +1,13 @@
 __pycache__/
 *.pyc
 
-# Local env & secrets
+# Local env & secrets (any directory; placeholder .env.example files stay tracked)
 .env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
 
 # Virtual environments
 .venv/
@@ -22,3 +27,25 @@ bot.db-shm
 .coverage
 htmlcov/
 coverage.xml
+
+# Mini App frontend
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+
+# Mini App backend (own venv)
+miniapp/.venv/
+
+# Databases and backups anywhere (SQLite files, WAL/SHM/journal side files)
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.db-journal
+**/*.sqlite
+**/*.sqlite3
+**/*.sqlite-*
+**/*.sqlite3-*
+**/*.bak
+**/*.backup
+**/backups/

@@ -1,0 +1,143 @@
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  width: 100%;
+  min-width: 0;
+}
+
+.screenBar {
+  composes: bar;
+  gap: 8px;
+  height: 44px;
+}
+
+.mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 12px;
+  background: var(--glass-solid);
+  border: 1px solid var(--line-62);
+  overflow: hidden;
+}
+
+/* Header tile (Figma 41:267): the Velocity V2 symbol (162:83) fills the 32 px tile edge to edge. */
+.symbol {
+  display: block;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  max-width: none;
+}
+
+.brand {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 21px;
+  line-height: 30px;
+  color: var(--text-title);
+}
+
+.centerBrand {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 20px;
+  line-height: 26px;
+  color: var(--text-strong);
+}
+
+.screenTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 27px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lang {
+  flex: 0 0 auto;
+  min-width: 40px;
+  height: 40px;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-muted);
+}
+
+.langHome {
+  composes: lang;
+  min-width: 24px;
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--text-title);
+}
+
+.screenBar .lang {
+  min-width: 44px;
+  height: 44px;
+  color: var(--text-muted-3);
+}
+
+.bell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  padding: 10px;
+  border-radius: 20px;
+  background: var(--glass-18);
+  border: 1px solid var(--line-62);
+}
+
+.bell:disabled {
+  opacity: 0.55;
+}
+
+.iconBack {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  padding: 0;
+  background: none;
+}
+
+.roundBack {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--glass-24);
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 24px;
+  line-height: 32px;
+  color: var(--text-primary);
+}

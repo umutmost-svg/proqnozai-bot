@@ -1,0 +1,109 @@
+/* Shared surfaces and buttons from the Light Glass frames. */
+.glass {
+  background: var(--glass-18);
+  border: 1px solid var(--line-74);
+  border-radius: var(--radius-card);
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+}
+
+.section {
+  composes: glass;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  width: 100%;
+  color: var(--text-primary);
+}
+
+.sectionTitle {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 20px;
+  line-height: 26px;
+}
+
+.body {
+  font-size: 14px;
+  line-height: 21px;
+}
+
+.note {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted-3);
+}
+
+.notice {
+  width: 100%;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--glass-30);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted-3);
+}
+
+.button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--line-70);
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 21px;
+  color: var(--text-primary);
+  text-align: center;
+  text-decoration: none;
+  transition: transform 120ms ease, background-color 120ms ease;
+}
+
+.button:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.primary {
+  composes: button;
+  background: var(--glass-strong);
+}
+
+.secondary {
+  composes: button;
+  background: var(--glass-18);
+}
+
+/* Deferred action: visibly unavailable, never pretends to work. */
+.deferred {
+  composes: secondary;
+  opacity: 0.62;
+  flex-direction: column;
+  gap: 0;
+}
+
+.deferredHint {
+  font-weight: 400;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-muted-3);
+}
+
+.footnote {
+  width: 100%;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-footnote);
+}
+
+.pageHeading {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 26px;
+  line-height: 34px;
+  color: var(--text-primary);
+}

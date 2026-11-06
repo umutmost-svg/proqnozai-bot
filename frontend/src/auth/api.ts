@@ -1,0 +1,168 @@
+/**
+ * HTTP client of the Mini App API (same origin, `/api`).
+ *
+ * The session itself is an HttpOnly cookie the browser attaches; this code
+ * never sees or stores it. Raw initData is sent only in a POST body, once,
+ * when there is no live session.
+ */
+import { isLang, type Lang } from '../i18n';
+
+export interface AuthUser {
+  id: number;
+  firstName: string | null;
+  lastName: string | null;
+  username: string | null;
+  lang: Lang;
+}
+
+export interface AuthSession {
+  user: AuthUser;
+  expiresAt: string;
+  /** Per-session anti-CSRF token for state-changing requests; kept in memory only. */
+  csrfToken: string;
+}
+
+export type AuthFailure =
+  | 'unauthenticated'
+  | 'session_expired'
+  | 'init_data_invalid'
+  | 'init_data_expired'
+  | 'init_data_reused'
+  | 'rate_limited'
+  | 'forbidden'
+  | 'unavailable';
+
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: AuthFailure };
+
+export interface AuthApi {
+  me(): Promise<ApiResult<AuthSession>>;
+  createSession(initData: string): Promise<ApiResult<AuthSession>>;
+  /** `initData`: the current launch, so the server burns it too (null outside Telegram). */
+  logout(csrfToken: string, initData: string | null): Promise<ApiResult<null>>;
+  /** Ends every session of the user (all devices); burns the current launch too. */
+  logoutAll(csrfToken: string, initData: string | null): Promise<ApiResult<null>>;
+  setLanguage(lang: Lang, csrfToken: string): Promise<ApiResult<null>>;
+}
+
+const KNOWN_401 = new Set<AuthFailure>([
+  'unauthenticated',
+  'session_expired',
+  'init_data_invalid',
+  'init_data_expired',
+  'init_data_reused',
+]);
+
+interface RawSession {
+  user?: { id?: unknown; first_name?: unknown; last_name?: unknown; username?: unknown; lang?: unknown };
+  session?: { expires_at?: unknown; csrf_token?: unknown };
+}
+
+const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+
+function parseSession(raw: RawSession): AuthSession | null {
+  const u = raw.user;
+  const s = raw.session;
+  if (!u || !s || typeof u.id !== 'number' || typeof s.csrf_token !== 'string' || typeof s.expires_at !== 'string') {
+    return null;
+  }
+  return {
+    user: {
+      id: u.id,
+      firstName: str(u.first_name),
+      lastName: str(u.last_name),
+      username: str(u.username),
+      lang: isLang(u.lang) ? u.lang : 'ru',
+    },
+    expiresAt: s.expires_at,
+    csrfToken: s.csrf_token,
+  };
+}
+
+/**
+ * Upper bound for one API exchange (request + body). A WebView on a dead network
+ * can leave fetch pending for minutes; then nothing (the loading screen's retry
+ * included) could start a fresh session check.
+ */
+export const REQUEST_TIMEOUT_MS = 10_000;
+
+export function createHttpAuthApi(
+  fetchImpl: typeof fetch = (...a) => fetch(...a),
+  base = '/api',
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): AuthApi {
+  async function call(path: string, init: RequestInit = {}): Promise<ApiResult<unknown>> {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Raced as well as aborted: a fetch that ignores the signal still cannot hang the app.
+    const timedOut = new Promise<ApiResult<unknown>>((resolve) => {
+      timer = setTimeout(() => {
+        controller?.abort();
+        resolve({ ok: false, error: 'unavailable' });
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([exchange(path, init, controller?.signal), timedOut]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function exchange(path: string, init: RequestInit, signal: AbortSignal | undefined): Promise<ApiResult<unknown>> {
+    let response: Response;
+    try {
+      response = await fetchImpl(`${base}${path}`, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        ...init,
+        signal,
+        headers: { Accept: 'application/json', ...init.headers },
+      });
+    } catch {
+      return { ok: false, error: 'unavailable' };
+    }
+    // Checked before the body: the edge rate limit (Cloudflare) answers 429 with HTML, not our JSON.
+    if (response.status === 429) return { ok: false, error: 'rate_limited' };
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      // Not our API (e.g. a static server without /api) — treat as unavailable.
+      return { ok: false, error: 'unavailable' };
+    }
+    if (response.ok) return { ok: true, value: body };
+    const code = (body as { error?: unknown } | null)?.error;
+    if (response.status === 401) {
+      return { ok: false, error: KNOWN_401.has(code as AuthFailure) ? (code as AuthFailure) : 'unauthenticated' };
+    }
+    if (response.status === 403) return { ok: false, error: 'forbidden' };
+    return { ok: false, error: 'unavailable' };
+  }
+
+  const toSession = (r: ApiResult<unknown>): ApiResult<AuthSession> => {
+    if (!r.ok) return r;
+    const session = parseSession(r.value as RawSession);
+    return session ? { ok: true, value: session } : { ok: false, error: 'unavailable' };
+  };
+
+  const postJson = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+    call(path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+
+  async function endSession(path: string, csrfToken: string, initData: string | null): Promise<ApiResult<null>> {
+    const headers = { 'X-CSRF-Token': csrfToken };
+    const r = initData
+      ? await postJson(path, { init_data: initData }, headers)
+      : await call(path, { method: 'POST', headers });
+    return r.ok ? { ok: true, value: null } : r;
+  }
+
+  return {
+    me: async () => toSession(await call('/me')),
+    createSession: async (initData) => toSession(await postJson('/auth/session', { init_data: initData })),
+    logout: (csrfToken, initData) => endSession('/auth/logout', csrfToken, initData),
+    logoutAll: (csrfToken, initData) => endSession('/auth/logout-all', csrfToken, initData),
+    setLanguage: async (lang, csrfToken) => {
+      const r = await postJson('/me/language', { lang }, { 'X-CSRF-Token': csrfToken });
+      return r.ok ? { ok: true, value: null } : r;
+    },
+  };
+}
