@@ -33,7 +33,8 @@ npm run test:e2e:auth # вход через настоящий backend (miniapp/
 
 ```
 src/
-  config/brand.ts         # название продукта «ProqnozAI» (символ P — assets/figma/brand-symbol-*.svg)
+  config/brand.ts         # название продукта «ProqnozAI»
+  assets/brand/           # знак Velocity V2: символ, иконка приложения, favicon (Figma 162:111)
   data/                   # модели по видам спорта, фикстуры, фильтры, DemoDataProvider
   i18n/                   # словари az / ru / en, форматирование дат
   settings/               # язык, часовой пояс, анимации — localStorage

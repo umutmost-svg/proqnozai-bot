@@ -26,7 +26,7 @@
   overflow: hidden;
 }
 
-/* Figma «ProqnozAI P brand» (41:267): the 32 px symbol fills the 32 px tile edge to edge. */
+/* Header tile (Figma 41:267): the Velocity V2 symbol (162:83) fills the 32 px tile edge to edge. */
 .symbol {
   display: block;
   flex: 0 0 auto;

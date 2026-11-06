@@ -115,6 +115,8 @@
   overflow: hidden;
 }
 
+/* The approved app icon (Figma Velocity V2, 162:103) as one vector, so the splash,
+   favicon and store icon can never drift apart. Slot geometry is the LOADING frame. */
 .icon {
   position: absolute;
   left: 27.02px;
@@ -123,32 +125,12 @@
   height: 168.96px;
   border-radius: 38.28px;
   overflow: hidden;
-  background: linear-gradient(120deg, #eaf3c6 5.86%, #cdeac6 46.12%, #a0cec9 79.06%);
 }
 
-.iconLight {
-  position: absolute;
-  left: -13.2px;
-  top: -33px;
+.iconArt {
   display: block;
-  max-width: none;
-}
-
-.iconEdge {
-  position: absolute;
-  left: 7.59px;
-  top: 7.59px;
-  width: 153.78px;
-  height: 153.78px;
-  border: 0.66px solid rgba(255, 255, 255, 0.53);
-  border-radius: 33px;
-}
-
-.symbol {
-  position: absolute;
-  left: 25.74px;
-  top: 25.74px;
-  display: block;
+  width: 168.96px;
+  height: 168.96px;
   max-width: none;
 }
 

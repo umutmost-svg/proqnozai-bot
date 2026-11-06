@@ -69,19 +69,28 @@ for (const width of WIDTHS) {
       () => document.querySelector('[class*="stage_"]')!.getBoundingClientRect().top,
     );
     expect(Math.abs(stageTop - 242)).toBeLessThanOrEqual(2);
-    // Figma 123:55 LOADING frame: the 118.272 px P sits 25.74 px inside the 168.96 px app icon.
-    const sym = await page.evaluate(() => {
-      const img = document.querySelector<HTMLImageElement>('[data-testid="app-loading"] img[src*="loading-symbol"]')!;
+    // The Velocity V2 app icon (Figma 162:103) fills the 168.96 px icon slot of the LOADING frame,
+    // 27.02 px inside the 226 px stage; the pulse scales the stage, so compare in stage units.
+    const art = await page.evaluate(() => {
+      const img = document.querySelector<HTMLImageElement>('[data-testid="app-loading"] img[src*="velocity-icon"]')!;
       const i = img.getBoundingClientRect();
-      const icon = img.parentElement!.getBoundingClientRect();
-      // The pulse scales the whole stage, so compare in icon units (168.96 px in Figma).
-      const k = icon.width / 168.96;
-      return { loaded: img.complete && img.naturalWidth > 0, size: i.width / k, dx: (i.left - icon.left) / k, dy: (i.top - icon.top) / k };
+      const stageEl = document.querySelector<HTMLElement>('[class*="stage_"]')!;
+      const st = stageEl.getBoundingClientRect();
+      const k = st.width / 226;
+      const border = parseFloat(getComputedStyle(stageEl).borderLeftWidth);
+      return {
+        loaded: img.complete && img.naturalWidth > 0,
+        size: i.width / k,
+        square: Math.abs(i.width - i.height) < 0.01,
+        dx: (i.left - st.left) / k - border,
+        dy: (i.top - st.top) / k - border,
+      };
     });
-    expect(sym.loaded).toBe(true);
-    expect(Math.abs(sym.size - 118.272)).toBeLessThan(0.5);
-    expect(Math.abs(sym.dx - 25.74)).toBeLessThan(0.5);
-    expect(Math.abs(sym.dy - 25.74)).toBeLessThan(0.5);
+    expect(art.loaded).toBe(true);
+    expect(art.square).toBe(true);
+    expect(Math.abs(art.size - 168.96)).toBeLessThan(0.5);
+    expect(Math.abs(art.dx - 27.02)).toBeLessThan(0.5);
+    expect(Math.abs(art.dy - 27.02)).toBeLessThan(0.5);
     await expect(splash).toContainText('PROQNOZAI');
     await page.screenshot({ path: `test-results/loading/${width}-loading.png`, animations: 'disabled' });
 
@@ -150,6 +159,12 @@ test('system reduced motion: static mark and text, no animations at all', async 
     document.querySelector('[data-testid="app-loading"]')!.getAnimations({ subtree: true }).length,
   );
   expect(running).toBe(0);
+  // Static mark = the approved Velocity V2 app icon (Figma 162:103); a changed path,
+  // gradient, rim or clip fails here. Tolerance (0.05 % of pixels) covers anti-aliasing only.
+  await expect(page.locator('[data-testid="app-loading"] img[src*="velocity-icon"]')).toHaveScreenshot(
+    'splash-velocity-icon.png',
+    { maxDiffPixelRatio: 0.0005 },
+  );
 });
 
 test('in-app "Меньше анимации" setting also stops the splash motion', async ({ page }) => {

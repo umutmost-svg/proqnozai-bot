@@ -20,12 +20,12 @@ describe('home', () => {
     expect(screen.getByTestId('demo-footer')).toHaveTextContent('Демо · 8 ноября 2026 · время Баку');
   });
 
-  it('shows the ProqnozAI brand with the vector P symbol instead of a text mark', async () => {
+  it('shows the ProqnozAI brand with the Velocity V2 vector symbol', async () => {
     renderApp('#/');
     await screen.findByTestId('hero');
     const heading = screen.getByRole('heading', { level: 1, name: 'ProqnozAI' });
     const header = heading.closest('header')!;
-    const symbol = header.querySelector('img[src*="brand-symbol-32"]');
+    const symbol = header.querySelector('img[src*="velocity-symbol"]');
     expect(symbol).not.toBeNull();
     expect(symbol).toHaveAttribute('alt', '');
     expect(header).not.toHaveTextContent(/Spor/i);

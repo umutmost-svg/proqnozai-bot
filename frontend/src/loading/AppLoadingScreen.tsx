@@ -9,8 +9,7 @@ import dots2 from '../assets/figma/loading-dots-2.svg';
 import dots3 from '../assets/figma/loading-dots-3.svg';
 import haloLime from '../assets/figma/loading-halo-lime.svg';
 import haloMint from '../assets/figma/loading-halo-mint.svg';
-import iconLight from '../assets/figma/loading-icon-light.svg';
-import symbol from '../assets/figma/loading-symbol.svg';
+import appIcon from '../assets/brand/velocity-icon.svg';
 import ui from '../components/ui.module.css';
 import { brand } from '../config/brand';
 import { useT } from '../state/contexts';
@@ -63,9 +62,7 @@ export function AppLoadingScreen({ phase, subject, hint, view, reducedMotion, on
             <img className={s.haloMint} src={haloMint} alt="" width={210} height={210} draggable={false} />
             <div className={s.stage}>
               <div className={s.icon}>
-                <img className={s.iconLight} src={iconLight} alt="" width={122.1} height={122.1} draggable={false} />
-                <span className={s.iconEdge} />
-                <img className={s.symbol} src={symbol} alt="" width={118.272} height={118.272} draggable={false} />
+                <img className={s.iconArt} src={appIcon} alt="" width={168.96} height={168.96} draggable={false} />
               </div>
             </div>
           </div>

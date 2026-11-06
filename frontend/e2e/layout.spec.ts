@@ -138,11 +138,11 @@ test('works outside Telegram and shows demo marks', async ({ page }) => {
 });
 
 for (const width of WIDTHS) {
-  test(`ProqnozAI header @${width}px: vector P fills the 32 px tile (Figma 41:267)`, async ({ page }) => {
+  test(`ProqnozAI header @${width}px: Velocity V2 symbol fills the 32 px tile (Figma 41:267)`, async ({ page }) => {
     await open(page, '/', width);
     await expect(page.getByRole('heading', { level: 1, name: 'ProqnozAI' })).toBeVisible();
     const geo = await page.evaluate(() => {
-      const img = document.querySelector<HTMLImageElement>('header img[src*="brand-symbol-32"]')!;
+      const img = document.querySelector<HTMLImageElement>('header img[src*="velocity-symbol"]')!;
       const tile = img.parentElement!;
       const t = tile.getBoundingClientRect();
       const i = img.getBoundingClientRect();
@@ -168,5 +168,47 @@ test('metadata: ProqnozAI title, description and an SVG favicon that is served',
   const res = await page.request.get(href);
   expect(res.status()).toBe(200);
   expect(res.headers()['content-type']).toContain('image/svg+xml');
-  expect(await res.text()).toContain('Prediction monogram P');
+  expect(await res.text()).toContain('Velocity V2 app icon');
+});
+
+test('Velocity V2 symbol at 32, 40 and 64 px (1× and 3× screens) matches the approved rendering', async ({ browser }) => {
+  for (const scale of [1, 3]) {
+    const context = await browser.newContext({ deviceScaleFactor: scale, viewport: { width: 390, height: 844 } });
+    const page = await context.newPage();
+    await open(page, '/', 390);
+    expect(await page.evaluate(() => window.devicePixelRatio)).toBe(scale);
+    const src = await page.locator('header img[src*="velocity-symbol"]').getAttribute('src');
+    const sizes = await page.evaluate(async (url) => {
+      const row = document.createElement('div');
+      row.id = 'scale-test';
+      row.style.cssText = 'position:fixed;left:0;top:0;z-index:99;display:flex;gap:12px;padding:12px;background:#f6f8e9';
+      document.body.append(row);
+      return Promise.all(
+        [32, 40, 64].map(
+          (px) =>
+            new Promise<number[]>((resolve) => {
+              const img = new Image(px, px);
+              img.onload = () => {
+                const r = img.getBoundingClientRect();
+                resolve([px, r.width, r.height, img.naturalWidth]);
+              };
+              img.src = url!;
+              row.append(img);
+            }),
+        ),
+      );
+    }, src);
+    for (const [px, w, h, natural] of sizes) {
+      expect([w, h]).toEqual([px, px]);
+      expect(natural).toBeGreaterThan(0);
+    }
+    // Pixel check against the approved baseline: a changed path, colour or clipping fails.
+    // scale: 'device' keeps real device pixels, so the 3× baseline is a true 3× rendering.
+    await expect(page.locator('#scale-test')).toHaveScreenshot(`velocity-scale-${scale}x.png`, {
+      maxDiffPixelRatio: 0.0005,
+      scale: 'device',
+    });
+    await page.locator('#scale-test').screenshot({ path: `test-results/screens/velocity-scale-${scale}x.png`, scale: 'device' });
+    await context.close();
+  }
 });

@@ -50,7 +50,7 @@ describe('AppLoadingGate', () => {
     expect(splash()).toHaveAttribute('data-phase', 'connecting');
     expect(screen.getByText('Подключаем ProqnozAI')).toBeInTheDocument();
     expect(splash()).toHaveTextContent('PROQNOZAI');
-    expect(splash()!.querySelector('img[src*="loading-symbol"]')).not.toBeNull();
+    expect(splash()!.querySelector('img[src*="velocity-icon"]')).not.toBeNull();
     expect(document.querySelector('[inert]')).not.toBeNull(); // the app underneath is not reachable
 
     s.answer({ ok: false, error: 'unavailable' });

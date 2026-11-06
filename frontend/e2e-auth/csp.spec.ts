@@ -53,12 +53,12 @@ test('enforced CSP is served and nothing on any screen violates it', async ({ pa
   expect(violations).toEqual([]);
 });
 
-test('the ProqnozAI favicon loads in the browser under the enforced CSP, via a relative URL', async ({ page }) => {
+test('the Velocity V2 favicon loads in the browser under the enforced CSP, via a relative URL', async ({ page }) => {
   const violations = await watchViolations(page);
   await page.goto('/');
   const icon = page.locator('link[rel="icon"]');
   // Relative, so the page also works when served from a sub-path (vite base './').
-  expect(await icon.getAttribute('href')).toMatch(/^\.\/assets\/brand-symbol-favicon-[\w-]+\.svg$/);
+  expect(await icon.getAttribute('href')).toMatch(/^\.\/assets\/favicon-[\w-]+\.svg$/);
   // A real browser image load, subject to img-src (an API request would bypass CSP).
   const size = await icon.evaluate(
     (l: HTMLLinkElement) =>

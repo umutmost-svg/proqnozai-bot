@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import backIcon from '../assets/figma/icon-back.svg';
 import bellIcon from '../assets/figma/icon-bell.svg';
-import brandSymbol from '../assets/figma/brand-symbol-32.svg';
+import brandSymbol from '../assets/brand/velocity-symbol.svg';
 import { brand } from '../config/brand';
 import { useT } from '../state/contexts';
 import { useGoBack } from '../hooks/useGoBack';
