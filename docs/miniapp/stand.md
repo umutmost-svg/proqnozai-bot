@@ -13,8 +13,10 @@
 > **Railway-специфичное, переписать после выбора хостинга** (до этого — не выполнять):
 > схема «Архитектура» (узел Railway edge), «Доверие к заголовкам и обход защиты»
 > (факты о Railway edge, `*.up.railway.app`, healthcheck), место хранения переменных,
-> ротация токена (шаги в Railway), healthcheck и алерты по логам, резервные копии
-> volume, откат кода, «Настройка Railway», «Что проверено» (пункты про Railway).
+> ротация токена (шаги в Railway), доступ к shell контейнера для `admin`-команд
+> (`railway ssh` в примерах — заменить способом выбранного хостинга, например
+> `docker exec` на сервере), healthcheck и алерты по логам, резервные копии volume,
+> откат кода, «Настройка Railway», «Что проверено» (пункты про Railway).
 
 Стенд нужен, чтобы проверить вход в настоящих Telegram-клиентах. Он
 изолирован от production:
@@ -202,7 +204,7 @@ Telegram») в режиме `MINIAPP_CSP_MODE=report-only`. Нарушения �
 |---|---|
 | Cloudflare, Rate limiting rule (на Free — 1 правило, окно 10 с, счёт по IP) | **Обязательно до открытия стенда — весь API:** `starts_with(http.request.uri.path, "/api/")`, порог 30 запросов за 10 с, Block на 10 с. Иначе `GET /api/me` с произвольной cookie без ограничений доходит до SQLite (поиск сессии по хешу токена). На платном плане — второе, более строгое правило: `http.request.uri.path eq "/api/auth/session"` и `POST`, 10 за 10 с. На Free вход дополнительно защищён в приложении: HMAC до любой записи, лимит по `user.id` |
 | Cloudflare, WAF custom rules (на Free — 5) | 1) Block, если метод не `GET`/`HEAD`/`POST`. 2) Block для `starts_with(http.request.uri.path, "/api/")` и метода `POST` вне списка `/api/auth/session`, `/api/auth/logout`, `/api/auth/logout-all`, `/api/me/language`. 3) Block, если `http.host` не равен домену стенда |
-| Cloudflare | Always Use HTTPS; SSL mode **Full** (Railway: «Full (strict)» с ним не работает); Under Attack / Bot Fight не включать — это браузерные челленджи, они ломают API и WebView |
+| Cloudflare | Always Use HTTPS; SSL mode — по разделу «Настройка Cloudflare», шаг 2 (не Flexible; Full (strict), если у сервера доверенный сертификат); Under Attack / Bot Fight не включать — это браузерные челленджи, они ломают API и WebView |
 | Cloudflare Transform Rule | Modify Request Header → Set `X-Edge-Auth` = секрет. Set перезаписывает значение, присланное клиентом |
 | Приложение | без секрета → 403 до любой логики. Origin проверяется до чтения тела. Тело ≤ 8 КиБ (`Content-Length` и потоковый счётчик), строгий JSON. HMAC проверяется до любой записи в БД. Лимит по проверенному `user.id`. Сожжённый initData отклоняется до лимита. Неподписанный трафик не тратит ничей бюджет |
 | uvicorn | `--limit-concurrency 200` (сверх — 503), `--timeout-keep-alive 5`, 1 воркер |
@@ -232,7 +234,7 @@ Telegram») в режиме `MINIAPP_CSP_MODE=report-only`. Нарушения �
   созданные root, заблокировали бы приложению его же WAL. Прямой
   `python -m miniapp.admin` под root отказывается работать.
   ```
-  railway ssh                                   # shell контейнера стенда
+  <shell контейнера стенда>                     # у хостинга (было: railway ssh)
   miniapp-entrypoint admin stats
   miniapp-entrypoint admin revoke-user <telegram_user_id>
   miniapp-entrypoint admin revoke-all --yes
