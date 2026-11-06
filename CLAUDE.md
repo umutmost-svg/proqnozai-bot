@@ -1,12 +1,13 @@
 # CLAUDE.md — правила работы с репозиторием proqnozai-bot
 
 Telegram-бот AI-прогнозов на спорт (Python 3.13, python-telegram-bot 21.5,
-Anthropic Claude, SQLite, Railway). Детали архитектуры — в `ARCHITECTURE.md`,
+Anthropic Claude, SQLite; production — DigitalOcean Droplet + Dokploy, Docker). Детали архитектуры — в `ARCHITECTURE.md`,
 обзор и env-переменные — в `README.md`. Этот файл — правила для работы с кодом.
 
 ## Архитектура (кратко)
 
-- Два процесса Railway: `worker` (`main.py` — бот + фоновые задачи +
+- Два процесса (в Dokploy — приложения `bot` и `dashboard`, деплой из `main`):
+  `worker` (`main.py` — бот + фоновые задачи +
   `stats_server.py`) и `web` (`dashboard.py` — Flask-дашборд, ходит к
   воркеру только по HTTP).
 - Слои снизу вверх: `config` → `db` / `translations` → сервисы

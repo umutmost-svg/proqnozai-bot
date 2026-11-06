@@ -354,4 +354,3 @@ test('short screen with Telegram safe areas: failed-view actions stay inside the
   await page.clock.runFor(500);
   await expect(page.getByTestId('app-loading-gate')).toHaveCount(0);
 });
-

@@ -27,9 +27,12 @@ case "${1:-serve}" in
     # One worker: the login limiter is per process and SQLite has one writer.
     # --no-proxy-headers and no --forwarded-allow-ips: the app never trusts
     # X-Forwarded-*; per-IP limits live at the edge (docs/miniapp/stand.md).
+    # --no-access-log: uvicorn logs the path WITH its query string, so a request that
+    # puts init_data or a token in the URL would land in the logs; the app writes
+    # its own structured events (auth.*, request_id) without request data.
     exec python -m uvicorn --factory miniapp.asgi:create_app_from_env \
       --host 0.0.0.0 --port "${PORT:-8000}" --workers 1 \
-      --no-proxy-headers --no-server-header \
+      --no-proxy-headers --no-server-header --no-access-log \
       --limit-concurrency 200 --timeout-keep-alive 5 --timeout-graceful-shutdown 10
     ;;
   admin)

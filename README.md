@@ -22,12 +22,14 @@ Odds Checker API (доступ по IP whitelist).
 - **БД:** SQLite (`bot.db`, создаётся автоматически при первом запуске)
 - **HTTP-клиент:** `httpx` (async)
 - **Дашборд:** Flask
-- **Хостинг:** Railway Pro (статичный outbound IP для whitelist Mostbet)
+- **Хостинг:** DigitalOcean Droplet + Dokploy (статичный IP droplet — для whitelist Mostbet).
+  Два приложения Dokploy, `bot` и `dashboard`, собираются из ветки `main`
+  (On Push, autodeploy; preview deployments выключены). Railway больше не используется
 
 ## Точки входа и процессы
 
 Проект — **не монолит**: код разбит на модули (см. `ARCHITECTURE.md`).
-Railway запускает два процесса из `Procfile`:
+Два процесса (точки входа описаны в `Procfile`; в Dokploy — приложения `bot` и `dashboard`):
 
 | Процесс | Команда | Назначение |
 |---|---|---|
@@ -35,8 +37,9 @@ Railway запускает два процесса из `Procfile`:
 | `web` | `python dashboard.py` | Flask-дашборд администратора (Basic Auth) |
 
 Дашборд **не обращается к SQLite напрямую** — все данные он получает по HTTP
-от stats-сервера воркера через приватную сеть Railway
-(`BOT_API_URL`, по умолчанию `http://worker.railway.internal:8888`).
+от stats-сервера воркера по внутренней сети (`BOT_API_URL` задаётся в Dokploy;
+значение по умолчанию в коде, `http://worker.railway.internal:8888`, —
+наследие Railway и на DigitalOcean не работает).
 
 ### Рассылки
 
@@ -61,7 +64,7 @@ Railway запускает два процесса из `Procfile`:
 ## Переменные окружения
 
 Полный список с плейсхолдерами — в `.env.example`. Секреты хранятся только
-в env (Railway → Variables), никогда в коде и репозитории.
+в env (Dokploy → Environment приложения), никогда в коде и репозитории.
 
 | Переменная | Назначение | Обязательна |
 |---|---|---|
@@ -70,7 +73,7 @@ Railway запускает два процесса из `Procfile`:
 | `ADMIN_ID` | Telegram ID администратора (доступ к `/admin`) | Нет (без него админка недоступна) |
 | `DASHBOARD_TOKEN` | Токен stats-API и пароль Basic Auth дашборда | Да для web/stats |
 | `DASHBOARD_USER` | Логин Basic Auth дашборда (по умолчанию `admin`) | Нет |
-| `BOT_DB_DIR` | Каталог для `bot.db` — **на Railway должен указывать на volume** | Нет (по умолчанию `.`) |
+| `BOT_DB_DIR` | Каталог для `bot.db` — **в production должен указывать на постоянный volume/mount** | Нет (по умолчанию `.`) |
 | `FOOTBALL_KEY` | football-data.org — форма команд текущих сезонов (предпочтительное имя) | Нет |
 | `FOOTBALL_API_KEY` | Legacy-алиас `FOOTBALL_KEY`, читается как fallback | Нет |
 | `APIFOOTBALL_KEY` | api-football.com (api-sports.io) — live-статусы, события, H2H | Нет |
@@ -90,9 +93,9 @@ Railway запускает два процесса из `Procfile`:
 матчем». Без `FOOTBALL_KEY` форма команд оценивается моделью и помечается
 как «(оценочно)». Mostbet API отдельного ключа не требует — доступ по IP.
 
-### ⚠️ Персистентность SQLite на Railway
+### ⚠️ Персистентность SQLite в Docker
 
-Файловая система контейнера Railway **эфемерна**: без volume каждый редеплой
+Файловая система контейнера **эфемерна**: без volume (mount в Dokploy) каждый редеплой
 стирает `bot.db` со всеми пользователями. `BOT_DB_DIR` обязан указывать на
 примонтированный volume. По умолчанию (`.`) БД создаётся рядом с кодом —
 это подходит только для локальной разработки.

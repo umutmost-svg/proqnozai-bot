@@ -120,6 +120,8 @@ export function createHttpAuthApi(
     } catch {
       return { ok: false, error: 'unavailable' };
     }
+    // Checked before the body: the edge rate limit (Cloudflare) answers 429 with HTML, not our JSON.
+    if (response.status === 429) return { ok: false, error: 'rate_limited' };
     let body: unknown;
     try {
       body = await response.json();
@@ -132,7 +134,6 @@ export function createHttpAuthApi(
     if (response.status === 401) {
       return { ok: false, error: KNOWN_401.has(code as AuthFailure) ? (code as AuthFailure) : 'unauthenticated' };
     }
-    if (response.status === 429) return { ok: false, error: 'rate_limited' };
     if (response.status === 403) return { ok: false, error: 'forbidden' };
     return { ok: false, error: 'unavailable' };
   }

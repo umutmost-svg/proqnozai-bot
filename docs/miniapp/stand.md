@@ -1,5 +1,11 @@
 # Mini App: закрытый HTTPS-стенд (M2.5)
 
+> **Хостинг стенда требует пересмотра.** План ниже написан под отдельный проект
+> Railway. С 2026-11 Railway в проекте не используется (production — DigitalOcean +
+> Dokploy), поэтому Railway-шаги — исходный план, а не действующая инструкция.
+> Требования (отдельный сервер и тестовый бот, Cloudflare + edge secret, нет обходного
+> URL, постоянный volume для SQLite, бэкапы, откат) остаются в силе.
+
 Стенд нужен, чтобы проверить вход в настоящих Telegram-клиентах. Он
 изолирован от production:
 
@@ -183,7 +189,7 @@ Telegram») в режиме `MINIAPP_CSP_MODE=report-only`. Нарушения �
 
 | Уровень | Мера |
 |---|---|
-| Cloudflare, Rate limiting rule (на Free — 1 правило, окно 10 с, счёт по IP) | `http.request.uri.path eq "/api/auth/session"` и `http.request.method eq "POST"`, порог 10 запросов за 10 с, Block на 10 с. На платном плане — также `/api/` целиком, с окном до минуты |
+| Cloudflare, Rate limiting rule (на Free — 1 правило, окно 10 с, счёт по IP) | **Обязательно до открытия стенда — весь API:** `starts_with(http.request.uri.path, "/api/")`, порог 30 запросов за 10 с, Block на 10 с. Иначе `GET /api/me` с произвольной cookie без ограничений доходит до SQLite (поиск сессии по хешу токена). На платном плане — второе, более строгое правило: `http.request.uri.path eq "/api/auth/session"` и `POST`, 10 за 10 с. На Free вход дополнительно защищён в приложении: HMAC до любой записи, лимит по `user.id` |
 | Cloudflare, WAF custom rules (на Free — 5) | 1) Block, если метод не `GET`/`HEAD`/`POST`. 2) Block для `starts_with(http.request.uri.path, "/api/")` и метода `POST` вне списка `/api/auth/session`, `/api/auth/logout`, `/api/auth/logout-all`, `/api/me/language`. 3) Block, если `http.host` не равен домену стенда |
 | Cloudflare | Always Use HTTPS; SSL mode **Full** (Railway: «Full (strict)» с ним не работает); Under Attack / Bot Fight не включать — это браузерные челленджи, они ломают API и WebView |
 | Cloudflare Transform Rule | Modify Request Header → Set `X-Edge-Auth` = секрет. Set перезаписывает значение, присланное клиентом |
@@ -434,8 +440,8 @@ production-проект бота. Настройки задаются в пан�
 3. Rules → Transform Rules → Modify Request Header: hostname равен
    `<stand-domain>` → **Set** `X-Edge-Auth` = значение
    `MINIAPP_EDGE_SECRET`.
-4. Security → WAF → Rate limiting rule и Custom rules — по таблице «Защита
-   `/api/auth/session`».
+4. Security → WAF → Rate limiting rule (на весь `/api/`) и Custom rules — по
+   таблице «Защита `/api/auth/session` и API от массовых запросов».
 5. Caching: правило Bypass cache для `/api/*`. Приложение и так отдаёт
    `no-store`; правило страхует от чужих настроек кэша.
 

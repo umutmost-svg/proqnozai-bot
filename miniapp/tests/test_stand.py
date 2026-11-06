@@ -573,3 +573,10 @@ def test_single_logout_also_purges(tmp_path: Path) -> None:
     store.create_session("current", 1, "2" * 64, now=NOW, ttl_s=60)
     assert store.revoke_session("current", NOW, NOW + 330)
     assert store.get_session("ancient") is None
+
+
+def test_stand_server_has_no_access_log() -> None:
+    # uvicorn's access log includes query strings; a URL carrying init_data must not be logged.
+    entrypoint = (Path(__file__).resolve().parents[2] / "deploy" / "miniapp" / "entrypoint.sh").read_text()
+    serve = entrypoint.split("serve)", 1)[1].split(";;", 1)[0]
+    assert "uvicorn" in serve and "--no-access-log" in serve

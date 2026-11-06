@@ -33,7 +33,7 @@ proqnozai-bot/
 ├── broadcast.py             # 📢 Рассылки: валидация HTML/кнопок, отправка, планировщик
 │                            #     отложенных (таблица `broadcasts`, переживает рестарт)
 ├── stats_server.py          # 📊 HTTP-сервер статистики внутри worker-процесса
-├── dashboard.py             # 🖥  Flask-дашборд (отдельный web-процесс Railway)
+├── dashboard.py             # 🖥  Flask-дашборд (отдельный web-процесс)
 │
 ├── handlers/                # 🎮 Telegram-хендлеры (по доменам)
 │   ├── __init__.py          #     register_handlers() — регистрация всех обработчиков
@@ -51,20 +51,20 @@ proqnozai-bot/
 ├── test_e2e.py              # 🧪 Ручной интеграционный прогон (реальные API, не для CI)
 ├── requirements.txt         # 📦 Зависимости рантайма
 ├── requirements-dev.txt     # 📦 Dev-зависимости (pytest, ruff)
-├── Procfile                 # 🚂 Railway: worker (main.py) + web (dashboard.py)
+├── Procfile                 # 🚂 точки входа: worker (main.py) + web (dashboard.py)
 └── README.md
 ```
 
 ## Процессы
 
-| Процесс Railway | Точка входа | Что делает |
+| Процесс (приложение Dokploy) | Точка входа | Что делает |
 |---|---|---|
 | `worker` | `main.py` | Telegram-бот (polling/webhook), фоновые задачи, поток `stats_server.py` на `STATS_PORT` |
 | `web` | `dashboard.py` | Flask-дашборд (Basic Auth: `DASHBOARD_USER`/`DASHBOARD_TOKEN`) |
 
 Дашборд не читает SQLite: все данные и действия (рассылка, блокировка
-пользователей) идут по HTTP к stats-серверу воркера через приватную сеть
-Railway (`BOT_API_URL`). Эндпоинты stats-сервера (`/stats`, `/broadcast`,
+пользователей) идут по HTTP к stats-серверу воркера по внутренней сети
+(`BOT_API_URL`, задаётся в Dokploy). Эндпоинты stats-сервера (`/stats`, `/broadcast`,
 `/broadcast/status`, `/broadcast/list`, `/broadcast/cancel`, `/segment/size`,
 `/users/search`, `/users/block`) защищены `DASHBOARD_TOKEN`
 (`hmac.compare_digest`); `/health` открыт для health-check'ов.
@@ -317,14 +317,18 @@ pool-кампании отбиваются `ValueError`, иначе импорт
 
 ## Деплой
 
-Railway (`Procfile`: worker + web). Поддержка webhook (`WEBHOOK_URL`) и polling.
+DigitalOcean Droplet + Dokploy (Docker): приложения `bot` (worker) и `dashboard`
+(web) собираются из ветки `main` — On Push, autodeploy, preview deployments
+выключены. Railway больше не используется. Поддержка webhook (`WEBHOOK_URL`) и polling;
+в production — polling, поэтому бот обязан работать в единственном экземпляре
+(второй процесс с тем же токеном вызывает конфликт `getUpdates`).
 ```
 WEBHOOK_URL установлена  → app.run_webhook()
 иначе                    → app.run_polling()
 ```
 
-SQLite-файл `bot.db` создаётся в `BOT_DB_DIR` — на Railway этот каталог
-должен быть volume, иначе данные теряются при редеплое.
+SQLite-файл `bot.db` создаётся в `BOT_DB_DIR` — в production этот каталог
+должен быть постоянным volume/mount, иначе данные теряются при редеплое.
 
 ## Известные архитектурные риски (зафиксированы, не исправлены)
 
@@ -334,7 +338,7 @@ SQLite-файл `bot.db` создаётся в `BOT_DB_DIR` — на Railway э�
    `NAV_RATE_WINDOW`) — листание не тормозится текстовым лимитом и не ведёт к
    авто-блоку; выбор матча — строгий `cb_guard` (+ in-flight lock). См.
    `handlers/utils.py`, `security.nav_rate_check`.
-2. **Персистентность SQLite** зависит от volume на Railway (`BOT_DB_DIR`).
+2. **Персистентность SQLite** зависит от постоянного volume/mount (`BOT_DB_DIR`).
 3. ~~Частичный фид Mostbet кэшируется на полный TTL при обрыве пагинации.~~
    **Исправлено (ранее этой сессии).** `_publish_generation`/
    `_merge_generations` в `mostbet.py` подмешивают хвост предыдущей генерации

@@ -218,6 +218,18 @@ def create_app(
         if not origin_allowed(request.headers.get("origin"), settings.trusted_origins):
             raise ApiError(403, "origin_not_allowed")
 
+    def mark_partitioned(response: Response) -> None:
+        # SameSite=None cookies live in the Telegram Web iframe, where browsers need
+        # CHIPS (Partitioned). Starlette's `partitioned=` raises before Python 3.14
+        # (http.cookies lacks the attribute), so the flag is appended to the header
+        # that set_cookie/delete_cookie just added.
+        if settings.cookie_samesite != "none":
+            return
+        name, value = response.raw_headers[-1]
+        if name != b"set-cookie":
+            raise RuntimeError("expected the session Set-Cookie header last")
+        response.raw_headers[-1] = (name, value + b"; Partitioned")
+
     def set_session_cookie(response: Response, token: str, expires_at: int) -> None:
         response.set_cookie(
             settings.cookie_name,
@@ -227,8 +239,8 @@ def create_app(
             secure=settings.cookie_secure,
             httponly=True,
             samesite=settings.cookie_samesite,
-            partitioned=settings.cookie_samesite == "none",
         )
+        mark_partitioned(response)
 
     def clear_session_cookie(response: Response) -> None:
         response.delete_cookie(
@@ -237,8 +249,8 @@ def create_app(
             secure=settings.cookie_secure,
             httponly=True,
             samesite=settings.cookie_samesite,
-            partitioned=settings.cookie_samesite == "none",
         )
+        mark_partitioned(response)
 
     async def unrevoked_session(request: Request) -> tuple[str, Session] | None:
         """Session from the cookie that was not revoked, expired or not."""

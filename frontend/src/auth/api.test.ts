@@ -37,6 +37,8 @@ describe('HTTP auth API', () => {
       [json(401, { error: 'init_data_reused' }), 'init_data_reused'],
       [json(401, { error: 'something_else' }), 'unauthenticated'],
       [json(429, { error: 'rate_limited' }), 'rate_limited'],
+      // Edge rate limit (Cloudflare): HTML body, still a rate limit, not an outage.
+      [new Response('<html>Too Many Requests</html>', { status: 429, headers: { 'Content-Type': 'text/html' } }), 'rate_limited'],
       [json(403, { error: 'origin_not_allowed' }), 'forbidden'],
       [json(502, { error: 'internal' }), 'unavailable'],
       [new Response('<html>404</html>', { status: 404 }), 'unavailable'],

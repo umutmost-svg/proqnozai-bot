@@ -238,6 +238,39 @@ def test_concurrent_logins_create_one_user(settings: Settings, clock: FakeClock)
 
 # --- logout ------------------------------------------------------------------
 
+def test_samesite_none_cookie_is_partitioned_and_works_on_this_python(tmp_path, clock: FakeClock) -> None:
+    # Telegram Web iframe setting: Secure + SameSite=None + Partitioned (CHIPS).
+    # Regression: Starlette's partitioned= raised ValueError before Python 3.14 → 500.
+    origin = "https://app.example.com"
+    settings = Settings(
+        bot_token=TEST_BOT_TOKEN,
+        db_path=tmp_path / "none.db",
+        trusted_origins=frozenset({origin}),
+        environment="production",
+        cookie_samesite="none",
+    )
+    client = TestClient(create_app(settings, clock=clock), base_url=origin)
+    r = login(client, fresh(clock), origin=origin)
+    assert r.status_code == 200, r.text
+    cookie = r.headers["set-cookie"]
+    assert cookie.startswith("__Host-sporai_session=")
+    for flag in ("Secure", "HttpOnly", "SameSite=none", "Path=/"):
+        assert flag in cookie
+    assert cookie.endswith("; Partitioned") and cookie.count("Partitioned") == 1
+    assert client.get("/api/me").status_code == 200
+
+    out = logout(client, r.json()["session"]["csrf_token"], origin=origin)
+    assert out.status_code == 200, out.text
+    cleared = out.headers["set-cookie"]
+    assert cleared.startswith('__Host-sporai_session=""') and cleared.endswith("; Partitioned")
+    assert "SameSite=none" in cleared and "Secure" in cleared
+
+
+def test_lax_cookie_is_not_partitioned(client: TestClient, clock: FakeClock) -> None:
+    r = login(client, fresh(clock))
+    assert "Partitioned" not in r.headers["set-cookie"]
+
+
 def test_logout_revokes_session_and_clears_cookie(client: TestClient, clock: FakeClock) -> None:
     body = logged_in(client, clock)
     token = client.cookies.get(COOKIE)

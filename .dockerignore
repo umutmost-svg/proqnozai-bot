@@ -35,6 +35,9 @@ venv/
 **/backups/
 
 # --- VCS and CI metadata ----------------------------------------------------
+# The bot's startup banner (main.py: _deploy_version) does not need .git: the
+# runtime image (python:3.12-slim) has no git binary, so the version comes from
+# the GIT_COMMIT env var set by the platform, else "unknown" — with or without .git.
 .git/
 .gitignore
 
