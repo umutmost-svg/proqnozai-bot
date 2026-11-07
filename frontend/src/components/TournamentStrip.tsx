@@ -29,9 +29,11 @@ export function TournamentStrip({
             onChange(tournament.id);
           }}
         >
-          <span className={s.logoSlot}>
-            <Logo asset={tournament.logo} box={28} />
-          </span>
+          {tournament.logo && (
+            <span className={s.logoSlot}>
+              <Logo asset={tournament.logo} box={28} />
+            </span>
+          )}
           {tournament.name}
         </button>
       ))}

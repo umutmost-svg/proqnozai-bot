@@ -54,7 +54,9 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
     <>
       <DemoBanner label={t('ai.exampleBadge')} />
       <h2 className={s.matchTitle}>{`${event.home.name} — ${event.away.name}`}</h2>
-      <p className={s.snapshot}>{t('ai.snapshot', { date: formatDateTime(new Date(analysis.generatedAt), timeZone) })}</p>
+      {analysis.generatedAt && (
+        <p className={s.snapshot}>{t('ai.snapshot', { date: formatDateTime(new Date(analysis.generatedAt), timeZone) })}</p>
+      )}
       <section className={ui.section} data-testid="ai-result" data-sport={analysis.sport}>
         <h3 className={ui.sectionTitle}>{t('ai.probabilities')}</h3>
         {analysis.probabilities.map((p, i) => (
@@ -77,6 +79,22 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
       {/* AI history ships in M4. */}
       <DeferredButton label={t('ai.saveAnalysis')} />
       <p className={ui.notice}>{t('ai.disclaimer')}</p>
+    </>
+  );
+}
+
+/** Real events: no analysis yet, and no demo example in its place. */
+function Unavailable({ onBack }: { onBack(): void }) {
+  const { t } = useSettings();
+  return (
+    <>
+      <section className={ui.section} data-testid="ai-unavailable">
+        <h2 className={ui.pageHeading}>{t('ai.unavailableTitle')}</h2>
+        <p className={ui.body}>{t('ai.unavailableText')}</p>
+      </section>
+      <button type="button" className={ui.secondary} onClick={onBack}>
+        {t('ai.backToMatch')}
+      </button>
     </>
   );
 }
@@ -144,12 +162,15 @@ export function AiScreen() {
       </>
     );
   } else if (analysis.status === 'loading') {
-    body = <Waiting onBack={goBack} />;
+    // The staged "preparing" screen and its demo note belong to the demo only.
+    body = data.isDemo ? <Waiting onBack={goBack} /> : <LoadingState cards={2} />;
   } else if (event.status === 'loading') {
     body = <LoadingState cards={2} />;
   } else if (event.data) {
     body =
-      analysis.data.kind === 'ready' ? (
+      analysis.data.kind === 'unavailable' ? (
+        <Unavailable onBack={goBack} />
+      ) : analysis.data.kind === 'ready' ? (
         <Result event={event.data} analysis={analysis.data} />
       ) : (
         <Insufficient

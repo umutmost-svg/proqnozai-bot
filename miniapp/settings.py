@@ -97,6 +97,16 @@ class Settings:
     # If set, every request except GET /api/health must carry it in EDGE_SECRET_HEADER:
     # only the edge that injects it can reach the app (no bypass via another route).
     edge_secret: str | None = field(default=None, repr=False)
+    # Sports data (M3). Without a key the sport is reported "not connected"; no demo data.
+    football_data_key: str | None = field(default=None, repr=False)
+    football_data_competitions: tuple[str, ...] = ("PL", "PD")
+    # True only on a paid plan with live scores; the free plan delays scores.
+    football_data_live_plan: bool = False
+    # Self-imposed budgets below the provider's own limits (free tier: 10 requests/minute).
+    football_data_per_minute: int = 8
+    football_data_per_day: int = 3000
+    # Event ids never seen in a listing may cost an upstream call: capped per hour.
+    sports_unknown_lookups_per_hour: int = 20
 
     def __post_init__(self) -> None:
         if not self.bot_token or ":" not in self.bot_token:
@@ -141,6 +151,22 @@ class Settings:
             raise SettingsError(f"edge secret must be >= {MIN_EDGE_SECRET_CHARS} printable ASCII chars without spaces")
         if self.cookie_samesite == "none" and not self.cookie_secure:
             raise SettingsError("SameSite=None requires Secure cookies (production)")
+        if self.football_data_key is not None and (
+            not self.football_data_key.isascii() or not self.football_data_key.isalnum()
+            or not 16 <= len(self.football_data_key) <= 128
+        ):
+            raise SettingsError("football-data.org key must be 16-128 alphanumeric ASCII chars")
+        from .sports.football_data import KNOWN_COMPETITIONS  # local: settings stay importable alone
+
+        unknown = [c for c in self.football_data_competitions if c not in KNOWN_COMPETITIONS]
+        if unknown or not self.football_data_competitions:
+            raise SettingsError(f"unsupported football-data.org competitions: {unknown or 'none'}")
+        if not 1 <= self.football_data_per_minute <= 10:
+            raise SettingsError("football_data_per_minute must be 1..10 (free tier: 10/minute)")
+        if not 1 <= self.football_data_per_day <= 14400:
+            raise SettingsError("football_data_per_day must be 1..14400")
+        if not 0 <= self.sports_unknown_lookups_per_hour <= 600:
+            raise SettingsError("sports_unknown_lookups_per_hour must be 0..600")
 
     @property
     def cookie_secure(self) -> bool:
@@ -205,4 +231,14 @@ class Settings:
             static_dir=Path(static_dir) if static_dir else None,
             csp_mode=(optional("MINIAPP_CSP_MODE") or "enforce").lower(),  # type: ignore[arg-type]
             edge_secret=edge_secret,
+            football_data_key=optional("MINIAPP_FOOTBALL_DATA_KEY"),
+            football_data_competitions=tuple(
+                c.strip().upper()
+                for c in (optional("MINIAPP_FOOTBALL_DATA_COMPETITIONS") or "PL,PD").split(",")
+                if c.strip()
+            ),
+            football_data_live_plan=boolean("MINIAPP_FOOTBALL_DATA_LIVE_PLAN", False),
+            football_data_per_minute=integer("MINIAPP_FOOTBALL_DATA_PER_MINUTE", 8),
+            football_data_per_day=integer("MINIAPP_FOOTBALL_DATA_PER_DAY", 3000),
+            sports_unknown_lookups_per_hour=integer("MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR", 20),
         )

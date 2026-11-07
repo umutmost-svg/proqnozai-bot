@@ -1,3 +1,4 @@
+import { pickFeatured } from '../data/filter';
 import { useNavigate } from 'react-router-dom';
 import ambientSrc from '../assets/figma/ambient-light.svg';
 import sparkIcon from '../assets/figma/icon-spark.svg';
@@ -10,12 +11,13 @@ import { Header } from '../components/Header';
 import { SearchLauncher } from '../components/SearchField';
 import { SportTabs } from '../components/SportTabs';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
+import { DataFootnote } from '../components/SourceNote';
+import { NoEvents } from '../components/NoEvents';
 import { DemoChip } from '../components/StatusBadge';
 import { TournamentStrip } from '../components/TournamentStrip';
-import ui from '../components/ui.module.css';
 import type { SportEvent } from '../data/models';
 import { headlineScore } from '../data/score';
-import { formatDayMonth, formatLongDate, zoneLabel, zoneWithOffset } from '../i18n/format';
+import { formatDayMonth, zoneWithOffset } from '../i18n/format';
 import { useAsync } from '../hooks/useAsync';
 import { useFilters, useServices, useSettings } from '../state/contexts';
 import { dayKeyOf, timeOf } from '../time/zoned';
@@ -35,7 +37,7 @@ function Hero({ event }: { event: SportEvent }) {
       </div>
       <div className={s.heroHead}>
         <h2 className={s.heroTitle}>{t('home.matchOfDay')}</h2>
-        <DemoChip />
+        {data.isDemo && <DemoChip />}
       </div>
       {/* Locale-independent upper case: CSS uppercase would turn "Liga" into "LİGA" in AZ. */}
       <p className={s.league}>{data.getTournament(event.tournamentId)?.name.toUpperCase()}</p>
@@ -56,9 +58,14 @@ function Hero({ event }: { event: SportEvent }) {
         </p>
         <p className={s.kickoffZone}>{zoneWithOffset(t, timeZone, start)}</p>
       </div>
-      <button type="button" className={s.cta} onClick={() => navigate(`/event/${event.id}/ai`)}>
-        <img src={sparkIcon} alt="" width={17} height={17} />
-        {t('home.openAi')}
+      {/* Real data: no AI analysis yet, so the hero opens the match instead of promising one. */}
+      <button
+        type="button"
+        className={s.cta}
+        onClick={() => navigate(data.isDemo ? `/event/${event.id}/ai` : `/event/${event.id}`)}
+      >
+        {data.isDemo && <img src={sparkIcon} alt="" width={17} height={17} />}
+        {t(data.isDemo ? 'home.openAi' : 'home.openMatch')}
         <img src={arrowIcon} alt="" width={17} height={17} />
       </button>
     </section>
@@ -67,11 +74,13 @@ function Hero({ event }: { event: SportEvent }) {
 
 export function HomeScreen() {
   const { data } = useServices();
-  const { t, timeZone } = useSettings();
+  const { t } = useSettings();
   const f = useFilters();
   const navigate = useNavigate();
   const { query, key } = useEventQuery();
-  const featured = useAsync(() => data.getFeatured(query), `featured:${key}`);
+  // The day's events, so the home can tell "no matches" from "only stopped matches".
+  const day = useAsync(() => data.listEvents({ ...query, query: '' }), `featured:${key}`);
+  const featured = day.status === 'success' ? pickFeatured(day.data) : null;
   const openCatalog = () => navigate('/matches');
 
   return (
@@ -88,15 +97,17 @@ export function HomeScreen() {
         />
       </div>
 
-      {featured.status === 'loading' && <LoadingState cards={1} text={t('home.loading')} />}
-      {featured.status === 'error' && (
-        <ErrorState title={t('catalog.errorTitle')} text={t('catalog.errorText')} onRetry={featured.retry} />
+      {day.status === 'loading' && <LoadingState cards={1} text={t('home.loading')} />}
+      {day.status === 'error' && (
+        <ErrorState title={t('catalog.errorTitle')} text={t('catalog.errorText')} onRetry={day.retry} />
       )}
-      {featured.status === 'success' &&
-        (featured.data ? (
-          <Hero key={featured.data.id} event={featured.data} />
+      {day.status === 'success' &&
+        (featured ? (
+          <Hero key={featured.id} event={featured} />
+        ) : day.data.length > 0 ? (
+          <EmptyState title={t('home.noScheduledTitle')} text={t('home.noScheduledText')} />
         ) : (
-          <EmptyState title={t('home.noFeaturedTitle')} text={t('home.noFeaturedText')} />
+          <NoEvents sport={f.filters.sport} title={t('home.noFeaturedTitle')} text={t('home.noFeaturedText')} />
         ))}
 
       <div className={s.more}>
@@ -116,9 +127,7 @@ export function HomeScreen() {
           </span>
         </button>
       </div>
-      <p className={ui.footnote} data-testid="demo-footer">
-        {t('footer.demo', { date: formatLongDate(t, f.today), zone: zoneLabel(t, timeZone) })}
-      </p>
+      <DataFootnote sport={f.filters.sport} today={f.today} />
     </AppShell>
   );
 }

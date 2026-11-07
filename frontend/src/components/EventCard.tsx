@@ -3,7 +3,7 @@ import type { SportEvent, Tournament } from '../data/models';
 import { competitorRole, flagOf, phaseText } from '../data/present';
 import { headlineScore } from '../data/score';
 import { formatDateTime } from '../i18n/format';
-import { useSettings } from '../state/contexts';
+import { useServices, useSettings } from '../state/contexts';
 import { timeOf } from '../time/zoned';
 import { Emblem } from './Emblem';
 import s from './EventCard.module.css';
@@ -16,7 +16,8 @@ interface Props {
 function StatusText({ event }: { event: SportEvent }) {
   const { t, timeZone } = useSettings();
   const status = t(`status.${event.status}`);
-  if (event.status === 'upcoming') return <>{status}</>;
+  // Upcoming shows only its label; a stopped or unknown state is its own phase — once.
+  if (event.status !== 'live' && event.status !== 'finished') return <>{status}</>;
   const phase = phaseText(t, event, timeOf(new Date(event.startsAt), timeZone));
   return (
     <>
@@ -28,6 +29,7 @@ function StatusText({ event }: { event: SportEvent }) {
 
 export function EventCard({ event, tournament }: Props) {
   const { t, timeZone } = useSettings();
+  const { data } = useServices();
   const when = formatDateTime(new Date(event.startsAt), timeZone);
   const score = headlineScore(event);
   const to = `/event/${event.id}`;
@@ -50,7 +52,7 @@ export function EventCard({ event, tournament }: Props) {
         <p className={s.title}>{`${event.home.name} — ${event.away.name}`}</p>
         <p className={s.footer}>
           <StatusText event={event} />
-          {`   ·   ${t('card.openAi')}  →`}
+          {data.isDemo ? `   ·   ${t('card.openAi')}  →` : '   →'}
         </p>
       </Link>
     );

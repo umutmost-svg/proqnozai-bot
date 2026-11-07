@@ -12,7 +12,10 @@ import { createHttpAuthApi } from './auth/api';
 import { AuthController } from './auth/controller';
 import { createSessionStorageMarker } from './auth/signedOut';
 import { brand } from './config/brand';
+import { waitForSession } from './auth/waitForSession';
+import { BackendSportsDataProvider } from './data/BackendSportsDataProvider';
 import { DemoDataProvider, type DemoOperation } from './data/DemoDataProvider';
+import { resolveDataMode } from './data/mode';
 import { BootTracker } from './loading/boot';
 import { createTelegramAdapter } from './telegram/telegram';
 import { systemClock } from './time/clock';
@@ -25,13 +28,18 @@ const failOnce = (new URLSearchParams(window.location.search).get('demoFail') ??
   .filter((op): op is DemoOperation => op === 'events' || op === 'search' || op === 'ai');
 
 const telegram = createTelegramAdapter(window.Telegram?.WebApp);
+// Created once per page, outside React: StrictMode cannot double-bootstrap it.
+const auth = new AuthController(createHttpAuthApi(), () => telegram.initData(), createSessionStorageMarker());
+// Real data needs a session; a real build never switches to demo data on errors.
+const data =
+  resolveDataMode(import.meta.env.VITE_DATA_MODE) === 'real'
+    ? new BackendSportsDataProvider({ waitForSession: () => waitForSession(auth) })
+    : new DemoDataProvider(systemClock, { failOnce });
 const services = {
   clock: systemClock,
-  // Sports data stays demo in M2 regardless of the sign-in state.
-  data: new DemoDataProvider(systemClock, { failOnce }),
+  data,
   telegram,
-  // Created once per page, outside React: StrictMode cannot double-bootstrap it.
-  auth: new AuthController(createHttpAuthApi(), () => telegram.initData(), createSessionStorageMarker()),
+  auth,
   scrollMemory: new Map<string, number>(),
   boot: new BootTracker(),
 };

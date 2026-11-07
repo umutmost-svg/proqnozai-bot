@@ -22,6 +22,8 @@ from starlette.staticfiles import StaticFiles
 
 from miniapp.security import CsrfTokens, LoginRateLimiter, origin_allowed
 from miniapp.settings import Settings
+from miniapp.sports.routes import register_sports_routes
+from miniapp.sports.service import SportsService, build_service
 from miniapp.store import SUPPORTED_LANGS, BurnWindow, InitDataConsumedError, Session, Store, User
 from miniapp.telegram_auth import InitDataError, validate_init_data
 
@@ -151,6 +153,7 @@ def create_app(
     *,
     clock: Callable[[], float] = time.time,
     store: Store | None = None,
+    sports: SportsService | None = None,
 ) -> FastAPI:
     store = store or Store(settings.db_path)
     store.init_schema()
@@ -494,6 +497,8 @@ def create_app(
         response = JSONResponse({"ok": True, "revoked": revoked})
         clear_session_cookie(response)
         return response
+
+    register_sports_routes(app, sports or build_service(settings, clock=clock), current_session)
 
     static = StaticFiles(directory=settings.static_dir, html=True) if settings.static_dir is not None else None
 

@@ -8,6 +8,8 @@ const RULES = [
   { name: 'Telegram bot token', re: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/ },
   { name: 'Anthropic API key', re: /sk-ant-[A-Za-z0-9_-]{10,}/ },
   { name: 'test-only initData signing key', re: /AAtest-only-not-a-real-token|WebAppData/ },
+  // Sports providers are called only by the backend: no provider host, key header or key variable here.
+  { name: 'sports provider called from the browser', re: /api\.football-data\.org|X-Auth-Token|x-apisports-key|MINIAPP_FOOTBALL_DATA_KEY/i },
   { name: 'secret env name', re: /\b(BOT_TOKEN|TELEGRAM_TOKEN|MINIAPP_BOT_TOKEN|ANTHROPIC_API_KEY|FOOTBALL_KEY|FOOTBALL_API_KEY|MOSTBET_[A-Z_]*KEY)\b/ },
 ];
 

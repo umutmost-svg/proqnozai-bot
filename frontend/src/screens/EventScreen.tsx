@@ -4,6 +4,7 @@ import { Emblem } from '../components/Emblem';
 import { Header } from '../components/Header';
 import { Logo } from '../components/Logo';
 import { DeferredButton, EmptyState, ErrorState, LoadingState } from '../components/States';
+import { SourceNote } from '../components/SourceNote';
 import { StatusBadge } from '../components/StatusBadge';
 import ui from '../components/ui.module.css';
 import type { SportEvent } from '../data/models';
@@ -26,13 +27,13 @@ export function EventHero({ event }: { event: SportEvent }) {
   return (
     <section className={s.hero} data-testid="event-hero" data-sport={event.sport}>
       <div className={s.competition}>
-        {tournament && (
+        {tournament?.logo && (
           <span className={s.logo}>
             <Logo asset={tournament.logo} box={26} />
           </span>
         )}
         <p className={s.tournament}>{tournament?.name}</p>
-        <StatusBadge status={event.status} />
+        <StatusBadge status={event.status} demo={data.isDemo} />
       </div>
       <div className={s.competitors}>
         <div className={s.competitor}>
@@ -62,26 +63,37 @@ export function EventHero({ event }: { event: SportEvent }) {
 
 function Overview({ event }: { event: SportEvent }) {
   const { t } = useSettings();
+  const { data } = useServices();
   let title = t('event.prematchTitle');
   let text = '';
-  if (event.status === 'upcoming') {
+  if (event.status === 'upcoming' && !data.isDemo) {
+    // Real data: promise nothing the source does not supply (form, H2H, lineups).
+    text = t('event.prematch.real');
+  } else if (event.status === 'upcoming') {
     switch (event.sport) {
       case 'football':
         text = t('event.prematch.football');
         break;
       case 'tennis':
-        text = t('event.prematch.tennis', { surface: t(`surface.${event.surface}`) });
+        text = event.surface
+          ? t('event.prematch.tennis', { surface: t(`surface.${event.surface}`) })
+          : t('event.prematch.noDetails');
         break;
       case 'basketball':
         text = t('event.prematch.basketball');
         break;
       case 'mma':
-        text = t('event.prematch.mma', { rounds: event.scheduledRounds });
+        text = event.scheduledRounds
+          ? t('event.prematch.mma', { rounds: event.scheduledRounds })
+          : t('event.prematch.noDetails');
         break;
     }
   } else if (event.status === 'live') {
     title = t('event.liveTitle');
-    text = t('event.liveText');
+    text = t(data.isDemo ? 'event.liveText' : 'event.liveTextReal');
+  } else if (event.status !== 'finished') {
+    title = t('event.statusTitle');
+    text = t(`event.statusText.${event.status}`);
   } else {
     title = t('event.finishedTitle');
     text =
@@ -99,6 +111,7 @@ function Overview({ event }: { event: SportEvent }) {
 
 function Stats({ event }: { event: SportEvent }) {
   const { t } = useSettings();
+  const { data } = useServices();
   const rows = statRows(t, event);
   return (
     <>
@@ -127,10 +140,17 @@ function Stats({ event }: { event: SportEvent }) {
           </table>
         </section>
       ) : (
-        <EmptyState title={t('event.tabStats')} text={t('event.statsUnavailable')} />
+        <EmptyState
+          title={t('event.tabStats')}
+          text={t(event.source ? 'event.statsNotProvided' : 'event.statsUnavailable')}
+        />
       )}
       {event.sport === 'football' && <p className={ui.notice}>{t('event.lineupsNote')}</p>}
-      <p className={ui.footnote}>{t('event.demoNote')}</p>
+      {data.isDemo || !event.source ? (
+        <p className={ui.footnote}>{t('event.demoNote')}</p>
+      ) : (
+        <SourceNote source={event.source} />
+      )}
     </>
   );
 }
@@ -176,18 +196,24 @@ export function EventScreen() {
             <button type="button" role="tab" aria-selected={tab === 'stats'} className={tab === 'stats' ? s.tabActive : s.tab} onClick={() => setTab('stats')}>
               {t('event.tabStats')}
             </button>
-            <button type="button" role="tab" aria-selected={false} className={s.tab} onClick={openAi}>
-              {t('event.tabAi')}
-            </button>
+            {data.isDemo && (
+              <button type="button" role="tab" aria-selected={false} className={s.tab} onClick={openAi}>
+                {t('event.tabAi')}
+              </button>
+            )}
           </div>
           {tab === 'overview' ? (
             <>
               <Overview event={event} />
-              <button type="button" className={ui.primary} onClick={openAi}>
-                {t('event.createAi')}
-              </button>
+              {/* The real AI analysis is a later M3 block: no button that leads nowhere. */}
+              {data.isDemo && (
+                <button type="button" className={ui.primary} onClick={openAi}>
+                  {t('event.createAi')}
+                </button>
+              )}
               {/* Favourites ship in M4. */}
               <DeferredButton label={t('event.saveMatch')} />
+              {!data.isDemo && event.source && <SourceNote source={event.source} />}
             </>
           ) : (
             <Stats event={event} />

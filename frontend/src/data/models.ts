@@ -7,7 +7,11 @@
 export type Sport = 'football' | 'tennis' | 'basketball' | 'mma';
 export const SPORTS: readonly Sport[] = ['football', 'tennis', 'basketball', 'mma'];
 
-export type EventStatus = 'upcoming' | 'live' | 'finished';
+/**
+ * Real states are kept apart: a postponed, suspended or cancelled event is never
+ * shown as an ordinary upcoming one; an unrecognised provider state is "unknown".
+ */
+export type EventStatus = 'upcoming' | 'live' | 'finished' | 'postponed' | 'suspended' | 'cancelled' | 'unknown';
 
 /** Local image asset with its intrinsic size, so aspect ratio is never distorted. */
 export interface ImageAsset {
@@ -22,7 +26,8 @@ export interface Tournament {
   id: string;
   sport: Sport;
   name: string;
-  logo: ImageAsset;
+  /** Local, licensed asset only; real tournaments without one show their name alone. */
+  logo?: ImageAsset;
 }
 
 export interface Competitor {
@@ -40,9 +45,26 @@ export type Pair = readonly [home: number, away: number];
 
 export type AiDemo =
   | { kind: 'ready'; probabilities: readonly number[] }
-  | { kind: 'insufficient'; reasons: readonly InsufficientReason[] };
+  | { kind: 'insufficient'; reasons: readonly InsufficientReason[] }
+  /** Real events: the AI analysis is not connected yet, nothing is shown instead. */
+  | { kind: 'unavailable' };
 
 export type InsufficientReason = 'noFreshStats' | 'lineupUnconfirmed' | 'limitedCoverage';
+
+/** Where a real event came from; absent for demo events. */
+export interface EventSource {
+  provider: string;
+  /** When our backend received it (ISO-8601 UTC). */
+  fetchedAt: string;
+  /** The provider's own "last updated", if it gives one. */
+  sourceUpdatedAt: string | null;
+  /** Served from cache after a failed refresh. */
+  stale: boolean;
+  /** Attribution text the provider's terms require next to its data. */
+  attribution: string | null;
+  /** The provider's scores are delayed on the current plan. */
+  delayed: boolean;
+}
 
 interface BaseEvent {
   id: string;
@@ -54,20 +76,25 @@ interface BaseEvent {
   away: Competitor;
   featured?: boolean;
   ai: AiDemo;
+  source?: EventSource;
 }
 
 export interface FootballEvent extends BaseEvent {
   sport: 'football';
   score?: Pair;
   minute?: number;
+  halfTime?: Pair;
+  /** Result set by the competition (e.g. a forfeit), not played out. */
+  awarded?: boolean;
   stats?: { possession: Pair; shots: Pair; onTarget: Pair; corners: Pair };
 }
 
 export interface TennisEvent extends BaseEvent {
   sport: 'tennis';
-  format: 'singles' | 'doubles';
-  surface: 'hard' | 'clay' | 'grass';
-  bestOf: 3 | 5;
+  /** Unknown when the provider does not say; never guessed. */
+  format?: 'singles' | 'doubles';
+  surface?: 'hard' | 'clay' | 'grass';
+  bestOf?: 3 | 5;
   /** Games per set, completed and in progress. */
   sets: readonly Pair[];
   /** Points in the current game, e.g. "40:30". */
@@ -87,8 +114,9 @@ export type MmaMethod = 'ko_tko' | 'submission' | 'decision' | 'draw';
 
 export interface MmaEvent extends BaseEvent {
   sport: 'mma';
-  weightClass: string;
-  scheduledRounds: 3 | 5;
+  /** Unknown when the provider does not say; never guessed. */
+  weightClass?: string;
+  scheduledRounds?: 3 | 5;
   currentRound?: number;
   roundClock?: string;
   result?: { winner: 'home' | 'away' | null; method: MmaMethod; round: number; time: string };
@@ -100,9 +128,9 @@ export type SportEvent = FootballEvent | TennisEvent | BasketballEvent | MmaEven
 export interface AiAnalysis {
   eventId: string;
   sport: Sport;
-  kind: 'ready' | 'insufficient';
+  kind: 'ready' | 'insufficient' | 'unavailable';
   probabilities: readonly number[];
   reasons: readonly InsufficientReason[];
-  /** When the demo snapshot was produced. */
-  generatedAt: string;
+  /** When the demo snapshot was produced; null when nothing was produced. */
+  generatedAt: string | null;
 }

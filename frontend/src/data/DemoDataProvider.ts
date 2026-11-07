@@ -2,7 +2,7 @@ import type { Clock } from '../time/clock';
 import { buildDemoEvents, TOURNAMENTS } from './fixtures';
 import { ALL_TOURNAMENTS, filterEvents, pickFeatured, type EventQuery } from './filter';
 import type { AiAnalysis, Sport, SportEvent, Tournament } from './models';
-import { DataError, type SportsDataProvider } from './provider';
+import { DataError, type SportCoverage, type SportsDataProvider } from './provider';
 
 export type DemoOperation = 'events' | 'search' | 'ai';
 
@@ -39,6 +39,10 @@ export class DemoDataProvider implements SportsDataProvider {
     if (latency > 0) await new Promise((r) => setTimeout(r, latency));
     if (this.failOnce.delete(op)) throw new DataError(op);
     return value();
+  }
+
+  coverage(): SportCoverage {
+    return { status: 'demo', provider: null, attribution: null };
   }
 
   getTournament(id: string): Tournament | undefined {

@@ -27,7 +27,8 @@ export function mmaRoundLabel(e: MmaEvent): string {
 
 /** Main scoreboard value, or null when the event has not started. */
 export function headlineScore(e: SportEvent): string | null {
-  if (e.status === 'upcoming') return null;
+  // Only played (or interrupted) events have a score; a postponed one shows none.
+  if (e.status !== 'live' && e.status !== 'finished' && e.status !== 'suspended') return null;
   switch (e.sport) {
     case 'football':
       return e.score ? `${e.score[0]} : ${e.score[1]}` : null;

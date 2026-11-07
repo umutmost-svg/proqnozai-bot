@@ -1,7 +1,9 @@
 # Spor AI Mini App stand: built frontend + API in ONE image, ONE HTTPS origin.
 # Separate from the bot's root Dockerfile; never used by the production bot.
 # Build context = repository root (the root .dockerignore drops secrets, DBs, node_modules, dist):
-#   docker build -f deploy/miniapp/Dockerfile -t sporai-miniapp .
+#   docker build -f deploy/miniapp/Dockerfile --build-arg VITE_DATA_MODE=real -t sporai-miniapp .
+# VITE_DATA_MODE is baked into the bundle at build time (demo | real) and is required:
+# a runtime env var cannot change it, and a forgotten value must not silently mean demo.
 # Base images are pinned by digest (multi-arch index); bump tag and digest together.
 
 FROM node:24.22.2-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9 AS frontend
@@ -11,8 +13,12 @@ COPY frontend/package.json frontend/package-lock.json ./
 # Exactly the lock file; fails if package.json and the lock disagree.
 RUN npm ci
 COPY frontend/ ./
+ARG VITE_DATA_MODE
 # tsc + vite build, then the bundle scan for secrets and temporary URLs.
-RUN npm run build && npm run check:bundle
+RUN case "$VITE_DATA_MODE" in demo|real) ;; \
+      *) echo "build with --build-arg VITE_DATA_MODE=demo or real" >&2; exit 1 ;; \
+    esac \
+    && npm run build && npm run check:bundle
 
 FROM python:3.13.18-slim@sha256:09a17cad02668ae61ece136b4fd36ac3849e14f670ebedb637ea3e15580525bc AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -30,6 +36,8 @@ RUN pip install --require-hashes --no-deps --only-binary=:all: -r miniapp/requir
 # Application code only: no tests, no .env, no bot modules.
 COPY miniapp/__init__.py miniapp/admin.py miniapp/app.py miniapp/asgi.py miniapp/security.py \
      miniapp/settings.py miniapp/store.py miniapp/telegram_auth.py miniapp/
+COPY miniapp/sports/ miniapp/sports/
+COPY miniapp/ai/ miniapp/ai/
 COPY --from=frontend /build/frontend/dist /app/static
 COPY deploy/miniapp/entrypoint.sh /usr/local/bin/miniapp-entrypoint
 RUN chmod 0755 /usr/local/bin/miniapp-entrypoint && python -m compileall -q /app/miniapp

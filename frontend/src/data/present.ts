@@ -5,12 +5,20 @@ import type { Competitor, Pair, SportEvent } from './models';
 /** Secondary scoreboard line: minute, set, quarter clock or round clock. */
 export function phaseText(t: Translate, e: SportEvent, kickoffTime: string): string {
   if (e.status === 'upcoming') return kickoffTime;
+  if (e.status === 'postponed' || e.status === 'cancelled' || e.status === 'unknown' || e.status === 'suspended') {
+    return t(`status.${e.status}`);
+  }
   switch (e.sport) {
     case 'football':
-      if (e.status === 'finished') return t('phase.finished');
+      if (e.status === 'finished') return e.awarded ? t('event.awarded') : t('phase.finished');
+      // A provider may not report the minute: say "in play", never invent 0'.
+      if (e.minute === undefined) return t('phase.football.liveNoMinute');
+      // Real data: the minute alone. A break (half-time) is "live" at the provider and
+      // added/extra time exceed 45/90, so the half cannot be inferred from the minute.
+      if (e.source || e.minute > 90) return t('phase.football.minute', { minute: e.minute });
       return t('phase.football.live', {
-        minute: e.minute ?? 0,
-        half: t((e.minute ?? 0) > 45 ? 'phase.football.secondHalf' : 'phase.football.firstHalf'),
+        minute: e.minute,
+        half: t(e.minute > 45 ? 'phase.football.secondHalf' : 'phase.football.firstHalf'),
       });
     case 'tennis':
       if (e.status === 'finished') return t('phase.finished');
@@ -28,6 +36,7 @@ export function phaseText(t: Translate, e: SportEvent, kickoffTime: string): str
           time: e.result.time,
         });
       }
+      if (e.scheduledRounds === undefined) return e.roundClock ?? t('status.live');
       return t('phase.mma.live', { clock: e.roundClock ?? '', rounds: e.scheduledRounds });
   }
 }
@@ -90,6 +99,7 @@ export function statRows(t: Translate, e: SportEvent): StatRow[] | null {
 export function competitorRole(t: Translate, e: SportEvent, side: 'home' | 'away'): string {
   switch (e.sport) {
     case 'tennis':
+      if (!e.format) return '';
       return t(e.format === 'singles' ? 'card.singles' : 'card.doubles');
     case 'basketball':
       return t(side === 'home' ? 'card.home' : 'card.away');

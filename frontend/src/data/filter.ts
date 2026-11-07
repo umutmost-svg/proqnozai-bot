@@ -1,5 +1,5 @@
 import { dayKeyOf, type DayKey } from '../time/zoned';
-import type { Sport, SportEvent, Tournament } from './models';
+import type { EventStatus, Sport, SportEvent, Tournament } from './models';
 
 export const ALL_TOURNAMENTS = 'all';
 
@@ -44,13 +44,33 @@ export function filterEvents(
     .sort(compareEvents);
 }
 
-const STATUS_ORDER = { live: 0, upcoming: 1, finished: 2 } as const;
+const STATUS_ORDER: Record<EventStatus, number> = {
+  live: 0,
+  upcoming: 1,
+  suspended: 2,
+  postponed: 3,
+  finished: 4,
+  cancelled: 5,
+  unknown: 6,
+};
 
 export function compareEvents(a: SportEvent, b: SportEvent): number {
   return STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.startsAt.localeCompare(b.startsAt);
 }
 
-/** Featured event for the home hero: an explicitly featured one first, then the next relevant. */
+const FEATURABLE: ReadonlySet<EventStatus> = new Set(['live', 'upcoming', 'finished']);
+
+/**
+ * Featured event for the home hero: an explicitly featured one first, then the next
+ * relevant. Postponed, suspended, cancelled or unknown events are never the
+ * "match of the day" — the hero shows a kickoff time, not a status.
+ */
 export function pickFeatured(events: readonly SportEvent[]): SportEvent | null {
-  return events.find((e) => e.featured) ?? events.find((e) => e.status !== 'finished') ?? events[0] ?? null;
+  const candidates = events.filter((e) => FEATURABLE.has(e.status));
+  return (
+    candidates.find((e) => e.featured) ??
+    candidates.find((e) => e.status === 'live' || e.status === 'upcoming') ??
+    candidates[0] ??
+    null
+  );
 }

@@ -4,6 +4,7 @@ import { App } from '../App';
 import type { AuthApi } from '../auth/api';
 import { AuthController } from '../auth/controller';
 import { DemoDataProvider, type DemoOperation } from '../data/DemoDataProvider';
+import type { SportsDataProvider } from '../data/provider';
 import { STORAGE_KEY, type Settings } from '../settings/settings';
 import { BootTracker } from '../loading/boot';
 import { createTelegramAdapter } from '../telegram/telegram';
@@ -28,6 +29,8 @@ export function renderApp(
     aiLatencyMs?: number;
     latencyMs?: number;
     authApi?: AuthApi;
+    /** Replace the demo provider (e.g. BackendSportsDataProvider with a fake fetch). */
+    data?: SportsDataProvider;
     initData?: string | null;
     strict?: boolean;
   } = {},
@@ -38,7 +41,9 @@ export function renderApp(
   const clock = fixedClock(TEST_NOW);
   const services = {
     clock,
-    data: new DemoDataProvider(clock, { latencyMs: opts.latencyMs ?? 0, aiLatencyMs: opts.aiLatencyMs ?? 0, failOnce: opts.failOnce }),
+    data:
+      opts.data ??
+      new DemoDataProvider(clock, { latencyMs: opts.latencyMs ?? 0, aiLatencyMs: opts.aiLatencyMs ?? 0, failOnce: opts.failOnce }),
     telegram: createTelegramAdapter(undefined),
     auth: new AuthController(opts.authApi ?? offlineAuthApi, () => opts.initData ?? null),
     scrollMemory: new Map<string, number>(),

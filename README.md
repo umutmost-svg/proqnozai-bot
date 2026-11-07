@@ -114,6 +114,13 @@ Mini App (`miniapp/`, `frontend/`) читает только свои перем
 `MINIAPP_LOGIN_RATE_WINDOW_S`, `MINIAPP_COOKIE_SAMESITE`,
 `MINIAPP_ALLOW_EPHEMERAL_DB` (только локальный Docker).
 
+Реальные спортивные данные Mini App (M3, `docs/miniapp/m3-sports.md`):
+`MINIAPP_FOOTBALL_DATA_KEY` (секрет, только backend; без него футбол —
+«не подключён»), `MINIAPP_FOOTBALL_DATA_COMPETITIONS`,
+`MINIAPP_FOOTBALL_DATA_LIVE_PLAN`, `MINIAPP_FOOTBALL_DATA_PER_MINUTE`,
+`MINIAPP_FOOTBALL_DATA_PER_DAY`, `MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR`.
+Frontend: `VITE_DATA_MODE=demo|real` при сборке (по умолчанию `demo`).
+
 ## Модели Claude (фактический роутинг)
 
 | Задача | Модель | Где |

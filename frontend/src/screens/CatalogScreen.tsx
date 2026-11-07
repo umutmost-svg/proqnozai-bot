@@ -1,3 +1,5 @@
+import { NoEvents } from '../components/NoEvents';
+import { DataFootnote } from '../components/SourceNote';
 import { useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
@@ -6,19 +8,19 @@ import { EventCard } from '../components/EventCard';
 import { Header } from '../components/Header';
 import { SearchField } from '../components/SearchField';
 import { SportTabs } from '../components/SportTabs';
-import { EmptyState, ErrorState, LoadingState } from '../components/States';
+import { ErrorState, LoadingState } from '../components/States';
 import { TournamentStrip } from '../components/TournamentStrip';
 import ui from '../components/ui.module.css';
 import { ALL_TOURNAMENTS } from '../data/filter';
 import { useAsync } from '../hooks/useAsync';
-import { formatDayMonth, formatLongDate, zoneLabel } from '../i18n/format';
+import { formatDayMonth } from '../i18n/format';
 import { useFilters, useServices, useSettings } from '../state/contexts';
 import { useEventQuery } from './useEventQuery';
 import s from './CatalogScreen.module.css';
 
 export function CatalogScreen() {
   const { data } = useServices();
-  const { t, timeZone } = useSettings();
+  const { t } = useSettings();
   const f = useFilters();
   const location = useLocation();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -78,7 +80,8 @@ export function CatalogScreen() {
       {events.status === 'success' && events.data.length === 0 && (
         <>
           <p className={s.summary}>{summary}</p>
-          <EmptyState
+          <NoEvents
+            sport={f.filters.sport}
             title={searching ? t('catalog.searchEmptyTitle') : t('catalog.emptyTitle')}
             text={searching ? t('catalog.searchEmptyText') : t('catalog.emptyText')}
             actions={
@@ -106,9 +109,7 @@ export function CatalogScreen() {
         </div>
       )}
 
-      <p className={ui.footnote} data-testid="demo-footer">
-        {t('footer.demo', { date: formatLongDate(t, f.today), zone: zoneLabel(t, timeZone) })}
-      </p>
+      <DataFootnote sport={f.filters.sport} today={f.today} />
     </AppShell>
   );
 }

@@ -22,11 +22,18 @@ const STATUS_TEXT: Record<AuthStatus, MessageKey> = {
   signed_out: 'auth.signedOut',
 };
 
+/** In real mode there is no demo to fall back to: say what the user can do instead. */
+function statusText(status: AuthStatus, isDemo: boolean): MessageKey {
+  if (!isDemo && status === 'outside_telegram') return 'auth.outsideReal';
+  if (!isDemo && status === 'unavailable') return 'auth.unavailableReal';
+  return STATUS_TEXT[status];
+}
+
 /** Identity only. Whether sports data is demo is shown separately on each screen. */
 function AccountStatus() {
   const { t } = useSettings();
   const { state, auth } = useAuth();
-  const { telegram } = useServices();
+  const { telegram, data } = useServices();
   const [logoutFailed, setLogoutFailed] = useState(false);
   // Both sign-out buttons are off while one request runs: a tap the controller
   // ignores must not be reported as a failed sign-out.
@@ -48,7 +55,7 @@ function AccountStatus() {
       <p className={s.user}>{name || t('profile.user')}</p>
       <p className={s.context}>{t('profile.context')}</p>
       <p className={verified ? s.authOk : s.authNote} role="status" aria-live="polite" data-testid="auth-status">
-        {t(STATUS_TEXT[state.status])}
+        {t(statusText(state.status, data.isDemo))}
       </p>
       {logoutFailed && <p className={s.authNote}>{t('auth.logoutFailed')}</p>}
       {RETRYABLE.has(state.status) && (

@@ -8,6 +8,24 @@ const events = buildDemoEvents(new Date('2026-11-08T06:00:00Z'));
 const get = <T extends SportEvent>(id: string) => events.find((e) => e.id === id) as T;
 const t = createTranslator('ru');
 
+describe('football phase from the minute', () => {
+  const live = (minute?: number) => ({ ...get<SportEvent>('fb-costa-sierra'), status: 'live' as const, minute }) as SportEvent;
+  it('names the half only within regular time', () => {
+    expect(phaseText(t, live(30), '')).toContain("30'");
+    expect(phaseText(t, live(30), '')).toContain('первый тайм');
+    expect(phaseText(t, live(67), '')).toContain('второй тайм');
+    // Added/extra time or penalties: the minute alone, no guessed half.
+    expect(phaseText(t, live(105), '')).toBe("105'");
+    expect(phaseText(t, live(undefined), '')).toBe('Идет матч');
+  });
+
+  it('real events show the supplied minute only (a break is "live" at the provider)', () => {
+    const source = { provider: 'football-data.org', fetchedAt: '2026-11-08T05:59:00Z', sourceUpdatedAt: null, stale: false, attribution: null, delayed: true };
+    const real = { ...live(45), source } as SportEvent;
+    expect(phaseText(t, real, '')).toBe("45'");
+  });
+});
+
 describe('sport-specific scoring', () => {
   it('football shows goals', () => {
     expect(headlineScore(get('fb-costa-sierra'))).toBe('2 : 1');
