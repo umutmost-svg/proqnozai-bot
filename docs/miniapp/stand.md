@@ -139,7 +139,7 @@ sealed). В репозитории есть лишь плейсхолдеры в
 | `MINIAPP_LOGINS_ENABLED` | `true` (аварийно — `false`) | — |
 | `MINIAPP_MAX_SESSIONS_PER_USER` | `5` (необязательна; допустимо 1…5) | — |
 | `MINIAPP_FOOTBALL_DATA_KEY` | ключ football-data.org **только для Mini App** (не `FOOTBALL_KEY` бота); без него футбол и AI — «не подключены» | да |
-| `MINIAPP_FOOTBALL_DATA_COMPETITIONS`, `MINIAPP_FOOTBALL_DATA_LIVE_PLAN`, `MINIAPP_FOOTBALL_DATA_PER_MINUTE`, `MINIAPP_FOOTBALL_DATA_PER_DAY`, `MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR` | по умолчанию (`PL,PD`, `false`, `8`, `3000`, `20`) | — |
+| `MINIAPP_FOOTBALL_DATA_COMPETITIONS`, `MINIAPP_FOOTBALL_DATA_LIVE_PLAN`, `MINIAPP_FOOTBALL_DATA_PER_MINUTE`, `MINIAPP_FOOTBALL_DATA_PER_DAY`, `MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR` | по умолчанию (`PL,PD,SA,BL1,FL1,CL,ELC,DED,PPL,BSA` — все клубные турниры бесплатного плана, `false`, `8`, `3000`, `20`) | — |
 | `MINIAPP_ANTHROPIC_API_KEY` | ключ Anthropic **только для Mini App** (не `ANTHROPIC_API_KEY` бота); без него кнопки AI нет | да |
 | `MINIAPP_AI_MODEL`, `MINIAPP_AI_PER_USER_DAILY`, `MINIAPP_AI_DAILY_BUDGET` | по умолчанию (`claude-opus-5-5`, `10`, `200`); бюджет — потолок платных вызовов в сутки | — |
 | `MINIAPP_SESSION_TTL_S`, `MINIAPP_INIT_DATA_MAX_AGE_S`, `MINIAPP_INIT_DATA_FUTURE_SKEW_S`, `MINIAPP_LOGIN_RATE_LIMIT`, `MINIAPP_LOGIN_RATE_WINDOW_S`, `MINIAPP_COOKIE_SAMESITE` | по умолчанию (необязательны) | — |
@@ -206,7 +206,7 @@ Telegram») в режиме `MINIAPP_CSP_MODE=report-only`. Нарушения �
 
 | Уровень | Мера |
 |---|---|
-| Cloudflare, Rate limiting rule (на Free — 1 правило, окно 10 с, счёт по IP) | **Обязательно до открытия стенда — весь API:** `starts_with(http.request.uri.path, "/api/")`, порог 30 запросов за 10 с, Block на 10 с. Иначе `GET /api/me` с произвольной cookie без ограничений доходит до SQLite (поиск сессии по хешу токена). На платном плане — второе, более строгое правило: `http.request.uri.path eq "/api/auth/session"` и `POST`, 10 за 10 с. На Free вход дополнительно защищён в приложении: HMAC до любой записи, лимит по `user.id` |
+| Cloudflare, Rate limiting rule (на Free — 1 правило, окно 10 с, счёт по IP) | **Обязательно до открытия стенда — весь API:** `starts_with(http.request.uri.path, "/api/") and not starts_with(http.request.uri.path, "/api/crests/")`, порог 30 запросов за 10 с, Block на 10 с. Эмблемы (`GET /api/crests/...`, M3.3) исключены: один экран показывает десятки картинок. Вместо лимита по IP — кеш Cloudflare (п. 5 «Caching» ниже), так что повторные запросы до origin не доходят; маршрут публичный, не трогает SQLite и квоту football-data.org, отдаёт только PNG из памяти, загрузку с хоста эмблем ограничивает сам (240 в минуту, ожидание слота ≤ 3 с), а всего отвечает не больше чем на 200 запросов известных эмблем в секунду (дальше 429); неизвестные id и запросы с параметрами (обход кеша) получают дешёвый 404 под отдельным лимитом (200 в секунду, дальше 429) и в лимит известных эмблем не входят. Иначе `GET /api/me` с произвольной cookie без ограничений доходит до SQLite (поиск сессии по хешу токена). На платном плане — второе, более строгое правило: `http.request.uri.path eq "/api/auth/session"` и `POST`, 10 за 10 с. На Free вход дополнительно защищён в приложении: HMAC до любой записи, лимит по `user.id` |
 | Cloudflare, WAF custom rules (на Free — 5) | 1) Block, если метод не `GET`/`HEAD`/`POST`. 2) Block для `starts_with(http.request.uri.path, "/api/")` и метода `POST` вне списка `/api/auth/session`, `/api/auth/logout`, `/api/auth/logout-all`, `/api/me/language`, `/api/ai/analysis`. 3) Block, если `http.host` не равен домену стенда |
 | Cloudflare | Always Use HTTPS; SSL mode — по разделу «Настройка Cloudflare», шаг 2 (не Flexible; Full (strict), если у сервера доверенный сертификат); Under Attack / Bot Fight не включать — это браузерные челленджи, они ломают API и WebView |
 | Cloudflare Transform Rule | Modify Request Header → Set `X-Edge-Auth` = секрет. Set перезаписывает значение, присланное клиентом |
@@ -467,7 +467,13 @@ production-проект бота. Настройки задаются в пан�
    `MINIAPP_EDGE_SECRET`.
 4. Security → WAF → Rate limiting rule (на весь `/api/`) и Custom rules — по
    таблице «Защита `/api/auth/session` и API от массовых запросов».
-5. Caching: правило Bypass cache для `/api/*`. Приложение и так отдаёт
+5. Caching: два правила с непересекающимися условиями (при пересечении
+   Cloudflare применяет последнее подходящее, и Bypass отключил бы кеш эмблем):
+   Eligible for cache — `starts_with(http.request.uri.path, "/api/crests/")`
+   (Edge TTL — по заголовкам origin: эмблемы отдаются `public, max-age=86400`, без
+   cookie и пользовательских данных); Bypass cache —
+   `starts_with(http.request.uri.path, "/api/") and not starts_with(http.request.uri.path, "/api/crests/")`.
+   Проверка: повторный запрос эмблемы — заголовок `cf-cache-status: HIT`. Приложение и так отдаёт
    `no-store`; правило страхует от чужих настроек кэша.
 
 ## Проверки в Telegram (до открытия стенда тестировщикам)

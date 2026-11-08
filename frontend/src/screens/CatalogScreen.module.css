@@ -54,3 +54,21 @@
   color: var(--text-muted-3);
   overflow-wrap: anywhere;
 }
+
+.calendarLink {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: var(--glass-18);
+  border: 1px solid var(--line-62);
+  font-weight: 500;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-primary);
+  text-decoration: none;
+}

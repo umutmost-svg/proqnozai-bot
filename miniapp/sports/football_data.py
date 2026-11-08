@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
 from .client import ProviderClient, UpstreamError
+from .crests import crest_source
 from .models import Competitor, EventStatus, FootballEvent, Provenance, Tournament
 
 PROVIDER = "football-data.org"
@@ -60,6 +61,39 @@ UPCOMING_TTL_S = 15 * 60.0
 FINISHED_TTL_S = 6 * 3600.0
 PAST_DAY_TTL_S = 12 * 3600.0
 NOT_FOUND_TTL_S = 15 * 60.0
+# A season calendar (~150-400 matches, one request) is browsed, not watched live:
+# refreshed every 15 minutes, every 2 minutes while one of its matches is live.
+CALENDAR_TTL_S = 15 * 60.0
+CALENDAR_LIVE_TTL_S = 120.0
+# Competition emblems rarely change: the competition list is asked at most once a day.
+EMBLEMS_TTL_S = 24 * 3600.0
+EMBLEMS_RETRY_S = 15 * 60.0
+
+
+# Short Latin names come from the provider (`shortName`). A few of its short names are
+# unusual or misspelt; these familiar forms replace them (keyed by the provider's full
+# name, so a renamed club simply falls back to the provider's own short name).
+SHORT_NAMES: dict[str, str] = {
+    "Brighton & Hove Albion FC": "Brighton",
+    "Nottingham Forest FC": "Nottingham Forest",
+    "Wolverhampton Wanderers FC": "Wolves",
+    "West Ham United FC": "West Ham",
+    "Sevilla FC": "Sevilla",
+    "Real Racing Club de Santander": "Racing Santander",
+    "Borussia Mönchengladbach": "Gladbach",
+    "FK Shakhtar Donetsk": "Shakhtar",
+    "PAE AEK": "AEK Athens",
+    "Como 1907": "Como",
+}
+MAX_SHORT_NAME = 24
+
+
+def short_name(full: str, provided: object) -> str | None:
+    if full in SHORT_NAMES:
+        return SHORT_NAMES[full]
+    if isinstance(provided, str) and provided.strip() and len(provided.strip()) <= MAX_SHORT_NAME:
+        return provided.strip()
+    return None
 
 
 def tournament_id(code: str) -> str:
@@ -123,8 +157,10 @@ def _team(node: object) -> Competitor | None:
     name = node.get("name") or node.get("shortName")
     if not isinstance(name, str) or not name.strip():
         return None
-    short = node.get("shortName") if isinstance(node.get("shortName"), str) else None
-    return Competitor(f"{ID_PREFIX}:team:{node['id']}", name.strip(), short)
+    number = node["id"]
+    source = crest_source(node.get("crest"))
+    return Competitor(f"{ID_PREFIX}:team:{number}", name.strip(), short_name(name.strip(), node.get("shortName")),
+                      crest_source=source, crest_path=f"/api/crests/team/{number}" if source else None)
 
 
 def normalize_match(raw: object, fetched_at: str, allowed_codes: frozenset[str]) -> FootballEvent | None:
@@ -145,6 +181,7 @@ def normalize_match(raw: object, fetched_at: str, allowed_codes: frozenset[str])
     score = _pair(score_node.get("fullTime")) if status in ("live", "finished", "suspended") else None
     half_time = _pair(score_node.get("halfTime")) if status in ("live", "finished", "suspended") else None
     minute = _int_or_none(raw.get("minute")) if status == "live" else None
+    matchday = raw.get("matchday")
     return FootballEvent(
         id=event_id(raw["id"]),
         tournament_id=tournament_id(code),
@@ -157,6 +194,7 @@ def normalize_match(raw: object, fetched_at: str, allowed_codes: frozenset[str])
         half_time=half_time,
         minute=minute,
         awarded=source_status == "AWARDED",
+        matchday=matchday if _id(matchday) is not None and matchday <= 100 else None,
         provenance=Provenance(PROVIDER, fetched_at, _iso_utc(raw.get("lastUpdated"))),
     )
 
@@ -189,6 +227,76 @@ def ttl_for(events: list[FootballEvent], day: date, today: date) -> float:
     return UPCOMING_TTL_S
 
 
+_NOT_STARTED = frozenset({"SCHEDULED", "TIMED"})
+
+
+def _undetermined(raw: object, allowed: frozenset[str]) -> bool:
+    """A future fixture whose teams are not known yet (e.g. a knockout tie, even a final with
+    both sides open): not broken, just not shown. Everything else must be valid — id, status,
+    competition, kickoff, and each side that IS known — so a truncated record is still broken."""
+    if not isinstance(raw, dict) or _id(raw.get("id")) is None:
+        return False
+    status, competition = raw.get("status"), raw.get("competition")
+    code = competition.get("code") if isinstance(competition, dict) else None
+    # isinstance first: an unhashable value (list/dict) must read as broken, never raise.
+    if not isinstance(status, str) or status not in _NOT_STARTED or not isinstance(code, str) or code not in allowed:
+        return False
+    if _iso_utc(raw.get("utcDate")) is None:
+        return False
+    sides = [raw.get("homeTeam"), raw.get("awayTeam")]
+    if not all(isinstance(t, dict) for t in sides):
+        return False
+    # An open side says so explicitly ({"id": null, "name": null}); {} or a non-string name is broken.
+    tbd = [("id" in t and t["id"] is None and "name" in t and t["name"] is None) for t in sides]
+    known_ok = all(tbd[i] or (_id(t.get("id")) is not None and isinstance(t.get("name"), str) and t["name"].strip())
+                   for i, t in enumerate(sides))
+    return any(tbd) and known_ok
+
+
+def _day(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) != 10:
+        return None
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class Season:
+    start: str | None
+    end: str | None
+    current_matchday: int | None
+
+    def to_json(self) -> dict:
+        return {"startDate": self.start, "endDate": self.end, "currentMatchday": self.current_matchday}
+
+
+def season_of(raw_matches: list) -> Season:
+    """Season facts as given; a value that is present but unreadable makes the answer broken."""
+    nodes = [m["season"] for m in raw_matches if isinstance(m, dict) and "season" in m]  # null too: broken
+    if any(not isinstance(n, dict) for n in nodes):
+        raise UpstreamError("bad_response")
+    if not nodes:
+        return Season(None, None, None)
+    if len(nodes) != sum(1 for m in raw_matches if isinstance(m, dict)):
+        raise UpstreamError("bad_response")  # some matches carry a season and some do not
+    # Every match's season must be readable and the same one: a mixed answer is broken.
+    facts = [(n.get("id"), _season_facts(n)) for n in nodes]
+    if any(f != facts[0] for f in facts[1:]):
+        raise UpstreamError("bad_response")
+    return facts[0][1]
+
+
+def _season_facts(node: dict) -> Season:
+    start, end, current = node.get("startDate"), node.get("endDate"), node.get("currentMatchday")
+    if (start is not None and _day(start) is None) or (end is not None and _day(end) is None):
+        raise UpstreamError("bad_response")
+    if current is not None and (_id(current) is None or current > 100):
+        raise UpstreamError("bad_response")
+    return Season(_day(start), _day(end), current)
+
+
 def event_ttl(event: FootballEvent) -> float:
     return {"live": LIVE_TTL_S, "finished": FINISHED_TTL_S}.get(event.status, UPCOMING_TTL_S)
 
@@ -207,6 +315,17 @@ class FootballDataAdapter:
         self.codes = codes
         self._allowed = frozenset(codes)
         self._clock = clock
+        # Competition emblem URLs as the provider gives them (validated), learned from payloads.
+        self.emblems: dict[str, str] = {}
+        self._withdrawn: set[str] = set()  # codes the competition list gave no emblem for
+
+    def _learn_emblem(self, node: object) -> None:
+        competition = node.get("competition") if isinstance(node, dict) else None
+        code = competition.get("code") if isinstance(competition, dict) else None
+        if isinstance(code, str) and code in self._allowed and code not in self._withdrawn:
+            source = crest_source(competition.get("emblem"))
+            if source is not None:
+                self.emblems[code] = source
 
     def tournaments(self) -> list[Tournament]:
         return tournaments(self.codes)
@@ -229,8 +348,11 @@ class FootballDataAdapter:
         events: list[FootballEvent] = []
         parsed = malformed = 0
         for raw in matches:
+            self._learn_emblem(raw)
             event = _safe_normalize(raw, fetched, self._allowed)
             if event is None:
+                if _undetermined(raw, self._allowed):
+                    continue
                 if not _out_of_scope(raw, self._allowed):
                     malformed += 1
                 continue
@@ -257,6 +379,68 @@ class FootballDataAdapter:
         data, _ = await self.client.get_json(f"/competitions/{code}/standings")
         return normalize_standings(data), STANDINGS_TTL_S
 
+    async def competition_emblems(self) -> tuple[dict[str, str], float]:
+        """Emblem URLs of the served competitions, from the provider's competition list."""
+        data, _ = await self.client.get_json("/competitions")
+        items = data.get("competitions")
+        if not isinstance(items, list):
+            raise UpstreamError("bad_response")
+        found: dict[str, str] = {}
+        for item in items:
+            code = item.get("code") if isinstance(item, dict) else None
+            if not isinstance(code, str):
+                raise UpstreamError("bad_response")  # a truncated entry could hide a served competition
+            if code in self._allowed:
+                source = crest_source(item.get("emblem"))
+                if source is not None:
+                    found[code] = source
+        # Applied only after the whole list validated. The list is the authority: a served
+        # competition it omits (or gives no usable emblem) has none, and match payloads may not
+        # bring it back until the next list says otherwise.
+        self._withdrawn = set(self._allowed) - set(found)
+        for code in self._withdrawn:
+            self.emblems.pop(code, None)
+        self.emblems.update(found)
+        return found, EMBLEMS_TTL_S
+
+    async def calendar(self, code: str) -> tuple[tuple[list[FootballEvent], Season], float]:
+        """The whole current season of one competition: one request, shared by every user."""
+        if code not in self._allowed:
+            raise UpstreamError("not_found")
+        data, _ = await self.client.get_json(f"/competitions/{code}/matches")
+        matches = data.get("matches")
+        top = data.get("competition")
+        # The answer must be about the competition asked for, even with no matches at all.
+        if not isinstance(matches, list) or not isinstance(top, dict) or top.get("code") != code:
+            raise UpstreamError("bad_response")
+        # The provider always states how many matches it sent: without that, a cut answer could not
+        # be told from a complete one.
+        result_set = data.get("resultSet")
+        count = result_set.get("count") if isinstance(result_set, dict) else None
+        if not isinstance(count, int) or isinstance(count, bool) or count != len(matches):
+            raise UpstreamError("bad_response")
+        self._learn_emblem(data)
+        fetched = self._now_iso()
+        wanted = tournament_id(code)
+        events: dict[str, FootballEvent] = {}
+        open_ids: set[object] = set()
+        for raw in matches:
+            if _undetermined(raw, frozenset({code})):  # a TBD fixture of another competition is broken
+                if raw["id"] in open_ids or event_id(raw["id"]) in events:
+                    raise UpstreamError("bad_response")
+                open_ids.add(raw["id"])
+                continue
+            event = _safe_normalize(raw, fetched, self._allowed)
+            # A match of another competition in this answer is as broken as an unreadable one:
+            # a calendar with a silent gap would read as "no match that day".
+            # Two records under one id: one of them would vanish silently.
+            if event is None or event.tournament_id != wanted or event.id in events or raw["id"] in open_ids:
+                raise UpstreamError("bad_response")
+            events[event.id] = event
+        ordered = sorted(events.values(), key=lambda e: (e.starts_at, e.id))
+        ttl = CALENDAR_LIVE_TTL_S if any(e.status == "live" for e in ordered) else CALENDAR_TTL_S
+        return (ordered, season_of(matches)), ttl
+
     async def match(self, match_id: int) -> tuple[FootballEvent | None, float]:
         try:
             data, _ = await self.client.get_json(f"/matches/{match_id}")
@@ -268,6 +452,7 @@ class FootballDataAdapter:
         # (never a cached "not found" or another match under this id).
         if data.get("id") != match_id:
             raise UpstreamError("bad_response")
+        self._learn_emblem(data)
         event = _safe_normalize(data, self._now_iso(), self._allowed)
         if event is None:
             if _out_of_scope(data, self._allowed):

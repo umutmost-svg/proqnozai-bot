@@ -44,6 +44,8 @@ _SECURITY_HEADERS = {
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 # Vite puts content-hashed files under assets/: a new build gets new names.
 _IMMUTABLE = "public, max-age=31536000, immutable"
+# Public PNGs (no user data): the edge may cache them, so repeated requests never reach us.
+_CREST_CACHE = "public, max-age=86400"
 # Telegram Web (K and A) embeds the Mini App in an iframe; mobile and desktop
 # clients use a native WebView, where frame-ancestors does not apply.
 TELEGRAM_FRAME_ANCESTORS = "https://web.telegram.org"
@@ -208,6 +210,9 @@ def create_app(
         response.headers.update(_SECURITY_HEADERS)
         if request.url.path.startswith("/assets/") and response.status_code == 200:
             response.headers["Cache-Control"] = _IMMUTABLE
+        elif request.url.path.startswith("/api/crests/") and response.status_code == 200:
+            # A crest is a verified public PNG with no user data: cacheable for a day, also at the edge.
+            response.headers["Cache-Control"] = _CREST_CACHE
         else:
             response.headers.update(_NO_STORE)
         response.headers[csp_header] = csp_value

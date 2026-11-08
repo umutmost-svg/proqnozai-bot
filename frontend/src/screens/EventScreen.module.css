@@ -35,6 +35,7 @@
   line-height: 18px;
   color: var(--text-muted-3);
   overflow-wrap: anywhere;
+  text-decoration: none;
 }
 
 .competitors {

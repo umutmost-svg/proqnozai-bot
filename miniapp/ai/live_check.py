@@ -18,6 +18,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+from miniapp.settings import DEFAULT_COMPETITIONS
 from miniapp.sports.client import UpstreamError
 from miniapp.sports.models import FootballEvent
 from miniapp.sports.service import build_service
@@ -31,7 +32,7 @@ async def main() -> int:
     if not football_key or not anthropic_key:
         print("MINIAPP_FOOTBALL_DATA_KEY and MINIAPP_ANTHROPIC_API_KEY are required: no live call made.")
         return 2
-    codes = tuple(c.strip().upper() for c in os.environ.get("MINIAPP_FOOTBALL_DATA_COMPETITIONS", "PL,PD").split(","))
+    codes = tuple(c.strip().upper() for c in os.environ.get("MINIAPP_FOOTBALL_DATA_COMPETITIONS", DEFAULT_COMPETITIONS).split(","))
     settings = SimpleNamespace(
         football_data_key=football_key, football_data_competitions=codes, football_data_per_minute=8,
         football_data_per_day=50, football_data_live_plan=False, sports_unknown_lookups_per_hour=5,

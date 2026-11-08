@@ -19,6 +19,7 @@ import type {
   SportEvent,
   TennisEvent,
   Tournament,
+  TournamentCalendar,
 } from './models';
 import { DataError, type SportCoverage, type SportsDataProvider } from './provider';
 
@@ -83,11 +84,43 @@ function pairs(v: unknown): Pair[] {
   return Array.isArray(v) ? v.map(pair).filter((p): p is Pair => p !== undefined) : [];
 }
 
+// Pictures only from our own backend (never a third-party URL): /api/crests/<kind>/<id>.
+const CREST_PATH = /^\/api\/crests\/(team|competition)\/[A-Za-z0-9]{1,12}$/;
+
+/** A backend-served crest or emblem; proportions unknown, so fitted with object-fit. */
+export function remoteImage(v: unknown): ImageAsset | undefined {
+  const path = str(v);
+  return path && CREST_PATH.test(path) ? { src: path, width: 1, height: 1, remote: true } : undefined;
+}
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Season metadata: every field present, each a valid value or null; undefined = broken. */
+function readSeason(v: unknown): TournamentCalendar['season'] | undefined {
+  if (!isObj(v) || !('startDate' in v) || !('endDate' in v) || !('currentMatchday' in v)) return undefined;
+  const day = (x: unknown) => (x === null ? null : typeof x === 'string' && DAY.test(x) ? x : undefined);
+  const startDate = day(v.startDate);
+  const endDate = day(v.endDate);
+  const round = v.currentMatchday;
+  const currentMatchday = round === null ? null : int(round) !== null && (round as number) > 0 ? (round as number) : undefined;
+  if (startDate === undefined || endDate === undefined || currentMatchday === undefined) return undefined;
+  return { startDate, endDate, currentMatchday };
+}
+
 function competitor(v: unknown): Competitor | null {
   if (!isObj(v)) return null;
   const id = str(v.id);
-  const name = str(v.name);
-  return id && name ? { id, name: name.trim() } : null;
+  const full = str(v.name)?.trim();
+  if (!id || !full) return null;
+  // The short familiar name is displayed; the official one stays for search and labels.
+  const short = str(v.shortName)?.trim();
+  const emblem = remoteImage(v.crest);
+  return {
+    id,
+    name: short ?? full,
+    ...(short && short !== full ? { fullName: full } : {}),
+    ...(emblem ? { emblem } : {}),
+  };
 }
 
 /** Real-data provider: everything comes from the Mini App backend; never falls back to demo. */
@@ -129,9 +162,13 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     const body = await this.get(op, `/sports/${query.sport}/events?${params.toString()}`);
     // A malformed answer is an error: it must never read as "no matches today".
     if (!body || !Array.isArray(body.events) || !isObj(body.coverage)) throw new DataError(op, 'bad_response');
+    // The tournament catalogue rides along: all valid or the answer is broken (never a partial list).
+    if (!Array.isArray(body.tournaments)) throw new DataError(op, 'bad_response');
+    const catalogue = body.tournaments.map((raw) => this.parseTournament(raw));
+    if (catalogue.some((t) => !t || t.sport !== query.sport)) throw new DataError(op, 'bad_response');
     const coverage = this.readCoverage(query.sport, body.coverage);
     this.readAiStatus(body.ai);
-    for (const raw of Array.isArray(body.tournaments) ? body.tournaments : []) this.readTournament(raw);
+    for (const t of catalogue as Tournament[]) this.tournaments.set(t.id, t);
     // Staleness is per event (a two-day range may mix a fresh day and a cached one).
     const parsed = body.events.map((raw) => this.readEvent(raw, coverage));
     // Like the backend: one broken event makes the answer unusable — a partial schedule
@@ -156,6 +193,46 @@ export class BackendSportsDataProvider implements SportsDataProvider {
 
   async getFeatured(query: EventQuery): Promise<SportEvent | null> {
     return pickFeatured(await this.listEvents({ ...query, query: '' }));
+  }
+
+  async loadTournaments(sport: Sport): Promise<Tournament[]> {
+    const op = 'tournaments';
+    const body = await this.get(op, `/sports/${sport}/tournaments`);
+    if (!body || !Array.isArray(body.tournaments) || !isObj(body.coverage)) throw new DataError(op, 'bad_response');
+    const list = body.tournaments.map((raw) => this.parseTournament(raw));
+    // All or nothing: a partial catalogue must never look like the whole one.
+    if (list.some((t) => !t || t.sport !== sport)) throw new DataError(op, 'bad_response');
+    this.readCoverage(sport, body.coverage);
+    for (const t of list as Tournament[]) this.tournaments.set(t.id, t);
+    return list as Tournament[];
+  }
+
+  async getTournamentCalendar(id: string): Promise<TournamentCalendar | null> {
+    // Real calendars exist for football only; a deep link may arrive before the catalogue.
+    const sport: Sport = this.tournaments.get(id)?.sport ?? 'football';
+    const op = 'calendar';
+    const body = await this.get(op, `/sports/${sport}/tournaments/${encodeURIComponent(id)}/calendar`, true);
+    if (body === null) return null;
+    if (!Array.isArray(body.events) || !isObj(body.coverage) || body.sport !== sport) {
+      throw new DataError(op, 'bad_response');
+    }
+    const season = readSeason(body.season);
+    const tournament = this.readTournament(body.tournament);
+    if (!tournament || tournament.id !== id || tournament.sport !== sport || season === undefined) {
+      throw new DataError(op, 'bad_response');
+    }
+    const coverage = this.readCoverage(sport, body.coverage);
+    this.readAiStatus(body.ai);
+    // Like a day listing: one broken match makes the calendar unusable (a gap would read as "no match").
+    const parsed = body.events.map((raw) => this.readEvent(raw, coverage));
+    if (body.stale === true && body.events.length === 0) throw new DataError(op, 'source_unavailable');
+    if (parsed.some((e) => e === null || e.sport !== sport || e.tournamentId !== id)) {
+      throw new DataError(op, 'bad_response');
+    }
+    const events = (parsed as SportEvent[]).sort(
+      (a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt) || a.id.localeCompare(b.id),
+    );
+    return { tournament, events, season };
   }
 
   async getEvent(id: string): Promise<SportEvent | null> {
@@ -288,13 +365,24 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     return { ...coverage, delayed: c.liveScores === 'delayed' };
   }
 
-  private readTournament(raw: unknown): void {
+  private readTournament(raw: unknown): Tournament | undefined {
+    const tournament = this.parseTournament(raw);
+    if (tournament) this.tournaments.set(tournament.id, tournament);
+    return tournament;
+  }
+
+  /** Parsed without storing: a list is stored only once every entry is valid. */
+  private parseTournament(raw: unknown): Tournament | undefined {
     if (!isObj(raw)) return;
     const id = str(raw.id);
     const name = str(raw.name);
     const sport = raw.sport as Sport;
     if (!id || !name || !['football', 'tennis', 'basketball', 'mma'].includes(sport)) return;
-    this.tournaments.set(id, { id, sport, name, logo: LOCAL_LOGOS[id] });
+    // A licensed local logo wins; otherwise the provider's emblem as served by our backend.
+    // An explicit emblem field is the current truth (null = withdrawn); without the field, keep what we had.
+    const logo = LOCAL_LOGOS[id] ?? ('emblem' in raw ? remoteImage(raw.emblem) : this.tournaments.get(id)?.logo);
+    const area = str(raw.area) ?? undefined;
+    return { id, sport, name, ...(area ? { area } : {}), ...(logo ? { logo } : {}) };
   }
 
   private readEvent(raw: unknown, coverage: SportCoverage & { delayed: boolean }): SportEvent | null {
@@ -333,6 +421,7 @@ export class BackendSportsDataProvider implements SportsDataProvider {
           halfTime: pair(raw.halfTime),
           minute: minute ?? undefined,
           awarded: raw.awarded === true,
+          ...(int(raw.matchday) ? { matchday: int(raw.matchday) as number } : {}),
         };
         return event;
       }

@@ -20,19 +20,33 @@ export interface ImageAsset {
   height: number;
   /** Figma renders some sourced logos mirrored vertically; keep that exact. */
   flipY?: boolean;
+  /** Served by our backend with unknown proportions: fitted with object-fit, may fail to load. */
+  remote?: boolean;
 }
 
 export interface Tournament {
   id: string;
   sport: Sport;
   name: string;
-  /** Local, licensed asset only; real tournaments without one show their name alone. */
+  /** Country or region, when the source gives one. */
+  area?: string;
+  /** A licensed local asset, or the provider's emblem served by our backend. */
   logo?: ImageAsset;
+}
+
+/** A tournament's season schedule: every known match, grouped into days by the screen. */
+export interface TournamentCalendar {
+  tournament: Tournament;
+  events: SportEvent[];
+  season: { startDate: string | null; endDate: string | null; currentMatchday: number | null } | null;
 }
 
 export interface Competitor {
   id: string;
+  /** Display name: the short familiar form when the source gives one. */
   name: string;
+  /** Official full name, when it differs from `name` (search, accessible labels). */
+  fullName?: string;
   /** Club crest when we have the real asset; never substituted with emoji. */
   emblem?: ImageAsset;
   /** Larger "authentic" emblem used on hero cards, when it differs. */
@@ -110,6 +124,8 @@ export interface FootballEvent extends BaseEvent {
   halfTime?: Pair;
   /** Result set by the competition (e.g. a forfeit), not played out. */
   awarded?: boolean;
+  /** Round of the competition, when the source gives one. */
+  matchday?: number;
   stats?: { possession: Pair; shots: Pair; onTarget: Pair; corners: Pair };
 }
 

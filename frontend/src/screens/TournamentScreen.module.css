@@ -1,0 +1,86 @@
+.head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 16px 18px;
+  border-radius: var(--radius-card);
+  background: var(--glass-18);
+  border: 1px solid var(--line-74);
+  color: var(--text-primary);
+}
+
+.emblem {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--glass-35);
+  border: 1px solid var(--line-70);
+}
+
+.headCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.name {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 22px;
+  line-height: 28px;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--text-muted);
+}
+
+/* Taller date chip: the season spans months, so each day shows its month too. */
+.chip {
+  flex-basis: 50px;
+  height: 66px;
+}
+
+.monthShort {
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--text-muted-2);
+}
+
+.dayTitle {
+  width: 100%;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 20px;
+  line-height: 28px;
+  color: var(--text-strong);
+}
+
+.round {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.initial {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 20px;
+  color: var(--text-primary);
+}

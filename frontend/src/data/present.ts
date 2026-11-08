@@ -117,5 +117,9 @@ export function flagOf(c: Competitor): string | null {
 }
 
 export function initialOf(c: Competitor): string {
-  return c.name.trim().charAt(0).toLocaleUpperCase() || '?';
+  return initialOfName(c.name);
+}
+
+export function initialOfName(name: string): string {
+  return name.trim().charAt(0).toLocaleUpperCase() || '?';
 }

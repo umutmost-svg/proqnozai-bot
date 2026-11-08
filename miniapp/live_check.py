@@ -15,6 +15,7 @@ import sys
 from collections import Counter
 from datetime import UTC, date, datetime
 
+from miniapp.settings import DEFAULT_COMPETITIONS
 from miniapp.sports import football_data
 from miniapp.sports.client import ClientLimits, ProviderClient, UpstreamError
 from miniapp.sports.football_data import FootballDataAdapter
@@ -25,7 +26,7 @@ async def main(day: date) -> int:
     if not key:
         print("MINIAPP_FOOTBALL_DATA_KEY is not set: no live call made.")
         return 2
-    codes = tuple(c.strip().upper() for c in os.environ.get("MINIAPP_FOOTBALL_DATA_COMPETITIONS", "PL,PD").split(","))
+    codes = tuple(c.strip().upper() for c in os.environ.get("MINIAPP_FOOTBALL_DATA_COMPETITIONS", DEFAULT_COMPETITIONS).split(","))
     client = ProviderClient(football_data.PROVIDER, football_data.BASE_URL, {"X-Auth-Token": key},
                             ClientLimits(per_minute=2, per_day=2, retries=0))
     adapter = FootballDataAdapter(client, codes, lambda: datetime.now(UTC).timestamp())

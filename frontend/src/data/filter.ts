@@ -26,7 +26,8 @@ export function normalize(text: string): string {
 export function matchesSearch(event: SportEvent, tournament: Tournament | undefined, query: string): boolean {
   const q = normalize(query);
   if (!q) return true;
-  const haystack = normalize([event.home.name, event.away.name, tournament?.name ?? ''].join(' '));
+  const names = [event.home.name, event.home.fullName, event.away.name, event.away.fullName, tournament?.name];
+  const haystack = normalize(names.filter(Boolean).join(' '));
   return q.split(' ').every((token) => haystack.includes(token));
 }
 

@@ -1,7 +1,7 @@
 import { NoEvents } from '../components/NoEvents';
 import { DataFootnote } from '../components/SourceNote';
 import { useEffect, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { DateStrip } from '../components/DateStrip';
 import { EventCard } from '../components/EventCard';
@@ -59,6 +59,16 @@ export function CatalogScreen() {
         <DateStrip today={f.today} value={f.day} onChange={f.setDay} />
         <TournamentStrip tournaments={tournaments} value={f.filters.tournamentId} onChange={f.setTournament} />
       </div>
+      {f.filters.tournamentId !== ALL_TOURNAMENTS && data.getTournament(f.filters.tournamentId) && (
+        <Link
+          to={`/tournament/${encodeURIComponent(f.filters.tournamentId)}`}
+          className={s.calendarLink}
+          data-testid="catalog-calendar-link"
+        >
+          {t('calendar.openFor', { name: tournamentName(f.filters.tournamentId) ?? '' })}
+          <span aria-hidden="true">→</span>
+        </Link>
+      )}
       <div className={s.titleRow}>
         <h2 className={s.title}>{t('catalog.title')}</h2>
         <button type="button" className={s.reset} onClick={f.reset} disabled={filtersAreDefault}>

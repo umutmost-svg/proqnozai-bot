@@ -14,6 +14,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { DataFootnote } from '../components/SourceNote';
 import { NoEvents } from '../components/NoEvents';
 import { DemoChip } from '../components/StatusBadge';
+import { TournamentList } from '../components/TournamentList';
 import { TournamentStrip } from '../components/TournamentStrip';
 import type { SportEvent } from '../data/models';
 import { headlineScore } from '../data/score';
@@ -127,6 +128,7 @@ export function HomeScreen() {
           </span>
         </button>
       </div>
+      <TournamentList sport={f.filters.sport} />
       <DataFootnote sport={f.filters.sport} today={f.today} />
     </AppShell>
   );

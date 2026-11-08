@@ -4,6 +4,7 @@ import { useAuthBootstrap } from './auth/useAuth';
 import { useGoBack } from './hooks/useGoBack';
 import { AppLoadingGate } from './loading/AppLoadingGate';
 import { AiScreen } from './screens/AiScreen';
+import { TournamentScreen } from './screens/TournamentScreen';
 import { CatalogScreen } from './screens/CatalogScreen';
 import { EventScreen } from './screens/EventScreen';
 import { HomeScreen } from './screens/HomeScreen';
@@ -51,6 +52,7 @@ export function AppRoutes() {
       <Route path="/matches" element={<CatalogScreen />} />
       <Route path="/event/:id" element={<EventScreen />} />
       <Route path="/event/:id/ai" element={<AiScreen />} />
+      <Route path="/tournament/:id" element={<TournamentScreen />} />
       <Route path="/profile" element={<ProfileScreen />} />
       <Route path="/profile/language" element={<LanguageScreen />} />
       <Route path="/profile/timezone" element={<TimezoneScreen />} />

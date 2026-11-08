@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
+# Every free-plan club competition with a current season (EC and WC: add them when they run).
+DEFAULT_COMPETITIONS = "PL,PD,SA,BL1,FL1,CL,ELC,DED,PPL,BSA"
+
 Environment = Literal["production", "development"]
 SameSite = Literal["lax", "strict", "none"]
 CspMode = Literal["enforce", "report-only"]
@@ -100,7 +103,7 @@ class Settings:
     edge_secret: str | None = field(default=None, repr=False)
     # Sports data (M3). Without a key the sport is reported "not connected"; no demo data.
     football_data_key: str | None = field(default=None, repr=False)
-    football_data_competitions: tuple[str, ...] = ("PL", "PD")
+    football_data_competitions: tuple[str, ...] = tuple(DEFAULT_COMPETITIONS.split(","))
     # True only on a paid plan with live scores; the free plan delays scores.
     football_data_live_plan: bool = False
     # Self-imposed budgets below the provider's own limits (free tier: 10 requests/minute).
@@ -252,7 +255,7 @@ class Settings:
             football_data_key=optional("MINIAPP_FOOTBALL_DATA_KEY"),
             football_data_competitions=tuple(
                 c.strip().upper()
-                for c in (optional("MINIAPP_FOOTBALL_DATA_COMPETITIONS") or "PL,PD").split(",")
+                for c in (optional("MINIAPP_FOOTBALL_DATA_COMPETITIONS") or DEFAULT_COMPETITIONS).split(",")
                 if c.strip()
             ),
             football_data_live_plan=boolean("MINIAPP_FOOTBALL_DATA_LIVE_PLAN", False),

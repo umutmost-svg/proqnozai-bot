@@ -11,6 +11,7 @@ const ROUTES = [
   ['event-tennis-stats', '/event/tn-live?tab=stats'],
   ['ai-football', '/event/fb-rm-fcb/ai'],
   ['ai-insufficient', '/event/fb-long-names/ai'],
+  ['tournament', '/tournament/premier'],
   ['profile', '/profile'],
   ['timezone', '/profile/timezone'],
 ] as const;
@@ -41,7 +42,7 @@ async function layoutProblems(page: Page) {
     for (const el of document.querySelectorAll<HTMLElement>('body *')) {
       const style = getComputedStyle(el);
       const scrollsX = ['auto', 'scroll'].includes(style.overflowX) && el.scrollWidth > el.clientWidth + 1;
-      if (scrollsX && !['date-strip', 'tournament-strip'].includes(el.dataset.testid ?? '')) {
+      if (scrollsX && !['date-strip', 'tournament-strip', 'calendar-days'].includes(el.dataset.testid ?? '')) {
         problems.push(`unexpected horizontal scroller: ${el.className}`);
       }
       // scrollWidth is unreliable for <button>; measure the laid-out text instead.
@@ -59,7 +60,7 @@ async function layoutProblems(page: Page) {
         const range = document.createRange();
         range.selectNodeContents(el);
         const text = range.getBoundingClientRect();
-        const inStrip = el.closest('[data-testid="date-strip"],[data-testid="tournament-strip"]');
+        const inStrip = el.closest('[data-testid="date-strip"],[data-testid="tournament-strip"],[data-testid="calendar-days"]');
         if (!inStrip && (text.right > window.innerWidth + 1 || text.left < -1)) problems.push(`text off-screen: "${el.textContent.trim()}"`);
       }
     }

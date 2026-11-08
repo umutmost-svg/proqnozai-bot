@@ -165,6 +165,34 @@ describe('real mode', () => {
     expect(screen.getByTestId('ai-basis')).toHaveTextContent('и таблица из football-data.org');
   });
 
+  it('AI basis uses the short name only for the same club; another name keeps its own label', async () => {
+    const user = userEvent.setup();
+    const upcoming = ev(8, 'upcoming', 'x', 'y', {
+      home: { id: 'fd:team:57', name: 'Arsenal FC', shortName: 'Arsenal' },
+      away: { id: 'fd:team:61', name: 'Chelsea FC', shortName: 'Chelsea' },
+    });
+    const team = (name: string) => ({ name, matches: 5, form: 'WWDWW', points: 13, goalsFor: 9, goalsAgainst: 2, tablePosition: null, tablePoints: null });
+    const analysis = {
+      eventId: 'fd:8', kind: 'partial', reasons: ['no_odds_source'], generatedAt: '2026-11-08T06:00:00Z', model: 'm',
+      probabilities: { home: 40, draw: 30, away: 30 }, factors: ['home_form', 'away_form'],
+      // The snapshot's away team is not the event's (e.g. corrected fixture): its own name stays.
+      basis: { home: team('Arsenal FC'), away: team('Fulham FC') }, estimated: true,
+    };
+    const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+    const fetchImpl = vi.fn<typeof fetch>(async (input) =>
+      String(input).startsWith('/api/ai/analysis')
+        ? ok(analysis)
+        : ok({ event: upcoming, tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'connected' } }),
+    );
+    const data = new BackendSportsDataProvider({ waitForSession: async () => true, getCsrfToken: () => 'c', fetchImpl });
+    renderApp('#/event/fd%3A8', { data });
+    await user.click(await screen.findByRole('button', { name: 'Создать AI-разбор' }));
+    const factors = await screen.findByTestId('ai-factors');
+    expect(factors).toHaveTextContent('Arsenal: форма WWDWW');
+    expect(factors).toHaveTextContent('Fulham FC: форма WWDWW');
+    expect(factors).not.toHaveTextContent('Chelsea');
+  });
+
   it('AI without the table: the limitation does not claim the table was used', async () => {
     const upcoming = ev(7, 'upcoming', 'Arsenal FC', 'Chelsea FC');
     const team = (name: string) => ({ name, matches: 5, form: 'WWDWW', points: 13, goalsFor: 9, goalsAgainst: 2, tablePosition: null, tablePoints: null });

@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from miniapp.app import create_app
-from miniapp.settings import Settings, SettingsError
+from miniapp.settings import DEFAULT_COMPETITIONS, Settings, SettingsError
 from miniapp.sports import football_data
 from miniapp.sports.cache import SportsCache
 from miniapp.sports.client import ClientLimits, HttpResponse, ProviderClient, TransportError, UpstreamError
@@ -473,7 +473,9 @@ def test_from_env_reads_only_miniapp_variables(tmp_path) -> None:
 def api(tmp_path, clock: FakeClock):
     t = FakeTransport()
     settings = base_settings(tmp_path, football_data_key=KEY, session_ttl_s=3600)
-    service = build_service(settings, clock=clock, transport=t)
+    # Emblem warm-up (one /competitions call a day) is covered in test_tournaments_crests.py;
+    # off here so these tests keep exact upstream call scripts.
+    service = build_service(settings, clock=clock, transport=t, warm_emblems=False)
     service.football.client._sleep = no_sleep
     app = create_app(settings, clock=clock, sports=service)
     return TestClient(app, base_url="http://127.0.0.1:8000"), t
@@ -506,8 +508,10 @@ def test_events_api_returns_real_provider_events(api, clock: FakeClock) -> None:
     assert [(e["id"], e["status"]) for e in body["events"]] == [("fd:11", "live"), ("fd:12", "postponed")]
     assert body["events"][0]["score"] == [1, 1] and body["events"][0]["minute"] == 55
     assert body["fetchedAt"] == "2027-01-15T08:00:00Z" and body["stale"] is False
-    assert [x["id"] for x in body["tournaments"]] == ["fd:PL", "fd:PD"]
-    assert KEY not in r.text and "crest" not in r.text  # no key, no third-party image URLs
+    assert [x["id"] for x in body["tournaments"]] == [f"fd:{c}" for c in DEFAULT_COMPETITIONS.split(",")]
+    # No key and no third-party image URL: a crest from an unknown host is simply not offered.
+    assert KEY not in r.text and "https://" not in r.text
+    assert all(e[side]["crest"] is None for e in body["events"] for side in ("home", "away"))
 
 
 def test_events_api_validates_parameters(api, clock: FakeClock) -> None:

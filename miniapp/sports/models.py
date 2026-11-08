@@ -44,9 +44,12 @@ class Competitor:
     id: str
     name: str
     short_name: str | None = None
+    # Provider's picture URL (validated, fetched only by the backend) and our path for it.
+    crest_source: str | None = field(default=None, repr=False)
+    crest_path: str | None = None
 
     def to_json(self) -> dict:
-        return {"id": self.id, "name": self.name, "shortName": self.short_name}
+        return {"id": self.id, "name": self.name, "shortName": self.short_name, "crest": self.crest_path}
 
 
 @dataclass(frozen=True)
@@ -57,8 +60,9 @@ class Tournament:
     area: str | None = None
     provider: str = ""
 
-    def to_json(self) -> dict:
-        return {"id": self.id, "sport": self.sport, "name": self.name, "area": self.area, "provider": self.provider}
+    def to_json(self, emblem: str | None = None) -> dict:
+        return {"id": self.id, "sport": self.sport, "name": self.name, "area": self.area, "provider": self.provider,
+                "emblem": emblem}
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,7 @@ class FootballEvent:
     half_time: tuple[int, int] | None = None
     minute: int | None = None
     awarded: bool = False
+    matchday: int | None = None
     stats: dict | None = None
     stats_availability: Availability = "unavailable"
     sport: Sport = field(default="football", init=False)
@@ -94,6 +99,7 @@ class FootballEvent:
             "halfTime": list(self.half_time) if self.half_time is not None else None,
             "minute": self.minute,
             "awarded": self.awarded,
+            "matchday": self.matchday,
             "stats": self.stats,
             "statsAvailability": self.stats_availability,
             "source": self.provenance.to_json(),

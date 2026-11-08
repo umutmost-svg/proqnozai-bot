@@ -11,9 +11,10 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .client import UpstreamError
+from .crests import KINDS
 from .models import SPORTS
 from .service import RequestError, SportsService, parse_instant
 
@@ -49,6 +50,7 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
     async def coverage(request: Request) -> JSONResponse:
         if not await signed_in(request):
             return _error(401, "unauthenticated")
+        await service.ensure_emblems()
         return JSONResponse({**service.coverage(), "ai": {"status": ai_status()}})
 
     @app.get("/api/sports/{sport}/tournaments")
@@ -57,11 +59,12 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             return _error(401, "unauthenticated")
         if sport not in SPORTS:
             return _error(404, "not_found")
+        await service.ensure_emblems()
         coverage = service.coverage()["sports"][sport]
         return JSONResponse({
             "sport": sport,
             "coverage": _short(coverage),
-            "tournaments": [t.to_json() for t in service.tournaments(sport)],  # type: ignore[arg-type]
+            "tournaments": [service.tournament_json(t) for t in service.tournaments(sport)],  # type: ignore[arg-type]
         })
 
     @app.get("/api/sports/{sport}/events")
@@ -81,12 +84,13 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             return _error(400, exc.code)
         except UpstreamError as exc:
             return _upstream(exc)
+        await service.ensure_emblems()  # after the data: an emblem never delays or fails a listing
         coverage = service.coverage()["sports"][sport]
         return JSONResponse({
             "sport": sport,
             "coverage": _short(coverage),
             "events": [e.to_json() for e in result.events],
-            "tournaments": [t.to_json() for t in result.tournaments],
+            "tournaments": [service.tournament_json(t) for t in result.tournaments],
             "fetchedAt": result.fetched_at,
             "stale": result.stale,
             "ai": {"status": ai_status()},
@@ -104,6 +108,63 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             return _upstream(exc)
         if found is None:
             return _error(404, "not_found")
-        return JSONResponse({"event": found.to_json(), "tournament": tournament.to_json() if tournament else None,
+        return JSONResponse({"event": found.to_json(),
+                             "tournament": service.tournament_json(tournament) if tournament else None,
                              "coverage": _short(service.coverage()["sports"][found.sport]),
                              "ai": {"status": ai_status()}})
+
+    @app.get("/api/sports/{sport}/tournaments/{tournament_id}/calendar")
+    async def calendar(sport: str, tournament_id: str, request: Request) -> JSONResponse:
+        if not await signed_in(request):
+            return _error(401, "unauthenticated")
+        if sport not in SPORTS or len(tournament_id) > 40:
+            return _error(404, "not_found")
+        if request.query_params:
+            return _error(400, "bad_request")
+        try:
+            result = await service.calendar(sport, tournament_id)  # type: ignore[arg-type]
+        except UpstreamError as exc:
+            return _upstream(exc)
+        if result is None:
+            return _error(404, "not_found")
+        return JSONResponse({
+            "sport": sport,
+            "coverage": _short(service.coverage()["sports"][sport]),
+            # After the load: the emblem URL is learned from this very payload.
+            "tournament": service.tournament_json(result.tournament),
+            "season": result.season.to_json(),
+            "events": [e.to_json() for e in result.events],
+            "fetchedAt": result.fetched_at,
+            "stale": result.stale,
+            "ai": {"status": ai_status()},
+        })
+
+    @app.api_route("/api/crests/{kind}/{ident}", methods=["GET", "HEAD"])
+    async def crest(kind: str, ident: str, request: Request) -> Response:
+        # Public on purpose: a screen shows dozens of crests at once, so this path is left out
+        # of the edge's per-IP API rate limit and cached at the edge instead (public, 1 day).
+        # It never touches the session store or the provider quota: only PNGs the provider
+        # listed, from memory, with capped fetches and a global per-second cap.
+        valid = kind in KINDS and 0 < len(ident) <= 12 and ident.isascii() and (
+            (ident.isdigit() and ident[0] != "0") if kind == "team" else ident.isalnum())
+        # Junk ids and query strings (which would bypass the edge cache) get a cheap 404 under
+        # their own cap, so they can neither crowd out real crests nor spin the origin.
+        if not valid or request.url.query or service.crests.path(kind, ident) is None:
+            if not service.crests.admit_rejected():
+                return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "1"})
+            return _error(404, "not_found")
+        if not service.crests.admit():
+            return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "1"})
+        body = await service.crests.image(kind, ident)
+        if body is None:
+            return _error(404, "not_found")
+        # The bytes were checked to be a PNG (never SVG); caching and nosniff come from the app middleware.
+        return Response(body, media_type="image/png")
+
+    @app.api_route("/api/crests/{rest:path}", methods=["GET", "HEAD"])
+    async def crest_other(rest: str) -> Response:
+        # Any other shape under the crest prefix (also outside the edge's per-IP limit):
+        # the same capped cheap 404 as an unknown crest.
+        if not service.crests.admit_rejected():
+            return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "1"})
+        return _error(404, "not_found")

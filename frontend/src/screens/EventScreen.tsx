@@ -1,4 +1,4 @@
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { Emblem } from '../components/Emblem';
 import { Header } from '../components/Header';
@@ -32,7 +32,18 @@ export function EventHero({ event }: { event: SportEvent }) {
             <Logo asset={tournament.logo} box={26} />
           </span>
         )}
-        <p className={s.tournament}>{tournament?.name}</p>
+        {tournament ? (
+          <Link
+            to={`/tournament/${encodeURIComponent(tournament.id)}`}
+            className={s.tournament}
+            aria-label={t('tournaments.open', { name: tournament.name })}
+            data-testid="event-tournament-link"
+          >
+            {tournament.name}
+          </Link>
+        ) : (
+          <p className={s.tournament} />
+        )}
         <StatusBadge status={event.status} demo={data.isDemo} />
       </div>
       <div className={s.competitors}>

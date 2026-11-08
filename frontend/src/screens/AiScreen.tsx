@@ -92,6 +92,14 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
       ? [event.home.name, t('ai.draw'), event.away.name]
       : [event.home.name, event.away.name];
   const real = !data.isDemo;
+  // The short name replaces the analysis' own team name only when both name the same club
+  // (the official name matches); otherwise the snapshot's name stays with its numbers.
+  const shortFor = (team: TeamBasis, c: typeof event.home) =>
+    team.name === (c.fullName ?? c.name) ? { ...team, name: c.name } : team;
+  const basis = analysis.basis && {
+    home: shortFor(analysis.basis.home, event.home),
+    away: shortFor(analysis.basis.away, event.away),
+  };
   const title = !real ? t('ai.probabilities') : analysis.estimated ? t('ai.probabilitiesEstimated') : t('ai.probabilitiesReal');
   return (
     <>
@@ -118,27 +126,27 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
           </div>
         ))}
       </section>
-      {real && analysis.basis && analysis.factors && analysis.factors.length > 0 && (
+      {real && basis && analysis.factors && analysis.factors.length > 0 && (
         <section className={ui.section} data-testid="ai-factors">
           <h3 className={ui.sectionTitle}>{t('ai.factorsTitle')}</h3>
           <ul className={s.reasons}>
             {analysis.factors.map((f) => (
-              <li key={f}>{factorText(t, f, analysis.basis!)}</li>
+              <li key={f}>{factorText(t, f, basis)}</li>
             ))}
           </ul>
         </section>
       )}
       <section className={ui.section} data-testid="ai-basis">
         <h3 className={ui.sectionTitle}>{t('ai.basisTitle')}</h3>
-        {real && analysis.basis ? (
+        {real && basis ? (
           <>
             <ul className={s.reasons}>
-              <BasisRow team={analysis.basis.home} />
-              <BasisRow team={analysis.basis.away} />
+              <BasisRow team={basis.home} />
+              <BasisRow team={basis.away} />
             </ul>
             <p className={ui.note}>
               {t(
-                analysis.basis.home.tablePosition === null && analysis.basis.away.tablePosition === null
+                basis.home.tablePosition === null && basis.away.tablePosition === null
                   ? 'ai.realLimitationNoTable'
                   : 'ai.realLimitation',
               )}

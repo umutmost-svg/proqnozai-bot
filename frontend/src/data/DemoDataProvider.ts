@@ -1,7 +1,7 @@
 import type { Clock } from '../time/clock';
 import { buildDemoEvents, TOURNAMENTS } from './fixtures';
 import { ALL_TOURNAMENTS, filterEvents, pickFeatured, type EventQuery } from './filter';
-import type { AiAnalysis, Sport, SportEvent, Tournament } from './models';
+import type { AiAnalysis, Sport, SportEvent, Tournament, TournamentCalendar } from './models';
 import { DataError, type SportCoverage, type SportsDataProvider } from './provider';
 
 export type DemoOperation = 'events' | 'search' | 'ai';
@@ -55,6 +55,22 @@ export class DemoDataProvider implements SportsDataProvider {
 
   listTournaments(sport: Sport): Tournament[] {
     return TOURNAMENTS.filter((t) => t.sport === sport);
+  }
+
+  loadTournaments(sport: Sport): Promise<Tournament[]> {
+    // Static demo catalogue: no latency and no demo failure (that is reserved for the match list).
+    return Promise.resolve(this.listTournaments(sport));
+  }
+
+  getTournamentCalendar(id: string): Promise<TournamentCalendar | null> {
+    return this.respond('events', () => {
+      const tournament = this.getTournament(id);
+      if (!tournament) return null;
+      const events = this.events()
+        .filter((e) => e.tournamentId === id)
+        .sort((a, b) => a.startsAt.localeCompare(b.startsAt) || a.id.localeCompare(b.id));
+      return { tournament, events, season: null };
+    });
   }
 
   listEvents(query: EventQuery): Promise<SportEvent[]> {
