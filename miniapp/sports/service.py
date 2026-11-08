@@ -19,6 +19,7 @@ from .cache import Cached, SportsCache
 from .client import UpstreamError
 from .crests import CrestStore
 from .football_data import FootballDataAdapter, Season
+from .search import SearchIndex
 from .models import SPORTS, Provenance, Sport, SportEvent, Tournament
 
 logger = logging.getLogger("miniapp.sports")
@@ -85,6 +86,8 @@ class SportsService:
         self._warm_emblems = warm_emblems
         self._emblems_retry_at = 0.0
         self._emblems_task: asyncio.Task[None] | None = None
+        self.search_index = SearchIndex(lambda tid: self.calendar("football", tid),
+                                        lambda: [t.id for t in self.tournaments("football")], clock)
         self._unknown_lookups: deque[float] = deque()
         self._unknown_per_hour = unknown_lookups_per_hour
 
@@ -272,8 +275,10 @@ class SportsService:
             self._calendar_index.clear()
         self._calendar_index.update((e.id, tournament_id) for e in events)
         self._learn_crests(events)
-        return CalendarResult(tournament, season, [_with_cache_state(e, cached.stale) for e in events],
-                              _iso(cached.fetched_at), cached.stale)
+        marked = [_with_cache_state(e, cached.stale) for e in events]
+        # The index keeps the same staleness marks as the calendar answer (served-from-cache scores).
+        self.search_index.store(tournament_id, marked, cached.fetched_at)
+        return CalendarResult(tournament, season, marked, _iso(cached.fetched_at), cached.stale)
 
     # --- verified context for the AI analysis (shared cache, no per-user requests) ---
 

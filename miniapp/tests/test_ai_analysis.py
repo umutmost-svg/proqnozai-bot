@@ -30,7 +30,8 @@ from miniapp.tests.conftest import ORIGIN, FakeClock, fresh, login
 from miniapp.tests.signing import TEST_BOT_TOKEN
 from miniapp.tests.test_sports import DAY, KEY, FakeTransport, make_client, match, no_sleep, run
 
-GOOD = json.dumps({"home_win": 48, "draw": 27, "away_win": 25, "factors": ["home_form", "away_table"]})
+NB = {"market": "NO_BET", "reasons": []}
+GOOD = json.dumps({"home_win": 48, "draw": 27, "away_win": 25, "factors": ["home_form", "away_table"], "pick": NB})
 ALL = frozenset(FACTORS)
 
 
@@ -159,12 +160,12 @@ def test_unknown_event_is_none(clock: FakeClock) -> None:
 
 
 @pytest.mark.parametrize("bad", [
-    json.dumps({"home_win": 50, "draw": 30, "away_win": 30, "factors": ["home_form", "away_form"]}),  # sum 110
-    json.dumps({"home_win": True, "draw": 49, "away_win": 50, "factors": ["home_form", "away_form"]}),
-    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form"]}),  # one factor
-    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "home_form"]}),  # duplicate
-    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "injuries"]}),  # not in the list
-    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "away_form"], "summary": "x"}),
+    json.dumps({"home_win": 50, "draw": 30, "away_win": 30, "factors": ["home_form", "away_form"], "pick": NB}),  # sum 110
+    json.dumps({"home_win": True, "draw": 49, "away_win": 50, "factors": ["home_form", "away_form"], "pick": NB}),
+    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form"], "pick": NB}),  # one factor
+    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "home_form"], "pick": NB}),  # duplicate
+    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "injuries"], "pick": NB}),  # not in the list
+    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "away_form"], "pick": NB, "summary": "x"}),
     "not json",
 ])
 def test_model_output_outside_the_contract_is_rejected_not_repaired(bad: str) -> None:
@@ -176,7 +177,7 @@ def test_model_output_outside_the_contract_is_rejected_not_repaired(bad: str) ->
 def test_malformed_factor_items_are_bad_output_not_a_crash() -> None:
     for factors in ([["home_form"], "away_form"], [{"k": 1}, "away_form"], [None, "home_form"]):
         with pytest.raises(AiError) as exc:
-            validate_output(json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": factors}), ALL)
+            validate_output(json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": factors, "pick": NB}), ALL)
         assert exc.value.code == "bad_output"
 
 
@@ -281,11 +282,11 @@ def test_a_ledger_failure_after_cancellation_is_retrieved(clock: FakeClock, capl
 def test_without_the_table_the_form_alone_still_gives_a_partial_estimate(clock: FakeClock) -> None:
     from miniapp.sports.client import HttpResponse
 
-    answer = json.dumps({"home_win": 45, "draw": 30, "away_win": 25, "factors": ["home_form", "away_form"]})
+    answer = json.dumps({"home_win": 45, "draw": 30, "away_win": 25, "factors": ["home_form", "away_form"], "pick": NB})
     ai, _ = make_ai(clock, FakeModel(answer), table=HttpResponse(403, {}, b""))
     result = run(ai.analyse("fd:7", user_id=1))
     assert result.kind == "partial" and result.basis["home"]["tablePosition"] is None
-    table_answer = json.dumps({"home_win": 45, "draw": 30, "away_win": 25, "factors": ["home_form", "home_table"]})
+    table_answer = json.dumps({"home_win": 45, "draw": 30, "away_win": 25, "factors": ["home_form", "home_table"], "pick": NB})
     ai2, _ = make_ai(clock, FakeModel(table_answer), table=HttpResponse(403, {}, b""))
     with pytest.raises(Exception) as exc:  # a table factor without a table row is off-contract
         run(ai2.analyse("fd:7", user_id=1))
@@ -296,7 +297,7 @@ def test_a_slow_table_does_not_use_up_the_forms_deadline(clock: FakeClock, monke
     import miniapp.ai.analysis as analysis
 
     monkeypatch.setattr(analysis, "STANDINGS_TIMEOUT_S", 0.01)
-    answer = json.dumps({"home_win": 45, "draw": 30, "away_win": 25, "factors": ["home_form", "away_form"]})
+    answer = json.dumps({"home_win": 45, "draw": 30, "away_win": 25, "factors": ["home_form", "away_form"], "pick": NB})
     ai, t = make_ai(clock, FakeModel(answer))
 
     async def hanging_table(_tournament_id):
@@ -344,10 +345,10 @@ def test_a_model_call_that_hangs_is_cut_at_the_wall_clock_limit(clock: FakeClock
 
 
 def test_a_table_factor_needs_that_teams_table_row() -> None:
-    answer = json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "away_table"]})
+    answer = json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "away_table"], "pick": NB})
     with pytest.raises(AiError):
         validate_output(answer, ALL - {"away_table"})
-    assert validate_output(answer, ALL) == ({"home": 50, "draw": 25, "away": 25}, ("home_form", "away_table"))
+    assert validate_output(answer, ALL)[:2] == ({"home": 50, "draw": 25, "away": 25}, ("home_form", "away_table"))
 
 
 def new_analysis(ai: AiService, clock: FakeClock) -> None:
@@ -624,6 +625,7 @@ def test_ai_endpoint_returns_the_analysis(api, clock: FakeClock) -> None:
     body = r.json()
     assert body["kind"] == "partial" and body["estimated"] is True and body["probabilities"]["home"] == 48
     assert body["factors"] == ["home_form", "away_table"] and "summary" not in body
+    assert body["pick"] == {"market": "NO_BET", "reasons": [], "probability": None}
     assert KEY not in r.text
 
 
@@ -632,3 +634,16 @@ def test_ai_status_is_reported_with_sports_data(tmp_path, clock: FakeClock) -> N
     client = TestClient(create_app(settings, clock=clock), base_url="http://127.0.0.1:8000")
     login(client, fresh(clock))
     assert client.get("/api/sports/coverage").json()["ai"] == {"status": "not_connected"}
+
+
+def test_a_supported_pick_reaches_the_api_result_and_the_cache_is_versioned(clock: FakeClock) -> None:
+    answer = json.dumps({"home_win": 52, "draw": 26, "away_win": 22, "factors": ["home_form", "away_form"],
+                         "pick": {"market": "1X", "reasons": ["home_better_form", "away_better_form"]}})
+    model = FakeModel(answer)
+    ai, _ = make_ai(clock, model)
+    result = run(ai.analyse("fd:7", user_id=1))
+    # Arsenal (13 pts) has the better form: the home reason stays, the false away reason is dropped.
+    assert result.pick.to_json() == {"market": "1X", "reasons": ["home_better_form"], "probability": 78}
+    assert all(k.startswith("ai:v2:") for k in ai._cache._entries)
+    again = run(ai.analyse("fd:7", user_id=2))  # another user or language: the same cached answer, no call
+    assert again.pick == result.pick and len(model.calls) == 1

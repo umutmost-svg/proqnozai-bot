@@ -84,14 +84,20 @@ describe('real mode', () => {
     expect(within(screen.getByTestId('tournament-strip')).getByRole('button', { name: /LaLiga/ })).toBeInTheDocument();
   });
 
-  it('a sport without a source says so and shows no demo matches', async () => {
+  it('a sport without a source shows "coming soon", no demo matches and calls no API', async () => {
     const user = userEvent.setup();
-    const { data } = backend();
+    const { data, fetchImpl } = backend();
     renderApp('#/matches', { data });
     await screen.findByTestId('event-list');
+    const before = fetchImpl.mock.calls.length;
     await user.click(screen.getByRole('button', { name: 'Теннис' }));
-    expect(await screen.findByTestId('not-connected')).toHaveTextContent('Источник данных не подключен');
+    const soon = await screen.findByTestId('coming-soon');
+    expect(soon).toHaveTextContent('Скоро');
+    expect(soon).toHaveTextContent('Расписание и результаты теннисных турниров появятся здесь.');
     expect(screen.queryAllByTestId('event-card')).toHaveLength(0);
+    expect(fetchImpl.mock.calls.slice(before).map(([u]) => String(u))).toEqual([]);
+    await user.click(screen.getByRole('button', { name: 'Перейти к футболу' }));
+    expect(await screen.findByTestId('event-list')).toBeInTheDocument();
   });
 
   it('event page: real status, no invented statistics, source with time and attribution', async () => {
@@ -132,13 +138,14 @@ describe('real mode', () => {
     const user = userEvent.setup();
     const upcoming = ev(4, 'upcoming', 'Arsenal FC', 'Chelsea FC');
     const team = (name: string, form: string, points: number, position: number) => ({
-      name, matches: form.length, form, points, goalsFor: 9, goalsAgainst: 2, tablePosition: position, tablePoints: 25,
+      name, matches: form.length, form, points,
+      wins: form.split('W').length - 1, draws: form.split('D').length - 1, losses: form.split('L').length - 1, goalsFor: 9, goalsAgainst: 2, tablePosition: position, tablePoints: 25,
     });
     const analysis = {
       eventId: 'fd:4', kind: 'partial', reasons: ['no_odds_source'], generatedAt: '2026-11-08T06:00:00Z', model: 'm',
       probabilities: { home: 52, draw: 26, away: 22 },
       factors: ['home_form', 'away_table'],
-      basis: { home: team('Arsenal FC', 'WWDWW', 13, 2), away: team('Chelsea FC', 'DDDDD', 5, 9) }, estimated: true,
+      basis: { home: team('Arsenal FC', 'WWDWW', 13, 2), away: team('Chelsea FC', 'DDDDD', 5, 9) }, estimated: true, pick: { market: 'NO_BET', reasons: [], probability: null },
     };
     const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
     const fetchImpl = vi.fn<typeof fetch>(async (input) =>
@@ -153,16 +160,17 @@ describe('real mode', () => {
     expect(screen.getByTestId('ai-probabilities-title')).toHaveTextContent('Оценка вероятностей');
     expect(result).toHaveTextContent('52%');
     const factors = screen.getByTestId('ai-factors');
-    expect(factors).toHaveTextContent('Arsenal FC: форма WWDWW, очки 13 (матчей: 5)');
-    expect(factors).toHaveTextContent('Chelsea FC: 9-е место в таблице, очки 25');
-    expect(screen.getByTestId('ai-basis')).toHaveTextContent('форма WWDWW, очки 13, голы 9:2 (матчей: 5)');
-    expect(screen.getByTestId('ai-basis')).toHaveTextContent('2-е место, очки 25');
+    expect(factors).toHaveTextContent('За последние 5 матчей у Arsenal FC: 4 победы, 1 ничья и 0 поражений (13 очков).');
+    expect(factors).toHaveTextContent('Chelsea FC занимает 9-е место в таблице с 25 очками.');
+    expect(screen.getByTestId('ai-basis')).toHaveTextContent('Голы: забито 9, пропущено 2 · 13 очков');
+    expect(screen.getByTestId('ai-basis')).toHaveTextContent('В таблице: 2-е место, 25 очков');
+    expect(screen.getByTestId('ai-basis')).toHaveTextContent('Слева самый новый матч');
     expect(screen.queryByText('ДЕМО')).toBeNull();
     expect(screen.queryByText(/иллюстративные/)).toBeNull();
     const credit = within(screen.getByTestId('ai-basis')).getByTestId('ai-source');
     expect(credit).toHaveTextContent('Источник: football-data.org');
     expect(credit).toHaveTextContent(ATTR);
-    expect(screen.getByTestId('ai-basis')).toHaveTextContent('и таблица из football-data.org');
+    expect(screen.getByTestId('ai-limitations')).toHaveTextContent('Учтены только последние матчи команд и турнирная таблица.');
   });
 
   it('AI basis uses the short name only for the same club; another name keeps its own label', async () => {
@@ -171,12 +179,12 @@ describe('real mode', () => {
       home: { id: 'fd:team:57', name: 'Arsenal FC', shortName: 'Arsenal' },
       away: { id: 'fd:team:61', name: 'Chelsea FC', shortName: 'Chelsea' },
     });
-    const team = (name: string) => ({ name, matches: 5, form: 'WWDWW', points: 13, goalsFor: 9, goalsAgainst: 2, tablePosition: null, tablePoints: null });
+    const team = (name: string) => ({ name, matches: 5, form: 'WWDWW', wins: 4, draws: 1, losses: 0, points: 13, goalsFor: 9, goalsAgainst: 2, tablePosition: null, tablePoints: null });
     const analysis = {
       eventId: 'fd:8', kind: 'partial', reasons: ['no_odds_source'], generatedAt: '2026-11-08T06:00:00Z', model: 'm',
       probabilities: { home: 40, draw: 30, away: 30 }, factors: ['home_form', 'away_form'],
       // The snapshot's away team is not the event's (e.g. corrected fixture): its own name stays.
-      basis: { home: team('Arsenal FC'), away: team('Fulham FC') }, estimated: true,
+      basis: { home: team('Arsenal FC'), away: team('Fulham FC') }, estimated: true, pick: { market: 'NO_BET', reasons: [], probability: null },
     };
     const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
     const fetchImpl = vi.fn<typeof fetch>(async (input) =>
@@ -188,18 +196,18 @@ describe('real mode', () => {
     renderApp('#/event/fd%3A8', { data });
     await user.click(await screen.findByRole('button', { name: 'Создать AI-разбор' }));
     const factors = await screen.findByTestId('ai-factors');
-    expect(factors).toHaveTextContent('Arsenal: форма WWDWW');
-    expect(factors).toHaveTextContent('Fulham FC: форма WWDWW');
+    expect(factors).toHaveTextContent('у Arsenal: 4 победы');
+    expect(factors).toHaveTextContent('у Fulham FC: 4 победы');
     expect(factors).not.toHaveTextContent('Chelsea');
   });
 
   it('AI without the table: the limitation does not claim the table was used', async () => {
     const upcoming = ev(7, 'upcoming', 'Arsenal FC', 'Chelsea FC');
-    const team = (name: string) => ({ name, matches: 5, form: 'WWDWW', points: 13, goalsFor: 9, goalsAgainst: 2, tablePosition: null, tablePoints: null });
+    const team = (name: string) => ({ name, matches: 5, form: 'WWDWW', wins: 4, draws: 1, losses: 0, points: 13, goalsFor: 9, goalsAgainst: 2, tablePosition: null, tablePoints: null });
     const analysis = {
       eventId: 'fd:7', kind: 'partial', reasons: ['no_odds_source'], generatedAt: '2026-11-08T06:00:00Z', model: 'm',
       probabilities: { home: 45, draw: 30, away: 25 }, factors: ['home_form', 'away_form'],
-      basis: { home: team('Arsenal FC'), away: team('Chelsea FC') }, estimated: true,
+      basis: { home: team('Arsenal FC'), away: team('Chelsea FC') }, estimated: true, pick: { market: 'NO_BET', reasons: [], probability: null },
     };
     const fetchImpl = vi.fn<typeof fetch>(async (input) =>
       String(input).startsWith('/api/ai/analysis')
@@ -208,9 +216,9 @@ describe('real mode', () => {
     );
     const data = new BackendSportsDataProvider({ waitForSession: async () => true, getCsrfToken: () => 'c', fetchImpl });
     renderApp('#/event/fd%3A7/ai', { data });
-    const basis = await screen.findByTestId('ai-basis');
-    expect(basis).toHaveTextContent('таблица сейчас недоступна');
-    expect(basis).not.toHaveTextContent('и таблица из football-data.org');
+    const limits = await screen.findByTestId('ai-limitations');
+    expect(limits).toHaveTextContent('турнирная таблица была недоступна');
+    expect(screen.getByTestId('ai-basis')).not.toHaveTextContent('Таблица — положение');
   });
 
   it('AI not connected: a real match offers no AI button', async () => {

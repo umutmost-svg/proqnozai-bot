@@ -1,4 +1,4 @@
-import { addDays, zonedTimeToInstant } from '../time/zoned';
+import { addDays, zonedTimeToInstant, type DayKey } from '../time/zoned';
 import { ALL_TOURNAMENTS, filterEvents, pickFeatured, type EventQuery } from './filter';
 import { TOURNAMENTS as DEMO_TOURNAMENTS } from './fixtures';
 import type {
@@ -20,7 +20,15 @@ import type {
   TennisEvent,
   Tournament,
   TournamentCalendar,
+  AiPick,
+  PickMarket,
+  PickReason,
+  SearchResults,
+  SearchCoverage,
+  TeamHit,
+  TeamMatches,
 } from './models';
+import { pickProbability } from './probabilities';
 import { DataError, type SportCoverage, type SportsDataProvider } from './provider';
 
 /** One API exchange may not hang the app (the loading screen waits on first data). */
@@ -43,6 +51,9 @@ const STATUSES: ReadonlySet<EventStatus> = new Set([
 
 // Licensed local assets already shipped with M1; any other real tournament shows its name only.
 const demoLogo = (id: string): ImageAsset | undefined => DEMO_TOURNAMENTS.find((t) => t.id === id)?.logo;
+/** Sports with a real source in this release; the others show "coming soon" and call nothing. */
+const REAL_SPORTS: ReadonlySet<Sport> = new Set(['football']);
+
 const LOCAL_LOGOS: Record<string, ImageAsset | undefined> = {
   'fd:PL': demoLogo('premier'),
   'fd:PD': demoLogo('laliga'),
@@ -107,6 +118,12 @@ function readSeason(v: unknown): TournamentCalendar['season'] | undefined {
   return { startDate, endDate, currentMatchday };
 }
 
+function readTeamHit(v: unknown): TeamHit | null {
+  const team = competitor(v);
+  if (!team || !isObj(v) || !Array.isArray(v.tournaments) || v.tournaments.some((x) => typeof x !== 'string')) return null;
+  return { team, tournamentIds: v.tournaments as string[] };
+}
+
 function competitor(v: unknown): Competitor | null {
   if (!isObj(v)) return null;
   const id = str(v.id);
@@ -129,6 +146,7 @@ export class BackendSportsDataProvider implements SportsDataProvider {
   private readonly tournaments = new Map<string, Tournament>();
   private readonly coverages = new Map<Sport, SportCoverage>();
   private aiStatus: 'connected' | 'not_connected' | 'unknown' = 'unknown';
+  private readonly knownDays = new Map<string, Map<DayKey, number>>();
   private readonly fetchImpl: typeof fetch;
   private readonly base: string;
   private readonly timeoutMs: number;
@@ -188,7 +206,15 @@ export class BackendSportsDataProvider implements SportsDataProvider {
       });
     }
     // Same filters as the demo: calendar day in the chosen zone, tournament, search, order.
-    return filterEvents(events, [...this.tournaments.values()], query);
+    const filtered = filterEvents(events, [...this.tournaments.values()], query);
+    // A complete day (all tournaments, no search) is a fact for the calendar's dots.
+    if (query.tournamentId === ALL_TOURNAMENTS && !query.query.trim() && body.stale !== true) {
+      const key = `${query.sport}|${query.timeZone}`;
+      const days = this.knownDays.get(key) ?? new Map<DayKey, number>();
+      days.set(query.day, filtered.length);
+      this.knownDays.set(key, days);
+    }
+    return filtered;
   }
 
   async getFeatured(query: EventQuery): Promise<SportEvent | null> {
@@ -205,6 +231,68 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     this.readCoverage(sport, body.coverage);
     for (const t of list as Tournament[]) this.tournaments.set(t.id, t);
     return list as Tournament[];
+  }
+
+  dateWindow(): { past: number; future: number } {
+    // The backend's window (miniapp/sports/service.py: PAST_WINDOW, FUTURE_WINDOW), one day
+    // inside it on each side so a local day never reaches past the server's instant bounds.
+    return { past: 29, future: 59 };
+  }
+
+  sportAvailable(sport: Sport): boolean {
+    return REAL_SPORTS.has(sport);
+  }
+
+  knownMatchDays(sport: Sport, timeZone: string): ReadonlyMap<DayKey, number> {
+    return this.knownDays.get(`${sport}|${timeZone}`) ?? new Map();
+  }
+
+  async search(sport: Sport, query: string): Promise<SearchResults> {
+    const op = 'search';
+    if (!this.sportAvailable(sport)) return { teams: [], events: [], coverage: { indexed: 0, total: 0, complete: true } };
+    const body = await this.get(op, `/sports/${sport}/search?${new URLSearchParams({ q: query }).toString()}`);
+    if (!body || !Array.isArray(body.teams) || !Array.isArray(body.events)) throw new DataError(op, 'bad_response');
+    const coverage = this.readSearchCoverage(op, body.coverage);
+    this.readCatalogue(op, sport, body.tournaments);
+    const source = this.readCoverage(sport, body.source);
+    const teams = body.teams.map((raw) => readTeamHit(raw));
+    const events = body.events.map((raw) => this.readEvent(raw, source));
+    // One broken entry makes the answer unusable: a partial list must not look complete.
+    if (teams.some((t) => !t) || events.some((e) => !e || e.sport !== sport)) throw new DataError(op, 'bad_response');
+    return { teams: teams as TeamHit[], events: events as SportEvent[], coverage };
+  }
+
+  async getTeamMatches(teamId: string): Promise<TeamMatches | null> {
+    const op = 'team';
+    const body = await this.get(op, `/sports/football/teams/${encodeURIComponent(teamId)}/matches`, true);
+    if (body === null) return null;
+    if (!Array.isArray(body.events)) throw new DataError(op, 'bad_response');
+    const coverage = this.readSearchCoverage(op, body.coverage);
+    this.readCatalogue(op, 'football', body.tournaments);
+    const source = this.readCoverage('football', body.source);
+    const team = readTeamHit(body.team);
+    const events = body.events.map((raw) => this.readEvent(raw, source));
+    if (!team || team.team.id !== teamId || events.some((e) => !e || (e.home.id !== teamId && e.away.id !== teamId))) {
+      throw new DataError(op, 'bad_response');
+    }
+    return { team, events: events as SportEvent[], coverage };
+  }
+
+  private readSearchCoverage(op: string, v: unknown): SearchCoverage {
+    if (!isObj(v) || !Array.isArray(v.indexed) || int(v.total) === null || typeof v.complete !== 'boolean') {
+      throw new DataError(op, 'bad_response');
+    }
+    const indexed = v.indexed.length;
+    if (indexed > (v.total as number) || v.complete !== (indexed === v.total)) throw new DataError(op, 'bad_response');
+    return { indexed, total: v.total as number, complete: v.complete };
+  }
+
+  /** A catalogue riding along: stored only when every entry is valid. */
+  private readCatalogue(op: string, sport: Sport, raw: unknown): void {
+    if (!Array.isArray(raw)) throw new DataError(op, 'bad_response');
+    const list = raw.map((x) => this.parseTournament(x));
+    if (list.some((t) => !t || t.sport !== sport)) throw new DataError(op, 'bad_response');
+    for (const t of list as Tournament[]) this.tournaments.set(t.id, t);
   }
 
   async getTournamentCalendar(id: string): Promise<TournamentCalendar | null> {
@@ -528,10 +616,45 @@ function readBasis(v: unknown): TeamBasis | null {
   const tablePosition = optional(v.tablePosition);
   const tablePoints = optional(v.tablePoints);
   if (tablePosition === undefined || tablePoints === undefined) return null;
-  return { name, form, matches, points, goalsFor, goalsAgainst, tablePosition, tablePoints };
+  // The counts must agree with the form string (they are rendered as words).
+  const [wins, draws, losses] = [int(v.wins), int(v.draws), int(v.losses)];
+  const count = (c: string) => form.split('').filter((x) => x === c).length;
+  if (wins !== count('W') || draws !== count('D') || losses !== count('L')) return null;
+  if (points !== wins * 3 + draws) return null;
+  return { name, form, matches, wins, draws, losses, points, goalsFor, goalsAgainst, tablePosition, tablePoints };
 }
 
 /** Strict reading of the backend analysis; anything off-contract is rejected (null), never repaired. */
+const MARKETS: ReadonlySet<PickMarket> = new Set(['1', 'X', '2', '1X', 'X2', '12', 'NO_BET']);
+const PICK_REASONS: Record<string, PickReason> = {
+  home_better_form: 'homeBetterForm',
+  away_better_form: 'awayBetterForm',
+  home_higher_table: 'homeHigherTable',
+  away_higher_table: 'awayHigherTable',
+  home_more_goals: 'homeMoreGoals',
+  away_more_goals: 'awayMoreGoals',
+  home_fewer_conceded: 'homeFewerConceded',
+  away_fewer_conceded: 'awayFewerConceded',
+  evenly_matched: 'evenlyMatched',
+};
+
+/**
+ * The preferred outcome, checked again here: its probability must be the sum the 1X2
+ * estimate gives for that market (computed, never trusted), NO_BET carries nothing.
+ */
+function readPick(v: unknown, [home, draw, away]: number[]): AiPick | null {
+  if (!isObj(v) || typeof v.market !== 'string' || !MARKETS.has(v.market as PickMarket) || !Array.isArray(v.reasons)) {
+    return null;
+  }
+  const market = v.market as PickMarket;
+  const reasons = v.reasons.map((r) => (typeof r === 'string' ? PICK_REASONS[r] : undefined));
+  if (reasons.some((r) => r === undefined) || new Set(reasons).size !== reasons.length || reasons.length > 3) return null;
+  const expected = pickProbability(market, home!, draw!, away!);
+  if (market === 'NO_BET') return v.probability === null && reasons.length === 0 ? { market, reasons: [], probability: null } : null;
+  if (reasons.length === 0 || v.probability !== expected) return null;
+  return { market, reasons: reasons as PickReason[], probability: expected };
+}
+
 function readAnalysis(b: Json, eventId: string, sport: Sport): AiAnalysis | null {
   if (b.eventId !== eventId || !Array.isArray(b.reasons)) return null;
   const reasons = b.reasons.map((r) => (typeof r === 'string' ? REASONS[r] : undefined));
@@ -565,10 +688,15 @@ function readAnalysis(b: Json, eventId: string, sport: Sport): AiAnalysis | null
   if (factors.some((f) => tableOf[f!] && (tableOf[f!]!.tablePosition === null || tableOf[f!]!.tablePoints === null))) {
     return null;
   }
+  // The v2 answer always carries the preferred outcome (NO_BET included): a missing one is a
+  // broken answer, never a page that silently lacks the block.
+  const pick = readPick(b.pick, probabilities as number[]);
+  if (!pick) return null;
   return {
     eventId,
     sport,
     kind: b.kind,
+    pick,
     probabilities: probabilities as number[],
     reasons: known,
     generatedAt,

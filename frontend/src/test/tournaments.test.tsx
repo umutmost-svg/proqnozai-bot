@@ -125,7 +125,7 @@ describe('tournament calendar', () => {
     const list = await screen.findByTestId('tournament-list');
     await user.click(within(list).getByRole('link', { name: 'Serie A: открыть календарь' }));
     expect(await screen.findByTestId('tournament-head')).toHaveTextContent('Serie A');
-    expect(screen.getByTestId('tournament-head')).toHaveTextContent('Italy');
+    expect(screen.getByTestId('tournament-head')).toHaveTextContent('Италия'); // the provider's area, localized
     expect(screen.getByTestId('tournament-head')).toHaveTextContent('Текущий тур: 11');
     expect(screen.getByTestId('calendar-day-title')).toHaveTextContent('9 ноября · Тур 11');
     const cards = within(screen.getByTestId('calendar-events')).getAllByTestId('event-card');

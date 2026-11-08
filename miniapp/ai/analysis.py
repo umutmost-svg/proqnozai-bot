@@ -9,7 +9,8 @@ Order of decisions, all in Python before any model call:
    time, and is charged against a per-user and a global daily budget.
 
 The model gets only the verified numbers and returns strict JSON: three whole
-percentages and 2–4 keys of the factors that weighed most, chosen from a fixed list.
+percentages, 2–4 keys of the factors that weighed most (fixed list) and a preferred
+outcome (market enum + reason codes, checked by the rules in pick.py).
 It writes no free text, so it cannot attach a number to the wrong team or name data
 we never gave; every sentence the user sees is a template filled with verified
 numbers by the frontend. Anything outside the contract is rejected, never repaired.
@@ -33,6 +34,7 @@ from miniapp.sports.models import FootballEvent, Tournament
 from miniapp.sports.service import SportsService, parse_instant
 
 from .evidence import TeamSummary, has_verified_form, summarize
+from .pick import MARKETS, MAX_REASONS, NO_BET, REASONS, Pick, checked_pick
 from .readiness import NOT_ANALYSED, forecast_readiness
 
 logger = logging.getLogger("miniapp.ai")
@@ -57,10 +59,22 @@ SCHEMA = {
         "draw": {"type": "integer"},
         "away_win": {"type": "integer"},
         "factors": {"type": "array", "items": {"type": "string", "enum": list(FACTORS)}},
+        "pick": {
+            "type": "object",
+            "properties": {
+                "market": {"type": "string", "enum": list(MARKETS)},
+                "reasons": {"type": "array", "items": {"type": "string", "enum": list(REASONS)}},
+            },
+            "required": ["market", "reasons"],
+            "additionalProperties": False,
+        },
     },
-    "required": ["home_win", "draw", "away_win", "factors"],
+    "required": ["home_win", "draw", "away_win", "factors", "pick"],
     "additionalProperties": False,
 }
+# Bumped whenever the answer's shape changes: a cached answer of an older shape is never
+# served as a newer one (the cache lives in memory; nothing persisted needs migrating).
+SCHEMA_VERSION = "v2"
 
 # Stable across requests (cache-friendly): everything that varies goes in the user turn.
 SYSTEM_PROMPT = """You estimate one upcoming football match for the ProqnozAI app.
@@ -77,7 +91,19 @@ Return:
 - "factors": the 2 to 4 facts that weighed most in your estimate, most important
   first, as keys: home_form / away_form (recent results and points), home_goals /
   away_goals (goals scored and conceded), home_table / away_table (table position;
-  only when that team's tablePosition is present). No duplicates."""
+  only when that team's tablePosition is present). No duplicates.
+- "pick": the outcome you prefer, or "NO_BET" when the numbers do not clearly support
+  one. There are no bookmaker odds, so this is never a claim of value or profit.
+  "market": 1 (home win), X (draw), 2 (away win), 1X (home win or draw), X2 (draw or
+  away win), 12 (no draw), NO_BET. Prefer NO_BET when the teams are close. Choose a
+  double chance only for the team your own estimate clearly favours, never just
+  because two outcomes together are more likely.
+  "reasons": up to 3 codes that are TRUE in the facts and support that pick:
+  home_better_form / away_better_form (more points in the recent matches),
+  home_higher_table / away_higher_table (better table position, both present),
+  home_more_goals / away_more_goals (more goals scored), home_fewer_conceded /
+  away_fewer_conceded (fewer goals conceded), evenly_matched (similar points and
+  table positions). Empty for NO_BET."""
 
 
 class AiError(Exception):
@@ -112,6 +138,7 @@ class AnalysisResult:
     factors: tuple[str, ...] = ()  # keys from FACTORS
     basis: dict | None = None  # the verified numbers shown under the result
     estimated: bool = False
+    pick: Pick | None = None  # None only for results without a model answer
 
     def to_json(self) -> dict:
         return {
@@ -124,11 +151,14 @@ class AnalysisResult:
             "factors": list(self.factors),
             "basis": self.basis,
             "estimated": self.estimated,
+            "pick": self.pick.to_json() if self.pick else None,
         }
 
 
-def validate_output(text: str, allowed: frozenset[str]) -> tuple[dict, tuple[str, ...]]:
-    """Strict check of the model's JSON. Nothing is clamped, renormalised or dropped."""
+def validate_output(text: str, allowed: frozenset[str],
+                    basis: dict | None = None) -> tuple[dict, tuple[str, ...], Pick]:
+    """Strict check of the model's JSON. Nothing is clamped, renormalised or dropped; the
+    only change is that a pick the rules do not support becomes NO_BET (a weaker claim)."""
     try:
         data = json.loads(text)
     except ValueError:
@@ -144,7 +174,15 @@ def validate_output(text: str, allowed: frozenset[str]) -> tuple[dict, tuple[str
     if any(not isinstance(f, str) or f not in allowed for f in factors) or len(set(factors)) != len(factors):
         raise AiError("bad_output")
     probabilities = {"home": numbers[0], "draw": numbers[1], "away": numbers[2]}
-    return probabilities, tuple(factors)
+    pick = data["pick"]
+    if not isinstance(pick, dict) or set(pick) != {"market", "reasons"} or pick["market"] not in MARKETS:
+        raise AiError("bad_output")
+    reasons = pick["reasons"]
+    if (not isinstance(reasons, list) or len(reasons) > MAX_REASONS or len(set(map(str, reasons))) != len(reasons)
+            or any(not isinstance(r, str) or r not in REASONS for r in reasons)):
+        raise AiError("bad_output")
+    checked = checked_pick(pick["market"], tuple(reasons), probabilities, basis) if basis else NO_BET
+    return probabilities, tuple(factors), checked
 
 
 class QuotaLedger(Protocol):
@@ -216,7 +254,8 @@ class AiService:
             "away": basis["away"],
         }
         digest = hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()[:16]
-        key = f"ai:{event.id}:{digest}"  # language-free: the frontend renders the factors
+        # Language-free (the frontend renders every sentence), versioned by answer shape.
+        key = f"ai:{SCHEMA_VERSION}:{event.id}:{digest}"
         allowed = frozenset(f for f in FACTORS if not f.endswith("_table")
                             or (home if f.startswith("home") else away).table_position is not None)
         client = self.client
@@ -228,10 +267,11 @@ class AiService:
                 answer = await asyncio.wait_for(client.complete(SYSTEM_PROMPT, request, SCHEMA), MODEL_TIMEOUT_S)
             except TimeoutError:
                 raise AiError("timeout") from None
-            probabilities, factors = validate_output(answer.text, allowed)
-            logger.info("ai.analysis event=%s readiness=%s", event.id, readiness)
+            probabilities, factors, pick = validate_output(answer.text, allowed, basis)
+            logger.info("ai.analysis event=%s readiness=%s pick=%s", event.id, readiness, pick.market)
             return AnalysisResult(event.id, readiness, ("no_odds_source",), self._iso(), answer.model,
-                                  probabilities, factors, basis, estimated=readiness == "partial"), ANALYSIS_TTL_S
+                                  probabilities, factors, basis, estimated=readiness == "partial",
+                                  pick=pick), ANALYSIS_TTL_S
 
         loader = _as_upstream(load)
         kickoff = parse_instant(event.starts_at).timestamp()

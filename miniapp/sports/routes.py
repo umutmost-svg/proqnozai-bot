@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, Response
 from .client import UpstreamError
 from .crests import KINDS
 from .models import SPORTS
+from .search import MAX_QUERY, MIN_QUERY, normalize
 from .service import RequestError, SportsService, parse_instant
 
 logger = logging.getLogger("miniapp.sports")
@@ -168,3 +169,60 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
         if not service.crests.admit_rejected():
             return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "1"})
         return _error(404, "not_found")
+
+    def _coverage_json(indexed: list[str], total: int) -> dict:
+        return {"indexed": indexed, "total": total, "complete": len(indexed) == total}
+
+    @app.get("/api/sports/{sport}/search")
+    async def search(sport: str, request: Request) -> JSONResponse:
+        # Global: independent of any date or tournament the catalogue shows. Served from the
+        # season index (no upstream request per keystroke; the warm-up runs in the background).
+        if not await signed_in(request):
+            return _error(401, "unauthenticated")
+        if sport not in SPORTS:
+            return _error(404, "not_found")
+        params = request.query_params
+        raw = params.get("q", "")
+        if set(params) != {"q"} or len(raw) > MAX_QUERY or len(normalize(raw)) < MIN_QUERY:
+            return _error(400, "bad_query")
+        if not service.connected(sport):  # type: ignore[arg-type]
+            return JSONResponse({"sport": sport, "query": raw, "teams": [], "events": [],
+                                 "coverage": _coverage_json([], 0), "tournaments": []})
+        index = service.search_index
+        await index.wait_for_some()
+        result = index.search(raw)
+        return JSONResponse({
+            "sport": sport,
+            "query": raw,
+            "teams": [h.to_json() for h in result.teams],
+            "events": [e.to_json() for e in result.events],
+            "coverage": _coverage_json(result.indexed, result.total),
+            "tournaments": [service.tournament_json(t) for t in service.tournaments(sport)],  # type: ignore[arg-type]
+            "source": _short(service.coverage()["sports"][sport]),
+        })
+
+    @app.get("/api/sports/{sport}/teams/{team_id}/matches")
+    async def team_matches(sport: str, team_id: str, request: Request) -> JSONResponse:
+        if not await signed_in(request):
+            return _error(401, "unauthenticated")
+        if sport not in SPORTS or len(team_id) > 40 or not service.connected(sport):  # type: ignore[arg-type]
+            return _error(404, "not_found")
+        index = service.search_index
+        await index.wait_for_some()
+        hit, events = index.team(team_id)
+        indexed = index.indexed()
+        if hit is None:
+            total = len(service.tournaments(sport))  # type: ignore[arg-type]
+            if len(indexed) < total:
+                # The team may be in a competition not indexed yet: "try again", never "not found".
+                return JSONResponse({"error": "source_unavailable", "reason": "indexing"}, status_code=503,
+                                    headers={"Retry-After": "15"})
+            return _error(404, "not_found")
+        return JSONResponse({
+            "sport": sport,
+            "team": hit.to_json(),
+            "events": [e.to_json() for e in events],
+            "coverage": _coverage_json(indexed, len(service.tournaments(sport))),  # type: ignore[arg-type]
+            "tournaments": [service.tournament_json(t) for t in service.tournaments(sport)],  # type: ignore[arg-type]
+            "source": _short(service.coverage()["sports"][sport]),
+        })

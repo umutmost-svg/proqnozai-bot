@@ -1,0 +1,70 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 28px 22px 22px;
+  border-radius: var(--radius-hero);
+  background: var(--glass-24);
+  border: 1px solid var(--line-74);
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: var(--glass-solid);
+  color: var(--text-strong);
+  box-shadow: 0 0 0 10px rgba(255, 255, 255, 0.22);
+}
+
+.sport {
+  margin-top: 8px;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 30px;
+  line-height: 36px;
+  color: var(--text-strong);
+}
+
+.text {
+  max-width: 320px;
+  font-size: 14px;
+  line-height: 21px;
+}
+
+.note {
+  max-width: 320px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted-3);
+}
+
+.button {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 6px;
+  border: 1px solid var(--line-70);
+  border-radius: var(--radius-control);
+  background: var(--glass-strong);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-primary);
+}

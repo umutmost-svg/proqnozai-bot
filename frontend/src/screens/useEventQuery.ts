@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { EventQuery } from '../data/filter';
 import { useFilters, useSettings } from '../state/contexts';
 
-/** Current filters as a provider query, plus a stable key for re-fetching. */
+/** Current date and tournament filters as a provider query, plus a stable key for re-fetching. */
 export function useEventQuery(): { query: EventQuery; key: string } {
   const { filters, day } = useFilters();
   const { timeZone } = useSettings();
@@ -12,8 +12,9 @@ export function useEventQuery(): { query: EventQuery; key: string } {
       day,
       timeZone,
       tournamentId: filters.tournamentId,
-      query: filters.query,
+      // The search box is global (its own results); it never narrows the day's list.
+      query: '',
     };
     return { query, key: JSON.stringify(query) };
-  }, [filters.sport, filters.tournamentId, filters.query, day, timeZone]);
+  }, [filters.sport, filters.tournamentId, day, timeZone]);
 }

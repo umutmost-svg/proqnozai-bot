@@ -5,16 +5,16 @@ import { Header } from '../components/Header';
 import { DeferredButton, EmptyState, ErrorState, LoadingState } from '../components/States';
 import { DemoBanner } from '../components/StatusBadge';
 import ui from '../components/ui.module.css';
-import type { AiAnalysis, AiFactor, SportEvent, TeamBasis } from '../data/models';
+import type { AiAnalysis, SportEvent, TeamBasis } from '../data/models';
+import { Facts, Factors, Limitations } from './ai/Explain';
+import { PickCard } from './ai/PickCard';
+import { ProbabilityBlock } from './ai/ProbabilityBlock';
 import { DataError } from '../data/provider';
 import { useAsync } from '../hooks/useAsync';
 import { useGoBack } from '../hooks/useGoBack';
 import { formatDateTime } from '../i18n/format';
 import { useServices, useSettings } from '../state/contexts';
 import s from './AiScreen.module.css';
-
-/** Darker bar for the leading outcome, as in the Figma probability block. */
-const FILL_ALPHA = [0.55, 0.45, 0.35];
 
 function Waiting({ onBack }: { onBack(): void }) {
   const { t } = useSettings();
@@ -45,45 +45,6 @@ function Waiting({ onBack }: { onBack(): void }) {
   );
 }
 
-/** A factor the model picked, as a sentence built only from that team's verified numbers. */
-function factorText(t: ReturnType<typeof useSettings>['t'], factor: AiFactor, basis: { home: TeamBasis; away: TeamBasis }): string {
-  const team = factor.startsWith('home') ? basis.home : basis.away;
-  const params = {
-    team: team.name,
-    form: team.form,
-    matches: team.matches,
-    points: team.points,
-    goalsFor: team.goalsFor,
-    goalsAgainst: team.goalsAgainst,
-    position: team.tablePosition ?? 0,
-    tablePoints: team.tablePoints ?? 0,
-  };
-  if (factor.endsWith('Form')) return t('ai.factor.form', params);
-  if (factor.endsWith('Goals')) return t('ai.factor.goals', params);
-  return t('ai.factor.table', params);
-}
-
-/** One team's verified numbers (computed by the backend in Python, not by the model). */
-function BasisRow({ team }: { team: TeamBasis }) {
-  const { t } = useSettings();
-  return (
-    <li>
-      <strong>{team.name}</strong>
-      {': '}
-      {t('ai.basisForm', {
-        form: team.form,
-        matches: team.matches,
-        points: team.points,
-        goalsFor: team.goalsFor,
-        goalsAgainst: team.goalsAgainst,
-      })}
-      {team.tablePosition !== null &&
-        team.tablePoints !== null &&
-        ` · ${t('ai.basisTable', { position: team.tablePosition, points: team.tablePoints })}`}
-    </li>
-  );
-}
-
 function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }) {
   const { data } = useServices();
   const { t, timeZone } = useSettings();
@@ -101,6 +62,7 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
     away: shortFor(analysis.basis.away, event.away),
   };
   const title = !real ? t('ai.probabilities') : analysis.estimated ? t('ai.probabilitiesEstimated') : t('ai.probabilitiesReal');
+  const hasTable = !!basis && (basis.home.tablePosition !== null || basis.away.tablePosition !== null);
   return (
     <>
       {!real && <DemoBanner label={t('ai.exampleBadge')} />}
@@ -110,69 +72,30 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
           {t(real ? 'ai.generated' : 'ai.snapshot', { date: formatDateTime(new Date(analysis.generatedAt), timeZone) })}
         </p>
       )}
-      <section className={ui.section} data-testid="ai-result" data-sport={analysis.sport}>
-        <h3 className={ui.sectionTitle} data-testid="ai-probabilities-title">
-          {title}
-        </h3>
-        {analysis.probabilities.map((p, i) => (
-          <div key={labels[i]} className={s.outcome}>
-            <div className={s.outcomeLabel}>
-              <span className={s.outcomeName}>{labels[i]}</span>
-              <span className={s.outcomeValue}>{p}%</span>
-            </div>
-            <div className={s.track} role="presentation">
-              <div className={s.fill} style={{ width: `${p}%`, background: `rgba(25, 35, 28, ${FILL_ALPHA[i] ?? 0.35})` }} />
-            </div>
-          </div>
-        ))}
-      </section>
+      <ProbabilityBlock title={title} labels={labels} values={analysis.probabilities} sport={analysis.sport} />
+      {real && basis && analysis.pick && (
+        <PickCard pick={analysis.pick} event={event} values={analysis.probabilities} basis={basis} />
+      )}
       {real && basis && analysis.factors && analysis.factors.length > 0 && (
-        <section className={ui.section} data-testid="ai-factors">
-          <h3 className={ui.sectionTitle}>{t('ai.factorsTitle')}</h3>
-          <ul className={s.reasons}>
-            {analysis.factors.map((f) => (
-              <li key={f}>{factorText(t, f, basis)}</li>
-            ))}
-          </ul>
+        <Factors factors={analysis.factors} basis={basis} />
+      )}
+      {real && basis ? (
+        <>
+          <Facts
+            basis={basis}
+            tournament={data.getTournament(event.tournamentId)}
+            provider={event.source?.provider ?? null}
+            attribution={event.source?.attribution ?? null}
+          />
+          <Limitations hasTable={hasTable} />
+        </>
+      ) : (
+        <section className={ui.section} data-testid="ai-basis">
+          <h3 className={ui.sectionTitle}>{t('ai.basisTitle')}</h3>
+          <p className={ui.body}>{t(`ai.basis.${analysis.sport}`)}</p>
+          <p className={ui.note}>{t('ai.limitation')}</p>
         </section>
       )}
-      <section className={ui.section} data-testid="ai-basis">
-        <h3 className={ui.sectionTitle}>{t('ai.basisTitle')}</h3>
-        {real && basis ? (
-          <>
-            <ul className={s.reasons}>
-              <BasisRow team={basis.home} />
-              <BasisRow team={basis.away} />
-            </ul>
-            <p className={ui.note}>
-              {t(
-                basis.home.tablePosition === null && basis.away.tablePosition === null
-                  ? 'ai.realLimitationNoTable'
-                  : 'ai.realLimitation',
-              )}
-            </p>
-            {/* The figures are the provider's: its required attribution goes with them. No
-                "updated" time here — the form and table are fetched apart from the fixture;
-                when the analysis was made is shown at the top. */}
-            {event.source && (
-              <p className={ui.footnote} data-testid="ai-source">
-                {t('ai.basisSource', { provider: event.source.provider })}
-                {event.source.attribution && (
-                  <>
-                    <br />
-                    {event.source.attribution}
-                  </>
-                )}
-              </p>
-            )}
-          </>
-        ) : (
-          <>
-            <p className={ui.body}>{t(`ai.basis.${analysis.sport}`)}</p>
-            <p className={ui.note}>{t('ai.limitation')}</p>
-          </>
-        )}
-      </section>
       {/* AI history ships in M4. */}
       <DeferredButton label={t('ai.saveAnalysis')} />
       <p className={ui.notice}>{t('ai.disclaimer')}</p>

@@ -23,12 +23,16 @@ export function normalize(text: string): string {
     .trim();
 }
 
-export function matchesSearch(event: SportEvent, tournament: Tournament | undefined, query: string): boolean {
+/** Every word of the query appears in one of the names (case and accent insensitive). */
+export function namesMatch(query: string, names: readonly (string | undefined)[]): boolean {
   const q = normalize(query);
   if (!q) return true;
-  const names = [event.home.name, event.home.fullName, event.away.name, event.away.fullName, tournament?.name];
   const haystack = normalize(names.filter(Boolean).join(' '));
   return q.split(' ').every((token) => haystack.includes(token));
+}
+
+export function matchesSearch(event: SportEvent, tournament: Tournament | undefined, query: string): boolean {
+  return namesMatch(query, [event.home.name, event.home.fullName, event.away.name, event.away.fullName, tournament?.name]);
 }
 
 export function filterEvents(
@@ -66,12 +70,17 @@ const FEATURABLE: ReadonlySet<EventStatus> = new Set(['live', 'upcoming', 'finis
  * relevant. Postponed, suspended, cancelled or unknown events are never the
  * "match of the day" — the hero shows a kickoff time, not a status.
  */
-export function pickFeatured(events: readonly SportEvent[]): SportEvent | null {
+export function pickFeatured(events: readonly SportEvent[], rank: (tournamentId: string) => number = () => 0): SportEvent | null {
+  // Only events of the day being shown are passed in (filterEvents keeps the chosen day in
+  // the chosen zone): an older match can never stand in for this day's.
   const candidates = events.filter((e) => FEATURABLE.has(e.status));
+  const byRank = (list: SportEvent[]) =>
+    [...list].sort((a, b) => rank(a.tournamentId) - rank(b.tournamentId) || a.startsAt.localeCompare(b.startsAt));
   return (
     candidates.find((e) => e.featured) ??
-    candidates.find((e) => e.status === 'live' || e.status === 'upcoming') ??
-    candidates[0] ??
+    byRank(candidates.filter((e) => e.status === 'live'))[0] ??
+    byRank(candidates.filter((e) => e.status === 'upcoming'))[0] ??
+    byRank(candidates)[0] ??
     null
   );
 }

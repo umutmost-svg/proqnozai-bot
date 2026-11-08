@@ -13,7 +13,8 @@ import { SportTabs } from '../components/SportTabs';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { DataFootnote } from '../components/SourceNote';
 import { NoEvents } from '../components/NoEvents';
-import { DemoChip } from '../components/StatusBadge';
+import { DemoChip, StatusBadge } from '../components/StatusBadge';
+import { ComingSoon } from '../components/ComingSoon';
 import { TournamentList } from '../components/TournamentList';
 import { TournamentStrip } from '../components/TournamentStrip';
 import type { SportEvent } from '../data/models';
@@ -25,10 +26,11 @@ import { dayKeyOf, timeOf } from '../time/zoned';
 import { useEventQuery } from './useEventQuery';
 import s from './HomeScreen.module.css';
 
-function Hero({ event }: { event: SportEvent }) {
+function Hero({ event, isToday, day }: { event: SportEvent; isToday: boolean; day: string }) {
   const { t, timeZone } = useSettings();
   const { data } = useServices();
   const navigate = useNavigate();
+  const showStatus = event.status === 'live' || event.status === 'finished';
   const start = new Date(event.startsAt);
   const score = headlineScore(event);
   return (
@@ -37,8 +39,12 @@ function Hero({ event }: { event: SportEvent }) {
         <img src={ambientSrc} alt="" width={260} height={170} />
       </div>
       <div className={s.heroHead}>
-        <h2 className={s.heroTitle}>{t('home.matchOfDay')}</h2>
+        {/* "Match of the day" only for today; another chosen day says which day it is. */}
+        <h2 className={s.heroTitle} data-testid="hero-title">
+          {isToday ? t('home.matchOfDay') : t('home.matchOfDate', { date: formatDayMonth(t, day) })}
+        </h2>
         {data.isDemo && <DemoChip />}
+        {!data.isDemo && showStatus && <StatusBadge status={event.status} demo={false} />}
       </div>
       {/* Locale-independent upper case: CSS uppercase would turn "Liga" into "LİGA" in AZ. */}
       <p className={s.league}>{data.getTournament(event.tournamentId)?.name.toUpperCase()}</p>
@@ -80,8 +86,15 @@ export function HomeScreen() {
   const navigate = useNavigate();
   const { query, key } = useEventQuery();
   // The day's events, so the home can tell "no matches" from "only stopped matches".
-  const day = useAsync(() => data.listEvents({ ...query, query: '' }), `featured:${key}`);
-  const featured = day.status === 'success' ? pickFeatured(day.data) : null;
+  const available = data.sportAvailable(f.filters.sport);
+  const day = useAsync(
+    () => (available ? data.listEvents({ ...query, query: '' }) : Promise.resolve([])),
+    `featured:${key}:${available}`,
+  );
+  // Tournament order of the catalogue = priority for the match of the day.
+  const order = data.listTournaments(f.filters.sport).map((x) => x.id);
+  const rank = (id: string) => (order.indexOf(id) === -1 ? order.length : order.indexOf(id));
+  const featured = day.status === 'success' ? pickFeatured(day.data, rank) : null;
   const openCatalog = () => navigate('/matches');
 
   return (
@@ -89,6 +102,10 @@ export function HomeScreen() {
       <Header variant="home" />
       <SearchLauncher value={f.filters.query} onOpen={() => navigate('/matches', { state: { focusSearch: true } })} />
       <SportTabs value={f.filters.sport} onChange={f.setSport} />
+      {!available ? (
+        <ComingSoon sport={f.filters.sport} onBackToFootball={() => f.setSport('football')} />
+      ) : (
+        <>
       <div className={s.filters}>
         <DateStrip today={f.today} value={f.day} onChange={f.setDay} />
         <TournamentStrip
@@ -104,7 +121,7 @@ export function HomeScreen() {
       )}
       {day.status === 'success' &&
         (featured ? (
-          <Hero key={featured.id} event={featured} />
+          <Hero key={featured.id} event={featured} isToday={f.day === f.today} day={f.day} />
         ) : day.data.length > 0 ? (
           <EmptyState title={t('home.noScheduledTitle')} text={t('home.noScheduledText')} />
         ) : (
@@ -130,6 +147,8 @@ export function HomeScreen() {
       </div>
       <TournamentList sport={f.filters.sport} />
       <DataFootnote sport={f.filters.sport} today={f.today} />
+        </>
+      )}
     </AppShell>
   );
 }

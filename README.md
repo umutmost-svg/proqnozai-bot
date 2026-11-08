@@ -122,7 +122,9 @@ Mini App (`miniapp/`, `frontend/`) читает только свои перем
 AI-разбор Mini App (M3.2): `MINIAPP_ANTHROPIC_API_KEY` (секрет, только
 backend; без него AI — «не подключён»), `MINIAPP_AI_MODEL`,
 `MINIAPP_AI_PER_USER_DAILY`, `MINIAPP_AI_DAILY_BUDGET`.
-Frontend: `VITE_DATA_MODE=demo|real` при сборке (по умолчанию `demo`).
+Frontend: `VITE_DATA_MODE=demo|real` при сборке (по умолчанию `demo`);
+`VITE_SUPPORT_TELEGRAM` — публичный username аккаунта поддержки (без @, не
+секрет; не задан — раздел поддержки показывает кнопки неактивными).
 
 ## Модели Claude (фактический роутинг)
 

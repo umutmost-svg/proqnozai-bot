@@ -14,6 +14,8 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 ARG VITE_DATA_MODE
+# Optional public support username (no "@"); empty = support buttons shown as not available.
+ARG VITE_SUPPORT_TELEGRAM=""
 # tsc + vite build, then the bundle scan for secrets and temporary URLs.
 RUN case "$VITE_DATA_MODE" in demo|real) ;; \
       *) echo "build with --build-arg VITE_DATA_MODE=demo or real" >&2; exit 1 ;; \

@@ -110,7 +110,7 @@ const GROUPS: { title: MessageKey; rows: Row[] }[] = [
       { label: 'profile.preferences' },
     ],
   },
-  { title: 'profile.groupMore', rows: [{ label: 'profile.partners' }, { label: 'profile.help' }] },
+  { title: 'profile.groupMore', rows: [{ label: 'profile.help', to: '/profile/support' }, { label: 'profile.partners' }] },
 ];
 
 export function ProfileScreen() {

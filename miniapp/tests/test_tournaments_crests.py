@@ -62,12 +62,22 @@ class FakeImages:
 
 # --- short names --------------------------------------------------------------------
 
-def test_short_names_come_from_the_provider_with_a_few_familiar_overrides() -> None:
-    assert short_name("Real Betis Balompié", "Real Betis") == "Real Betis"
-    assert short_name("Brighton & Hove Albion FC", "Brighton Hove") == "Brighton"
-    assert short_name("FK Shakhtar Donetsk", "Shaktar") == "Shakhtar"  # provider typo
-    assert short_name("Some Club", None) is None and short_name("Some Club", "  ") is None
-    assert short_name("Some Club", "x" * 25) is None  # not a short name: the full name is shown
+def test_display_names_are_keyed_by_team_id_not_by_name() -> None:
+    assert short_name(81, "FC Barcelona", "Barça") == "Barcelona"
+    assert short_name(78, "Club Atlético de Madrid", "Atleti") == "Atlético Madrid"
+    assert short_name(65, "Manchester City FC", "Man City") == "Manchester City"
+    assert short_name(66, "Manchester United FC", "Man United") == "Manchester United"
+    assert short_name(90, "Real Betis Balompié", "Real Betis") == "Real Betis"   # the provider's own form
+    # Another club whose name happens to match is not renamed: only the id decides.
+    assert short_name(999999, "FC Barcelona", "Barcelona SC") == "Barcelona SC"
+    assert short_name(1, "Some Club", None) == "1. FC Köln"                       # id 1 is Köln
+    assert short_name(424242, "Some Club", None) is None
+    assert short_name(424242, "Some Club", "x" * 29) is None  # not a short name: the full name is shown
+
+
+def test_display_names_are_readable() -> None:
+    from miniapp.sports.football_data import DISPLAY_NAMES
+    assert all(2 < len(v) <= 28 and "." not in v.replace("1. FC", "") for v in DISPLAY_NAMES.values())
 
 
 def test_normalized_teams_carry_the_short_name_and_keep_the_full_one() -> None:

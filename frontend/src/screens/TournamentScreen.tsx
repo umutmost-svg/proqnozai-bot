@@ -4,7 +4,7 @@ import { AppShell } from '../components/AppShell';
 import { EventCard } from '../components/EventCard';
 import { Header } from '../components/Header';
 import { Logo } from '../components/Logo';
-import { initialOfName } from '../data/present';
+import { areaName, initialOfName } from '../data/present';
 import { DataFootnote } from '../components/SourceNote';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import filters from '../components/Filters.module.css';
@@ -102,7 +102,7 @@ function Calendar({ calendar }: { calendar: TournamentCalendar }) {
         }
         <div className={s.headCopy}>
           <h2 className={s.name}>{tournament.name}</h2>
-          {tournament.area && <p className={s.meta}>{tournament.area}</p>}
+          {tournament.area && <p className={s.meta}>{areaName(t, tournament.area)}</p>}
           {season?.currentMatchday != null && (
             <p className={s.meta}>{t('calendar.currentRound', { round: season.currentMatchday })}</p>
           )}

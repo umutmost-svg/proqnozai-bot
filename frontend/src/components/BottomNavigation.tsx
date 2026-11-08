@@ -7,7 +7,7 @@ import s from './BottomNavigation.module.css';
 
 const ITEMS = [
   { to: '/', icon: homeIcon, label: 'nav.home', match: (p: string) => p === '/' },
-  { to: '/matches', icon: calendarIcon, label: 'nav.matches', match: (p: string) => p.startsWith('/matches') || p.startsWith('/event') || p.startsWith('/tournament') },
+  { to: '/matches', icon: calendarIcon, label: 'nav.matches', match: (p: string) => p.startsWith('/matches') || p.startsWith('/event') || p.startsWith('/tournament') || p.startsWith('/team') },
   { to: '/profile', icon: personIcon, label: 'nav.profile', match: (p: string) => p.startsWith('/profile') },
 ] as const;
 

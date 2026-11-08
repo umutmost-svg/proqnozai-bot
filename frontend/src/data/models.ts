@@ -82,6 +82,10 @@ export interface TeamBasis {
   matches: number;
   /** Newest first, W/D/L. */
   form: string;
+  /** Counted from `form` (verified: they must agree). */
+  wins: number;
+  draws: number;
+  losses: number;
   points: number;
   goalsFor: number;
   goalsAgainst: number;
@@ -165,6 +169,50 @@ export interface MmaEvent extends BaseEvent {
 
 export type SportEvent = FootballEvent | TennisEvent | BasketballEvent | MmaEvent;
 
+/** The model's preferred outcome (no odds source: never a value claim). */
+export type PickMarket = '1' | 'X' | '2' | '1X' | 'X2' | '12' | 'NO_BET';
+export type PickReason =
+  | 'homeBetterForm'
+  | 'awayBetterForm'
+  | 'homeHigherTable'
+  | 'awayHigherTable'
+  | 'homeMoreGoals'
+  | 'awayMoreGoals'
+  | 'homeFewerConceded'
+  | 'awayFewerConceded'
+  | 'evenlyMatched';
+
+export interface AiPick {
+  market: PickMarket;
+  reasons: readonly PickReason[];
+  /** Percent computed from the 1X2 estimate; null for NO_BET. */
+  probability: number | null;
+}
+
+/** Global search over the served competitions (independent of catalogue filters). */
+export interface SearchCoverage {
+  indexed: number;
+  total: number;
+  complete: boolean;
+}
+
+export interface TeamHit {
+  team: Competitor;
+  tournamentIds: readonly string[];
+}
+
+export interface SearchResults {
+  teams: TeamHit[];
+  events: SportEvent[];
+  coverage: SearchCoverage;
+}
+
+export interface TeamMatches {
+  team: TeamHit;
+  events: SportEvent[];
+  coverage: SearchCoverage;
+}
+
 export interface AiAnalysis {
   eventId: string;
   sport: Sport;
@@ -180,4 +228,6 @@ export interface AiAnalysis {
   basis?: { home: TeamBasis; away: TeamBasis };
   /** Probabilities are an estimate (PARTIAL): labelled as such in the UI. */
   estimated?: boolean;
+  /** Preferred outcome; absent in analyses made before it existed. */
+  pick?: AiPick;
 }

@@ -123,3 +123,10 @@ export function initialOf(c: Competitor): string {
 export function initialOfName(name: string): string {
   return name.trim().charAt(0).toLocaleUpperCase() || '?';
 }
+
+/** A provider's area ("England", "Europe") in the interface language; unknown ones as given. */
+export function areaName(t: Translate, area: string): string {
+  const key = `area.${area}` as Parameters<Translate>[0];
+  const label = t(key);
+  return label === key ? area : label;
+}

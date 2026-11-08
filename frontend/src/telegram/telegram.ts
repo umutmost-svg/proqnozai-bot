@@ -31,6 +31,8 @@ export interface TelegramAdapter {
   haptic(kind: HapticKind): void;
   /** Raw signed launch data for the server-side check; null outside Telegram. */
   initData(): string | null;
+  /** Opens a t.me link: inside Telegram via the client (iOS, Android, Web), else a new tab. */
+  openTelegramLink(url: string): void;
   /** Unverified display hints from initDataUnsafe. */
   userFirstName(): string | null;
   languageCode(): string | null;
@@ -54,6 +56,7 @@ export interface TelegramWebApp {
   ready?: () => void;
   close?: () => void;
   expand?: () => void;
+  openTelegramLink?: (url: string) => void;
   onEvent?: (event: string, handler: () => void) => void;
   offEvent?: (event: string, handler: () => void) => void;
   BackButton?: {
@@ -118,6 +121,11 @@ export function createTelegramAdapter(webApp: TelegramWebApp | undefined): Teleg
       else app?.HapticFeedback?.impactOccurred('light');
     },
     initData: () => app?.initData || null,
+    openTelegramLink: (url: string) => {
+      if (!/^https:\/\/t\.me\//.test(url)) return; // only Telegram links, never arbitrary URLs
+      if (app?.openTelegramLink) app.openTelegramLink(url);
+      else window.open(url, '_blank', 'noopener,noreferrer');
+    },
     userFirstName: () => app?.initDataUnsafe?.user?.first_name?.trim() || null,
     languageCode: () => app?.initDataUnsafe?.user?.language_code ?? null,
   };

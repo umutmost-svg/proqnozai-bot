@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import type { Sport } from '../data/models';
 import { useAsync } from '../hooks/useAsync';
 import { useServices, useT } from '../state/contexts';
-import { initialOfName } from '../data/present';
+import { areaName, initialOfName } from '../data/present';
 import { Logo } from './Logo';
 import s from './TournamentList.module.css';
 import ui from './ui.module.css';
@@ -54,7 +54,7 @@ export function TournamentList({ sport }: { sport: Sport }) {
               </span>
               <span className={s.copy}>
                 <span className={s.name}>{tournament.name}</span>
-                {tournament.area && <span className={s.area}>{tournament.area}</span>}
+                {tournament.area && <span className={s.area}>{areaName(t, tournament.area)}</span>}
               </span>
               <span className={s.arrow} aria-hidden="true">
                 →

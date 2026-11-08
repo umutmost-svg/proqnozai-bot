@@ -1,4 +1,5 @@
-import type { AiAnalysis, SportEvent, Tournament, TournamentCalendar, Sport } from './models';
+import type { AiAnalysis, SearchResults, SportEvent, TeamMatches, Tournament, TournamentCalendar, Sport } from './models';
+import type { DayKey } from '../time/zoned';
 import type { EventQuery } from './filter';
 
 /**
@@ -35,6 +36,19 @@ export interface SportsDataProvider {
   requestAnalysis(eventId: string): Promise<AiAnalysis>;
   /** The AI analysis can be requested for real events (always true for the demo). */
   aiAvailable(): boolean;
+  /** The sport has a data source here (real mode: football only; the demo shows every sport). */
+  sportAvailable(sport: Sport): boolean;
+  /** Global search, independent of the catalogue's date and tournament filters. */
+  search(sport: Sport, query: string): Promise<SearchResults>;
+  /** Every indexed match of one team; null when the team is unknown. */
+  getTeamMatches(teamId: string): Promise<TeamMatches | null>;
+  /**
+   * Days already known to have matches (from listings this session), for calendar dots.
+   * Only days that were actually loaded appear: no dot never means "no matches".
+   */
+  knownMatchDays(sport: Sport, timeZone: string): ReadonlyMap<DayKey, number>;
+  /** Days before/after today the source can answer for (null: any day). */
+  dateWindow(): { past: number; future: number } | null;
 }
 
 export class DataError extends Error {

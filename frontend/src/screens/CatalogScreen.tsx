@@ -1,5 +1,7 @@
 import { NoEvents } from '../components/NoEvents';
 import { DataFootnote } from '../components/SourceNote';
+import { ComingSoon } from '../components/ComingSoon';
+import { GlobalSearch } from '../components/GlobalSearch';
 import { useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
@@ -26,12 +28,16 @@ export function CatalogScreen() {
   const searchRef = useRef<HTMLInputElement>(null);
   const datesRef = useRef<HTMLDivElement>(null);
   const { query, key } = useEventQuery();
-  const events = useAsync(() => data.listEvents(query), `events:${key}`);
+  const available = data.sportAvailable(f.filters.sport);
+  const searching = f.filters.query.trim().length > 0;
+  // A sport without a source, or a global search, needs no day listing at all.
+  const events = useAsync(
+    () => (available && !searching ? data.listEvents(query) : Promise.resolve([])),
+    `events:${key}:${available}:${searching}`,
+  );
   const tournaments = data.listTournaments(f.filters.sport);
   const tournamentName = (id: string) => data.getTournament(id)?.name;
-  const searching = f.filters.query.trim().length > 0;
-  const filtersAreDefault =
-    f.filters.day === null && f.filters.tournamentId === ALL_TOURNAMENTS && !f.filters.query;
+  const filtersAreDefault = f.filters.day === null && f.filters.tournamentId === ALL_TOURNAMENTS;
 
   useEffect(() => {
     if ((location.state as { focusSearch?: boolean } | null)?.focusSearch) searchRef.current?.focus();
@@ -45,7 +51,6 @@ export function CatalogScreen() {
   const summary = [
     formatDayMonth(t, f.day),
     f.filters.tournamentId === ALL_TOURNAMENTS ? t('tournament.all') : tournamentName(f.filters.tournamentId),
-    searching ? `«${f.filters.query.trim()}»` : null,
   ]
     .filter(Boolean)
     .join(' · ');
@@ -55,6 +60,12 @@ export function CatalogScreen() {
       <Header variant="brand" backTo="/" />
       <SearchField ref={searchRef} value={f.filters.query} onChange={f.setQuery} />
       <SportTabs value={f.filters.sport} onChange={f.setSport} />
+      {!available ? (
+        <ComingSoon sport={f.filters.sport} onBackToFootball={() => f.setSport('football')} />
+      ) : searching ? (
+        <GlobalSearch sport={f.filters.sport} query={f.filters.query} />
+      ) : (
+        <>
       <div className={s.filters} ref={datesRef}>
         <DateStrip today={f.today} value={f.day} onChange={f.setDay} />
         <TournamentStrip tournaments={tournaments} value={f.filters.tournamentId} onChange={f.setTournament} />
@@ -80,20 +91,17 @@ export function CatalogScreen() {
         <LoadingState title={t('catalog.loadingTitle')} text={t('catalog.loadingText')} />
       )}
 
-      {events.status === 'error' &&
-        (searching ? (
-          <ErrorState title={t('catalog.searchErrorTitle')} text={t('catalog.searchErrorText')} onRetry={events.retry} />
-        ) : (
-          <ErrorState title={t('catalog.errorTitle')} text={t('catalog.errorText')} onRetry={events.retry} />
-        ))}
+      {events.status === 'error' && (
+        <ErrorState title={t('catalog.errorTitle')} text={t('catalog.errorText')} onRetry={events.retry} />
+      )}
 
       {events.status === 'success' && events.data.length === 0 && (
         <>
           <p className={s.summary}>{summary}</p>
           <NoEvents
             sport={f.filters.sport}
-            title={searching ? t('catalog.searchEmptyTitle') : t('catalog.emptyTitle')}
-            text={searching ? t('catalog.searchEmptyText') : t('catalog.emptyText')}
+            title={t('catalog.emptyTitle')}
+            text={t('catalog.emptyText')}
             actions={
               <>
                 <button type="button" className={ui.primary} onClick={focusDates}>
@@ -119,7 +127,9 @@ export function CatalogScreen() {
         </div>
       )}
 
-      <DataFootnote sport={f.filters.sport} today={f.today} />
+        </>
+      )}
+      {available && <DataFootnote sport={f.filters.sport} today={f.today} />}
     </AppShell>
   );
 }

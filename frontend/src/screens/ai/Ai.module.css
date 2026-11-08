@@ -1,0 +1,232 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 18px;
+  border-radius: var(--radius-card);
+  background: var(--glass-18);
+  border: 1px solid var(--line-74);
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+  color: var(--text-primary);
+}
+
+.cardTitle {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 20px;
+  line-height: 26px;
+}
+
+.body {
+  font-size: 14px;
+  line-height: 21px;
+}
+
+.hint {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted-3);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: 14px;
+  line-height: 21px;
+}
+
+/* Probabilities */
+.outcome {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.outcomeLabel {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.outcomeName {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--glass-solid);
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--tone);
+}
+
+.outcomeValue {
+  flex: 0 0 auto;
+  font-size: 18px;
+  line-height: 26px;
+  color: var(--tone);
+}
+
+.track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.5);
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--tone-bar);
+}
+
+.toneFavourite {
+  --tone: var(--tone-favourite);
+  --tone-bar: var(--tone-favourite-bar);
+}
+
+.toneOutsider {
+  --tone: var(--tone-outsider);
+  --tone-bar: var(--tone-outsider-bar);
+}
+
+.toneDraw {
+  --tone: var(--tone-draw);
+  --tone-bar: var(--tone-draw-bar);
+}
+
+.toneNeutral {
+  --tone: var(--tone-neutral);
+  --tone-bar: var(--tone-neutral-bar);
+}
+
+/* Preferred outcome */
+.pick {
+  background: rgba(255, 255, 255, 0.42);
+  border-color: rgba(255, 255, 255, 0.9);
+}
+
+.pickKicker {
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--text-muted);
+}
+
+.pickOutcome {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 22px;
+  line-height: 28px;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.pickProbability {
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 21px;
+  color: var(--tone-favourite);
+}
+
+.why {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 18px;
+  background: var(--glass-30);
+}
+
+.whyTitle {
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+/* Verified facts */
+.teams {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.teamFacts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 19px;
+}
+
+.teamFacts strong {
+  font-size: 15px;
+  line-height: 20px;
+}
+
+.form {
+  display: flex;
+  gap: 4px;
+}
+
+.formChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 12px;
+  color: #fff;
+}
+
+.formW {
+  background: var(--tone-favourite);
+}
+
+.formD {
+  background: var(--tone-draw);
+}
+
+.formL {
+  background: var(--tone-outsider);
+}
+
+.notes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 0 16px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted-3);
+}
+
+.source {
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-footnote);
+}

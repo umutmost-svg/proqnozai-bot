@@ -15,6 +15,15 @@
   --text-muted-3: #4c5c4e;
   --text-footnote: #54604b;
   --live: #b3261e;
+  /* Outcome tones (AI probabilities): soft bars, text dark enough for AA on the glass. */
+  --tone-favourite: #1d6b40;
+  --tone-favourite-bar: rgba(46, 160, 98, 0.78);
+  --tone-draw: #8a4d00;
+  --tone-draw-bar: rgba(236, 152, 48, 0.8);
+  --tone-outsider: #9c2f25;
+  --tone-outsider-bar: rgba(214, 86, 72, 0.74);
+  --tone-neutral: #19231c;
+  --tone-neutral-bar: rgba(25, 35, 28, 0.42);
 
   --glass-08: rgba(255, 255, 255, 0.1);
   --glass-12: rgba(255, 255, 255, 0.12);

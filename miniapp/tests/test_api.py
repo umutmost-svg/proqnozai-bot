@@ -504,6 +504,9 @@ def test_language_change_requires_csrf_and_valid_value(client: TestClient, clock
     csrf = body["session"]["csrf_token"]
     assert client.post("/api/me/language", json={"lang": "de"},
                        headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}).status_code == 400
+    for lang in ("tr", "uz", "pt-BR", "es"):  # the four languages added in M3.4 are saved
+        r = client.post("/api/me/language", json={"lang": lang}, headers={"Origin": ORIGIN, "X-CSRF-Token": csrf})
+        assert r.status_code == 200, lang
 
 
 # --- rate limit ---------------------------------------------------------------

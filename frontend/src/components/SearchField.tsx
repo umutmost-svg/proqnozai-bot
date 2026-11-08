@@ -3,6 +3,9 @@ import searchIcon from '../assets/figma/icon-search.svg';
 import { useT } from '../state/contexts';
 import s from './Filters.module.css';
 
+/** The server's limit for a search query (miniapp/sports/search.py MAX_QUERY). */
+export const MAX_SEARCH = 40;
+
 const Icon = () => (
   <span className={s.searchIcon} aria-hidden="true">
     <img src={searchIcon} alt="" width={18} height={18} />
@@ -35,6 +38,7 @@ export const SearchField = forwardRef<HTMLInputElement, { value: string; onChang
           inputMode="search"
           enterKeyHint="search"
           autoComplete="off"
+          maxLength={MAX_SEARCH}
           placeholder={t('search.placeholder')}
           value={value}
           onChange={(e) => onChange(e.target.value)}

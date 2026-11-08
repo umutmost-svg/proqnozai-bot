@@ -70,27 +70,45 @@ EMBLEMS_TTL_S = 24 * 3600.0
 EMBLEMS_RETRY_S = 15 * 60.0
 
 
-# Short Latin names come from the provider (`shortName`). A few of its short names are
-# unusual or misspelt; these familiar forms replace them (keyed by the provider's full
-# name, so a renamed club simply falls back to the provider's own short name).
-SHORT_NAMES: dict[str, str] = {
-    "Brighton & Hove Albion FC": "Brighton",
-    "Nottingham Forest FC": "Nottingham Forest",
-    "Wolverhampton Wanderers FC": "Wolves",
-    "West Ham United FC": "West Ham",
-    "Sevilla FC": "Sevilla",
-    "Real Racing Club de Santander": "Racing Santander",
-    "Borussia Mönchengladbach": "Gladbach",
-    "FK Shakhtar Donetsk": "Shakhtar",
-    "PAE AEK": "AEK Athens",
-    "Como 1907": "Como",
+# Display names: the provider's `shortName` (Latin) unless it is an unfamiliar
+# abbreviation; these well-known forms replace it, keyed by the provider's stable team
+# id (never by string matching, so namesakes cannot be confused). Reviewed for all ten
+# default competitions on 2026-11-08. The official full name stays for search and details.
+DISPLAY_NAMES: dict[int, str] = {
+    # Premier League
+    397: "Brighton", 65: "Manchester City", 66: "Manchester United", 351: "Nottingham Forest",
+    67: "Newcastle United",
+    # LaLiga
+    78: "Atlético Madrid", 81: "Barcelona", 77: "Athletic Club", 559: "Sevilla", 558: "Celta Vigo",
+    560: "Deportivo La Coruña", 5335: "Racing Santander",
+    # Serie A
+    98: "AC Milan", 108: "Inter", 7397: "Como", 454: "Venezia",
+    # Bundesliga
+    5: "Bayern Munich", 4: "Borussia Dortmund", 18: "Borussia Mönchengladbach", 3: "Bayer Leverkusen",
+    19: "Eintracht Frankfurt", 12: "Werder Bremen", 7: "Hamburger SV", 1: "1. FC Köln", 15: "Mainz 05",
+    29: "Paderborn", 2: "Hoffenheim",
+    # Ligue 1
+    523: "Lyon", 529: "Rennes", 532: "Angers", 546: "Lens", 548: "Monaco",
+    # Champions League (others are in their leagues above or below)
+    1887: "Shakhtar Donetsk", 1899: "AEK Athens", 7509: "Slovan Bratislava", 10233: "Sabah", 2016: "LASK",
+    # Championship
+    1081: "Preston North End", 356: "Sheffield United", 70: "Stoke City", 72: "Swansea City",
+    68: "Norwich City", 715: "Cardiff City", 348: "Charlton Athletic", 76: "Wolverhampton",
+    # Eredivisie
+    682: "AZ Alkmaar", 666: "Twente", 1920: "Fortuna Sittard", 718: "Go Ahead Eagles", 1915: "NEC Nijmegen",
+    684: "PEC Zwolle", 6806: "Sparta Rotterdam", 1909: "Cambuur", 680: "ADO Den Haag",
+    # Primeira Liga
+    5527: "Académico de Viseu", 1903: "Benfica", 5613: "Braga", 582: "Estoril", 9136: "Estrela da Amadora",
+    5529: "Nacional", 5543: "Vitória de Guimarães",
+    # Brasileirão
+    1766: "Atlético Mineiro", 1768: "Athletico Paranaense", 4287: "Remo", 4286: "Red Bull Bragantino",
 }
-MAX_SHORT_NAME = 24
+MAX_SHORT_NAME = 28
 
 
-def short_name(full: str, provided: object) -> str | None:
-    if full in SHORT_NAMES:
-        return SHORT_NAMES[full]
+def short_name(team: int, full: str, provided: object) -> str | None:
+    if team in DISPLAY_NAMES:
+        return DISPLAY_NAMES[team]
     if isinstance(provided, str) and provided.strip() and len(provided.strip()) <= MAX_SHORT_NAME:
         return provided.strip()
     return None
@@ -159,7 +177,7 @@ def _team(node: object) -> Competitor | None:
         return None
     number = node["id"]
     source = crest_source(node.get("crest"))
-    return Competitor(f"{ID_PREFIX}:team:{number}", name.strip(), short_name(name.strip(), node.get("shortName")),
+    return Competitor(f"{ID_PREFIX}:team:{number}", name.strip(), short_name(number, name.strip(), node.get("shortName")),
                       crest_source=source, crest_path=f"/api/crests/team/{number}" if source else None)
 
 

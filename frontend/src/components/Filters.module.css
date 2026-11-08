@@ -104,6 +104,10 @@
   font-size: 9px;
   line-height: 14px;
   color: var(--text-muted-2);
+  padding: 0;
+  border: 1px solid var(--line-55);
+  border-radius: var(--radius-date);
+  background: var(--glass-12);
 }
 
 .pill {

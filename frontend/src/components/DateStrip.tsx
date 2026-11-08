@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { CalendarSheet } from './CalendarSheet';
+import { useFilters, useServices, useSettings } from '../state/contexts';
 import todayIcon from '../assets/figma/icon-today.svg';
 import { listOf } from '../i18n';
 import { formatDayMonth } from '../i18n/format';
 import { useHaptic } from '../hooks/useHaptic';
-import { useT } from '../state/contexts';
 import { addDays, parseDayKey, weekdayOf, type DayKey } from '../time/zoned';
 import s from './Filters.module.css';
 
@@ -12,11 +13,19 @@ const SPAN_BEFORE = 3;
 const SPAN_AFTER = 3;
 
 export function DateStrip({ today, value, onChange }: { today: DayKey; value: DayKey; onChange(day: DayKey): void }) {
-  const t = useT();
+  const { t, timeZone } = useSettings();
+  const { data } = useServices();
+  const { filters } = useFilters();
   const haptic = useHaptic();
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const weekdays = listOf(t, 'date.weekdays');
   const months = listOf(t, 'date.monthsShort');
-  const days = Array.from({ length: SPAN_BEFORE + SPAN_AFTER + 1 }, (_, i) => addDays(today, i - SPAN_BEFORE));
+  // Around today; a day picked in the calendar beyond that moves the strip to it.
+  const nearToday = value >= addDays(today, -SPAN_BEFORE) && value <= addDays(today, SPAN_AFTER);
+  const centre = nearToday ? today : value;
+  const days = Array.from({ length: SPAN_BEFORE + SPAN_AFTER + 1 }, (_, i) => addDays(centre, i - SPAN_BEFORE));
+  const window = data.dateWindow();
+  const range = window ? { min: addDays(today, -window.past), max: addDays(today, window.future) } : null;
   const selectedRef = useRef<HTMLButtonElement>(null);
   const month = months[parseDayKey(value).month - 1];
 
@@ -36,6 +45,8 @@ export function DateStrip({ today, value, onChange }: { today: DayKey; value: Da
             className={active ? s.dateActive : s.date}
             aria-pressed={active}
             aria-label={formatDayMonth(t, day)}
+            // Days the source cannot answer for are shown but not selectable.
+            disabled={!!range && (day < range.min || day > range.max)}
             data-day={day}
             onClick={() => {
               haptic();
@@ -47,11 +58,31 @@ export function DateStrip({ today, value, onChange }: { today: DayKey; value: Da
           </button>
         );
       })}
-      {/* Month calendar ("UX / calendar") is deferred: shown as a label, not a control. */}
-      <span className={s.month} title={t('date.monthHint')}>
+      <button
+        type="button"
+        className={s.month}
+        onClick={() => {
+          haptic();
+          setCalendarOpen(true);
+        }}
+        aria-label={t('calendar.open')}
+        aria-haspopup="dialog"
+        data-testid="calendar-open"
+      >
         <img src={todayIcon} alt="" width={13.5} height={15} />
         <span>{month}</span>
-      </span>
+      </button>
+      {calendarOpen && (
+      <CalendarSheet
+        open
+        value={value}
+        today={today}
+        range={range}
+        markers={data.knownMatchDays(filters.sport, timeZone)}
+        onSelect={onChange}
+        onClose={() => setCalendarOpen(false)}
+      />
+      )}
     </div>
   );
 }

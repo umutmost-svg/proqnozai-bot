@@ -12,11 +12,13 @@ const ROUTES = [
   ['ai-football', '/event/fb-rm-fcb/ai'],
   ['ai-insufficient', '/event/fb-long-names/ai'],
   ['tournament', '/tournament/premier'],
+  ['team', '/team/real-madrid'],
+  ['support', '/profile/support'],
   ['profile', '/profile'],
   ['timezone', '/profile/timezone'],
 ] as const;
 
-async function open(page: Page, route: string, width: number, lang: 'ru' | 'az' | 'en' = 'ru') {
+async function open(page: Page, route: string, width: number, lang: string = 'ru') {
   await page.setViewportSize({ width, height: 844 });
   await page.addInitScript((l) => {
     if (!localStorage.getItem('sporai.settings.v1')) {
@@ -87,8 +89,11 @@ for (const width of WIDTHS) {
   }
 }
 
-for (const lang of ['az', 'en'] as const) {
-  for (const [name, route] of [['home', '/'], ['catalog', '/matches'], ['event', '/event/tn-live'], ['ai', '/event/fb-rm-fcb/ai'], ['profile', '/profile']] as const) {
+for (const lang of ['az', 'en', 'tr', 'uz', 'pt-BR', 'es'] as const) {
+  for (const [name, route] of [
+    ['home', '/'], ['catalog', '/matches'], ['event', '/event/tn-live'], ['ai', '/event/fb-rm-fcb/ai'],
+    ['profile', '/profile'], ['tournament', '/tournament/premier'], ['support', '/profile/support'], ['language', '/profile/language'],
+  ] as const) {
     test(`${name} in ${lang.toUpperCase()} @360px fits`, async ({ page }) => {
       await open(page, route, 360, lang);
       expect(await layoutProblems(page)).toEqual([]);

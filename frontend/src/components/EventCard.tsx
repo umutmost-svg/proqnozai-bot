@@ -19,6 +19,8 @@ function StatusText({ event }: { event: SportEvent }) {
   // Upcoming shows only its label; a stopped or unknown state is its own phase — once.
   if (event.status !== 'live' && event.status !== 'finished') return <>{status}</>;
   const phase = phaseText(t, event, timeOf(new Date(event.startsAt), timeZone));
+  // "Finished · Finished": the phase adds nothing when it only repeats the status.
+  if (phase === status) return <>{status}</>;
   return (
     <>
       <span className={event.status === 'live' ? s.live : undefined}>{status}</span>

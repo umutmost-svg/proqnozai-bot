@@ -193,10 +193,16 @@ describe('BackendSportsDataProvider: real data, never demo', () => {
 });
 
 const EVENT_AI = { event: football(1, 'upcoming'), tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'connected' } };
+const counts = (form: string) => ({
+  wins: form.split('W').length - 1,
+  draws: form.split('D').length - 1,
+  losses: form.split('L').length - 1,
+});
 const basisTeam = (name: string, form: string, points: number) => ({
   name,
   matches: form.length,
   form,
+  ...counts(form),
   points,
   goalsFor: 9,
   goalsAgainst: 2,
@@ -216,7 +222,7 @@ const PARTIAL = {
   probabilities: { home: 52, draw: 26, away: 22 },
   factors: ['home_form', 'away_table'],
   basis: { home: basisTeam('Arsenal FC', 'WWDWW', 13), away: basisTeam('Chelsea FC', 'DDDDD', 5) },
-  estimated: true,
+  estimated: true, pick: { market: 'NO_BET', reasons: [], probability: null },
 };
 
 describe('BackendSportsDataProvider: AI analysis', () => {

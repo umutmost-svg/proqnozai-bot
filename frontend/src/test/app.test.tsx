@@ -61,18 +61,40 @@ describe('catalog filters and search', () => {
     await waitFor(() => expect(cards()).toEqual(['mma-finished']));
   });
 
-  it('searches participants and shows an empty state with reset', async () => {
+  it('search is global: it ignores and keeps the chosen date and tournament', async () => {
     const user = userEvent.setup();
     await openCatalog();
+    // Another day and a tournament first: the search must not be limited by them.
+    await user.click(screen.getByRole('button', { name: '11 ноября' }));
+    await user.click(within(screen.getByTestId('tournament-strip')).getByRole('button', { name: /Premier League/ }));
     await user.type(screen.getByPlaceholderText('Поиск матча или команды'), 'barcelona');
-    await waitFor(() => expect(cards()).toEqual(['fb-rm-fcb']));
+    const results = await screen.findByTestId('search-results');
+    expect(within(results).getAllByTestId('search-team').map((x) => x.textContent)).toEqual(
+      expect.arrayContaining([expect.stringContaining('Barcelona')]),
+    );
+    expect(within(results).getAllByTestId('event-card').map((c) => c.getAttribute('data-event-id'))).toContain('fb-rm-fcb');
 
+    await user.clear(screen.getByPlaceholderText('Поиск матча или команды'));
     await user.type(screen.getByPlaceholderText('Поиск матча или команды'), 'xyz');
     expect(await screen.findByText('Ничего не найдено')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Сбросить фильтры' }));
-    await waitFor(() => expect(cards()).toHaveLength(3));
-    expect(screen.getByPlaceholderText('Поиск матча или команды')).toHaveValue('');
+    // Clearing the search returns to the catalogue exactly as it was.
+    await user.clear(screen.getByPlaceholderText('Поиск матча или команды'));
+    expect(screen.getByRole('button', { name: '11 ноября' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(screen.getByTestId('tournament-strip')).getByRole('button', { name: /Premier League/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('a found team opens its matches across dates', async () => {
+    const user = userEvent.setup();
+    await openCatalog();
+    await user.type(screen.getByPlaceholderText('Поиск матча или команды'), 'real');
+    const team = (await screen.findAllByTestId('search-team'))[0]!;
+    await user.click(team);
+    expect(await screen.findByTestId('team-head')).toBeInTheDocument();
+    expect(screen.getAllByTestId('event-card').length).toBeGreaterThan(0);
   });
 
   it('shows an empty day', async () => {

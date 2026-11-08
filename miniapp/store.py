@@ -13,12 +13,14 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Literal
 
 from miniapp.telegram_auth import TelegramUser
 
-Lang = Literal["az", "ru", "en"]
-SUPPORTED_LANGS: tuple[Lang, ...] = ("az", "ru", "en")
+Lang = Literal["az", "ru", "en", "tr", "uz", "pt-BR", "es"]
+# Same set as the frontend (frontend/src/i18n/index.ts LANGS).
+SUPPORTED_LANGS: tuple[Lang, ...] = ("az", "ru", "en", "tr", "uz", "pt-BR", "es")
 DEFAULT_LANG: Lang = "ru"
 
 _SCHEMA = """
@@ -91,7 +93,10 @@ class InitDataConsumedError(Exception):
 
 
 def lang_from_telegram(code: str | None) -> Lang:
-    base = (code or "").lower().split("-")[0]
+    """Telegram language_code -> interface language; any Portuguese is pt-BR (as the frontend)."""
+    base = re.split(r"[-_]", (code or "").lower())[0]
+    if base == "pt":
+        return "pt-BR"
     return base if base in SUPPORTED_LANGS else DEFAULT_LANG  # type: ignore[return-value]
 
 

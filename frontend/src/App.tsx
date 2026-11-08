@@ -5,6 +5,8 @@ import { useGoBack } from './hooks/useGoBack';
 import { AppLoadingGate } from './loading/AppLoadingGate';
 import { AiScreen } from './screens/AiScreen';
 import { TournamentScreen } from './screens/TournamentScreen';
+import { TeamScreen } from './screens/TeamScreen';
+import { SupportScreen } from './screens/SupportScreen';
 import { CatalogScreen } from './screens/CatalogScreen';
 import { EventScreen } from './screens/EventScreen';
 import { HomeScreen } from './screens/HomeScreen';
@@ -53,6 +55,8 @@ export function AppRoutes() {
       <Route path="/event/:id" element={<EventScreen />} />
       <Route path="/event/:id/ai" element={<AiScreen />} />
       <Route path="/tournament/:id" element={<TournamentScreen />} />
+      <Route path="/team/:id" element={<TeamScreen />} />
+      <Route path="/profile/support" element={<SupportScreen />} />
       <Route path="/profile" element={<ProfileScreen />} />
       <Route path="/profile/language" element={<LanguageScreen />} />
       <Route path="/profile/timezone" element={<TimezoneScreen />} />
