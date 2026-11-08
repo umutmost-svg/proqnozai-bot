@@ -7,6 +7,7 @@ own `.env` / `config.py` are never read.
 from __future__ import annotations
 
 import ipaddress
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -107,6 +108,12 @@ class Settings:
     football_data_per_day: int = 3000
     # Event ids never seen in a listing may cost an upstream call: capped per hour.
     sports_unknown_lookups_per_hour: int = 20
+    # AI analysis (M3.2). Without a key the analysis is reported "not connected".
+    anthropic_api_key: str | None = field(default=None, repr=False)
+    ai_model: str = "claude-opus-5-5"
+    # Model calls (cache hits are free): per user per UTC day, and for everyone.
+    ai_per_user_daily: int = 10
+    ai_daily_budget: int = 200
 
     def __post_init__(self) -> None:
         if not self.bot_token or ":" not in self.bot_token:
@@ -167,6 +174,17 @@ class Settings:
             raise SettingsError("football_data_per_day must be 1..14400")
         if not 0 <= self.sports_unknown_lookups_per_hour <= 600:
             raise SettingsError("sports_unknown_lookups_per_hour must be 0..600")
+        if self.anthropic_api_key is not None and (
+            not self.anthropic_api_key.isascii() or not self.anthropic_api_key.isprintable()
+            or " " in self.anthropic_api_key or not 20 <= len(self.anthropic_api_key) <= 256
+        ):
+            raise SettingsError("Anthropic API key must be 20-256 printable ASCII chars without spaces")
+        if not re.fullmatch(r"claude-[a-z0-9-]{1,60}", self.ai_model):
+            raise SettingsError("ai_model must be a Claude model id such as claude-opus-5-5")
+        if not 1 <= self.ai_per_user_daily <= 1000:
+            raise SettingsError("ai_per_user_daily must be 1..1000")
+        if not 1 <= self.ai_daily_budget <= 100000:
+            raise SettingsError("ai_daily_budget must be 1..100000")
 
     @property
     def cookie_secure(self) -> bool:
@@ -241,4 +259,8 @@ class Settings:
             football_data_per_minute=integer("MINIAPP_FOOTBALL_DATA_PER_MINUTE", 8),
             football_data_per_day=integer("MINIAPP_FOOTBALL_DATA_PER_DAY", 3000),
             sports_unknown_lookups_per_hour=integer("MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR", 20),
+            anthropic_api_key=optional("MINIAPP_ANTHROPIC_API_KEY"),
+            ai_model=optional("MINIAPP_AI_MODEL") or "claude-opus-5-5",
+            ai_per_user_daily=integer("MINIAPP_AI_PER_USER_DAILY", 10),
+            ai_daily_budget=integer("MINIAPP_AI_DAILY_BUDGET", 200),
         )

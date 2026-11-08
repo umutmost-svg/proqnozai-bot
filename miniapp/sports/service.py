@@ -168,6 +168,22 @@ class SportsService:
         tournament = next((t for t in adapter.tournaments() if t.id == event.tournament_id), None)
         return _with_cache_state(event, cached.stale), tournament
 
+    # --- verified context for the AI analysis (shared cache, no per-user requests) ---
+
+    async def team_form(self, team_id: str) -> list:
+        number = football_data.team_number(team_id)
+        if number is None or self.football is None:
+            return []
+        adapter = self.football
+        return (await self.cache.get(f"football:form:{number}", lambda: adapter.team_form(number))).value
+
+    async def standings(self, tournament_id: str) -> dict:
+        code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+        if self.football is None or code not in self.football.codes:
+            return {}
+        adapter = self.football
+        return (await self.cache.get(f"football:standings:{code}", lambda: adapter.standings(code))).value
+
     def _spend_unknown_lookup(self) -> None:
         """Ids never seen in a listing may cost an upstream call: cap them per hour."""
         now = self._clock()

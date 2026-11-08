@@ -60,14 +60,32 @@ class SportsCache:
             if now < failure[1]:
                 raise UpstreamError(failure[0].code, status=failure[0].status)
             del self._failures[key]
+        return await asyncio.shield(self.start(key, load))
+
+    def existing(self, key: str) -> Cached | asyncio.Future | None:
+        """Without starting anything: the fresh value, the running load, or None. A remembered
+        failure is raised, like get(). Lets a caller decide (and pay) before start()."""
+        now = self._clock()
+        entry = self._entries.get(key)
+        if entry is not None and now < entry.expires_at:
+            return entry
+        failure = self._failures.get(key)
+        if failure is not None:
+            if now < failure[1]:
+                raise UpstreamError(failure[0].code, status=failure[0].status)
+            del self._failures[key]
+        return self._inflight.get(key)
+
+    def start(self, key: str, load: Callable[[], Awaitable[tuple[T, float]]]) -> asyncio.Future:
+        """Starts the load unless one is running (synchronous: no await between check and start)."""
         running = self._inflight.get(key)
         if running is None:
             # The refresh runs as its own task: a caller that goes away (cancelled
             # request) must not cancel the load other callers are waiting for.
-            running = asyncio.ensure_future(self._refresh(key, load, entry))
+            running = asyncio.ensure_future(self._refresh(key, load, self._entries.get(key)))
             self._inflight[key] = running
             running.add_done_callback(lambda task, k=key: self._finished(k, task))
-        return await asyncio.shield(running)
+        return running
 
     def _finished(self, key: str, task: asyncio.Future) -> None:
         if self._inflight.get(key) is task:

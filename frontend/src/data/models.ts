@@ -49,7 +49,31 @@ export type AiDemo =
   /** Real events: the AI analysis is not connected yet, nothing is shown instead. */
   | { kind: 'unavailable' };
 
-export type InsufficientReason = 'noFreshStats' | 'lineupUnconfirmed' | 'limitedCoverage';
+export type InsufficientReason =
+  | 'noFreshStats'
+  | 'lineupUnconfirmed'
+  | 'limitedCoverage'
+  /** Real analysis: not enough verified recent results for both teams. */
+  | 'noVerifiedForm'
+  /** Real analysis: only upcoming matches are analysed. */
+  | 'notUpcoming'
+  /** Real analysis: no bookmaker odds source, so probabilities are an estimate. */
+  | 'noOddsSource';
+
+/** Verified numbers behind a real analysis (computed by the backend, not the model). */
+export type AiFactor = 'homeForm' | 'awayForm' | 'homeGoals' | 'awayGoals' | 'homeTable' | 'awayTable';
+
+export interface TeamBasis {
+  name: string;
+  matches: number;
+  /** Newest first, W/D/L. */
+  form: string;
+  points: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  tablePosition: number | null;
+  tablePoints: number | null;
+}
 
 /** Where a real event came from; absent for demo events. */
 export interface EventSource {
@@ -128,9 +152,16 @@ export type SportEvent = FootballEvent | TennisEvent | BasketballEvent | MmaEven
 export interface AiAnalysis {
   eventId: string;
   sport: Sport;
-  kind: 'ready' | 'insufficient' | 'unavailable';
+  /** partial: verified data without odds — probabilities are an estimate. */
+  kind: 'ready' | 'partial' | 'insufficient' | 'unavailable';
   probabilities: readonly number[];
   reasons: readonly InsufficientReason[];
   /** When the demo snapshot was produced; null when nothing was produced. */
   generatedAt: string | null;
+  /** Real analysis only. */
+  /** What weighed most (model's choice); each is rendered from that team's basis numbers. */
+  factors?: readonly AiFactor[];
+  basis?: { home: TeamBasis; away: TeamBasis };
+  /** Probabilities are an estimate (PARTIAL): labelled as such in the UI. */
+  estimated?: boolean;
 }

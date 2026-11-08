@@ -119,6 +119,9 @@ Mini App (`miniapp/`, `frontend/`) читает только свои перем
 «не подключён»), `MINIAPP_FOOTBALL_DATA_COMPETITIONS`,
 `MINIAPP_FOOTBALL_DATA_LIVE_PLAN`, `MINIAPP_FOOTBALL_DATA_PER_MINUTE`,
 `MINIAPP_FOOTBALL_DATA_PER_DAY`, `MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR`.
+AI-разбор Mini App (M3.2): `MINIAPP_ANTHROPIC_API_KEY` (секрет, только
+backend; без него AI — «не подключён»), `MINIAPP_AI_MODEL`,
+`MINIAPP_AI_PER_USER_DAILY`, `MINIAPP_AI_DAILY_BUDGET`.
 Frontend: `VITE_DATA_MODE=demo|real` при сборке (по умолчанию `demo`).
 
 ## Модели Claude (фактический роутинг)

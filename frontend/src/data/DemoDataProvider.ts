@@ -41,6 +41,10 @@ export class DemoDataProvider implements SportsDataProvider {
     return value();
   }
 
+  aiAvailable(): boolean {
+    return true;
+  }
+
   coverage(): SportCoverage {
     return { status: 'demo', provider: null, attribution: null };
   }

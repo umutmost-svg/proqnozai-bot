@@ -33,7 +33,13 @@ const auth = new AuthController(createHttpAuthApi(), () => telegram.initData(), 
 // Real data needs a session; a real build never switches to demo data on errors.
 const data =
   resolveDataMode(import.meta.env.VITE_DATA_MODE) === 'real'
-    ? new BackendSportsDataProvider({ waitForSession: () => waitForSession(auth) })
+    ? new BackendSportsDataProvider({
+        waitForSession: () => waitForSession(auth),
+        getCsrfToken: () => {
+          const state = auth.getState();
+          return state.status === 'authenticated' ? state.session.csrfToken : null;
+        },
+      })
     : new DemoDataProvider(systemClock, { failOnce });
 const services = {
   clock: systemClock,

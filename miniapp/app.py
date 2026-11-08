@@ -22,6 +22,8 @@ from starlette.staticfiles import StaticFiles
 
 from miniapp.security import CsrfTokens, LoginRateLimiter, origin_allowed
 from miniapp.settings import Settings
+from miniapp.ai.analysis import AI_ERROR_CODES, AiError, AiService, build_ai_service
+from miniapp.sports.client import UpstreamError
 from miniapp.sports.routes import register_sports_routes
 from miniapp.sports.service import SportsService, build_service
 from miniapp.store import SUPPORTED_LANGS, BurnWindow, InitDataConsumedError, Session, Store, User
@@ -154,6 +156,7 @@ def create_app(
     clock: Callable[[], float] = time.time,
     store: Store | None = None,
     sports: SportsService | None = None,
+    ai: AiService | None = None,
 ) -> FastAPI:
     store = store or Store(settings.db_path)
     store.init_schema()
@@ -498,7 +501,35 @@ def create_app(
         clear_session_cookie(response)
         return response
 
-    register_sports_routes(app, sports or build_service(settings, clock=clock), current_session)
+    sports = sports or build_service(settings, clock=clock)
+    ai = ai or build_ai_service(settings, sports, clock=clock, ledger=store)
+    register_sports_routes(app, sports, current_session,
+                           ai_status=lambda: "connected" if ai.connected else "not_connected")
+
+    @app.post("/api/ai/analysis")
+    async def ai_analysis(request: Request) -> JSONResponse:
+        # Costs money: same gate as other state-changing calls (Origin, session, CSRF).
+        require_origin(request)
+        active = await current_session(request)
+        if active is None:
+            raise ApiError(401, "unauthenticated")
+        token, session = active
+        if not csrf.verify(token, request.headers.get(CSRF_HEADER)):
+            raise ApiError(403, "csrf_failed")
+        body = await _read_json_object(request, 1024, {"event_id"})
+        event_id = body["event_id"]
+        if not isinstance(event_id, str) or not 0 < len(event_id) <= 40:
+            raise ApiError(400, "bad_request")
+        try:
+            result = await ai.analyse(event_id, session.user_id)
+        except (AiError, UpstreamError) as exc:
+            if exc.code in AI_ERROR_CODES:
+                status = 429 if exc.code == "limit_reached" else 503
+                return JSONResponse({"error": "ai_unavailable", "reason": exc.code}, status_code=status)
+            return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503)
+        if result is None:
+            raise ApiError(404, "not_found")
+        return JSONResponse(result.to_json())
 
     static = StaticFiles(directory=settings.static_dir, html=True) if settings.static_dir is not None else None
 

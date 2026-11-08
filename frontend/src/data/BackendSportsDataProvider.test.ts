@@ -1,4 +1,4 @@
-import { BackendSportsDataProvider, DATA_TIMEOUT_MS } from './BackendSportsDataProvider';
+import { AI_TIMEOUT_MS, BackendSportsDataProvider, DATA_TIMEOUT_MS } from './BackendSportsDataProvider';
 import { resolveDataMode } from './mode';
 import type { FootballEvent, MmaEvent, TennisEvent } from './models';
 import { DataError } from './provider';
@@ -44,12 +44,12 @@ const query = (over: Partial<EventQuery> = {}): EventQuery => ({
   ...over,
 });
 
-function provider(responses: Response[], session = true) {
+function provider(responses: Response[], session = true, csrf: string | null = 'csrf-test') {
   const fetchImpl = vi.fn<typeof fetch>(async () => {
     const next = responses.length > 1 ? responses.shift()! : responses[0]!;
     return next.clone();
   });
-  const data = new BackendSportsDataProvider({ waitForSession: async () => session, fetchImpl });
+  const data = new BackendSportsDataProvider({ waitForSession: async () => session, getCsrfToken: () => csrf, fetchImpl });
   return { data, fetchImpl };
 }
 
@@ -181,11 +181,132 @@ describe('BackendSportsDataProvider: real data, never demo', () => {
     expect([me!.weightClass, me!.scheduledRounds, me!.result]).toEqual([undefined, undefined, undefined]);
   });
 
-  it('requests no AI and returns "unavailable" for a real event', async () => {
-    const { data, fetchImpl } = provider([json(200, { event: football(1, 'upcoming'), tournament: TOURNAMENTS[0], coverage: COVERAGE })]);
+  it('requests no AI and returns "unavailable" while the backend AI is not connected', async () => {
+    const { data, fetchImpl } = provider([
+      json(200, { event: football(1, 'upcoming'), tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'not_connected' } }),
+    ]);
     const analysis = await data.requestAnalysis('fd:1');
     expect(analysis).toMatchObject({ kind: 'unavailable', probabilities: [], reasons: [], generatedAt: null });
+    expect(data.aiAvailable()).toBe(false);
     expect(fetchImpl.mock.calls.every(([u]) => String(u).startsWith('/api/sports/event/'))).toBe(true);
+  });
+});
+
+const EVENT_AI = { event: football(1, 'upcoming'), tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'connected' } };
+const basisTeam = (name: string, form: string, points: number) => ({
+  name,
+  matches: form.length,
+  form,
+  points,
+  goalsFor: 9,
+  goalsAgainst: 2,
+  goalsForPerMatch: 1.8,
+  goalsAgainstPerMatch: 0.4,
+  venues: 'HAHAH',
+  tablePosition: 2,
+  tablePoints: 25,
+  tablePlayed: 11,
+});
+const PARTIAL = {
+  eventId: 'fd:1',
+  kind: 'partial',
+  reasons: ['no_odds_source'],
+  generatedAt: '2026-11-08T06:00:00Z',
+  model: 'claude-opus-5-5',
+  probabilities: { home: 52, draw: 26, away: 22 },
+  factors: ['home_form', 'away_table'],
+  basis: { home: basisTeam('Arsenal FC', 'WWDWW', 13), away: basisTeam('Chelsea FC', 'DDDDD', 5) },
+  estimated: true,
+};
+
+describe('BackendSportsDataProvider: AI analysis', () => {
+  it('posts the event with the CSRF token and reads a PARTIAL estimate', async () => {
+    const { data, fetchImpl } = provider([json(200, EVENT_AI), json(200, PARTIAL)]);
+    const a = await data.requestAnalysis('fd:1');
+    expect(data.aiAvailable()).toBe(true);
+    const [url, init] = fetchImpl.mock.calls[1]!;
+    expect(url).toBe('/api/ai/analysis');
+    expect(init?.method).toBe('POST');
+    expect((init?.headers as Record<string, string>)['X-CSRF-Token']).toBe('csrf-test');
+    expect(JSON.parse(String(init?.body))).toEqual({ event_id: 'fd:1' });
+    expect(a).toMatchObject({
+      kind: 'partial',
+      estimated: true,
+      probabilities: [52, 26, 22],
+      reasons: ['noOddsSource'],
+      factors: ['homeForm', 'awayTable'],
+      basis: { home: { form: 'WWDWW', points: 13, tablePosition: 2 }, away: { form: 'DDDDD' } },
+    });
+  });
+
+  it('reads INSUFFICIENT with its reasons and no probabilities', async () => {
+    const body = { ...PARTIAL, kind: 'insufficient', reasons: ['no_verified_form', 'no_odds_source'], probabilities: null, factors: [], generatedAt: null, estimated: false };
+    const { data } = provider([json(200, EVENT_AI), json(200, body)]);
+    expect(await data.requestAnalysis('fd:1')).toMatchObject({
+      kind: 'insufficient',
+      probabilities: [],
+      reasons: ['noVerifiedForm', 'noOddsSource'],
+    });
+  });
+
+  it('rejects an off-contract analysis instead of repairing it', async () => {
+    const bad = [
+      { ...PARTIAL, probabilities: { home: 50, draw: 30, away: 30 } },
+      { ...PARTIAL, reasons: ['something_else'] },
+      { ...PARTIAL, eventId: 'fd:2' },
+      { ...PARTIAL, summary: 'Chelsea won 4 of 5' }, // no free text from the model
+      { ...PARTIAL, factors: ['home_form', 'injuries'] },
+      { ...PARTIAL, factors: ['home_form', 'home_form'] },
+      { ...PARTIAL, basis: { home: basisTeam('A', 'WWW', 9), away: { ...basisTeam('B', 'WWW', 9), tablePosition: null } } }, // away_table without a row
+      { ...PARTIAL, basis: null },
+      { ...PARTIAL, basis: { home: basisTeam('A', 'WWX', 6), away: basisTeam('B', 'WWW', 9) } },
+      { ...PARTIAL, basis: { home: { ...basisTeam('A', 'WWW', 9), matches: 5 }, away: basisTeam('B', 'WWW', 9) } },
+      { ...PARTIAL, kind: 'example' },
+      { ...PARTIAL, factors: ['home_form'] },
+      { ...PARTIAL, basis: { home: { ...basisTeam('A', 'WWW', 9), tablePosition: '2' }, away: basisTeam('B', 'WWW', 9) } },
+      { ...PARTIAL, kind: 'insufficient', reasons: ['no_verified_form'] }, // insufficient must carry no probabilities
+    ];
+    for (const body of bad) {
+      const { data } = provider([json(200, EVENT_AI), json(200, body)]);
+      await expect(data.requestAnalysis('fd:1')).rejects.toMatchObject({ operation: 'ai', reason: 'bad_response' });
+    }
+  });
+
+  it('maps the limit, a named AI failure and an unknown one to safe reasons', async () => {
+    const cases: [Response, string][] = [
+      [json(429, { error: 'ai_unavailable', reason: 'limit_reached' }), 'limit_reached'],
+      [json(503, { error: 'ai_unavailable', reason: 'budget_exhausted' }), 'budget_exhausted'],
+      [json(503, { error: 'ai_unavailable', reason: '<script>' }), 'source_unavailable'],
+      [json(503, { error: 'source_unavailable', reason: 'timeout' }), 'source_unavailable'],
+    ];
+    for (const [response, reason] of cases) {
+      const { data } = provider([json(200, EVENT_AI), response]);
+      await expect(data.requestAnalysis('fd:1')).rejects.toMatchObject({ operation: 'ai', reason });
+    }
+  });
+
+  it('waits for the model longer than for data, but not forever', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn<typeof fetch>((input) =>
+        String(input).startsWith('/api/ai/') ? new Promise<Response>(() => {}) : Promise.resolve(json(200, EVENT_AI)),
+      );
+      const data = new BackendSportsDataProvider({ waitForSession: async () => true, getCsrfToken: () => 'c', fetchImpl });
+      const pending = data.requestAnalysis('fd:1');
+      const outcome = pending.then(() => 'done', (e: DataError) => e.reason);
+      await vi.advanceTimersByTimeAsync(DATA_TIMEOUT_MS + 1);
+      expect(await Promise.race([outcome, Promise.resolve('waiting')])).toBe('waiting');
+      await vi.advanceTimersByTimeAsync(AI_TIMEOUT_MS);
+      expect(await outcome).toBe('network');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends nothing paid without a CSRF token', async () => {
+    const { data, fetchImpl } = provider([json(200, EVENT_AI), json(200, PARTIAL)], true, null);
+    await expect(data.requestAnalysis('fd:1')).rejects.toMatchObject({ reason: 'unauthenticated' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -15,6 +15,13 @@ from miniapp.tests.signing import TEST_BOT_TOKEN
 COOKIE = "sporai_session"
 
 
+def replace_cookie(client: TestClient, value: str) -> None:
+    """Like a browser overwriting the cookie: one value per name. (httpx2's jar keeps the
+    server-set cookie next to a manually set one, and the server would read the real one.)"""
+    client.cookies.clear()
+    client.cookies.set(COOKIE, value)
+
+
 def logged_in(client: TestClient, clock: FakeClock, user: dict | None = None) -> dict:
     response = login(client, fresh(clock, user))
     assert response.status_code == 200, response.text
@@ -174,7 +181,7 @@ def test_me_without_cookie(client: TestClient) -> None:
 
 def test_me_with_forged_cookie(client: TestClient, clock: FakeClock) -> None:
     logged_in(client, clock)
-    client.cookies.set(COOKIE, "forged-" + "A" * 40)
+    replace_cookie(client, "forged-" + "A" * 40)
     r = client.get("/api/me")
     assert r.status_code == 401 and r.json() == {"error": "unauthenticated"}
     assert 'sporai_session=""' in r.headers["set-cookie"]  # cleared
@@ -217,7 +224,7 @@ def test_login_as_other_user_replaces_session(client: TestClient, clock: FakeClo
     body = logged_in(client, clock, {"id": 2})
     assert body["created"] is True and body["user"]["id"] == 2
     assert client.cookies.get(COOKIE) != old
-    client.cookies.set(COOKIE, old)
+    replace_cookie(client, old)
     assert client.get("/api/me").status_code == 401  # old session revoked
 
 
@@ -287,7 +294,7 @@ def test_logout_revokes_session_and_clears_cookie(client: TestClient, clock: Fak
     r = logout(client, body["session"]["csrf_token"])
     assert r.status_code == 200 and r.json() == {"ok": True}
     assert 'sporai_session=""' in r.headers["set-cookie"]
-    client.cookies.set(COOKIE, token)  # a stolen copy of the cookie is useless now
+    replace_cookie(client, token)  # a stolen copy of the cookie is useless now
     assert client.get("/api/me").json() == {"error": "unauthenticated"}
 
 
@@ -413,9 +420,9 @@ def test_logout_with_an_expired_session_still_burns_the_current_launch(client: T
     token = client.cookies.get(COOKIE)
     clock.advance(settings.session_ttl_s + 1)  # session expired while the page stayed open
     current = fresh(clock)  # the launch the page runs in now (reopened), still fresh
-    client.cookies.set(COOKIE, token)
+    replace_cookie(client, token)
     assert logout(client, None).status_code == 403  # CSRF still required
-    client.cookies.set(COOKIE, token)
+    replace_cookie(client, token)
     assert logout_with_launch(client, csrf, current).status_code == 200
     r = login(client, current)
     assert r.status_code == 401 and r.json() == {"error": "init_data_reused"}

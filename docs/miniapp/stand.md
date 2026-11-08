@@ -138,6 +138,10 @@ sealed). В репозитории есть лишь плейсхолдеры в
 | `MINIAPP_CSP_MODE` | `report-only` на первом прогоне в клиентах, затем `enforce` | — |
 | `MINIAPP_LOGINS_ENABLED` | `true` (аварийно — `false`) | — |
 | `MINIAPP_MAX_SESSIONS_PER_USER` | `5` (необязательна; допустимо 1…5) | — |
+| `MINIAPP_FOOTBALL_DATA_KEY` | ключ football-data.org **только для Mini App** (не `FOOTBALL_KEY` бота); без него футбол и AI — «не подключены» | да |
+| `MINIAPP_FOOTBALL_DATA_COMPETITIONS`, `MINIAPP_FOOTBALL_DATA_LIVE_PLAN`, `MINIAPP_FOOTBALL_DATA_PER_MINUTE`, `MINIAPP_FOOTBALL_DATA_PER_DAY`, `MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR` | по умолчанию (`PL,PD`, `false`, `8`, `3000`, `20`) | — |
+| `MINIAPP_ANTHROPIC_API_KEY` | ключ Anthropic **только для Mini App** (не `ANTHROPIC_API_KEY` бота); без него кнопки AI нет | да |
+| `MINIAPP_AI_MODEL`, `MINIAPP_AI_PER_USER_DAILY`, `MINIAPP_AI_DAILY_BUDGET` | по умолчанию (`claude-opus-5-5`, `10`, `200`); бюджет — потолок платных вызовов в сутки | — |
 | `MINIAPP_SESSION_TTL_S`, `MINIAPP_INIT_DATA_MAX_AGE_S`, `MINIAPP_INIT_DATA_FUTURE_SKEW_S`, `MINIAPP_LOGIN_RATE_LIMIT`, `MINIAPP_LOGIN_RATE_WINDOW_S`, `MINIAPP_COOKIE_SAMESITE` | по умолчанию (необязательны) | — |
 | `RAILWAY_DOCKERFILE_PATH` | `deploy/miniapp/Dockerfile` | — |
 
@@ -203,7 +207,7 @@ Telegram») в режиме `MINIAPP_CSP_MODE=report-only`. Нарушения �
 | Уровень | Мера |
 |---|---|
 | Cloudflare, Rate limiting rule (на Free — 1 правило, окно 10 с, счёт по IP) | **Обязательно до открытия стенда — весь API:** `starts_with(http.request.uri.path, "/api/")`, порог 30 запросов за 10 с, Block на 10 с. Иначе `GET /api/me` с произвольной cookie без ограничений доходит до SQLite (поиск сессии по хешу токена). На платном плане — второе, более строгое правило: `http.request.uri.path eq "/api/auth/session"` и `POST`, 10 за 10 с. На Free вход дополнительно защищён в приложении: HMAC до любой записи, лимит по `user.id` |
-| Cloudflare, WAF custom rules (на Free — 5) | 1) Block, если метод не `GET`/`HEAD`/`POST`. 2) Block для `starts_with(http.request.uri.path, "/api/")` и метода `POST` вне списка `/api/auth/session`, `/api/auth/logout`, `/api/auth/logout-all`, `/api/me/language`. 3) Block, если `http.host` не равен домену стенда |
+| Cloudflare, WAF custom rules (на Free — 5) | 1) Block, если метод не `GET`/`HEAD`/`POST`. 2) Block для `starts_with(http.request.uri.path, "/api/")` и метода `POST` вне списка `/api/auth/session`, `/api/auth/logout`, `/api/auth/logout-all`, `/api/me/language`, `/api/ai/analysis`. 3) Block, если `http.host` не равен домену стенда |
 | Cloudflare | Always Use HTTPS; SSL mode — по разделу «Настройка Cloudflare», шаг 2 (не Flexible; Full (strict), если у сервера доверенный сертификат); Under Attack / Bot Fight не включать — это браузерные челленджи, они ломают API и WebView |
 | Cloudflare Transform Rule | Modify Request Header → Set `X-Edge-Auth` = секрет. Set перезаписывает значение, присланное клиентом |
 | Приложение | без секрета → 403 до любой логики. Origin проверяется до чтения тела. Тело ≤ 8 КиБ (`Content-Length` и потоковый счётчик), строгий JSON. HMAC проверяется до любой записи в БД. Лимит по проверенному `user.id`. Сожжённый initData отклоняется до лимита. Неподписанный трафик не тратит ничей бюджет |

@@ -128,6 +128,86 @@ describe('real mode', () => {
     expect(screen.queryByText(/%/)).toBeNull();
   });
 
+  it('AI connected: an upcoming match offers the analysis; the result is a labelled estimate on verified numbers', async () => {
+    const user = userEvent.setup();
+    const upcoming = ev(4, 'upcoming', 'Arsenal FC', 'Chelsea FC');
+    const team = (name: string, form: string, points: number, position: number) => ({
+      name, matches: form.length, form, points, goalsFor: 9, goalsAgainst: 2, tablePosition: position, tablePoints: 25,
+    });
+    const analysis = {
+      eventId: 'fd:4', kind: 'partial', reasons: ['no_odds_source'], generatedAt: '2026-11-08T06:00:00Z', model: 'm',
+      probabilities: { home: 52, draw: 26, away: 22 },
+      factors: ['home_form', 'away_table'],
+      basis: { home: team('Arsenal FC', 'WWDWW', 13, 2), away: team('Chelsea FC', 'DDDDD', 5, 9) }, estimated: true,
+    };
+    const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+    const fetchImpl = vi.fn<typeof fetch>(async (input) =>
+      String(input).startsWith('/api/ai/analysis')
+        ? ok(analysis)
+        : ok({ event: upcoming, tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'connected' } }),
+    );
+    const data = new BackendSportsDataProvider({ waitForSession: async () => true, getCsrfToken: () => 'c', fetchImpl });
+    renderApp('#/event/fd%3A4', { data });
+    await user.click(await screen.findByRole('button', { name: 'Создать AI-разбор' }));
+    const result = await screen.findByTestId('ai-result');
+    expect(screen.getByTestId('ai-probabilities-title')).toHaveTextContent('Оценка вероятностей');
+    expect(result).toHaveTextContent('52%');
+    const factors = screen.getByTestId('ai-factors');
+    expect(factors).toHaveTextContent('Arsenal FC: форма WWDWW, очки 13 (матчей: 5)');
+    expect(factors).toHaveTextContent('Chelsea FC: 9-е место в таблице, очки 25');
+    expect(screen.getByTestId('ai-basis')).toHaveTextContent('форма WWDWW, очки 13, голы 9:2 (матчей: 5)');
+    expect(screen.getByTestId('ai-basis')).toHaveTextContent('2-е место, очки 25');
+    expect(screen.queryByText('ДЕМО')).toBeNull();
+    expect(screen.queryByText(/иллюстративные/)).toBeNull();
+    const credit = within(screen.getByTestId('ai-basis')).getByTestId('ai-source');
+    expect(credit).toHaveTextContent('Источник: football-data.org');
+    expect(credit).toHaveTextContent(ATTR);
+    expect(screen.getByTestId('ai-basis')).toHaveTextContent('и таблица из football-data.org');
+  });
+
+  it('AI without the table: the limitation does not claim the table was used', async () => {
+    const upcoming = ev(7, 'upcoming', 'Arsenal FC', 'Chelsea FC');
+    const team = (name: string) => ({ name, matches: 5, form: 'WWDWW', points: 13, goalsFor: 9, goalsAgainst: 2, tablePosition: null, tablePoints: null });
+    const analysis = {
+      eventId: 'fd:7', kind: 'partial', reasons: ['no_odds_source'], generatedAt: '2026-11-08T06:00:00Z', model: 'm',
+      probabilities: { home: 45, draw: 30, away: 25 }, factors: ['home_form', 'away_form'],
+      basis: { home: team('Arsenal FC'), away: team('Chelsea FC') }, estimated: true,
+    };
+    const fetchImpl = vi.fn<typeof fetch>(async (input) =>
+      String(input).startsWith('/api/ai/analysis')
+        ? new Response(JSON.stringify(analysis), { status: 200 })
+        : new Response(JSON.stringify({ event: upcoming, tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'connected' } }), { status: 200 }),
+    );
+    const data = new BackendSportsDataProvider({ waitForSession: async () => true, getCsrfToken: () => 'c', fetchImpl });
+    renderApp('#/event/fd%3A7/ai', { data });
+    const basis = await screen.findByTestId('ai-basis');
+    expect(basis).toHaveTextContent('таблица сейчас недоступна');
+    expect(basis).not.toHaveTextContent('и таблица из football-data.org');
+  });
+
+  it('AI not connected: a real match offers no AI button', async () => {
+    const upcoming = ev(5, 'upcoming', 'Leeds United', 'Burnley FC');
+    const { data } = backend({
+      detail: new Response(JSON.stringify({ event: upcoming, tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'not_connected' } }), { status: 200 }),
+    });
+    renderApp('#/event/fd%3A5', { data });
+    await screen.findByTestId('event-hero');
+    expect(screen.queryByRole('button', { name: 'Создать AI-разбор' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'AI-разбор' })).toBeNull();
+  });
+
+  it('AI daily limit: says so instead of a generic failure', async () => {
+    const upcoming = ev(6, 'upcoming', 'Leeds United', 'Burnley FC');
+    const fetchImpl = vi.fn<typeof fetch>(async (input) =>
+      String(input).startsWith('/api/ai/analysis')
+        ? new Response(JSON.stringify({ error: 'ai_unavailable', reason: 'limit_reached' }), { status: 429 })
+        : new Response(JSON.stringify({ event: upcoming, tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'connected' } }), { status: 200 }),
+    );
+    const data = new BackendSportsDataProvider({ waitForSession: async () => true, getCsrfToken: () => 'c', fetchImpl });
+    renderApp('#/event/fd%3A6/ai', { data });
+    expect(await screen.findByTestId('ai-error')).toHaveTextContent('Дневной лимит AI-разборов исчерпан');
+  });
+
   it('a source outage is an error state with retry, not demo data', async () => {
     const user = userEvent.setup();
     const outage = new Response(JSON.stringify({ error: 'source_unavailable', reason: 'rate_limited' }), { status: 503 });

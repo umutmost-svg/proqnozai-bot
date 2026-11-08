@@ -40,7 +40,8 @@ def _short(coverage: dict) -> dict:
     }
 
 
-def register_sports_routes(app: FastAPI, service: SportsService, current_session: SessionCheck) -> None:
+def register_sports_routes(app: FastAPI, service: SportsService, current_session: SessionCheck,
+                           ai_status: Callable[[], str] = lambda: "not_connected") -> None:
     async def signed_in(request: Request) -> bool:
         return await current_session(request) is not None
 
@@ -48,7 +49,7 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
     async def coverage(request: Request) -> JSONResponse:
         if not await signed_in(request):
             return _error(401, "unauthenticated")
-        return JSONResponse(service.coverage())
+        return JSONResponse({**service.coverage(), "ai": {"status": ai_status()}})
 
     @app.get("/api/sports/{sport}/tournaments")
     async def tournaments(sport: str, request: Request) -> JSONResponse:
@@ -88,6 +89,7 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             "tournaments": [t.to_json() for t in result.tournaments],
             "fetchedAt": result.fetched_at,
             "stale": result.stale,
+            "ai": {"status": ai_status()},
         })
 
     @app.get("/api/sports/event/{event_id}")
@@ -103,4 +105,5 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
         if found is None:
             return _error(404, "not_found")
         return JSONResponse({"event": found.to_json(), "tournament": tournament.to_json() if tournament else None,
-                             "coverage": _short(service.coverage()["sports"][found.sport])})
+                             "coverage": _short(service.coverage()["sports"][found.sport]),
+                             "ai": {"status": ai_status()}})

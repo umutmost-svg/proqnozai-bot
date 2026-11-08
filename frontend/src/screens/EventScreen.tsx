@@ -165,6 +165,10 @@ export function EventScreen() {
   const result = useAsync(() => data.getEvent(id), `event:${id}`);
   const event = result.status === 'success' ? result.data : null;
   const openAi = () => navigate(`/event/${id}/ai`);
+  // Real data: the backend analyses only upcoming football, and only with its AI connected
+  // (aiAvailable() is known after this event's answer) — no button that leads nowhere.
+  const aiEnabled =
+    data.isDemo || (!!event && event.sport === 'football' && event.status === 'upcoming' && data.aiAvailable());
   const setTab = (next: 'overview' | 'stats') =>
     setParams(next === 'stats' ? { tab: 'stats' } : {}, { replace: true });
 
@@ -196,7 +200,7 @@ export function EventScreen() {
             <button type="button" role="tab" aria-selected={tab === 'stats'} className={tab === 'stats' ? s.tabActive : s.tab} onClick={() => setTab('stats')}>
               {t('event.tabStats')}
             </button>
-            {data.isDemo && (
+            {aiEnabled && (
               <button type="button" role="tab" aria-selected={false} className={s.tab} onClick={openAi}>
                 {t('event.tabAi')}
               </button>
@@ -205,8 +209,7 @@ export function EventScreen() {
           {tab === 'overview' ? (
             <>
               <Overview event={event} />
-              {/* The real AI analysis is a later M3 block: no button that leads nowhere. */}
-              {data.isDemo && (
+              {aiEnabled && (
                 <button type="button" className={ui.primary} onClick={openAi}>
                   {t('event.createAi')}
                 </button>

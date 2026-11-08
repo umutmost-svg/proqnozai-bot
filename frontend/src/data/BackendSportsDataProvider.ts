@@ -3,7 +3,10 @@ import { ALL_TOURNAMENTS, filterEvents, pickFeatured, type EventQuery } from './
 import { TOURNAMENTS as DEMO_TOURNAMENTS } from './fixtures';
 import type {
   AiAnalysis,
+  AiFactor,
   BasketballEvent,
+  InsufficientReason,
+  TeamBasis,
   Competitor,
   EventSource,
   EventStatus,
@@ -21,6 +24,11 @@ import { DataError, type SportCoverage, type SportsDataProvider } from './provid
 
 /** One API exchange may not hang the app (the loading screen waits on first data). */
 export const DATA_TIMEOUT_MS = 10_000;
+/**
+ * The AI request waits for the backend's whole bounded path: evidence ≤ 20 s, quota
+ * reservation ≤ ~10 s, one model attempt ≤ 60 s — plus headroom.
+ */
+export const AI_TIMEOUT_MS = 120_000;
 
 const STATUSES: ReadonlySet<EventStatus> = new Set([
   'upcoming',
@@ -47,9 +55,12 @@ const REQUIRED_ATTRIBUTION: Record<string, string> = {
 export interface BackendOptions {
   /** Resolves once the Telegram sign-in is settled: true = there is a session. */
   waitForSession(): Promise<boolean>;
+  /** The session's anti-CSRF token, sent with the (paid) AI request. */
+  getCsrfToken?(): string | null;
   fetchImpl?: typeof fetch;
   base?: string;
   timeoutMs?: number;
+  aiTimeoutMs?: number;
 }
 
 type Json = Record<string, unknown>;
@@ -84,14 +95,17 @@ export class BackendSportsDataProvider implements SportsDataProvider {
   readonly isDemo = false;
   private readonly tournaments = new Map<string, Tournament>();
   private readonly coverages = new Map<Sport, SportCoverage>();
+  private aiStatus: 'connected' | 'not_connected' | 'unknown' = 'unknown';
   private readonly fetchImpl: typeof fetch;
   private readonly base: string;
   private readonly timeoutMs: number;
+  private readonly aiTimeoutMs: number;
 
   constructor(private readonly options: BackendOptions) {
     this.fetchImpl = options.fetchImpl ?? ((...a) => fetch(...a));
     this.base = options.base ?? '/api';
     this.timeoutMs = options.timeoutMs ?? DATA_TIMEOUT_MS;
+    this.aiTimeoutMs = options.aiTimeoutMs ?? AI_TIMEOUT_MS;
   }
 
   coverage(sport: Sport): SportCoverage {
@@ -116,6 +130,7 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     // A malformed answer is an error: it must never read as "no matches today".
     if (!body || !Array.isArray(body.events) || !isObj(body.coverage)) throw new DataError(op, 'bad_response');
     const coverage = this.readCoverage(query.sport, body.coverage);
+    this.readAiStatus(body.ai);
     for (const raw of Array.isArray(body.tournaments) ? body.tournaments : []) this.readTournament(raw);
     // Staleness is per event (a two-day range may mix a fresh day and a cached one).
     const parsed = body.events.map((raw) => this.readEvent(raw, coverage));
@@ -150,6 +165,7 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     if (body.tournament) this.readTournament(body.tournament);
     const sport = body.event.sport as Sport;
     const coverage = this.readCoverage(sport, body.coverage);
+    this.readAiStatus(body.ai);
     const event = this.readEvent(body.event, coverage);
     // A malformed real event, or a different event than asked for, is an error —
     // never "no such event" and never another match under this id.
@@ -157,17 +173,54 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     return event;
   }
 
-  /** The real AI analysis is a later M3 block: nothing (and no demo example) until then. */
+  /** True once the backend has said its AI is connected (from the last events/event answer). */
+  aiAvailable(): boolean {
+    return this.aiStatus === 'connected';
+  }
+
+  /**
+   * Real AI analysis from the backend (verified data → PARTIAL / INSUFFICIENT).
+   * Without a connected AI the answer is "unavailable" — never a demo example.
+   */
   async requestAnalysis(eventId: string): Promise<AiAnalysis> {
     const event = await this.getEvent(eventId);
     if (!event) throw new DataError('ai', 'not_found');
-    return { eventId, sport: event.sport, kind: 'unavailable', probabilities: [], reasons: [], generatedAt: null };
+    if (!this.aiAvailable()) {
+      return { eventId, sport: event.sport, kind: 'unavailable', probabilities: [], reasons: [], generatedAt: null };
+    }
+    const csrf = this.options.getCsrfToken?.() ?? null;
+    if (!csrf) throw new DataError('ai', 'unauthenticated');
+    const body = await this.request(
+      'ai',
+      '/ai/analysis',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+        body: JSON.stringify({ event_id: eventId }),
+      },
+      true,
+      this.aiTimeoutMs,
+    );
+    if (!body) throw new DataError('ai', 'not_found');
+    const analysis = readAnalysis(body, eventId, event.sport);
+    if (!analysis) throw new DataError('ai', 'bad_response');
+    return analysis;
   }
 
   // --- transport ------------------------------------------------------------------
 
   /** GET a backend JSON body; `nullOn404` turns "no such event" into null. */
-  private async get(op: string, path: string, nullOn404 = false): Promise<Json | null> {
+  private get(op: string, path: string, nullOn404 = false): Promise<Json | null> {
+    return this.request(op, path, { method: 'GET' }, nullOn404, this.timeoutMs);
+  }
+
+  private async request(
+    op: string,
+    path: string,
+    init: RequestInit,
+    nullOn404: boolean,
+    timeoutMs: number,
+  ): Promise<Json | null> {
     if (!(await this.options.waitForSession())) throw new DataError(op, 'unauthenticated');
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -175,22 +228,29 @@ export class BackendSportsDataProvider implements SportsDataProvider {
       timer = setTimeout(() => {
         controller?.abort();
         reject(new DataError(op, 'network'));
-      }, this.timeoutMs);
+      }, timeoutMs);
     });
     try {
-      return await Promise.race([this.exchange(op, path, nullOn404, controller?.signal), timedOut]);
+      return await Promise.race([this.exchange(op, path, init, nullOn404, controller?.signal), timedOut]);
     } finally {
       clearTimeout(timer);
     }
   }
 
-  private async exchange(op: string, path: string, nullOn404: boolean, signal?: AbortSignal): Promise<Json | null> {
+  private async exchange(
+    op: string,
+    path: string,
+    init: RequestInit,
+    nullOn404: boolean,
+    signal?: AbortSignal,
+  ): Promise<Json | null> {
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.base}${path}`, {
+        ...init,
         credentials: 'same-origin',
         cache: 'no-store',
-        headers: { Accept: 'application/json' },
+        headers: { Accept: 'application/json', ...(init.headers as Record<string, string> | undefined) },
         signal,
       });
     } catch {
@@ -198,7 +258,8 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     }
     if (response.status === 404 && nullOn404) return null;
     if (response.status === 401) throw new DataError(op, 'unauthenticated');
-    if (response.status === 503) throw new DataError(op, 'source_unavailable');
+    if (response.status === 429) throw new DataError(op, 'limit_reached');
+    if (response.status === 503) throw new DataError(op, await aiReason(response));
     if (!response.ok) throw new DataError(op, 'bad_response');
     try {
       const body: unknown = await response.json();
@@ -210,6 +271,11 @@ export class BackendSportsDataProvider implements SportsDataProvider {
   }
 
   // --- parsing --------------------------------------------------------------------
+
+  private readAiStatus(raw: unknown): void {
+    const status = isObj(raw) ? raw.status : null;
+    if (status === 'connected' || status === 'not_connected') this.aiStatus = status;
+  }
 
   private readCoverage(sport: Sport, raw: unknown): SportCoverage & { delayed: boolean } {
     const c = isObj(raw) ? raw : {};
@@ -318,4 +384,108 @@ export class BackendSportsDataProvider implements SportsDataProvider {
         return null;
     }
   }
+}
+
+/** Why the AI is unavailable, when the backend says so (no free-form text reaches the UI). */
+const AI_REASONS = new Set([
+  'not_configured',
+  'limit_reached',
+  'budget_exhausted',
+  'refused',
+  'bad_output',
+  'upstream_error',
+  'timeout',
+  'rate_limited',
+]);
+
+async function aiReason(response: Response): Promise<string> {
+  try {
+    const body: unknown = await response.json();
+    if (isObj(body) && body.error === 'ai_unavailable' && typeof body.reason === 'string' && AI_REASONS.has(body.reason)) {
+      return body.reason;
+    }
+  } catch {
+    // not JSON: the generic reason below
+  }
+  return 'source_unavailable';
+}
+
+const FACTORS: Record<string, AiFactor> = {
+  home_form: 'homeForm',
+  away_form: 'awayForm',
+  home_goals: 'homeGoals',
+  away_goals: 'awayGoals',
+  home_table: 'homeTable',
+  away_table: 'awayTable',
+};
+
+const REASONS: Record<string, InsufficientReason> = {
+  no_verified_form: 'noVerifiedForm',
+  not_upcoming: 'notUpcoming',
+  no_odds_source: 'noOddsSource',
+};
+
+function readBasis(v: unknown): TeamBasis | null {
+  if (!isObj(v)) return null;
+  const name = str(v.name);
+  const form = typeof v.form === 'string' && /^[WDL]{0,10}$/.test(v.form) ? v.form : null;
+  const [matches, points, goalsFor, goalsAgainst] = [int(v.matches), int(v.points), int(v.goalsFor), int(v.goalsAgainst)];
+  if (!name || form === null || matches === null || points === null || goalsFor === null || goalsAgainst === null) {
+    return null;
+  }
+  if (form.length !== matches) return null;
+  // Optional table numbers: absent/null is fine, anything else must be a valid number.
+  const optional = (x: unknown): number | null | undefined => (x === null || x === undefined ? null : (int(x) ?? undefined));
+  const tablePosition = optional(v.tablePosition);
+  const tablePoints = optional(v.tablePoints);
+  if (tablePosition === undefined || tablePoints === undefined) return null;
+  return { name, form, matches, points, goalsFor, goalsAgainst, tablePosition, tablePoints };
+}
+
+/** Strict reading of the backend analysis; anything off-contract is rejected (null), never repaired. */
+function readAnalysis(b: Json, eventId: string, sport: Sport): AiAnalysis | null {
+  if (b.eventId !== eventId || !Array.isArray(b.reasons)) return null;
+  const reasons = b.reasons.map((r) => (typeof r === 'string' ? REASONS[r] : undefined));
+  if (reasons.some((r) => r === undefined)) return null;
+  const known = reasons as InsufficientReason[];
+  let basis: { home: TeamBasis; away: TeamBasis } | undefined;
+  if (b.basis !== null && b.basis !== undefined) {
+    const home = isObj(b.basis) ? readBasis(b.basis.home) : null;
+    const away = isObj(b.basis) ? readBasis(b.basis.away) : null;
+    if (!home || !away) return null;
+    basis = { home, away };
+  }
+  if ('summary' in b) return null; // the model writes no free text; any text here is off-contract
+  if (b.kind === 'insufficient') {
+    if ((b.probabilities !== null && b.probabilities !== undefined) || (Array.isArray(b.factors) && b.factors.length)) {
+      return null;
+    }
+    return { eventId, sport, kind: 'insufficient', probabilities: [], reasons: known, generatedAt: null, basis };
+  }
+  if ((b.kind !== 'partial' && b.kind !== 'ready') || !basis) return null;
+  const p = isObj(b.probabilities) ? b.probabilities : {};
+  const probabilities = [int(p.home), int(p.draw), int(p.away)];
+  if (probabilities.some((n) => n === null || n > 100)) return null;
+  if ((probabilities as number[]).reduce((a, n) => a + n, 0) !== 100) return null;
+  const factors = Array.isArray(b.factors) ? b.factors.map((f) => (typeof f === 'string' ? FACTORS[f] : undefined)) : [];
+  const generatedAt = validInstant(b.generatedAt);
+  if (factors.length < 2 || factors.length > 4 || factors.some((f) => f === undefined) || !generatedAt) return null;
+  if (new Set(factors).size !== factors.length) return null;
+  // A table factor is rendered from that team's table row: it must exist.
+  const tableOf = { homeTable: basis.home, awayTable: basis.away } as Record<string, TeamBasis>;
+  if (factors.some((f) => tableOf[f!] && (tableOf[f!]!.tablePosition === null || tableOf[f!]!.tablePoints === null))) {
+    return null;
+  }
+  return {
+    eventId,
+    sport,
+    kind: b.kind,
+    probabilities: probabilities as number[],
+    reasons: known,
+    generatedAt,
+    factors: factors as AiFactor[],
+    basis,
+    // PARTIAL is always an estimate, whatever the flag says.
+    estimated: b.kind === 'partial' || b.estimated === true,
+  };
 }

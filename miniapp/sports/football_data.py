@@ -9,6 +9,7 @@ and stay ``None`` / "unavailable".
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
 from .client import ProviderClient, UpstreamError
@@ -246,6 +247,16 @@ class FootballDataAdapter:
         today = datetime.fromtimestamp(self._clock(), UTC).date()
         return events, ttl_for(events, day, today)
 
+    async def team_form(self, team: int) -> tuple[list[FormMatch], float]:
+        data, _ = await self.client.get_json(f"/teams/{team}/matches", {"status": "FINISHED", "limit": str(FORM_MATCHES)})
+        return normalize_form(data.get("matches"), team), FORM_TTL_S
+
+    async def standings(self, code: str) -> tuple[dict[str, StandingRow], float]:
+        if code not in self._allowed:
+            raise UpstreamError("not_found")
+        data, _ = await self.client.get_json(f"/competitions/{code}/standings")
+        return normalize_standings(data), STANDINGS_TTL_S
+
     async def match(self, match_id: int) -> tuple[FootballEvent | None, float]:
         try:
             data, _ = await self.client.get_json(f"/matches/{match_id}")
@@ -263,3 +274,101 @@ class FootballDataAdapter:
                 return None, NOT_FOUND_TTL_S  # a real match of a competition we do not serve
             raise UpstreamError("bad_response")  # broken payload: not a cached "not found"
         return event, event_ttl(event)
+
+
+# --- verified context for the AI analysis (M3.2) ---------------------------------
+# Form and standings change at most after each round: cached for hours, shared by
+# every match of those teams, so an analysis rarely costs more than one request.
+FORM_TTL_S = 6 * 3600.0
+STANDINGS_TTL_S = 6 * 3600.0
+FORM_MATCHES = 10
+
+
+@dataclass(frozen=True)
+class FormMatch:
+    """One finished match of a team, from that team's point of view."""
+
+    date: str  # ISO-8601 UTC kickoff
+    opponent: str
+    venue: str  # "home" | "away"
+    goals_for: int
+    goals_against: int
+    competition: str | None
+
+    @property
+    def result(self) -> str:
+        return "W" if self.goals_for > self.goals_against else "L" if self.goals_for < self.goals_against else "D"
+
+
+@dataclass(frozen=True)
+class StandingRow:
+    position: int
+    team_id: str
+    played: int
+    won: int
+    draw: int
+    lost: int
+    points: int
+    goals_for: int
+    goals_against: int
+
+
+def team_number(team_id: str) -> int | None:
+    prefix, _, raw = team_id.rpartition(":")
+    if prefix != f"{ID_PREFIX}:team" or not (raw.isascii() and raw.isdigit()) or raw[0] == "0" or len(raw) > 12:
+        return None
+    return int(raw)
+
+
+def normalize_form(raw_matches: object, team: int) -> list[FormMatch]:
+    """Finished matches of `team`, newest first; anything incomplete is left out."""
+    if not isinstance(raw_matches, list):
+        raise UpstreamError("bad_response")
+    form: list[FormMatch] = []
+    for raw in raw_matches:
+        if not isinstance(raw, dict) or raw.get("status") != "FINISHED":
+            continue
+        home, away = raw.get("homeTeam"), raw.get("awayTeam")
+        if not isinstance(home, dict) or not isinstance(away, dict):
+            continue
+        score = _pair((raw.get("score") or {}).get("fullTime") if isinstance(raw.get("score"), dict) else None)
+        kickoff = _iso_utc(raw.get("utcDate"))
+        if score is None or kickoff is None:
+            continue
+        if _id(home.get("id")) == team:
+            them, venue, goals = away, "home", score
+        elif _id(away.get("id")) == team:
+            them, venue, goals = home, "away", (score[1], score[0])
+        else:
+            continue
+        name = them.get("name") or them.get("shortName")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        competition = raw.get("competition")
+        code = competition.get("code") if isinstance(competition, dict) else None
+        form.append(FormMatch(kickoff, name.strip(), venue, goals[0], goals[1], code if isinstance(code, str) else None))
+    form.sort(key=lambda m: m.date, reverse=True)
+    return form[:FORM_MATCHES]
+
+
+def normalize_standings(data: object) -> dict[str, StandingRow]:
+    """The overall ("TOTAL") table, keyed by our team id."""
+    standings = data.get("standings") if isinstance(data, dict) else None
+    if not isinstance(standings, list):
+        raise UpstreamError("bad_response")
+    total = next((s for s in standings if isinstance(s, dict) and s.get("type") == "TOTAL"), None)
+    table = total.get("table") if isinstance(total, dict) else None
+    if not isinstance(table, list):
+        return {}
+    rows: dict[str, StandingRow] = {}
+    for raw in table:
+        if not isinstance(raw, dict) or not isinstance(raw.get("team"), dict):
+            continue
+        team = _id(raw["team"].get("id"))
+        values = [_int_or_none(raw.get(k)) for k in
+                  ("position", "playedGames", "won", "draw", "lost", "points", "goalsFor", "goalsAgainst")]
+        if team is None or any(v is None for v in values):
+            continue
+        tid = f"{ID_PREFIX}:team:{team}"
+        rows[tid] = StandingRow(values[0], tid, *values[1:])  # type: ignore[arg-type]
+    return rows

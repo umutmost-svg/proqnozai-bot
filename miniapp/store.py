@@ -47,13 +47,20 @@ CREATE TABLE IF NOT EXISTS consumed_init_data (
     init_hash   TEXT PRIMARY KEY,
     expires_at  INTEGER NOT NULL
 );
+-- Paid AI calls per UTC day (per user and in total): survives restarts.
+CREATE TABLE IF NOT EXISTS ai_usage (
+    day      TEXT NOT NULL,
+    subject  TEXT NOT NULL,
+    used     INTEGER NOT NULL,
+    PRIMARY KEY (day, subject)
+);
 """
 
 
 _USER_COLUMNS = ("telegram_user_id, first_name, last_name, username, language_code, lang, lang_source, "
                  "created_at, last_login_at")
 _SESSION_COLUMNS = "token_hash, user_id, created_at, expires_at, revoked_at, init_hash"
-_OWN_TABLES = frozenset({"users", "sessions", "consumed_init_data", "sqlite_sequence"})
+_OWN_TABLES = frozenset({"users", "sessions", "consumed_init_data", "ai_usage", "sqlite_sequence"})
 
 
 class ForeignDatabaseError(RuntimeError):
@@ -318,6 +325,24 @@ class Store:
         with self._write() as conn:
             return self._revoke_where(conn, "1 = 1", (), now, burn)
 
+    def reserve_ai_call(self, day: str, limits: dict[str, int]) -> str | None:
+        """One paid call against several daily allowances ({subject: limit}), in ONE
+        transaction and for ONE day: either every allowance is charged or none is.
+        Returns None when charged, else the first subject that is used up."""
+        with self._write() as conn:
+            conn.execute("DELETE FROM ai_usage WHERE day < ?", (day,))
+            for subject, limit in limits.items():
+                row = conn.execute("SELECT used FROM ai_usage WHERE day = ? AND subject = ?", (day, subject)).fetchone()
+                if row is not None and row[0] >= limit:
+                    return subject
+            for subject in limits:
+                conn.execute(
+                    "INSERT INTO ai_usage (day, subject, used) VALUES (?, ?, 1) "
+                    "ON CONFLICT(day, subject) DO UPDATE SET used = used + 1",
+                    (day, subject),
+                )
+            return None
+
     def purge_expired(self, now: int) -> None:
         with self._write() as conn:
             self._purge(conn, now)
@@ -370,6 +395,7 @@ class Store:
             src.close()
         if not {"users", "sessions", "consumed_init_data"} <= tables or tables - _OWN_TABLES:
             raise ForeignDatabaseError("the restore source is not a Mini App database")
+        has_ai_usage = "ai_usage" in tables  # backups made before M3.2 have no AI ledger
         with self._connect() as conn:
             conn.execute("ATTACH DATABASE ? AS src", (source_uri,))
             try:
@@ -388,6 +414,12 @@ class Store:
                         "SELECT init_hash, expires_at FROM src.consumed_init_data WHERE true "
                         "ON CONFLICT(init_hash) DO UPDATE SET expires_at = MAX(expires_at, excluded.expires_at)"
                     )
+                    if has_ai_usage:
+                        # Merged like the burn ledger: a restore never gives back spent AI calls.
+                        conn.execute(
+                            "INSERT INTO ai_usage (day, subject, used) SELECT day, subject, used FROM src.ai_usage "
+                            "WHERE true ON CONFLICT(day, subject) DO UPDATE SET used = MAX(used, excluded.used)"
+                        )
                     revoked = self._revoke_where(conn, "1 = 1", (), now, burn)
                 except BaseException:
                     conn.execute("ROLLBACK")

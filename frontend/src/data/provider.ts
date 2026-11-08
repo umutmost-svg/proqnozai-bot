@@ -27,7 +27,10 @@ export interface SportsDataProvider {
   getFeatured(query: EventQuery): Promise<SportEvent | null>;
   getEvent(id: string): Promise<SportEvent | null>;
   getTournament(id: string): Tournament | undefined;
+  /** `lang`: language of the written analysis (the interface language). */
   requestAnalysis(eventId: string): Promise<AiAnalysis>;
+  /** The AI analysis can be requested for real events (always true for the demo). */
+  aiAvailable(): boolean;
 }
 
 export class DataError extends Error {
