@@ -10,7 +10,7 @@ nothing of this file — keeps working untouched.
 - Triggers forbid changing any forecast column and deleting rows. Settlement may only
   write the result columns; every change of a result is journalled with a revision.
 - Settlement (`settle_events`) takes events the app already holds — no request of its
-  own; it is not run automatically in M3.5 (owner's decision), only on purpose.
+  own; `settlement.py` runs it on every loaded season calendar and in a low-priority pass.
 - No user identifiers: a forecast's quality does not depend on who opened it.
 - No automatic retraining: `evaluate` only reads (Brier score, log loss, calibration
   per model version, competition and market) for an offline review.
@@ -166,9 +166,10 @@ def _now() -> str:
 
 
 class ForecastHistory:
-    def __init__(self, path: Path, clock=None) -> None:
+    def __init__(self, path: Path, clock=None, *, read_only: bool = False) -> None:
         self.path = path
         self._clock = clock
+        self._read_only = read_only  # operator reads: the file is opened mode=ro, never written
 
     def _iso_now(self) -> str:
         if self._clock is None:
@@ -177,7 +178,11 @@ class ForecastHistory:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        if self._read_only:
+            conn = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=10,
+                                   isolation_level=None)
+        else:
+            conn = sqlite3.connect(self.path, timeout=10, isolation_level=None)
         try:
             conn.execute("PRAGMA busy_timeout=10000")
             conn.execute("PRAGMA foreign_keys=ON")
@@ -309,6 +314,24 @@ class ForecastHistory:
                 return True
         except sqlite3.Error:
             return False
+
+    def is_forecast_history(self) -> bool:
+        with self._connect() as conn:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        return "ai_forecasts" in tables and not tables - _OWN
+
+    def pending_tournaments(self, kicked_off_before: str, kicked_off_after: str) -> list[str]:
+        """Competitions with forecasts still pending whose kickoff lies in the given window."""
+        with self._connect() as conn:
+            return [row[0] for row in conn.execute(
+                "SELECT DISTINCT tournament_id FROM ai_forecasts WHERE settled_status = 'pending' "
+                "AND kickoff_at <= ? AND kickoff_at >= ? ORDER BY tournament_id",
+                (kicked_off_before, kicked_off_after))]
+
+    def status_counts(self) -> dict[str, int]:
+        with self._connect() as conn:
+            counts = dict(conn.execute("SELECT settled_status, COUNT(*) FROM ai_forecasts GROUP BY settled_status"))
+        return {status: int(counts.get(status, 0)) for status in ("pending", "settled", "void")}
 
     def count(self) -> int:
         with self._connect() as conn:

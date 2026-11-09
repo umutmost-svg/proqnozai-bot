@@ -115,6 +115,10 @@ class SearchIndex:
         now = self._clock()
         return [t for t in self._ids() if t not in self._seasons or now - self._seasons[t][0] > REFRESH_AFTER_S]
 
+    @property
+    def warming(self) -> bool:
+        return self._warm is not None and not self._warm.done()
+
     def ensure_warm(self) -> asyncio.Task | None:
         if self._warm is None and self._due():
             self._warm = asyncio.create_task(self._run())

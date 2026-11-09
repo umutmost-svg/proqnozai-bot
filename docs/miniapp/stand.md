@@ -245,6 +245,7 @@ Telegram») в режиме `MINIAPP_CSP_MODE=report-only`. Нарушения �
   miniapp-entrypoint admin purge
   miniapp-entrypoint admin backup /data/backups/miniapp-$(date +%Y%m%d-%H%M).db
   miniapp-entrypoint admin restore /data/backups/<файл>.db --yes
+  miniapp-entrypoint admin forecasts     # учёт результатов прогнозов: счётчики и метрики (только чтение)
   ```
   - Вывод — только числа, без токенов, хешей и имён.
   - Отсутствующую БД CLI не создаёт; чужую (с таблицами бота) не трогает.

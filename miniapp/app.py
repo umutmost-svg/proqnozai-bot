@@ -24,6 +24,7 @@ from miniapp.security import CsrfTokens, LoginRateLimiter, origin_allowed
 from miniapp.settings import Settings
 from miniapp.ai.analysis import AI_ERROR_CODES, AiError, AiService, build_ai_service
 from miniapp.forecast.history import ForecastHistory, history_path
+from miniapp.forecast.settlement import Settlement
 from miniapp.odds.feed import FeedReceiver
 from miniapp.odds.routes import register_odds_routes
 from miniapp.odds.store import OddsStore
@@ -516,20 +517,30 @@ def create_app(
     # Forecast history in its own file next to the database (rollback-safe, see forecast/history.py).
     history = ForecastHistory(history_path(settings.db_path), clock)
     history.init_schema()
+    # Results of stored forecasts: from every loaded calendar plus a low-priority pass (internal only).
+    settlement = Settlement(history, sports, clock)
+    sports.calendar_listeners.append(settlement.on_calendar)
     # Odds pushed by the bot: in memory only, served after strict matching (miniapp/odds).
     odds = OddsStore(clock, enabled=settings.odds_feed_enabled)
     receiver = FeedReceiver(settings.odds_feed_secret.encode(), clock) if settings.odds_feed_secret else None
     register_odds_routes(app, receiver, odds, clock)
     ai = ai or build_ai_service(settings, sports, clock=clock, ledger=store, history=history, odds=odds)
-    register_sports_routes(app, sports, current_session,
+    async def active_session(request: Request) -> tuple[str, Session] | None:
+        """current_session for the data APIs: a signed-in user may also start the settlement pass."""
+        found = await current_session(request)
+        if found is not None:
+            settlement.ensure()
+        return found
+
+    register_sports_routes(app, sports, active_session,
                            ai_status=lambda: "connected" if ai.connected else "not_connected")
-    register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), current_session)
+    register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session)
 
     @app.get("/api/ai/analysis")
     async def ai_analysis_cached(request: Request) -> JSONResponse:
         # Read-only: an analysis already made (or one that costs nothing). Never reserves a
         # limit and never calls the model, so showing the AI screen can never pay.
-        active = await current_session(request)
+        active = await active_session(request)
         if active is None:
             raise ApiError(401, "unauthenticated")
         params = request.query_params
@@ -552,7 +563,7 @@ def create_app(
     async def ai_analysis(request: Request) -> JSONResponse:
         # Costs money: same gate as other state-changing calls (Origin, session, CSRF).
         require_origin(request)
-        active = await current_session(request)
+        active = await active_session(request)
         if active is None:
             raise ApiError(401, "unauthenticated")
         token, session = active

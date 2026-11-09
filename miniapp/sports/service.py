@@ -138,6 +138,7 @@ class SportsService:
         self._top_tables: OrderedDict[tuple[str, str], top_matches.Table] = OrderedDict()
         self._unknown_per_hour = unknown_lookups_per_hour
         self._warm_standings = warm_standings
+        self._background_loads = 0  # settlement calendar loads in flight (see background_busy)
         self._standings_task: asyncio.Task[None] | None = None
         self._standings_warm_retry_at: dict[str, float] = {}
         self._sleep = sleep
@@ -483,6 +484,8 @@ class SportsService:
         """Starts a background pass over the tables that are missing or due (never waits for it)."""
         if not self._warm_standings or self.football is None:
             return self._standings_task
+        if self._background_loads:
+            return self._standings_task  # a settlement load holds the background slot: next request
         if self._standings_task is None and self._standings_due():
             self._standings_task = asyncio.create_task(self._warm_standings_pass())
         return self._standings_task
@@ -506,6 +509,30 @@ class SportsService:
                 continue  # a remembered failure: its backoff holds for the warm-up too
             due.append(code)
         return due
+
+    async def background_calendar(self, tournament_id: str) -> CalendarResult | None:
+        """A season calendar for background work (forecast settlement): None when the
+        warm-up's budget is used up or another background load is running. Same low priority
+        as the standings warm-up: it keeps the minute's reserve for users and stops at its
+        share of the day."""
+        if self.football is None or not self._warm_budget_left() or self.background_busy():
+            return None
+        reserve = LOW_PRIORITY_RESERVE.set(STANDINGS_WARM_RESERVE)
+        share = LOW_PRIORITY_DAY_SHARE.set(STANDINGS_WARM_DAY_SHARE)
+        self._background_loads += 1
+        try:
+            # A load started here copies this context (its retries keep the same limits).
+            return await self.calendar("football", tournament_id)
+        finally:
+            self._background_loads -= 1
+            LOW_PRIORITY_DAY_SHARE.reset(share)
+            LOW_PRIORITY_RESERVE.reset(reserve)
+
+    def background_busy(self) -> bool:
+        """A background load (standings warm-up, search warm-up, settlement) is running: the
+        provider client has two request slots, and background work may hold at most one."""
+        standings = self._standings_task is not None and not self._standings_task.done()
+        return standings or self.search_index.warming or self._background_loads > 0
 
     def _warm_budget_left(self) -> bool:
         client = self.football.client  # type: ignore[union-attr]

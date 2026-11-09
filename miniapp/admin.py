@@ -6,6 +6,7 @@
     python -m miniapp.admin purge
     python -m miniapp.admin backup <new-file>
     python -m miniapp.admin restore <backup-file> --yes
+    python -m miniapp.admin forecasts
 
 Safe by construction: settings come from the same MINIAPP_* env as the API
 (same bot.db guard and bounds); a missing database is an error, never created;
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sqlite3
 import sys
@@ -24,10 +26,42 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+from miniapp.forecast.history import ForecastHistory, history_path
 from miniapp.settings import Settings, SettingsError, is_bot_database_path
 from miniapp.store import BurnWindow, ForeignDatabaseError, Store
 
 logger = logging.getLogger("miniapp.admin")
+
+
+def _finite(value: object) -> object:
+    """NaN (e.g. the hit rate without any pick) as null: the output stays strict JSON."""
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_finite(v) for v in value]
+    return value
+
+
+def _forecasts(settings: Settings) -> int:
+    """Read-only: the Mini App database is not opened and the history is opened mode=ro (SQLite
+    may still add its own -wal/-shm sidecar files next to a WAL database; no data changes)."""
+    path = history_path(settings.db_path)
+    if not path.is_file():
+        print("forecast history file not found (no forecast stored yet?)", file=sys.stderr)
+        return 2
+    history = ForecastHistory(path, read_only=True)
+    try:
+        if not history.is_forecast_history():
+            print("refused: the history file is not a forecast history", file=sys.stderr)
+            return 2
+        result = {"forecasts": history.status_counts(), "quality": _finite(history.evaluate())}
+    except sqlite3.Error as exc:
+        print(f"refused: {type(exc).__name__}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, sort_keys=True))
+    return 0
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -39,6 +73,7 @@ def _parser() -> argparse.ArgumentParser:
     revoke_all = sub.add_parser("revoke-all", help="emergency: end every session of every user")
     revoke_all.add_argument("--yes", action="store_true", help="confirm; without it nothing is changed")
     sub.add_parser("purge", help="delete long-ended sessions and expired burns")
+    sub.add_parser("forecasts", help="forecast history: settlement counts and quality metrics (read-only)")
     backup = sub.add_parser("backup", help="consistent online copy into a NEW file")
     backup.add_argument("destination", type=Path)
     restore = sub.add_parser("restore", help="replace the live data with a backup, then revoke every session")
@@ -60,6 +95,8 @@ def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None
     except SettingsError as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2
+    if args.command == "forecasts":
+        return _forecasts(settings)
     if not settings.db_path.is_file():
         # Never create an empty database by mistake (wrong path, volume not mounted).
         print("database file not found: check MINIAPP_DB_PATH and the volume mount", file=sys.stderr)
