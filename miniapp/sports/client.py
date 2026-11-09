@@ -14,6 +14,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import math
 import time
 import urllib.error
 import urllib.parse
@@ -31,6 +32,10 @@ logger = logging.getLogger("miniapp.sports")
 # features: every attempt it makes, retries included, is refused once fewer than this many
 # requests are left in the current minute. Checked inside _reserve, so it is atomic.
 LOW_PRIORITY_RESERVE: contextvars.ContextVar[int] = contextvars.ContextVar("low_priority_reserve", default=0)
+# Set around background work that must never spend the day's budget users need: every attempt
+# (retries included) is refused once this share of the daily budget is used. The refusal is a
+# local "rate_limited" (no request made) and is not a quota error for the coverage status.
+LOW_PRIORITY_DAY_SHARE: contextvars.ContextVar[float] = contextvars.ContextVar("low_priority_day_share", default=1.0)
 
 
 @dataclass(frozen=True)
@@ -114,10 +119,16 @@ async def urllib_transport(url: str, headers: Mapping[str, str], timeout_s: floa
 class UpstreamError(Exception):
     """The provider could not answer; ``code`` is safe to show and log."""
 
-    def __init__(self, code: str, *, status: int | None = None) -> None:
+    def __init__(self, code: str, *, status: int | None = None, retry_after: float | None = None,
+                 low_priority_only: bool = False) -> None:
         super().__init__(code)
         self.code = code  # quota_exhausted | rate_limited | timeout | upstream_error | bad_response | not_found
         self.status = status
+        # rate_limited: seconds until a request may be made again (None: unknown).
+        self.retry_after = retry_after
+        # True when only a low-priority caller's own limits refused it (an interactive request
+        # would have been admitted): never remembered for other callers of the same data.
+        self.low_priority_only = low_priority_only
 
 
 @dataclass(frozen=True)
@@ -196,16 +207,27 @@ class ProviderClient:
         """Count one upstream request against the budgets or refuse it."""
         now = self._clock()
         if now < self._cooldown_until:
-            raise UpstreamError("rate_limited")
+            raise UpstreamError("rate_limited", retry_after=self._cooldown_until - now)
         today = self._today()
         if self._day_key != today:
             self._day_key, self._day_used = today, 0
         if self._day_used >= self._limits.per_day:
             self.last_error = "quota_exhausted"  # coverage must not keep saying "connected"
             raise UpstreamError("quota_exhausted")
+        share = LOW_PRIORITY_DAY_SHARE.get()
+        # The next request must still fit inside the share (whole requests, rounded down).
+        if share < 1.0 and self._day_used + 1 > math.floor(self._limits.per_day * share):
+            raise UpstreamError("rate_limited", low_priority_only=True)
         self._trim(now)
-        if len(self._minute) >= self._limits.per_minute - LOW_PRIORITY_RESERVE.get():
-            raise UpstreamError("rate_limited")
+        allowed = self._limits.per_minute - LOW_PRIORITY_RESERVE.get()
+        if allowed <= 0:
+            # A minute limit at or below the reserve never admits a low-priority request.
+            raise UpstreamError("rate_limited", retry_after=60.0, low_priority_only=True)
+        if len(self._minute) >= allowed:
+            # The wait until enough of this minute's requests have aged out to admit one more.
+            oldest = self._minute[len(self._minute) - allowed]
+            raise UpstreamError("rate_limited", retry_after=max(oldest + 60 - now, 0.0),
+                                low_priority_only=len(self._minute) < self._limits.per_minute)
         self._day_used += 1
         self._minute.append(now)
 
@@ -258,7 +280,8 @@ class ProviderClient:
                         return data, response.headers
                     if response.status == 429:
                         self._cool_down(response.headers)
-                        raise self._fail(UpstreamError("rate_limited", status=429))
+                        raise self._fail(UpstreamError("rate_limited", status=429,
+                                                       retry_after=self._cooldown_until - self._clock()))
                     if response.status == 404:
                         raise UpstreamError("not_found", status=404)
                     if response.status in (401, 403):

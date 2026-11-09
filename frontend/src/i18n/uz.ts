@@ -423,6 +423,12 @@ export const uz: Dictionary = {
 
   // M3.5: goal model, markets, standings
   'tournament.title': 'Turnir',
+  'busy.title': 'Maʼlumot manbasi band',
+  'busy.auto': 'Manbaga juda koʻp soʻrov yuborildi. {seconds} soniyadan keyin avtomatik qayta urinib koʻramiz.',
+  'busy.wait': 'Manba hali band. {seconds} soniyadan keyin qayta urinib koʻring.',
+  'busy.ready': 'Manba yana mavjud boʻlishi kerak — yana bir bor urinib koʻring.',
+  'busy.autoAnnounce': 'Soʻrovni avtomatik takrorlaymiz.',
+  'busy.manualAnnounce': 'Birozdan keyin qayta urinib koʻring.',
   'tournament.tabs': 'Turnir bo‘limlari',
   'tournament.tab.matches': 'O‘yinlar',
   'tournament.tab.table': 'Jadval',

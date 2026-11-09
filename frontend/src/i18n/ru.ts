@@ -421,6 +421,12 @@ export const ru = {
 
   // M3.5: goal model, markets, standings
   'tournament.title': 'Турнир',
+  'busy.title': 'Источник данных занят',
+  'busy.auto': 'Слишком много запросов к источнику. Повторим автоматически через {seconds} с.',
+  'busy.wait': 'Источник пока занят. Попробуйте еще раз через {seconds} с.',
+  'busy.ready': 'Источник снова доступен — попробуйте еще раз.',
+  'busy.autoAnnounce': 'Повторим запрос автоматически.',
+  'busy.manualAnnounce': 'Попробуйте еще раз чуть позже.',
   'tournament.tabs': 'Разделы турнира',
   'tournament.tab.matches': 'Матчи',
   'tournament.tab.table': 'Таблица',

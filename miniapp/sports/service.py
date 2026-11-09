@@ -8,16 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections import OrderedDict, deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 
 from . import football_data
 from . import top as top_matches
 from .cache import Cached, SportsCache
-from .client import UpstreamError
+from .client import LOW_PRIORITY_DAY_SHARE, LOW_PRIORITY_RESERVE, UpstreamError
 from .crests import CrestStore
 from .football_data import FootballDataAdapter, Season, Standings
 from .search import SearchIndex
@@ -33,6 +34,20 @@ PAST_SEASON_RETRY_S = 6 * 3600.0
 FUTURE_WINDOW = timedelta(days=60)
 # Day-table snapshots of the top-match ranking kept at most (one per day start and competition).
 TOP_TABLES_MAX = 2000
+# Standings warm-up: every served table is refreshed in the background before its cache entry
+# (football_data.STANDINGS_TTL_S, 30 min) expires, so a user never waits on, or fails at, the
+# provider's per-minute limit for a table. It runs only while the app is used (each signed-in
+# sports request may start a pass), one table at a time, and leaves the minute and the day to
+# users: it needs more than STANDINGS_WARM_RESERVE requests of headroom and stops once half
+# of the daily budget is spent. At most ~2 refreshes per table per hour.
+STANDINGS_REFRESH_AFTER_S = 25 * 60.0
+STANDINGS_WARM_SPACING_S = 15.0
+STANDINGS_WARM_RESERVE = 3
+STANDINGS_WARM_DAY_SHARE = 0.5
+# After a warm-up attempt fails (or leaves the old table in place), the warm-up leaves that table
+# alone this long; users' own requests keep the cache's usual rules.
+STANDINGS_WARM_RETRY_S = 10 * 60.0
+STANDINGS_WARM_NOT_FOUND_S = 6 * 3600.0
 
 
 class RequestError(Exception):
@@ -100,7 +115,8 @@ class SportsService:
     def __init__(self, football: FootballDataAdapter | None, *, cache: SportsCache | None = None,
                  clock: Callable[[], float] = time.time, unknown_lookups_per_hour: int = 20,
                  football_live_plan: bool = False, crests: CrestStore | None = None,
-                 warm_emblems: bool = True) -> None:
+                 warm_emblems: bool = True, warm_standings: bool = False,
+                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
         self.football = football
         self.crests = crests or CrestStore(clock=clock)
         self.football_live_plan = football_live_plan
@@ -121,6 +137,10 @@ class SportsService:
         self._past_failure: dict[tuple[str, int], str] = {}
         self._top_tables: OrderedDict[tuple[str, str], top_matches.Table] = OrderedDict()
         self._unknown_per_hour = unknown_lookups_per_hour
+        self._warm_standings = warm_standings
+        self._standings_task: asyncio.Task[None] | None = None
+        self._standings_warm_retry_at: dict[str, float] = {}
+        self._sleep = sleep
 
     # --- coverage ------------------------------------------------------------
 
@@ -457,6 +477,88 @@ class SportsService:
         # single ranking, so the AI gets no table evidence at all rather than a mixed one.
         return table.rows_by_team() if len(table.blocks) == 1 else {}
 
+    # --- standings warm-up ---------------------------------------------------
+
+    def ensure_standings_warm(self) -> asyncio.Task[None] | None:
+        """Starts a background pass over the tables that are missing or due (never waits for it)."""
+        if not self._warm_standings or self.football is None:
+            return self._standings_task
+        if self._standings_task is None and self._standings_due():
+            self._standings_task = asyncio.create_task(self._warm_standings_pass())
+        return self._standings_task
+
+    def _standings_due(self) -> list[str]:
+        now = self._clock()
+        due = []
+        for t in self.tournaments("football"):
+            code = t.id.removeprefix(f"{football_data.ID_PREFIX}:")
+            if now < self._standings_warm_retry_at.get(code, 0.0):
+                continue  # the warm-up's own pause after a failed attempt
+            key = f"football:standings:{code}"
+            entry = self.cache.peek(key)
+            if entry is not None and now < entry.expires_at and (
+                    entry.stale or now - entry.fetched_at < STANDINGS_REFRESH_AFTER_S):
+                continue  # in date (or a stale copy inside its retry backoff)
+            try:
+                if isinstance(self.cache.existing(key), asyncio.Future):
+                    continue  # someone is loading it right now
+            except UpstreamError:
+                continue  # a remembered failure: its backoff holds for the warm-up too
+            due.append(code)
+        return due
+
+    def _warm_budget_left(self) -> bool:
+        client = self.football.client  # type: ignore[union-attr]
+        usage = client.usage()
+        if usage["usedToday"] + 1 > math.floor(usage["dailyLimit"] * STANDINGS_WARM_DAY_SHARE):
+            return False
+        return client.minute_headroom() > STANDINGS_WARM_RESERVE
+
+    async def _warm_standings_pass(self) -> None:
+        adapter = self.football
+        assert adapter is not None
+        try:
+            first = True
+            for code in self._standings_due():
+                if not first:
+                    await self._sleep(STANDINGS_WARM_SPACING_S)
+                first = False
+                if code not in self._standings_due():
+                    continue  # loaded meanwhile (by a user)
+                if not self._warm_budget_left():
+                    logger.info("sports.standings_warm_paused code=%s", code)
+                    return
+                key = f"football:standings:{code}"
+                before = self.cache.peek(key)
+                # The load task copies this context: every attempt it makes (retries included)
+                # keeps the minute's reserve free and stops at the warm-up's share of the day.
+                reserve = LOW_PRIORITY_RESERVE.set(STANDINGS_WARM_RESERVE)
+                share = LOW_PRIORITY_DAY_SHARE.set(STANDINGS_WARM_DAY_SHARE)
+                try:
+                    future = self.cache.start(key, lambda c=code: adapter.standings(c))
+                finally:
+                    LOW_PRIORITY_DAY_SHARE.reset(share)
+                    LOW_PRIORITY_RESERVE.reset(reserve)
+                try:
+                    cached = await asyncio.shield(future)
+                except UpstreamError as exc:
+                    pause = STANDINGS_WARM_NOT_FOUND_S if exc.code == "not_found" else STANDINGS_WARM_RETRY_S
+                    self._standings_warm_retry_at[code] = self._clock() + pause
+                    logger.info("sports.standings_warm_skipped code=%s reason=%s", code, exc.code)
+                    continue
+                if cached is before or cached.stale:
+                    # The refresh failed and the cache kept what it had: not asked again soon.
+                    self._standings_warm_retry_at[code] = self._clock() + STANDINGS_WARM_RETRY_S
+                    logger.info("sports.standings_warm_skipped code=%s reason=kept", code)
+                    continue
+                self._standings_warm_retry_at.pop(code, None)
+                for block in cached.value.blocks:
+                    self._learn_crests_of([row.team for row in block.rows])
+        except Exception as exc:  # optional background work: log, the next request starts a new pass
+            logger.warning("sports.standings_warm_failed type=%s", type(exc).__name__)
+        finally:
+            self._standings_task = None
+
     async def _standings(self, tournament_id: str) -> Cached[Standings]:
         assert self.football is not None
         adapter = self.football
@@ -481,7 +583,7 @@ def _with_cache_state(event: SportEvent, stale: bool) -> SportEvent:
 
 
 def build_service(settings, *, clock: Callable[[], float] = time.time, transport=None,
-                  crest_fetch=None, warm_emblems: bool = True) -> SportsService:
+                  crest_fetch=None, warm_emblems: bool = True, warm_standings: bool = False) -> SportsService:
     """Service from Mini App settings. No key → football is reported "not_connected"."""
     from .client import ClientLimits, ProviderClient, urllib_transport
 
@@ -499,4 +601,4 @@ def build_service(settings, *, clock: Callable[[], float] = time.time, transport
     crests = CrestStore(crest_fetch, clock=clock) if crest_fetch is not None else CrestStore(clock=clock)
     return SportsService(football, clock=clock, unknown_lookups_per_hour=settings.sports_unknown_lookups_per_hour,
                          football_live_plan=settings.football_data_live_plan, crests=crests,
-                         warm_emblems=warm_emblems)
+                         warm_emblems=warm_emblems, warm_standings=warm_standings)

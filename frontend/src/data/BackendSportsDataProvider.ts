@@ -552,8 +552,11 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     }
     if (response.status === 404 && nullOn404) return null;
     if (response.status === 401) throw new DataError(op, 'unauthenticated');
-    if (response.status === 429) throw new DataError(op, 'limit_reached');
-    if (response.status === 503) throw new DataError(op, await aiReason(response));
+    if (response.status === 429) throw new DataError(op, 'limit_reached', retryAfterHeader(response));
+    if (response.status === 503) {
+      const { reason, retryAfter } = await unavailable(response);
+      throw new DataError(op, reason, retryAfter);
+    }
     // A date range the server refused (e.g. a device clock far from the server's) is its own case.
     if (response.status === 400 && (await errorCode(response)) === 'bad_range') throw new DataError(op, 'bad_range');
     if (!response.ok) throw new DataError(op, 'bad_response');
@@ -715,16 +718,36 @@ async function errorCode(response: Response): Promise<string | null> {
   }
 }
 
-async function aiReason(response: Response): Promise<string> {
+/** Longest wait accepted from the server (as the backend caps it); anything else is ignored. */
+const MAX_RETRY_AFTER_S = 3600;
+
+function retrySeconds(v: unknown): number | undefined {
+  const n = typeof v === 'string' && /^\d{1,6}$/.test(v.trim()) ? Number(v.trim()) : v;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= MAX_RETRY_AFTER_S ? n : undefined;
+}
+
+function retryAfterHeader(response: Response): number | undefined {
+  return retrySeconds(response.headers?.get?.('Retry-After') ?? undefined);
+}
+
+/**
+ * A 503: the AI's own reasons, otherwise "source_unavailable". A wait is attached only when the
+ * data source is rate limited (the body's retryAfter, else the Retry-After header).
+ */
+async function unavailable(response: Response): Promise<{ reason: string; retryAfter?: number }> {
   try {
     const body: unknown = await response.json();
     if (isObj(body) && body.error === 'ai_unavailable' && typeof body.reason === 'string' && AI_REASONS.has(body.reason)) {
-      return body.reason;
+      return { reason: body.reason };
+    }
+    if (isObj(body) && body.error === 'source_unavailable' && body.reason === 'rate_limited') {
+      const retryAfter = retrySeconds(body.retryAfter) ?? retryAfterHeader(response);
+      return retryAfter === undefined ? { reason: 'source_unavailable' } : { reason: 'source_unavailable', retryAfter };
     }
   } catch {
     // not JSON: the generic reason below
   }
-  return 'source_unavailable';
+  return { reason: 'source_unavailable' };
 }
 
 const FACTORS: Record<string, AiFactor> = {

@@ -423,6 +423,12 @@ export const es: Dictionary = {
 
   // M3.5: goal model, markets, standings
   'tournament.title': 'Torneo',
+  'busy.title': 'La fuente de datos está ocupada',
+  'busy.auto': 'Demasiadas solicitudes a la fuente. Volveremos a intentarlo automáticamente en {seconds} s.',
+  'busy.wait': 'La fuente sigue ocupada. Inténtalo de nuevo en {seconds} s.',
+  'busy.ready': 'La fuente debería estar disponible de nuevo: inténtalo otra vez.',
+  'busy.autoAnnounce': 'Volveremos a intentarlo automáticamente.',
+  'busy.manualAnnounce': 'Inténtalo de nuevo en un rato.',
   'tournament.tabs': 'Secciones del torneo',
   'tournament.tab.matches': 'Partidos',
   'tournament.tab.table': 'Clasificación',

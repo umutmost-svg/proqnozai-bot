@@ -425,6 +425,12 @@ export const az: Dictionary = {
 
   // M3.5: goal model, markets, standings
   'tournament.title': 'Turnir',
+  'busy.title': 'Məlumat mənbəyi məşğuldur',
+  'busy.auto': 'Mənbəyə çoxlu sorğu göndərilib. {seconds} san. sonra avtomatik yenidən cəhd edəcəyik.',
+  'busy.wait': 'Mənbə hələ məşğuldur. {seconds} san. sonra yenidən cəhd edin.',
+  'busy.ready': 'Mənbə yenidən əlçatandır — bir daha cəhd edin.',
+  'busy.autoAnnounce': 'Sorğunu avtomatik təkrarlayacağıq.',
+  'busy.manualAnnounce': 'Bir az sonra yenidən cəhd edin.',
   'tournament.tabs': 'Turnirin bölmələri',
   'tournament.tab.matches': 'Matçlar',
   'tournament.tab.table': 'Cədvəl',

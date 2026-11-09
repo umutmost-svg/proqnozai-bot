@@ -79,6 +79,11 @@ export class DataError extends Error {
     public readonly operation: string,
     /** Why it failed, when known: unauthenticated | source_unavailable | network | bad_response. */
     public readonly reason?: string,
+    /**
+     * Set only when the data source is busy (its request limit): whole seconds the server asks
+     * to wait before the same request can succeed (Retry-After).
+     */
+    public readonly retryAfter?: number,
   ) {
     super(`Sports data request failed: ${operation}${reason ? ` (${reason})` : ''}`);
     this.name = 'DataError';

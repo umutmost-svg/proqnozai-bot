@@ -6,7 +6,8 @@ import { Header } from '../components/Header';
 import { Logo } from '../components/Logo';
 import { areaName, initialOfName } from '../data/present';
 import { DataFootnote } from '../components/SourceNote';
-import { EmptyState, ErrorState, LoadingState } from '../components/States';
+import { SourceErrorState, useBusyRetry } from '../components/BusyRetry';
+import { EmptyState, LoadingState } from '../components/States';
 import filters from '../components/Filters.module.css';
 import type { SportEvent, Tournament, TournamentCalendar } from '../data/models';
 import { useAsync } from '../hooks/useAsync';
@@ -149,10 +150,28 @@ export function TournamentScreen() {
   const tab: TabName = params.get('tab') === 'table' ? 'table' : 'matches';
   const [tableOpened, setTableOpened] = useState(tab === 'table');
   const calendar = useAsync(() => data.getTournamentCalendar(id), `calendar:${id}`);
+  const calendarBusy = useBusyRetry(calendar, `calendar:${id}`);
   const known = data.getTournament(id);
+  // A direct link arrives before any listing: the served list (the backend's configuration, no
+  // provider request) names the tournament at once, without waiting for its calendar.
+  const named = useAsync(
+    () =>
+      known
+        ? Promise.resolve(known)
+        : // Like the calendar request: an unknown id is looked up among the football tournaments.
+          data.loadTournaments('football').then(
+            () => data.getTournament(id) ?? null,
+            () => null,
+          ),
+    `tournament-name:${id}`,
+  );
+  const listed = known ?? (named.status === 'success' ? (named.data ?? undefined) : undefined);
   const sport =
-    calendar.status === 'success' && calendar.data ? calendar.data.tournament.sport : (known?.sport ?? f.filters.sport);
-  const tournament = calendar.status === 'success' && calendar.data ? calendar.data.tournament : known;
+    calendar.status === 'success' && calendar.data ? calendar.data.tournament.sport : (listed?.sport ?? f.filters.sport);
+  const tournament = calendar.status === 'success' && calendar.data ? calendar.data.tournament : listed;
+  // The league's own name; the generic word only once it is clear no tournament has this id.
+  const lookupDone = named.status !== 'loading' && calendar.status !== 'loading';
+  const title = tournament?.name ?? (lookupDone ? t('tournament.title') : '');
   const choose = (next: TabName) => {
     if (next === 'table') setTableOpened(true);
     setParams(next === 'table' ? { tab: 'table' } : {}, { replace: true });
@@ -161,7 +180,7 @@ export function TournamentScreen() {
 
   return (
     <AppShell scrollKey={`/tournament/${id}?${tab}`} restoreReady={calendar.status !== 'loading'}>
-      <Header variant="screen" title={t('tournament.title')} backTo="/" />
+      <Header variant="screen" title={title} backTo="/" />
       {tournament && <Head tournament={tournament} season={calendar.status === 'success' ? (calendar.data?.season ?? null) : null} />}
       {(tournament || calendar.status !== 'success' || calendar.data) && (
         <div className={tabs.tabs} role="tablist" aria-label={t('tournament.tabs')} data-testid="tournament-tabs">
@@ -186,7 +205,12 @@ export function TournamentScreen() {
           <LoadingState title={t('calendar.loadingTitle')} text={t('calendar.loadingText')} />
         )}
         {calendar.status === 'error' && (
-          <ErrorState title={t('calendar.errorTitle')} text={t('calendar.errorText')} onRetry={calendar.retry} />
+          <SourceErrorState
+            busy={calendarBusy.busy}
+            title={t('calendar.errorTitle')}
+            text={t('calendar.errorText')}
+            onRetry={calendarBusy.retry}
+          />
         )}
         {calendar.status === 'success' &&
           (calendar.data ? (

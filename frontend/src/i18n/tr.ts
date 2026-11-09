@@ -423,6 +423,12 @@ export const tr: Dictionary = {
 
   // M3.5: goal model, markets, standings
   'tournament.title': 'Turnuva',
+  'busy.title': 'Veri kaynağı meşgul',
+  'busy.auto': 'Kaynağa çok fazla istek gönderildi. {seconds} sn sonra otomatik olarak yeniden deneyeceğiz.',
+  'busy.wait': 'Kaynak hâlâ meşgul. {seconds} sn sonra yeniden deneyin.',
+  'busy.ready': 'Kaynak yeniden kullanılabilir olmalı — bir kez daha deneyin.',
+  'busy.autoAnnounce': 'İsteği otomatik olarak tekrarlayacağız.',
+  'busy.manualAnnounce': 'Biraz sonra yeniden deneyin.',
   'tournament.tabs': 'Turnuva bölümleri',
   'tournament.tab.matches': 'Maçlar',
   'tournament.tab.table': 'Puan durumu',

@@ -7,6 +7,7 @@ spent only for signed-in Telegram users, and only through the shared cache.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
@@ -30,9 +31,18 @@ def _error(status: int, code: str, **extra: Any) -> JSONResponse:
     return JSONResponse({"error": code, **extra}, status_code=status)
 
 
+MAX_RETRY_AFTER_S = 3600
+
+
 def _upstream(exc: UpstreamError) -> JSONResponse:
-    headers = {"Retry-After": "60"} if exc.code in ("rate_limited", "quota_exhausted") else None
-    return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503, headers=headers)
+    body: dict[str, Any] = {"error": "source_unavailable", "reason": exc.code}
+    headers = None
+    if exc.code in ("rate_limited", "quota_exhausted"):
+        # Whole seconds, rounded up: a client that waits this long is admitted (60: unknown wait).
+        wait = 60 if exc.retry_after is None else min(max(math.ceil(exc.retry_after), 1), MAX_RETRY_AFTER_S)
+        headers = {"Retry-After": str(wait)}
+        body["retryAfter"] = wait
+    return JSONResponse(body, status_code=503, headers=headers)
 
 
 def _short(coverage: dict) -> dict:
@@ -47,7 +57,11 @@ def _short(coverage: dict) -> dict:
 def register_sports_routes(app: FastAPI, service: SportsService, current_session: SessionCheck,
                            ai_status: Callable[[], str] = lambda: "not_connected") -> None:
     async def signed_in(request: Request) -> bool:
-        return await current_session(request) is not None
+        if await current_session(request) is None:
+            return False
+        # The app is in use: keep the tables warm (a background pass, only when one is due).
+        service.ensure_standings_warm()
+        return True
 
     @app.get("/api/sports/coverage")
     async def coverage(request: Request) -> JSONResponse:

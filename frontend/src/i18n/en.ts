@@ -423,6 +423,12 @@ export const en: Dictionary = {
 
   // M3.5: goal model, markets, standings
   'tournament.title': 'Tournament',
+  'busy.title': 'The data source is busy',
+  'busy.auto': "Too many requests to the source. We'll try again automatically in {seconds} s.",
+  'busy.wait': 'The source is still busy. Try again in {seconds} s.',
+  'busy.ready': 'The source should be available again — try once more.',
+  'busy.autoAnnounce': "We'll try again automatically.",
+  'busy.manualAnnounce': 'Try again a little later.',
   'tournament.tabs': 'Tournament sections',
   'tournament.tab.matches': 'Matches',
   'tournament.tab.table': 'Table',

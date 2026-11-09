@@ -297,7 +297,9 @@ describe('tournament calendar', () => {
     const { data } = backend();
     renderApp('#/tournament/fd%3ASA', { data, settings: { lang } });
     expect(await screen.findByTestId('calendar-day-title')).toHaveTextContent(round);
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(title);
+    // The screen is titled with the league itself, never the generic word.
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Serie A');
+    expect(screen.getByRole('heading', { level: 1 })).not.toHaveTextContent(title);
   });
 
   it('demo mode: a demo tournament opens its own matches', async () => {

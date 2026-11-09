@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { Emblem } from '../components/Emblem';
-import { EmptyState, ErrorState, LoadingState } from '../components/States';
+import { SourceErrorState, useBusyRetry } from '../components/BusyRetry';
+import { EmptyState, LoadingState } from '../components/States';
 import type { StandingBlock, TournamentStandings } from '../data/models';
 import type { Translate } from '../i18n';
 import { formatDateTime } from '../i18n/format';
@@ -94,11 +95,12 @@ export function StandingsTab({ id, provider }: { id: string; provider: string | 
   const { data } = useServices();
   const { t, timeZone } = useSettings();
   const standings = useAsync(() => data.getStandings(id), `standings:${id}`);
+  const { busy, retry } = useBusyRetry(standings, `standings:${id}`);
   if (standings.status === 'loading') {
     return <LoadingState title={t('standings.loadingTitle')} text={t('standings.loadingText')} />;
   }
   if (standings.status === 'error') {
-    return <ErrorState title={t('standings.errorTitle')} text={t('standings.errorText')} onRetry={standings.retry} />;
+    return <SourceErrorState busy={busy} title={t('standings.errorTitle')} text={t('standings.errorText')} onRetry={retry} />;
   }
   const table = standings.data;
   if (!table || table.blocks.length === 0 || table.blocks.every((b) => b.rows.length === 0)) {

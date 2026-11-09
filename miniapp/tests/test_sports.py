@@ -546,8 +546,15 @@ def test_upstream_outage_is_a_503_with_a_reason(api, clock: FakeClock) -> None:
     signed_in(client, clock)
     t.default = HttpResponse(429, {"retry-after": "60"}, b"")
     r = client.get(f"/api/sports/football/events?from={DAY}T00:00:00Z&to=2027-01-16T00:00:00Z")
-    assert r.status_code == 503 and r.json() == {"error": "source_unavailable", "reason": "rate_limited"}
+    assert r.status_code == 503 and r.json() == {"error": "source_unavailable", "reason": "rate_limited",
+                                                 "retryAfter": 60}
     assert r.headers["retry-after"] == "60"
+    # Asked again 20 s later: the remembered failure says how long is really left.
+    calls = len(t.calls)
+    clock.advance(20)
+    r = client.get(f"/api/sports/football/events?from={DAY}T00:00:00Z&to=2027-01-16T00:00:00Z")
+    assert r.status_code == 503 and r.json()["retryAfter"] == 40 and r.headers["retry-after"] == "40"
+    assert len(t.calls) == calls
 
 
 def test_event_api_and_coverage(api, clock: FakeClock) -> None:

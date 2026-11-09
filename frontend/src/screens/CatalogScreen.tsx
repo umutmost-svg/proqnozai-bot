@@ -10,7 +10,8 @@ import { EventCard } from '../components/EventCard';
 import { Header } from '../components/Header';
 import { SearchField } from '../components/SearchField';
 import { SportTabs } from '../components/SportTabs';
-import { ErrorState, LoadingState } from '../components/States';
+import { SourceErrorState, useBusyRetry } from '../components/BusyRetry';
+import { LoadingState } from '../components/States';
 import { TournamentStrip } from '../components/TournamentStrip';
 import ui from '../components/ui.module.css';
 import { ALL_TOURNAMENTS } from '../data/filter';
@@ -35,6 +36,7 @@ export function CatalogScreen() {
     () => (available && !searching ? data.listEvents(query) : Promise.resolve([])),
     `events:${key}:${available}:${searching}`,
   );
+  const eventsBusy = useBusyRetry(events, `events:${key}:${available}:${searching}`);
   const tournaments = data.listTournaments(f.filters.sport);
   const tournamentName = (id: string) => data.getTournament(id)?.name;
   const filtersAreDefault = f.filters.day === null && f.filters.tournamentId === ALL_TOURNAMENTS;
@@ -92,7 +94,12 @@ export function CatalogScreen() {
       )}
 
       {events.status === 'error' && (
-        <ErrorState title={t('catalog.errorTitle')} text={t('catalog.errorText')} onRetry={events.retry} />
+        <SourceErrorState
+          busy={eventsBusy.busy}
+          title={t('catalog.errorTitle')}
+          text={t('catalog.errorText')}
+          onRetry={eventsBusy.retry}
+        />
       )}
 
       {events.status === 'success' && events.data.length === 0 && (

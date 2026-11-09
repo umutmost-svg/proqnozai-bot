@@ -423,6 +423,12 @@ export const ptBR: Dictionary = {
 
   // M3.5: goal model, markets, standings
   'tournament.title': 'Campeonato',
+  'busy.title': 'A fonte de dados está ocupada',
+  'busy.auto': 'Muitas solicitações à fonte. Tentaremos de novo automaticamente em {seconds} s.',
+  'busy.wait': 'A fonte ainda está ocupada. Tente de novo em {seconds} s.',
+  'busy.ready': 'A fonte deve estar disponível de novo — tente mais uma vez.',
+  'busy.autoAnnounce': 'Vamos tentar de novo automaticamente.',
+  'busy.manualAnnounce': 'Tente de novo daqui a pouco.',
   'tournament.tabs': 'Seções do campeonato',
   'tournament.tab.matches': 'Jogos',
   'tournament.tab.table': 'Classificação',

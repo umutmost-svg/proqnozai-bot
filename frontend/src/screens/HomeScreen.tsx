@@ -5,7 +5,8 @@ import { DateStrip } from '../components/DateStrip';
 import { Header } from '../components/Header';
 import { SearchLauncher } from '../components/SearchField';
 import { SportTabs } from '../components/SportTabs';
-import { EmptyState, ErrorState, LoadingState } from '../components/States';
+import { SourceErrorState, useBusyRetry } from '../components/BusyRetry';
+import { EmptyState, LoadingState } from '../components/States';
 import { DataFootnote } from '../components/SourceNote';
 import { NoEvents } from '../components/NoEvents';
 import { ComingSoon } from '../components/ComingSoon';
@@ -37,6 +38,7 @@ export function HomeScreen() {
     // "Postponed or cancelled" only when that is what every match of the day really is.
     return { items, any: day.length > 0, stopped: day.length > 0 && day.every((e) => STOPPED.has(e.status)) };
   }, `top:${key}:${available}`);
+  const topBusy = useBusyRetry(top, `top:${key}:${available}`);
   const openCatalog = () => navigate('/matches');
 
   return (
@@ -59,7 +61,7 @@ export function HomeScreen() {
 
       {top.status === 'loading' && <LoadingState cards={1} text={t('home.loading')} />}
       {top.status === 'error' && (
-        <ErrorState title={t('catalog.errorTitle')} text={t('catalog.errorText')} onRetry={top.retry} />
+        <SourceErrorState busy={topBusy.busy} title={t('catalog.errorTitle')} text={t('catalog.errorText')} onRetry={topBusy.retry} />
       )}
       {top.status === 'success' &&
         (top.data.items.length > 0 ? (
