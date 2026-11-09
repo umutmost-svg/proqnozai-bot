@@ -32,6 +32,8 @@ async function open(page: Page, route: string, width: number, lang: string = 'ru
   await page.goto(`/#${route}`);
   await expect(page.getByTestId('app-loading-gate')).toHaveCount(0, { timeout: 15_000 });
   await expect(page.getByTestId('loading-state')).toHaveCount(0, { timeout: 10_000 });
+  // The AI screen creates an analysis only on its explicit button: lay out the result too.
+  if (route.endsWith('/ai')) await page.getByTestId('ai-create').click();
   await expect(page.getByTestId('ai-loading')).toHaveCount(0, { timeout: 10_000 });
 }
 

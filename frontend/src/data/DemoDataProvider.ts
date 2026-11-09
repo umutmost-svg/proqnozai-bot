@@ -22,6 +22,8 @@ export class DemoDataProvider implements SportsDataProvider {
   private readonly failOnce: Set<DemoOperation>;
   private readonly latencyMs: number;
   private readonly aiLatencyMs: number;
+  /** Analyses "created" in this session (the real backend keeps them in its cache and history). */
+  private readonly created = new Map<string, AiAnalysis>();
 
   constructor(
     private readonly clock: Clock,
@@ -180,24 +182,35 @@ export class DemoDataProvider implements SportsDataProvider {
     return this.respond('events', () => this.events().find((e) => e.id === id) ?? null, this.latencyMs / 2);
   }
 
+  /** The demo keeps the real flow: nothing exists until "Create AI analysis" is tapped; then it is kept. */
+  getCachedAnalysis(eventId: string): Promise<AiAnalysis | null> {
+    return Promise.resolve(this.created.get(eventId) ?? null);
+  }
+
   requestAnalysis(eventId: string): Promise<AiAnalysis> {
     return this.respond(
       'ai',
       () => {
-        const event = this.events().find((e) => e.id === eventId);
-        if (!event) throw new DataError('ai');
-        const ai = event.ai;
-        return {
-          eventId,
-          sport: event.sport,
-          kind: ai.kind,
-          probabilities: ai.kind === 'ready' ? ai.probabilities : [],
-          reasons: ai.kind === 'insufficient' ? ai.reasons : [],
-          generatedAt: this.clock.now().toISOString(),
-        };
+        const made = this.make(eventId);
+        this.created.set(eventId, made);
+        return made;
       },
       this.aiLatencyMs,
     );
+  }
+
+  private make(eventId: string): AiAnalysis {
+    const event = this.events().find((e) => e.id === eventId);
+    if (!event) throw new DataError('ai');
+    const ai = event.ai;
+    return {
+      eventId,
+      sport: event.sport,
+      kind: ai.kind,
+      probabilities: ai.kind === 'ready' ? ai.probabilities : [],
+      reasons: ai.kind === 'insufficient' ? ai.reasons : [],
+      generatedAt: this.clock.now().toISOString(),
+    };
   }
 }
 

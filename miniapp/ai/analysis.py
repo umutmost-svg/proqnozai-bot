@@ -111,7 +111,7 @@ class AiError(Exception):
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
-        self.code = code  # not_configured | limit_reached | budget_exhausted | refused | bad_output | upstream_error | timeout | rate_limited
+        self.code = code  # not_created | not_configured | limit_reached | budget_exhausted | refused | bad_output | upstream_error | timeout | rate_limited
 
 
 @dataclass(frozen=True)
@@ -263,8 +263,12 @@ class AiService:
     def _iso(self) -> str:
         return datetime.fromtimestamp(self._clock(), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    async def analyse(self, event_id: str, user_id: int) -> AnalysisResult | None:
-        """None when the event does not exist. Raises AiError / UpstreamError."""
+    async def analyse(self, event_id: str, user_id: int, *, create: bool = True) -> AnalysisResult | None:
+        """None when the event does not exist. Raises AiError / UpstreamError.
+
+        `create=False` only reads: an answer already made (cache or stored history) or one that
+        costs nothing (insufficient data, not upcoming); otherwise AiError("not_created"). It never
+        reserves a limit and never calls the model, so opening a screen can never pay."""
         try:
             # Event lookup and evidence share one deadline; nothing is charged yet,
             # so a slow source fails here for free.
@@ -283,8 +287,6 @@ class AiService:
             # Too little history for the goal model: no probabilities at all, never a guess.
             return AnalysisResult(event.id, "insufficient", (f"model_{forecast.reason}", "no_odds_source"),
                                   basis=basis)
-        if self.client is None:
-            raise AiError("not_configured")
         figures = forecast.to_json()
         shown = forecast.display
         probabilities = {"home": shown["1"], "draw": shown["X"], "away": shown["2"]}
@@ -332,6 +334,7 @@ class AiService:
 
         async def load() -> tuple[AnalysisResult, float]:
             request = f"Facts (JSON):\n{json.dumps(facts, ensure_ascii=False, sort_keys=True)}"
+            assert client is not None  # obtain() refuses a new analysis without the model
             try:
                 # Wall-clock bound: the SDK timeout bounds network waits, not the whole call.
                 answer = await asyncio.wait_for(client.complete(SYSTEM_PROMPT, request, SCHEMA), MODEL_TIMEOUT_S)
@@ -364,9 +367,29 @@ class AiService:
             async with self._start_lock:
                 if kickoff - KICKOFF_MARGIN_S <= self._clock():  # also for cached answers
                     return AnalysisResult(event.id, "insufficient", ("not_upcoming",))
-                found = self._cache.existing(key)
+                try:
+                    found = self._cache.existing(key)
+                except UpstreamError:
+                    if create:
+                        raise
+                    # A remembered failure of a paid attempt is not an answer: reading goes on
+                    # to the stored history and otherwise says "not created".
+                    found = None
+                if not create and isinstance(found, asyncio.Future):
+                    # A creation still running is not an answer yet: reading never waits on a paid
+                    # call (nor reports its failure). A stored answer is still read below.
+                    found = None
                 if found is not None:
                     return found  # joining or reading is free
+                if not create:
+                    if self.history is not None:
+                        stored = await asyncio.to_thread(self.history.stored_answer, prefix)
+                        if stored is not None:
+                            # Rebuilt here, not through the cache: a paid load of the same key
+                            # still in flight (single flight) must never be joined by a read.
+                            restored, _ = await restore(stored)
+                            return restored
+                    raise AiError("not_created")
                 # Charged outside the shared cache: a personal refusal is never
                 # remembered as everyone's answer.
                 user = f"user:{user_id}"
@@ -379,6 +402,9 @@ class AiService:
                     stored = await asyncio.to_thread(self.history.stored_answer, prefix)
                     if stored is not None:  # evicted or restarted: rebuilt for free, never paid again
                         return self._cache.start(key, _as_upstream(lambda: restore(stored)))
+                # Only a NEW analysis needs the model: a made one (cache, history) is read without it.
+                if client is None:
+                    raise AiError("not_configured")
                 if key in self._uncounted or await self._attempts(key) >= MAX_PAID_ATTEMPTS:
                     raise AiError("upstream_error")  # this exact analysis was already paid for twice
                 # Counted durably BEFORE the call: an SDK crash or a process exit after dispatch

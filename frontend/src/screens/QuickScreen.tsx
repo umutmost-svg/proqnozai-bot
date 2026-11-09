@@ -306,7 +306,40 @@ function Counts({ answer }: { answer: QuickAnswer }) {
   );
 }
 
-function Result({ answer }: { answer: QuickAnswer }) {
+/**
+ * Where to go from an empty answer: when the next match of the period can be picked, and the
+ * user's own ways to look elsewhere (a longer period, the match calendar). Nothing is loosened.
+ */
+function NextSteps({ answer, period, onWeek }: { answer: QuickAnswer; period: QuickCriteria['period']; onWeek: () => void }) {
+  const { t, timeZone } = useSettings();
+  const navigate = useNavigate();
+  const next = answer.nextMatchAt ? new Date(answer.nextMatchAt) : null;
+  return (
+    <div className={s.nextSteps} data-testid="quick-next-steps">
+      {next && (
+        <p className={s.body} data-testid="quick-next-match">
+          {t('quick.nextMatch', {
+            date: `${formatDayMonth(t, dayKeyOf(next, timeZone))} · ${timeOf(next, timeZone)}`,
+            // The rule's day is the UTC one: said explicitly, it may differ from the local date.
+            utcDay: formatDayMonth(t, dayKeyOf(next, 'UTC')),
+          })}
+        </p>
+      )}
+      <div className={s.actions}>
+        {period !== '7d' && (
+          <button type="button" className={s.secondary} onClick={onWeek} data-testid="quick-try-week">
+            {t('quick.tryWeek')}
+          </button>
+        )}
+        <button type="button" className={s.secondary} onClick={() => navigate('/matches')} data-testid="quick-open-calendar">
+          {t('quick.openCalendar')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Result({ answer, period, onWeek }: { answer: QuickAnswer; period: QuickCriteria['period']; onWeek: () => void }) {
   const { t, timeZone } = useSettings();
   if (answer.status !== 'ok') {
     const empty = answer.counts.matches === 0;
@@ -325,6 +358,7 @@ function Result({ answer }: { answer: QuickAnswer }) {
         ) : (
           <EmptyState title={t('quick.empty.noBetTitle')} text={t('quick.empty.noBetText')} testId="quick-no-bet" />
         )}
+        {answer.status !== 'unavailable' && <NextSteps answer={answer} period={period} onWeek={onWeek} />}
         {!empty || answer.status === 'unavailable' || answer.uncheckedDays > 0 ? (
           <Counts answer={answer} />
         ) : (
@@ -482,7 +516,18 @@ export function QuickScreen() {
         <>
           {run.state.status === 'loading' && <LoadingState cards={run.criteria.mode === 'coupon' ? 2 : 1} text={t('quick.loading')} />}
           {run.state.status === 'error' && <PickError reason={run.state.reason} onRetry={() => pick(run.criteria)} />}
-          {run.state.status === 'success' && <Result answer={run.state.answer} />}
+          {run.state.status === 'success' && (
+            <Result
+              answer={run.state.answer}
+              period={run.criteria.period}
+              onWeek={() => {
+                // The user's explicit choice of a longer period (saved like any other), never automatic.
+                const week = { ...run.criteria, period: '7d' as const };
+                change(week);
+                pick(week);
+              }}
+            />
+          )}
           {run.state.status !== 'loading' && (
             <div className={s.actions}>
               <button type="button" className={s.secondary} onClick={edit} data-testid="quick-change">

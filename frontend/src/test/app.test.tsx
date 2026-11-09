@@ -170,6 +170,24 @@ describe('event navigation', () => {
 });
 
 describe('AI analysis', () => {
+  /** Opening the screen never creates an analysis: it waits for the explicit button. */
+  async function create(user = userEvent.setup()) {
+    const button = await screen.findByTestId('ai-create');
+    // The demo says it is an example: no AI request and no limits are involved.
+    expect(screen.getByTestId('ai-create-prompt')).toHaveTextContent('без запроса к AI и без лимитов');
+    await user.click(button);
+  }
+
+  it('opening the screen asks for nothing until "Create AI analysis" is tapped', async () => {
+    const user = userEvent.setup();
+    renderApp('#/event/fb-rm-fcb/ai');
+    await screen.findByTestId('ai-create');
+    expect(screen.queryByTestId('ai-result')).toBeNull();
+    expect(screen.queryByTestId('ai-loading')).toBeNull();
+    await user.click(screen.getByTestId('ai-create'));
+    expect(await screen.findByTestId('ai-result')).toBeInTheDocument();
+  });
+
   it.each([
     ['fb-rm-fcb', 'football', ['Real Madrid', 'Ничья', 'Barcelona']],
     ['tn-live', 'tennis', ['Mateo Alvarez', 'Luca Bernardi']],
@@ -177,6 +195,7 @@ describe('AI analysis', () => {
     ['mma-live', 'mma', ['Kai Moreno', 'Elias Brandt']],
   ])('shows the %s demo result for the right sport', async (id, sport, outcomes) => {
     renderApp(`#/event/${id}/ai`);
+    await create();
     const result = await screen.findByTestId('ai-result');
     expect(result).toHaveAttribute('data-sport', sport);
     for (const o of outcomes) expect(within(result).getByText(o)).toBeInTheDocument();
@@ -186,6 +205,7 @@ describe('AI analysis', () => {
 
   it('shows the waiting state first', async () => {
     renderApp('#/event/fb-rm-fcb/ai', { aiLatencyMs: 50 });
+    await create();
     expect(await screen.findByTestId('ai-loading')).toHaveTextContent('Готовим разбор');
     await screen.findByTestId('ai-result');
   });
@@ -193,6 +213,7 @@ describe('AI analysis', () => {
   it('shows insufficient data without inventing probabilities', async () => {
     const user = userEvent.setup();
     renderApp('#/event/tn-wta-upcoming/ai');
+    await create(user);
     const block = await screen.findByTestId('ai-insufficient');
     expect(within(block).getByText('Нет свежей статистики')).toBeInTheDocument();
     expect(screen.queryByText(/%$/)).not.toBeInTheDocument();
@@ -203,6 +224,7 @@ describe('AI analysis', () => {
   it('recovers from an error with retry', async () => {
     const user = userEvent.setup();
     renderApp('#/event/mma-live/ai', { failOnce: ['ai'] });
+    await create(user);
     expect(await screen.findByTestId('ai-error')).toHaveTextContent('Разбор не создан');
     await user.click(screen.getByRole('button', { name: 'Повторить' }));
     expect(await screen.findByTestId('ai-result')).toHaveAttribute('data-sport', 'mma');

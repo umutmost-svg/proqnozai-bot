@@ -52,6 +52,11 @@ export interface SportsDataProvider {
   getStandings(id: string): Promise<TournamentStandings | null>;
   /** `lang`: language of the written analysis (the interface language). */
   requestAnalysis(eventId: string): Promise<AiAnalysis>;
+  /**
+   * An analysis already made (or one that costs nothing), never a new paid one: null when it
+   * has not been created yet. Opening the AI screen uses only this.
+   */
+  getCachedAnalysis(eventId: string): Promise<AiAnalysis | null>;
   /** The AI analysis can be requested for real events (always true for the demo). */
   aiAvailable(): boolean;
   /** The sport has a data source here (real mode: football only; the demo shows every sport). */

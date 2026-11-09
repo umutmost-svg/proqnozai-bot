@@ -611,5 +611,11 @@ export const es: Dictionary = {
   'quick.tournamentsError': 'No se cargó la lista de torneos.',
   'quick.clockTitle': 'El reloj del dispositivo no coincide con el servidor',
   'quick.clockText': 'Revisa la fecha y la hora del teléfono (mejor en automático) y vuelve a intentarlo.',
+  'ai.createTitle': 'El análisis de IA aún no se ha creado',
+  'ai.createText': 'El análisis se crea solo al pulsar el botón y usa tu límite diario de IA. Una vez hecho, se vuelve a abrir sin una nueva solicitud.',
+  'ai.createTextDemo': 'Este es el modo demo: el análisis es un ejemplo con datos de demostración, sin solicitud a la IA ni límites.',
+  'quick.nextMatch': 'El próximo partido del periodo elegido es el {date}. Solo puede considerarse para una selección el día del partido en UTC, el {utcDay}, y solo si un resultado supera las reglas del modelo.',
+  'quick.tryWeek': 'Próximos 7 días',
+  'quick.openCalendar': 'Calendario de partidos',
   'quick.demoText': 'En modo demo no se calculan las probabilidades del modelo.',
 };

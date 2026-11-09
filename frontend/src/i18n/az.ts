@@ -613,5 +613,11 @@ export const az: Dictionary = {
   'quick.tournamentsError': 'Turnir siyahısı yüklənmədi.',
   'quick.clockTitle': 'Cihazın saatı serverlə uyğun gəlmir',
   'quick.clockText': 'Telefonda tarix və vaxtı yoxlayın (avtomatik vaxt daha yaxşıdır) və yenidən seçin.',
+  'ai.createTitle': 'AI-təhlil hələ yaradılmayıb',
+  'ai.createText': 'Təhlil yalnız düyməyə basanda yaradılır və gündəlik AI limitinizdən istifadə edir. Hazır təhlil sonra yeni sorğusuz açılır.',
+  'ai.createTextDemo': 'Bu demo rejimidir: təhlil demo məlumatlarda nümunədir, AI sorğusu və limit yoxdur.',
+  'quick.nextMatch': 'Seçilmiş dövrdə ən yaxın matç — {date}. Onu seçim üçün yalnız UTC üzrə matç günü — {utcDay} nəzərdən keçirmək olar və yalnız nəticə model qaydalarından keçərsə.',
+  'quick.tryWeek': 'Yaxın 7 gün',
+  'quick.openCalendar': 'Matç təqvimi',
   'quick.demoText': 'Demo rejimində model ehtimalları hesablanmır.',
 };

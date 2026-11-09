@@ -5,6 +5,7 @@ import type { QuickCriteria, SportEvent } from '../data/models';
 import { DEFAULT_CRITERIA, quickRange, readCriteria } from '../data/quick';
 import { monotonic, resetQuickMemory } from '../screens/QuickScreen';
 import { renderApp } from './renderApp';
+import { FORECAST_V3 } from './fixtures/forecastV3';
 
 const ATTR = 'Football data provided by the Football-Data.org API';
 const COVERAGE = { status: 'connected', provider: 'football-data.org', attribution: ATTR, liveScores: 'delayed' };
@@ -53,6 +54,7 @@ const answer = (over: Record<string, unknown> = {}) => ({
   reasons: { early_forecast: 4 },
   unavailableTournaments: [],
   uncheckedDays: 0,
+  nextMatchAt: null,
   experimental: true,
   modelVersion: 'goals-1',
   computedAt: '2026-11-08T06:00:00Z',
@@ -83,6 +85,8 @@ describe('quick prediction answer is read strictly', () => {
     ['"no pick" with suitable matches', answer({ status: 'no_bet', legs: [], suitable: 3 })],
     ['"not enough" for a single', answer({ status: 'not_enough', legs: [], suitable: 0 })],
     ['"unavailable" with enough suitable matches', answer({ status: 'unavailable', legs: [], suitable: 1 })],
+    ['an impossible calendar date', answer({ computedAt: '2026-02-30T06:00:00Z' })],
+    ['an impossible time with an offset', answer({ legs: [{ ...leg(1, 'A', 'B'), event: ev(1, 'A', 'B', { startsAt: '2026-11-08T25:00:00+04:00' }) }] })],
     ['a computed-at time without a zone', answer({ computedAt: '2026-11-08T06:00:00' })],
     ['a kickoff without a zone', answer({ legs: [{ ...leg(1, 'A', 'B'), event: ev(1, 'A', 'B', { startsAt: '2026-11-08T15:00:00' }) }] })],
     ['a leg on another UTC day than the pick', answer({ legs: [{ ...leg(1, 'A', 'B'), event: ev(1, 'A', 'B', { startsAt: '2026-11-09T15:00:00Z' }) }] })],
@@ -273,6 +277,124 @@ describe('quick prediction transport', () => {
   });
 });
 
+describe('AI screen in real mode', () => {
+  function aiBackend(cached: unknown | null, ai: 'connected' | 'not_connected' = 'connected') {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+      if (url.startsWith('/api/ai/analysis')) {
+        const id = method === 'GET' ? new URL(url, 'http://x').searchParams.get('event_id') : JSON.parse(String(init?.body)).event_id;
+        calls.push(`${method} ${id}`);
+        if (method === 'GET') return cached ? ok(cached) : ok({ error: 'ai_not_created' }, 404);
+        return ok({ error: 'ai_unavailable', reason: 'limit_reached' }, 429);
+      }
+      const event = /^\/api\/sports\/event\/fd%3A(\d+)$/.exec(url) ?? /^\/api\/sports\/event\/fd:(\d+)$/.exec(url);
+      if (event) return ok({ event: ev(Number(event[1]), `Home${event[1]} FC`, `Away${event[1]} FC`), tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: ai } });
+      return ok({ sport: 'football', coverage: COVERAGE, tournaments: TOURNAMENTS, top: [], events: [], ai: { status: ai } });
+    });
+    return { data: new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl, getCsrfToken: () => 'csrf' }), calls };
+  }
+
+  it('opening the screen only reads; the paid request goes out on the explicit button only', async () => {
+    const user = userEvent.setup();
+    const { data, calls } = aiBackend(null);
+    renderApp('#/event/fd%3A1/ai', { data });
+    expect(await screen.findByTestId('ai-create')).toHaveTextContent('Создать AI-разбор');
+    expect(screen.getByTestId('ai-create-prompt')).toHaveTextContent('расходует ваш дневной лимит AI');
+    expect(calls).toEqual(['GET fd:1']);
+    await user.click(screen.getByTestId('ai-create'));
+    await screen.findByTestId('ai-error');
+    expect(calls).toEqual(['GET fd:1', 'POST fd:1']);
+  });
+
+  it('"check again" after a free "insufficient" answer only reads; creating needs the button again', async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    const insufficient = { schema: 'v3', eventId: 'fd:1', kind: 'insufficient', reasons: ['no_verified_form', 'no_odds_source'],
+      generatedAt: null, model: null, probabilities: null, factors: [], basis: null, estimated: false, pick: null, forecast: null, alternatives: [] };
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+      if (url.startsWith('/api/ai/analysis')) {
+        calls.push(init?.method ?? 'GET');
+        return (init?.method ?? 'GET') === 'GET' ? ok({ error: 'ai_not_created' }, 404) : ok(insufficient);
+      }
+      if (url.startsWith('/api/sports/event/')) return ok({ event: ev(1, 'A FC', 'B FC'), tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'connected' } });
+      return ok({ sport: 'football', coverage: COVERAGE, tournaments: TOURNAMENTS, ai: { status: 'connected' } });
+    });
+    const data = new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl, getCsrfToken: () => 'csrf' });
+    renderApp('#/event/fd%3A1/ai', { data });
+    await user.click(await screen.findByTestId('ai-create'));
+    await screen.findByTestId('ai-insufficient');
+    expect(calls).toEqual(['GET', 'POST']);
+    await user.click(screen.getByRole('button', { name: 'Проверить еще раз' }));
+    expect(await screen.findByTestId('ai-create')).toBeInTheDocument();
+    expect(calls).toEqual(['GET', 'POST', 'GET']);
+  });
+
+  it('a slow (cold) read is waited for, not cut at the ordinary listing timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
+        if (url.startsWith('/api/ai/analysis')) {
+          return new Promise<Response>((resolve) => setTimeout(() => resolve(new Response('{"error":"ai_not_created"}', { status: 404 })), 25_000));
+        }
+        return new Response(JSON.stringify({ event: ev(1, 'A FC', 'B FC'), tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'connected' } }), { status: 200 });
+      });
+      const data = new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl });
+      const pending = data.getCachedAnalysis('fd:1');
+      await vi.advanceTimersByTimeAsync(25_000);
+      await expect(pending).resolves.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a tap for one match never creates another match’s analysis', async () => {
+    const user = userEvent.setup();
+    const { data, calls } = aiBackend(null);
+    renderApp('#/event/fd%3A1/ai', { data });
+    await user.click(await screen.findByTestId('ai-create'));
+    await screen.findByTestId('ai-error');
+    window.location.hash = '#/event/fd%3A2/ai'; // another match, same app
+    await waitFor(() => expect(calls).toContain('GET fd:2'));
+    expect(await screen.findByTestId('ai-create')).toBeInTheDocument();
+    window.location.hash = '#/event/fd%3A1/ai'; // and back: reading again, not creating again
+    await waitFor(() => expect(calls.filter((c) => c === 'GET fd:1')).toHaveLength(2));
+    expect(await screen.findByTestId('ai-create')).toBeInTheDocument();
+    expect(calls.filter((c) => c.startsWith('POST'))).toEqual(['POST fd:1']);
+  });
+
+  it('an analysis made earlier is shown even while the AI is not connected, with no request to create', async () => {
+    const made = {
+      schema: 'v3', eventId: 'fd:1', kind: 'partial', reasons: ['no_odds_source'], generatedAt: '2026-11-08T05:00:00Z', model: 'm',
+      probabilities: { home: FORECAST_V3.markets['1'], draw: FORECAST_V3.markets.X, away: FORECAST_V3.markets['2'] },
+      factors: ['home_form', 'away_form'], estimated: true,
+      basis: {
+        home: { name: 'Home1 FC', matches: 5, form: 'WWDWL', wins: 3, draws: 1, losses: 1, points: 10, goalsFor: 8, goalsAgainst: 5, tablePosition: null, tablePoints: null },
+        away: { name: 'Away1 FC', matches: 5, form: 'LDLWL', wins: 1, draws: 1, losses: 3, points: 4, goalsFor: 4, goalsAgainst: 9, tablePosition: null, tablePoints: null },
+      },
+      pick: { market: 'NO_BET', reasons: [], probability: null }, alternatives: [],
+      forecast: { ...FORECAST_V3, noBetReason: 'no_qualifying_market' },
+    };
+    const { data, calls } = aiBackend(made, 'not_connected');
+    renderApp('#/event/fd%3A1/ai', { data });
+    expect(await screen.findByTestId('ai-result')).toBeInTheDocument();
+    expect(calls).toEqual(['GET fd:1']);
+    expect(screen.queryByTestId('ai-create')).toBeNull();
+  });
+
+  it('with the AI not connected and nothing made, the screen says it is unavailable', async () => {
+    const { data, calls } = aiBackend(null, 'not_connected');
+    renderApp('#/event/fd%3A1/ai', { data });
+    await waitFor(() => expect(calls).toEqual(['GET fd:1']));
+    expect(screen.queryByTestId('ai-create')).toBeNull();
+  });
+});
+
 describe('quick prediction errors', () => {
   beforeEach(() => {
     resetQuickMemory();
@@ -311,6 +433,41 @@ describe('quick prediction errors', () => {
     await user.click(screen.getByTestId('quick-submit'));
     await screen.findByTestId('quick-result');
     expect(new URL(urls.find((u) => u.startsWith('/api/quick/pick'))!, 'http://x').searchParams.get('tournaments')).toBe('fd:PD');
+  });
+
+  it('with nothing to pick it says when the next match is and offers other dates, nothing loosened', async () => {
+    const user = userEvent.setup();
+    const periods: string[] = [];
+    const { data } = backend((url) => {
+      periods.push(String((Date.parse(url.searchParams.get('to')!) - Date.parse(url.searchParams.get('from')!)) / 3600e3));
+      return answer({ status: 'no_bet', legs: [], suitable: 0, counts: { matches: 2, forecasts: 0 }, reasons: { early_forecast: 2 }, nextMatchAt: '2026-11-10T21:30:00Z' });
+    });
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByRole('button', { name: 'Ближайшие 3 дня' }));
+    await user.click(screen.getByTestId('quick-submit'));
+    // Local and UTC days differ here: 01:30 on 11 November in Baku is still 10 November in UTC.
+    expect(await screen.findByTestId('quick-next-match')).toHaveTextContent('Ближайший матч в выбранном периоде — 11 ноября · 01:30');
+    expect(screen.getByTestId('quick-next-match')).toHaveTextContent('только в день матча по UTC — 10 ноября, и только если исход пройдёт правила модели');
+    await user.click(screen.getByTestId('quick-try-week'));
+    await waitFor(() => expect(periods.at(-1)).toBe('168'));
+    expect(await screen.findByTestId('quick-next-steps')).toBeInTheDocument();
+    expect(screen.queryByTestId('quick-try-week')).toBeNull(); // already the longest period
+    expect(JSON.parse(window.localStorage.getItem('proqnozai.quick.v1')!).period).toBe('7d');
+    await user.click(screen.getByTestId('quick-open-calendar'));
+    await waitFor(() => expect(window.location.hash).toBe('#/matches'));
+  });
+
+  it('a next-match time outside the asked period is a broken answer', () => {
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-12T20:00:00Z' }), SINGLE, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-31T15:00:00Z' }), SINGLE, RANGE, asEvent)).toBeNull();
+    // An offset form of a valid instant is fine.
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-09T19:00:00+04:00' }), SINGLE, RANGE, asEvent)).not.toBeNull();
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-09T15:00:00Z' }), SINGLE, RANGE, asEvent)).not.toBeNull();
+  });
+
+  it('a next-match time on the pick’s own UTC day is a broken answer', () => {
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-08T20:00:00Z' }), SINGLE, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-09T20:00:00' }), SINGLE, RANGE, asEvent)).toBeNull();
   });
 
   it('a failed competition list says so and offers a retry', async () => {

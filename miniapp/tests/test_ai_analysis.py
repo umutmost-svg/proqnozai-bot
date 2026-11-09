@@ -853,3 +853,139 @@ def test_a_quota_refusal_does_not_use_up_an_attempt(tmp_path, clock: FakeClock) 
     import sqlite3
     with sqlite3.connect(history.path) as conn:
         assert conn.execute("SELECT COALESCE(SUM(attempts), 0) FROM ai_paid_attempts").fetchone()[0] == 0
+
+
+# --- read-only lookup: showing the AI screen never pays ----------------------------------------------
+
+def test_reading_never_calls_the_model_or_reserves_a_limit(clock: FakeClock) -> None:
+    ledger, model = MemoryLedger(), FakeModel()
+    ai, _ = make_ai(clock, model, ledger=ledger)
+    with pytest.raises(AiError) as exc:
+        run(ai.analyse("fd:7", user_id=1, create=False))
+    assert exc.value.code == "not_created" and model.calls == [] and not ledger.used
+    made = run(ai.analyse("fd:7", user_id=1))  # the explicit "create" pays once
+    read = run(ai.analyse("fd:7", user_id=2, create=False))
+    assert read == made and len(model.calls) == 1
+    assert (ai._today(), "user:2") not in ledger.used
+
+
+def test_reading_restores_a_stored_answer_after_a_restart_for_free(tmp_path, clock: FakeClock) -> None:
+    history = ForecastHistory(tmp_path / "h.db", clock)
+    history.init_schema()
+    model = FakeModel()
+    ai, _ = make_ai(clock, model, history=history, forecaster=FakeForecaster(fake_forecast("1X")))
+    made = run(ai.analyse("fd:7", user_id=1))
+    ledger = MemoryLedger()
+    restarted, _ = make_ai(clock, model, history=history, ledger=ledger, forecaster=FakeForecaster(fake_forecast("1X")))
+    read = run(restarted.analyse("fd:7", user_id=1, create=False))
+    assert read.pick == made.pick and read.factors == made.factors and len(model.calls) == 1 and not ledger.used
+
+
+def test_reading_returns_free_answers_without_creating(clock: FakeClock) -> None:
+    model = FakeModel()
+    ai, _ = make_ai(clock, model, status="FINISHED")
+    assert run(ai.analyse("fd:7", user_id=1, create=False)).reasons == ("not_upcoming",)
+    ai, _ = make_ai(clock, model, chelsea_games=2)
+    assert run(ai.analyse("fd:7", user_id=1, create=False)).kind == "insufficient" and model.calls == []
+
+
+def test_get_endpoint_reads_only_and_needs_a_session(api, clock: FakeClock) -> None:
+    client, t, model = api
+    url = "/api/ai/analysis?event_id=fd:7"
+    assert client.get(url).status_code == 401
+    csrf = login(client, fresh(clock)).json()["session"]["csrf_token"]
+    for bad in ("/api/ai/analysis", url + "&x=1", url + "&event_id=fd:8", "/api/ai/analysis?event_id=" + "9" * 41):
+        assert client.get(bad).status_code == 400, bad
+    t.script = [t.ok(match(7)), t.ok(arsenal_form()), t.ok(chelsea_form()), t.ok(standings())]
+    r = client.get(url)
+    assert r.status_code == 404 and r.json() == {"error": "ai_not_created"} and model.calls == []
+    assert post(client, {"event_id": "fd:7"}, csrf).status_code == 200 and len(model.calls) == 1
+    again = client.get(url)
+    assert again.status_code == 200 and again.json()["kind"] == "partial" and len(model.calls) == 1
+
+
+def test_a_made_analysis_is_read_even_without_the_model(tmp_path, clock: FakeClock) -> None:
+    history = ForecastHistory(tmp_path / "h.db", clock)
+    history.init_schema()
+    model = FakeModel()
+    ai, _ = make_ai(clock, model, history=history, forecaster=FakeForecaster(fake_forecast("1X")))
+    made = run(ai.analyse("fd:7", user_id=1))
+    # The key is gone (outage): stored answers are still read, for free, by both paths.
+    offline, _ = make_ai(clock, None, history=history, forecaster=FakeForecaster(fake_forecast("1X")))
+    assert run(offline.analyse("fd:7", user_id=1, create=False)).pick == made.pick
+    offline2, _ = make_ai(clock, None, history=history, forecaster=FakeForecaster(fake_forecast("1X")))
+    assert run(offline2.analyse("fd:7", user_id=1)).pick == made.pick and len(model.calls) == 1
+    # Nothing made: reading says "not created", creating says "not configured".
+    empty, _ = make_ai(clock, None)
+    with pytest.raises(AiError) as exc:
+        run(empty.analyse("fd:7", user_id=1, create=False))
+    assert exc.value.code == "not_created"
+
+
+def test_a_remembered_paid_failure_reads_as_not_created(clock: FakeClock) -> None:
+    class Failing(FakeModel):
+        async def complete(self, system, user, schema):
+            self.calls.append((system, user, schema))
+            raise AiError("timeout")
+
+    model = Failing()
+    ai, _ = make_ai(clock, model)
+    with pytest.raises(Exception):
+        run(ai.analyse("fd:7", user_id=1))
+    with pytest.raises(AiError) as exc:  # within the failure backoff: still only "not created"
+        run(ai.analyse("fd:7", user_id=1, create=False))
+    assert exc.value.code == "not_created" and len(model.calls) == 1
+
+
+def test_reading_never_waits_on_a_creation_in_progress(clock: FakeClock) -> None:
+    class Slow(FakeModel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.gate = asyncio.Event()
+
+        async def complete(self, system, user, schema):
+            await self.gate.wait()
+            return await super().complete(system, user, schema)
+
+    model = Slow()
+    ai, _ = make_ai(clock, model)
+
+    async def scenario():
+        creating = asyncio.create_task(ai.analyse("fd:7", user_id=1))
+        for _ in range(50):  # until the paid load is running
+            await asyncio.sleep(0)
+            if model.calls or any(isinstance(v, asyncio.Future) for v in ai._cache._inflight.values()):
+                break
+        with pytest.raises(AiError) as exc:
+            await asyncio.wait_for(ai.analyse("fd:7", user_id=2, create=False), 1)
+        assert exc.value.code == "not_created"
+        model.gate.set()
+        made = await creating
+        assert await ai.analyse("fd:7", user_id=2, create=False) == made
+
+    run(scenario())
+
+
+def test_a_stored_answer_is_read_directly_even_while_a_paid_load_of_its_key_runs(tmp_path, clock: FakeClock) -> None:
+    history = ForecastHistory(tmp_path / "h.db", clock)
+    history.init_schema()
+    model = FakeModel()
+    ai, _ = make_ai(clock, model, history=history, forecaster=FakeForecaster(fake_forecast("1X")))
+    made = run(ai.analyse("fd:7", user_id=1))
+    ai._cache._entries.clear()
+
+    async def scenario():
+        never = asyncio.get_running_loop().create_future()  # a paid load of the same key, unfinished
+        # The cache reports that unfinished load for the AI key, and would hand it to anyone starting one.
+        original = ai._cache.existing
+
+        def existing(k):
+            return never if k.startswith("ai:") else original(k)
+
+        ai._cache.existing = existing  # type: ignore[method-assign]
+        ai._cache.start = lambda *a, **kw: never  # type: ignore[method-assign]
+        read = await asyncio.wait_for(ai.analyse("fd:7", user_id=2, create=False), 1)
+        assert read.pick == made.pick and read.factors == made.factors
+
+    run(scenario())
+    assert len(model.calls) == 1

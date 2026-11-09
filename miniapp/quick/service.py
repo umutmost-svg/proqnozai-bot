@@ -69,6 +69,9 @@ class QuickAnswer:
     unavailable: tuple[str, ...]  # tournaments whose data could not be loaded now
     unchecked_days: int  # days of the period whose listing could not be loaded now
     computed_at: str
+    # Kickoff of the earliest match of the period not on today's UTC day (it can be picked only
+    # on its own match day): tells the user when to come back. None when there is none.
+    next_match_at: str | None = None
 
     def to_json(self) -> dict:
         combined = self.result.combined
@@ -85,6 +88,7 @@ class QuickAnswer:
             "reasons": dict(sorted(self.reasons.items())),
             "unavailableTournaments": list(self.unavailable),
             "uncheckedDays": self.unchecked_days,
+            "nextMatchAt": self.next_match_at,
             "experimental": FROZEN.experimental,
             "modelVersion": MODEL_VERSION,
             "computedAt": self.computed_at,
@@ -154,18 +158,19 @@ class QuickService:
         try:
             token = LOW_PRIORITY_RESERVE.set(self.reserve)
             try:
-                return await self._pick(max(start, now_dt), end, tournaments, criteria)
+                return await self._pick(max(start, now_dt), end, tournaments, criteria, now_dt.date())
             finally:
                 LOW_PRIORITY_RESERVE.reset(token)
         finally:
             self._running.discard(user_id)
 
     async def _pick(self, start: datetime, end: datetime, tournaments: frozenset[str] | None,
-                    criteria: Criteria) -> QuickAnswer:
+                    criteria: Criteria, today: date) -> QuickAnswer:
+        """`today`: the UTC day of the single clock reading that started the pick; a later day
+        change makes the answer "unavailable" (checked at the end)."""
         def affordable(cost: int) -> bool:
             return cost == 0 or cost <= self.sports.upstream_headroom() - self.reserve
 
-        today = datetime.fromtimestamp(self._clock(), UTC).date()
         days = _utc_days(start, end)
         events: dict[str, FootballEvent] = {}
         unchecked = 0
@@ -237,7 +242,11 @@ class QuickService:
             options.append(Option(event.id, event.starts_at, (event.home.id, event.away.id), outcome))
             if outcome.selection.no_bet_reason is not None:
                 reasons[outcome.selection.no_bet_reason] += 1
-        later = sum(1 for e in events.values() if parse_instant(e.starts_at).date() != today)
+        later_events = [e for e in events.values() if parse_instant(e.starts_at).date() > today]
+        later = len(later_events)
+        # "The next match" only when every day of the period was checked: an unchecked earlier day
+        # could hold a nearer one.
+        next_match_at = None if unchecked else min((e.starts_at for e in later_events), default=None)
         if later:
             reasons[NO_BET_EARLY] += later
         missing = sum(1 for e in todays if e.tournament_id in unavailable)
@@ -251,10 +260,14 @@ class QuickService:
         partial = missing or today_failed or (unchecked and not events)
         if result.status != "ok" and partial:
             result = QuickResult(STATUS_UNAVAILABLE, (), result.suitable, None)
+        if datetime.fromtimestamp(now, UTC).date() != today:
+            # The UTC day changed while the data loaded: "today's" picks and "later" matches were
+            # judged against the previous day. Never a mixed answer; asked again it is consistent.
+            result, next_match_at = QuickResult(STATUS_UNAVAILABLE, (), 0, None), None
         matches = sum(1 for e in events.values() if parse_instant(e.starts_at).timestamp() > now)
         return QuickAnswer(criteria, result, {e.id: e for e in usable}, matches, forecasts, reasons,
                            tuple(unavailable), unchecked,
-                           datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
+                           datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), next_match_at)
 
     def _forecast_all(self, events: list[FootballEvent], histories: dict[str, ModelHistory | None]):
         return [self.forecaster.compute(e, histories[e.tournament_id]) for e in events]

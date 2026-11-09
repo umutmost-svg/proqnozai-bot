@@ -611,5 +611,11 @@ export const ptBR: Dictionary = {
   'quick.tournamentsError': 'A lista de campeonatos não carregou.',
   'quick.clockTitle': 'O relógio do aparelho difere do servidor',
   'quick.clockText': 'Verifique a data e a hora do celular (o automático é melhor) e tente de novo.',
+  'ai.createTitle': 'A análise de IA ainda não foi criada',
+  'ai.createText': 'A análise é criada só quando você toca no botão e usa seu limite diário de IA. Depois de pronta, abre de novo sem uma nova solicitação.',
+  'ai.createTextDemo': 'Este é o modo demo: a análise é um exemplo com dados de demonstração, sem solicitação à IA e sem limites.',
+  'quick.nextMatch': 'O próximo jogo do período escolhido é em {date}. Ele só pode ser considerado para seleção no dia do jogo em UTC, {utcDay}, e só se um resultado passar pelas regras do modelo.',
+  'quick.tryWeek': 'Próximos 7 dias',
+  'quick.openCalendar': 'Calendário de jogos',
   'quick.demoText': 'No modo demo, as probabilidades do modelo não são calculadas.',
 };

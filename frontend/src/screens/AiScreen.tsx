@@ -180,7 +180,14 @@ export function AiScreen() {
   const navigate = useNavigate();
   const goBack = useGoBack(`/event/${id}`);
   const event = useAsync(() => data.getEvent(id), `ai-event:${id}`);
-  const analysis = useAsync(() => data.requestAnalysis(id), `ai:${id}`);
+  // Opening the screen only READS (an analysis already made, or one that costs nothing); a new
+  // paid analysis starts only from the explicit "Create AI analysis" button below.
+  // Tied to the match it was tapped for: moving to another match's AI screen never carries it over.
+  const [createFor, setCreateFor] = useState<string | null>(null);
+  const create = createFor === id;
+  const read = useAsync(() => data.getCachedAnalysis(id), `ai-read:${id}`);
+  const made = useAsync(() => (create ? data.requestAnalysis(id) : Promise.resolve(null)), `ai:${id}:${create}`);
+  const analysis = create ? made : read;
 
   let body;
   if (event.status === 'success' && !event.data) {
@@ -224,7 +231,22 @@ export function AiScreen() {
     body = data.isDemo ? <Waiting onBack={goBack} /> : <LoadingState cards={2} />;
   } else if (event.status === 'loading') {
     body = <LoadingState cards={2} />;
-  } else if (event.data) {
+  } else if (event.data && analysis.data === null) {
+    body = (
+      <>
+        <section className={ui.section} data-testid="ai-create-prompt">
+          <h2 className={ui.pageHeading}>{t('ai.createTitle')}</h2>
+          <p className={ui.body}>{t(data.isDemo ? 'ai.createTextDemo' : 'ai.createText')}</p>
+        </section>
+        <button type="button" className={ui.primary} onClick={() => setCreateFor(id)} data-testid="ai-create">
+          {t('event.createAi')}
+        </button>
+        <button type="button" className={ui.secondary} onClick={goBack}>
+          {t('ai.backToMatch')}
+        </button>
+      </>
+    );
+  } else if (event.data && analysis.data) {
     body =
       analysis.data.kind === 'unavailable' ? (
         <Unavailable onBack={goBack} />
@@ -234,7 +256,11 @@ export function AiScreen() {
         <Insufficient
           analysis={analysis.data}
           onStats={() => navigate(`/event/${id}?tab=stats`, { replace: true })}
-          onRetry={analysis.retry}
+          // "Check again" only reads: a new paid analysis needs the create button again.
+          onRetry={() => {
+            setCreateFor(null);
+            read.retry();
+          }}
         />
       );
   }

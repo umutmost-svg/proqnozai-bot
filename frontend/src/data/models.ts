@@ -405,6 +405,8 @@ export interface QuickAnswer {
   unavailableTournaments: readonly string[];
   /** Days of the period whose matches could not be loaded now. */
   uncheckedDays: number;
+  /** Kickoff of the earliest match of the period after today's UTC day (picked only on its day). */
+  nextMatchAt: string | null;
   experimental: boolean;
   computedAt: string;
 }

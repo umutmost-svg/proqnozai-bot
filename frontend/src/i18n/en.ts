@@ -611,5 +611,11 @@ export const en: Dictionary = {
   'quick.tournamentsError': 'The competition list did not load.',
   'quick.clockTitle': 'Your device clock differs from the server',
   'quick.clockText': 'Check the date and time on your phone (automatic time is best) and try again.',
+  'ai.createTitle': 'The AI analysis has not been created yet',
+  'ai.createText': 'An analysis is created only when you tap the button and uses your daily AI limit. Once made, it opens again without a new request.',
+  'ai.createTextDemo': 'This is demo mode: the analysis is an example on demo data, with no AI request and no limits.',
+  'quick.nextMatch': 'The next match in the chosen period is on {date}. It can be considered for a pick only on its UTC match day, {utcDay}, and only if an outcome passes the model’s rules.',
+  'quick.tryWeek': 'Next 7 days',
+  'quick.openCalendar': 'Match calendar',
   'quick.demoText': 'In demo mode the model’s probabilities are not calculated.',
 };

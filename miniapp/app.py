@@ -518,6 +518,29 @@ def create_app(
                            ai_status=lambda: "connected" if ai.connected else "not_connected")
     register_quick_routes(app, QuickService(sports, clock=clock), current_session)
 
+    @app.get("/api/ai/analysis")
+    async def ai_analysis_cached(request: Request) -> JSONResponse:
+        # Read-only: an analysis already made (or one that costs nothing). Never reserves a
+        # limit and never calls the model, so showing the AI screen can never pay.
+        active = await current_session(request)
+        if active is None:
+            raise ApiError(401, "unauthenticated")
+        params = request.query_params
+        event_id = params.get("event_id")
+        if set(params) != {"event_id"} or not event_id or len(event_id) > 40 or len(params.getlist("event_id")) > 1:
+            raise ApiError(400, "bad_request")
+        try:
+            result = await ai.analyse(event_id, active[1].user_id, create=False)
+        except (AiError, UpstreamError) as exc:
+            if exc.code == "not_created":
+                return JSONResponse({"error": "ai_not_created"}, status_code=404)
+            if exc.code in AI_ERROR_CODES:
+                return JSONResponse({"error": "ai_unavailable", "reason": exc.code}, status_code=503)
+            return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503)
+        if result is None:
+            raise ApiError(404, "not_found")
+        return JSONResponse(result.to_json())
+
     @app.post("/api/ai/analysis")
     async def ai_analysis(request: Request) -> JSONResponse:
         # Costs money: same gate as other state-changing calls (Origin, session, CSRF).

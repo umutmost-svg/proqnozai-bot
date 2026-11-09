@@ -179,6 +179,7 @@ def test_service_counts_honestly_and_reports_unavailable_sources() -> None:
     # The later match is never forecast (no history for it): it cannot be recommended yet.
     assert body["reasons"] == {NO_BET_EARLY: 1, "no_qualifying_market": 1, "source_unavailable": 1}
     assert body["unavailableTournaments"] == ["fd:PD"] and body["experimental"] is True and body["uncheckedDays"] == 0
+    assert body["nextMatchAt"] == "2027-01-17T15:00:00Z"  # the later match: picked only on its own day
     leg = body["legs"][0]
     assert leg["probability"] == by_id["fd:1"].display["1"] and leg["leagueRate"] == 45
     # One listing per UTC day, today first, from now (not from midnight).
@@ -194,6 +195,7 @@ def test_provider_budget_is_planned_and_missing_data_is_retryable_not_no_bet() -
     body = pick(svc, "2027-01-22T08:00:00Z")
     assert len(sports.history_calls) == 1 and body["unavailableTournaments"] in (["fd:PD"], ["fd:PL"])
     assert body["uncheckedDays"] == 6 and len(sports.ranges) == 2
+    assert body["nextMatchAt"] is None  # days unchecked: no claim about "the next match"
     svc, sports = service(events, by_id, day_cost=6)  # not even today's listing fits
     body = pick(svc, "2027-01-16T00:00:00Z")
     assert body["status"] == "unavailable" and body["uncheckedDays"] == 1 and sports.ranges == []
@@ -262,6 +264,27 @@ def test_coupon_answer_gives_bounds_of_the_shown_percents() -> None:
     body = pick(svc, "2027-01-16T00:00:00Z", Criteria("coupon", "any", "balanced", 2))
     # Exact 0.64 each: [floor(28), ceil(64)] — computed from the model's numbers, rounded outward.
     assert body["combined"] == [28, 64]
+
+
+def test_a_pick_crossing_utc_midnight_is_never_a_mixed_answer() -> None:
+    before = at(f"{DAY}T23:59:59Z").timestamp()
+    after = at("2027-01-16T00:00:05Z").timestamp()
+    times = iter([before, before])  # the pick's start and its admission; the end is past midnight
+    events = [ev(1, utc=f"{DAY}T23:59:59Z"), ev(2, utc="2027-01-16T15:00:00Z", home=(1, "A FC"), away=(2, "B FC"))]
+    svc, _ = service(events, {"fd:1": forecast(("1", 0.64, 0.45))}, clock=lambda: next(times, after))
+    body = asyncio.run(svc.pick(1, at(f"{DAY}T23:59:00Z"), at("2027-01-17T00:00:00Z"), None, SINGLE)).to_json()
+    assert body["status"] == "unavailable" and body["legs"] == [] and body["nextMatchAt"] is None
+    assert body["computedAt"].startswith("2027-01-16")
+
+
+def test_midnight_right_after_the_first_clock_reading_is_caught_too() -> None:
+    before = at(f"{DAY}T23:59:59Z").timestamp()
+    after = at("2027-01-16T00:00:01Z").timestamp()
+    times = iter([before])  # the one reading that starts the pick; every later one is past midnight
+    events = [ev(1, utc="2027-01-16T15:00:00Z")]
+    svc, _ = service(events, {"fd:1": forecast(("1", 0.64, 0.45))}, clock=lambda: next(times, after))
+    body = asyncio.run(svc.pick(1, at(f"{DAY}T23:59:00Z"), at("2027-01-17T00:00:00Z"), None, SINGLE)).to_json()
+    assert body["status"] == "unavailable" and body["nextMatchAt"] is None and body["legs"] == []
 
 
 def test_a_stale_listing_is_never_a_pick_nor_no_matches() -> None:
@@ -352,4 +375,14 @@ def test_route_requires_a_session_and_strict_parameters(tmp_path) -> None:
     t.script = [t.ok({"matches": [match(1, "FINISHED", full=(1, 0))]})]
     body = client.get(url).json()
     assert body["status"] == STATUS_NO_BET and body["counts"] == {"matches": 0, "forecasts": 0}
-    assert len(t.calls) == 1 and KEY not in str(body)
+    assert body["nextMatchAt"] is None and len(t.calls) == 1 and KEY not in str(body)
+
+
+def test_no_next_match_claim_while_some_days_are_unchecked() -> None:
+    events = [ev(3, utc="2027-01-16T15:00:00Z", home=(1, "A FC"), away=(2, "B FC"))]
+    # Room for today's and one more listing only: later days stay unchecked.
+    svc, sports = service(events, {}, day_cost=1, headroom=5)
+    body = pick(svc, "2027-01-22T08:00:00Z")
+    assert len(sports.ranges) == 2 and body["uncheckedDays"] == 6 and body["nextMatchAt"] is None
+    svc, _ = service(events, {})
+    assert pick(svc, "2027-01-22T08:00:00Z")["nextMatchAt"] == "2027-01-16T15:00:00Z"

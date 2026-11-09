@@ -56,6 +56,8 @@ export const DATA_TIMEOUT_MS = 10_000;
 export const AI_TIMEOUT_MS = 120_000;
 /** Matches the backend's own table cache order of magnitude; tab switches never refetch. */
 export const STANDINGS_CACHE_MS = 5 * 60_000;
+/** Reading an AI analysis: the backend may gather its free evidence for up to 20 s first. */
+export const AI_READ_TIMEOUT_MS = 30_000;
 /** Quick prediction: up to ~10 provider requests (≤ 10 s each at worst) plus the model. */
 export const QUICK_TIMEOUT_MS = 60_000;
 
@@ -479,6 +481,21 @@ export class BackendSportsDataProvider implements SportsDataProvider {
       this.aiTimeoutMs,
     );
     if (!body) throw new DataError('ai', 'not_found');
+    const analysis = readAnalysis(body, eventId, event.sport);
+    if (!analysis) throw new DataError('ai', 'bad_response');
+    return analysis;
+  }
+
+  async getCachedAnalysis(eventId: string): Promise<AiAnalysis | null> {
+    const event = await this.getEvent(eventId);
+    if (!event) throw new DataError('ai', 'not_found');
+    // Read-only on the backend: no limit reserved, no model called; 404 = not created yet. Asked
+    // even when the AI is not connected: an analysis made earlier is still shown then.
+    // Longer than the backend's free evidence deadline (20 s): a cold but successful read is never cut.
+    const body = await this.request('ai', `/ai/analysis?${new URLSearchParams({ event_id: eventId }).toString()}`, { method: 'GET' }, true, AI_READ_TIMEOUT_MS);
+    if (!body) {
+      return this.aiAvailable() ? null : { eventId, sport: event.sport, kind: 'unavailable', probabilities: [], reasons: [], generatedAt: null };
+    }
     const analysis = readAnalysis(body, eventId, event.sport);
     if (!analysis) throw new DataError('ai', 'bad_response');
     return analysis;
@@ -1041,7 +1058,23 @@ const TOP_STATUSES: ReadonlySet<EventStatus> = new Set(['upcoming', 'live', 'fin
 const QUICK_STATUSES: ReadonlySet<QuickAnswer['status']> = new Set(['ok', 'no_bet', 'not_enough', 'unavailable']);
 const REASON_SET: ReadonlySet<string> = new Set(QUICK_REASONS);
 /** An ISO instant with an explicit zone (Z or ±hh:mm): never read in the device's own zone. */
-const ZONED_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+const ZONED_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(:\d{2}(\.\d+)?)?(Z|([+-])(\d{2}):(\d{2}))$/;
+/**
+ * An ISO instant with an explicit zone (Z or ±hh:mm) and a real calendar date and time: Date
+ * would silently turn "02-30" into 2 March, so the parsed instant must read back as written.
+ */
+const ZONED_INSTANT = {
+  test(v: string): boolean {
+    const m = ZONED_RE.exec(v);
+    if (!m) return false;
+    const ms = Date.parse(v);
+    if (Number.isNaN(ms)) return false;
+    const offset = m[4] === 'Z' ? 0 : (m[5] === '-' ? -1 : 1) * (Number(m[6]) * 60 + Number(m[7]));
+    const seconds = m[2] ? Number(m[2].slice(1, 3)) : 0;
+    if (seconds > 59) return false;
+    return new Date(ms + offset * 60_000).toISOString().slice(0, 16) === m[1];
+  },
+};
 /** Whole-percent floors of the risk levels (backend: 0.70 / 0.60 / P_MIN 0.55, rounded half up). */
 const RISK_FLOOR: Record<QuickCriteria['risk'], number> = { conservative: 70, balanced: 60, elevated: 55 };
 /** How far a shown whole percent may be from the exact probability (sums of rounded 1X2 values). */
@@ -1128,6 +1161,9 @@ export function readQuick(
   if (!MODEL_CONFIRMED && !b.experimental) return null;
   const uncheckedDays = int(b.uncheckedDays);
   if (uncheckedDays === null) return null;
+  // The next match the rules may pick later: a zoned instant after the pick's own UTC day.
+  const nextMatchAt = b.nextMatchAt === null ? null : str(b.nextMatchAt);
+  if (b.nextMatchAt !== null && (!nextMatchAt || !ZONED_INSTANT.test(nextMatchAt))) return null;
   const computedAt = str(b.computedAt);
   if (!computedAt || !ZONED_INSTANT.test(computedAt) || Number.isNaN(Date.parse(computedAt))) return null;
   const reasons: Partial<Record<QuickReason, number>> = {};
@@ -1157,6 +1193,10 @@ export function readQuick(
   // Shape must match the status: a result has exactly the asked number of different matches.
   if (status === 'ok' ? ok.length !== size : ok.length !== 0) return null;
   if (new Set(ok.map((l) => l.event.id)).size !== ok.length) return null;
+  const utcDay = (iso: string) => new Date(iso).toISOString().slice(0, 10);
+  if (nextMatchAt && (Number.isNaN(Date.parse(nextMatchAt)) || utcDay(nextMatchAt) <= utcDay(computedAt))) return null;
+  // ...and inside the period that was asked for.
+  if (nextMatchAt && (Date.parse(nextMatchAt) < range.from.getTime() - CLOCK_SLACK_MS || Date.parse(nextMatchAt) >= range.to.getTime())) return null;
   const teams = ok.flatMap((l) => [l.event.home.id, l.event.away.id]);
   if (new Set(teams).size !== teams.length) return null;
   let combined: [number, number] | null = null;
@@ -1192,6 +1232,7 @@ export function readQuick(
     reasons,
     unavailableTournaments: unavailable,
     uncheckedDays,
+    nextMatchAt,
     experimental: b.experimental,
     computedAt,
   };

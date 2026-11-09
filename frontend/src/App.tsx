@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useAuthBootstrap } from './auth/useAuth';
 import { useGoBack } from './hooks/useGoBack';
 import { AppLoadingGate } from './loading/AppLoadingGate';
@@ -48,13 +48,19 @@ function TelegramBridge() {
   return null;
 }
 
+/** One AI screen per match: a "create" tapped for one match never survives into another's screen. */
+function AiForEvent() {
+  const { id = '' } = useParams();
+  return <AiScreen key={id} />;
+}
+
 export function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<HomeScreen />} />
       <Route path="/matches" element={<CatalogScreen />} />
       <Route path="/event/:id" element={<EventScreen />} />
-      <Route path="/event/:id/ai" element={<AiScreen />} />
+      <Route path="/event/:id/ai" element={<AiForEvent />} />
       <Route path="/tournament/:id" element={<TournamentScreen />} />
       <Route path="/team/:id" element={<TeamScreen />} />
       <Route path="/quick" element={<QuickScreen />} />

@@ -77,6 +77,7 @@ const json = (route: Route, body: unknown, status = 200) =>
 /** Installs a fake Telegram client and answers /api from `data`; returns the list of /api paths asked. */
 export async function mockApi(page: Page, data: Fixtures, lang = 'ru'): Promise<string[]> {
   const asked: string[] = [];
+  const created = new Set<string>();
   await page.route('https://telegram.org/**', (r) => r.abort());
   await page.addInitScript((l) => {
     localStorage.setItem('sporai.settings.v1', JSON.stringify({ lang: l, timeZone: 'auto', reduceMotion: true, haptics: true }));
@@ -95,8 +96,17 @@ export async function mockApi(page: Page, data: Fixtures, lang = 'ru'): Promise<
     if (path === '/api/me') return json(route, { error: 'unauthenticated' }, 401);
     if (path === '/api/auth/session') return json(route, session);
     if (path === '/api/me/language') return json(route, { ok: true });
+    if (req.method() === 'GET' && path === '/api/ai/analysis') {
+      // Read-only, like the backend: an answer that costs nothing (insufficient) is given at once,
+      // a real analysis only after it was created (the screen's explicit button).
+      const id = url.searchParams.get('event_id') ?? '';
+      const made = data[`POST /api/ai/analysis ${id}`] as { kind?: string } | undefined;
+      if (made && (made.kind === 'insufficient' || created.has(id))) return json(route, made);
+      return json(route, { error: 'ai_not_created' }, 404);
+    }
     if (req.method() === 'POST' && path === '/api/ai/analysis') {
       const id = (req.postDataJSON() as { event_id: string }).event_id;
+      if (data[`POST /api/ai/analysis ${id}`]) created.add(id);
       return json(route, data[`POST /api/ai/analysis ${id}`] ?? { error: 'not_found' }, data[`POST /api/ai/analysis ${id}`] ? 200 : 404);
     }
     if (path.startsWith('/api/crests/')) return route.fulfill({ status: 404, body: '' });
@@ -186,6 +196,8 @@ function quickAnswer(data: Fixtures, q: URLSearchParams) {
     suitable: fit.length, combined: ok && mode === 'coupon' ? bounds(fit.slice(0, size).map((l) => l.probability)) : null,
     counts: { matches: 4, forecasts: 3 }, reasons: { early_forecast: 1, ...(fit.length < 3 ? { no_qualifying_market: 3 - fit.length } : {}) },
     unavailableTournaments: [], uncheckedDays: 0,
+    // The next-day match only when the asked period reaches it.
+    nextMatchAt: Date.parse(q.get('to')!) > Date.parse('2099-11-22T14:00:00Z') ? '2099-11-22T14:00:00Z' : null,
     experimental: true, modelVersion: 'goals-1', computedAt: '2099-11-21T06:00:00Z',
   };
 }

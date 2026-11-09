@@ -221,8 +221,9 @@ export function EventScreen() {
             <>
               <Overview event={event} />
               {aiEnabled && (
+                // Opens the AI screen, which only reads; creating is its own explicit button there.
                 <button type="button" className={ui.primary} onClick={openAi}>
-                  {t('event.createAi')}
+                  {t('home.openAi')}
                 </button>
               )}
               {/* Favourites ship in M4. */}

@@ -46,6 +46,8 @@ for (const width of [360, 390, 430]) {
     await open(page, '/event/fb-rm-fcb', width);
     await page.getByRole('tab', { name: 'AI-разбор' }).click().catch(() => {});
     await page.goto('/#/event/fb-rm-fcb/ai');
+    // Opening the screen creates nothing: the analysis starts from the explicit button.
+    await page.getByTestId('ai-create').click();
     await expect(page.getByTestId('ai-result')).toBeVisible({ timeout: 10_000 });
     await page.goBack();
     await page.goForward();

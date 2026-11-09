@@ -161,7 +161,8 @@ describe('real mode', () => {
     );
     const data = new BackendSportsDataProvider({ waitForSession: async () => true, getCsrfToken: () => 'c', fetchImpl });
     renderApp('#/event/fd%3A4', { data });
-    await user.click(await screen.findByRole('button', { name: 'Создать AI-разбор' }));
+    // The card only opens the AI screen; this mock answers the read with a made analysis.
+    await user.click(await screen.findByRole('button', { name: 'Открыть AI-разбор' }));
     const result = await screen.findByTestId('ai-result');
     expect(screen.getByTestId('ai-probabilities-title')).toHaveTextContent('Оценка вероятностей');
     expect(result).toHaveTextContent('52%');
@@ -200,7 +201,7 @@ describe('real mode', () => {
     );
     const data = new BackendSportsDataProvider({ waitForSession: async () => true, getCsrfToken: () => 'c', fetchImpl });
     renderApp('#/event/fd%3A8', { data });
-    await user.click(await screen.findByRole('button', { name: 'Создать AI-разбор' }));
+    await user.click(await screen.findByRole('button', { name: 'Открыть AI-разбор' }));
     const factors = await screen.findByTestId('ai-factors');
     expect(factors).toHaveTextContent('у Arsenal: 4 победы');
     expect(factors).toHaveTextContent('у Fulham FC: 4 победы');
@@ -234,7 +235,7 @@ describe('real mode', () => {
     });
     renderApp('#/event/fd%3A5', { data });
     await screen.findByTestId('event-hero');
-    expect(screen.queryByRole('button', { name: 'Создать AI-разбор' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /AI-разбор/ })).toBeNull();
     expect(screen.queryByRole('tab', { name: 'AI-разбор' })).toBeNull();
   });
 
@@ -323,7 +324,7 @@ describe('real mode', () => {
     renderApp('#/event/fd%3A2', { data });
     await screen.findByTestId('event-hero');
     expect(screen.queryByRole('tab', { name: 'AI-разбор' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Создать AI-разбор' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /AI-разбор/ })).toBeNull();
   });
 
   it('"updated" shows the provider\'s own update time when it gives one', async () => {

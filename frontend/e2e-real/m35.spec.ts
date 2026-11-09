@@ -64,6 +64,7 @@ for (const width of [360, 390, 430]) {
     await page.locator(`[data-testid="event-card"]`).first().click();
     await expect(page).toHaveURL(/#\/event\//);
     await page.goto(`/#/event/${enc(MATCH)}/ai`);
+    await page.getByTestId('ai-create').click();
     await expect(page.getByTestId('ai-markets')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('ai-pick-caveat')).toBeVisible();
     await noHorizontalScroll(page, width);
@@ -104,6 +105,7 @@ test('after kickoff no analysis is shown', async ({ page }) => {
 for (const lang of LANGS) {
   test(`AI analysis and table in ${lang}`, async ({ page }) => {
     await open(page, `/event/${enc(MATCH)}/ai`, 390, lang);
+    await page.getByTestId('ai-create').click();
     await expect(page.getByTestId('ai-markets')).toBeVisible({ timeout: 15_000 });
     const text = (await page.locator('body').textContent()) ?? '';
     expect(text).not.toMatch(/\bai\.(pick|family|markets|stats|sources|alt|limits)\./);
@@ -121,6 +123,7 @@ for (const width of [360, 430]) {
   test(`screenshots at ${width}px`, async ({ page }) => {
     test.skip(!SHOTS, 'screenshots only on request');
     await open(page, `/event/${enc(MATCH)}/ai`, width);
+    await page.getByTestId('ai-create').click();
     await expect(page.getByTestId('ai-markets')).toBeVisible({ timeout: 15_000 });
     await shot(page, `ai-ru-${width}`);
     await page.goto('/#/tournament/fd%3APL?tab=table');
