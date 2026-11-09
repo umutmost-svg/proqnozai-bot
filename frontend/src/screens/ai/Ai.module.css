@@ -397,3 +397,69 @@
   line-height: 16px;
   overflow-wrap: anywhere;
 }
+
+/* --- the model against the market ------------------------------------------------------- */
+.priceLine {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.priceLine[data-positive] {
+  color: var(--tone-favourite);
+}
+
+.valueHead,
+.valueRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px 8px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.valueHead {
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 600;
+  color: var(--text-muted-3);
+}
+
+.valueRows {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.valueRow {
+  padding: 8px 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.valueRow + .valueRow {
+  border-top: 1px solid var(--glass-30);
+}
+
+.valueName {
+  grid-column: 1 / -1;
+  text-align: left;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.valueRow[data-positive] .valueEv {
+  color: var(--tone-favourite);
+  font-weight: 700;
+}
+
+.cellOdds {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted-3);
+}

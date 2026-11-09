@@ -77,6 +77,9 @@ Odds Checker API (доступ по IP whitelist).
 | `FOOTBALL_KEY` | football-data.org — форма команд текущих сезонов (предпочтительное имя) | Нет |
 | `FOOTBALL_API_KEY` | Legacy-алиас `FOOTBALL_KEY`, читается как fallback | Нет |
 | `APIFOOTBALL_KEY` | api-football.com (api-sports.io) — live-статусы, события, H2H | Нет |
+| `MINIAPP_ODDS_URL` | Адрес приёмника коэффициентов Mini App (`https://…/api/internal/odds`); пусто — выгрузка выключена | Нет |
+| `MINIAPP_ODDS_FEED_SECRET` | HMAC-секрет выгрузки (≥ 32 символов, тот же, что у Mini App) | Нет (нужен вместе с URL) |
+| `MINIAPP_ODDS_MAX_LINES` | Линий с коэффициентами за 5-минутный цикл, 1–40 (по умолчанию 40; первое включение — 5–10) | Нет |
 | `PROMO_CHANNEL` | Канал для гейта промокодов (`@name`/`-100…`); бот должен быть его админом. Пусто → кнопка скрыта | Нет |
 | `PROMO_CHANNEL_URL` | Публичная ссылка для кнопки «Открыть канал» (иначе выводится из `@name`) | Нет |
 | `PARTNERS` | **Только bootstrap.** Импортируется один раз в пустую таблицу `partners`, дальше игнорируется — партнёрами управляют в дашборде (`/partners`). Формат: `Название \| https://url` через `;` | Нет |
@@ -120,6 +123,12 @@ Mini App (`miniapp/`, `frontend/`) читает только свои перем
 `MINIAPP_FOOTBALL_DATA_LIVE_PLAN`, `MINIAPP_FOOTBALL_DATA_PER_MINUTE`,
 `MINIAPP_FOOTBALL_DATA_PER_DAY`, `MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR`
 (`PER_MINUTE` — 1..10 на бесплатном тарифе, до 120 только с `LIVE_PLAN=true`).
+
+Коэффициенты (подписанная выгрузка от бота, `docs/miniapp/odds.md`):
+`MINIAPP_ODDS_FEED_SECRET` (секрет HMAC, ≥ 32 символов; пусто — приём
+выключен, коэффициенты нигде не показываются), `MINIAPP_ODDS_FEED_ENABLED`
+(аварийный выключатель: `false` — выгрузки получают 410, бот перестаёт
+запрашивать коэффициенты, в Mini App их нет).
 AI-разбор Mini App (M3.2): `MINIAPP_ANTHROPIC_API_KEY` (секрет, только
 backend; без него AI — «не подключён»), `MINIAPP_AI_MODEL`,
 `MINIAPP_AI_PER_USER_DAILY`, `MINIAPP_AI_DAILY_BUDGET`.

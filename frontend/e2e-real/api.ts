@@ -41,11 +41,19 @@ function synthetic(): Fixtures {
     fetchedAt: '2026-11-08T06:00:00Z', stale: false, ai: { status: 'connected' } };
   const table = (tournament: typeof PL, blocks: unknown[]) => ({ sport: 'football', coverage: COVERAGE, tournament, season: SEASON,
     blocks, fetchedAt: '2026-11-08T06:00:00Z', stale: false });
+  // Prices as the backend computes them (rounded to 0.1): with them the analysis is complete.
+  const r1 = (x: number) => Math.round(x * 10) / 10;
+  const quote = (market: keyof typeof M, odds: number, marketP: number) => ({ market, odds, impliedProbability: r1(100 / odds),
+    marketProbability: marketP, modelProbability: M[market], edge: r1(M[market] - marketP),
+    expectedValue: r1((M[market] / 100) * odds * 100 - 100), margin: 4.8 });
+  const market = { fetchedAt: '2099-11-21T05:58:00Z', validFor: 840, quotes: [quote('1', 4.2, 22.6), quote('X', 3.9, 24.3), quote('2', 1.85, 53.1),
+    quote('1X', 2.1, 46.9), quote('X2', 1.3, 77.4), quote('12', 1.32, 75.7), quote('O2.5', 1.8, 53), quote('U2.5', 2.05, 47),
+    quote('BTTS_Y', 1.75, 54.6), quote('BTTS_N', 2.1, 45.4)] };
   const analysis = {
-    schema: 'v3', eventId: 'fd:4', kind: 'partial', reasons: ['no_odds_source'], generatedAt: '2026-11-08T06:00:00Z', model: 'm',
+    schema: 'v3', eventId: 'fd:4', kind: 'ready', reasons: [], market, generatedAt: '2026-11-08T06:00:00Z', model: 'm',
     probabilities: { home: M['1'], draw: M.X, away: M['2'] }, factors: ['away_rating', 'away_form', 'home_advantage'],
     basis: { home: basisTeam('Crystal Palace FC', 'LLLWD', 3, 10, 19, 7), away: basisTeam('Liverpool FC', 'WWDWW', 11, 3, 2, 25) },
-    estimated: true, pick: { market: 'X2', reasons: ['away_stronger_rating', 'away_better_form'], probability: M.X2 },
+    estimated: false, pick: { market: 'X2', reasons: ['away_stronger_rating', 'away_better_form'], probability: M.X2 },
     alternatives: [{ market: 'H2+1.5', probability: M['H2+1.5'] }], forecast: FORECAST_V3,
   };
   return {
@@ -188,7 +196,7 @@ function quickAnswer(data: Fixtures, q: URLSearchParams) {
   const fit = QUICK_LEGS.filter((l) => (market === 'any' || l.family === market) && l.probability >= floor
     && (!only || only.includes(l.event.tournamentId))).map((l) => ({
     ...l, leagueRate: 46, expectedGoals: { home: 1.21, away: 1.64 }, sample: 230, teamMatches: { home: 22, away: 23 },
-    dataUntil: '2026-11-06T20:00:00Z',
+    dataUntil: '2026-11-06T20:00:00Z', price: null,
   }));
   const ok = fit.length >= size;
   return {
@@ -198,7 +206,7 @@ function quickAnswer(data: Fixtures, q: URLSearchParams) {
     unavailableTournaments: [], uncheckedDays: 0,
     // The next-day match only when the asked period reaches it.
     nextMatchAt: Date.parse(q.get('to')!) > Date.parse('2099-11-22T14:00:00Z') ? '2099-11-22T14:00:00Z' : null,
-    experimental: true, modelVersion: 'goals-1', computedAt: '2099-11-21T06:00:00Z',
+    couponOdds: null, experimental: true, modelVersion: 'goals-1', computedAt: '2099-11-21T06:00:00Z',
   };
 }
 

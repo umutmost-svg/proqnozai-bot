@@ -333,6 +333,41 @@ export interface AiAnalysis {
   forecast?: ModelForecast;
   /** v3: up to three other markets that passed the selection rules. */
   alternatives?: readonly MarketChance[];
+  /** Current prices of this match against the model; absent without a fresh matched line. */
+  market?: MarketPrices;
+}
+
+/**
+ * One market's current price against the model, computed by the backend (percents):
+ * implied 100/odds, the market probability with the margin removed, the model's, their
+ * difference (edge, in points), the expected value of a unit stake and the group's margin.
+ */
+export interface MarketQuote {
+  market: MarketKey;
+  odds: number;
+  impliedProbability: number;
+  marketProbability: number;
+  modelProbability: number;
+  edge: number;
+  expectedValue: number;
+  margin: number;
+}
+
+/**
+ * When shown prices must disappear: fixed when the answer arrived from the server's "valid for"
+ * seconds, on the monotonic clock (immune to device-clock changes) and on the device clock
+ * (covers a monotonic clock that slept); whichever passes first.
+ */
+export interface PriceDeadline {
+  mono: number;
+  wall: number;
+}
+
+export interface MarketPrices {
+  /** When the prices were taken. */
+  fetchedAt: string;
+  expires: PriceDeadline;
+  quotes: readonly MarketQuote[];
 }
 
 /** One of the day's top matches (ranked by the backend from source facts only). */
@@ -385,6 +420,8 @@ export interface QuickLeg {
   sample: number;
   teamMatches: { home: number; away: number };
   dataUntil: string;
+  /** This market's current price against the model; null without a fresh matched line. */
+  price: (MarketQuote & { fetchedAt: string; expires: PriceDeadline }) | null;
 }
 
 export interface QuickAnswer {
@@ -407,6 +444,11 @@ export interface QuickAnswer {
   uncheckedDays: number;
   /** Kickoff of the earliest match of the period after today's UTC day (picked only on its day). */
   nextMatchAt: string | null;
+  /**
+   * Coupon: the product of the legs' current prices, only when every leg has one. A figure
+   * computed from separate quotes, not a price offered for the combination.
+   */
+  couponOdds: { odds: number; fetchedAt: string; expires: PriceDeadline } | null;
   experimental: boolean;
   computedAt: string;
 }

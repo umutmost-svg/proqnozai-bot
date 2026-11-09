@@ -87,8 +87,9 @@ describe('recommended bet', () => {
     expect(pick).toHaveTextContent('Liverpool — 52%, Ничья — 24%: вместе 76%.');
     expect(pick).toHaveTextContent('У Liverpool 13 очков в последних матчах, у Crystal Palace — 4 очка.');
     expect(pick).toHaveTextContent('Liverpool выше в таблице: 2-е место против 19-го у Crystal Palace.');
-    expect(pick).toHaveTextContent('Это модельная оценка, а не гарантия результата. Без букмекерских коэффициентов выгодность ставки определить нельзя.');
-    const order = ['ai-result', 'ai-pick', 'ai-factors', 'ai-basis', 'ai-limitations'].map((id) => screen.getByTestId(id));
+    expect(pick).not.toHaveTextContent(/гаранти|коэффициент/);
+    expect(screen.queryByTestId('ai-limitations')).toBeNull();
+    const order = ['ai-result', 'ai-pick', 'ai-factors', 'ai-basis'].map((id) => screen.getByTestId(id));
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }

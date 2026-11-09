@@ -67,8 +67,8 @@ for (const width of [360, 390, 430]) {
     const result = page.getByTestId('quick-result');
     await expect(result).toBeVisible({ timeout: 15_000 });
     await expect(result.getByTestId('quick-leg')).toHaveCount(1);
-    await expect(result.getByTestId('quick-caveat')).toBeVisible();
-    await expect(result.getByTestId('quick-experimental')).toBeVisible();
+    await expect(result.getByTestId('quick-caveat')).toHaveCount(0);
+    await expect(result.getByTestId('quick-experimental')).toHaveCount(0);
     await noHorizontalScroll(page, width);
     await shot(page, `quick-single-ru-${width}`);
 
@@ -77,7 +77,7 @@ for (const width of [360, 390, 430]) {
     await page.getByTestId('quick-size').getByRole('button', { name: '3' }).click();
     await page.getByTestId('quick-submit').click();
     await expect(result.getByTestId('quick-leg')).toHaveCount(3, { timeout: 15_000 });
-    await expect(result.getByTestId('quick-combined')).toContainText('Вероятности не перемножаются');
+    await expect(result.getByTestId('quick-combined')).toContainText('диапазон верен при любой связи');
     if (!REAL) await expect(page.getByTestId('quick-counts')).toContainText('Не в день матча по UTC: 1');
     await noHorizontalScroll(page, width);
     await shot(page, `quick-coupon-ru-${width}`);

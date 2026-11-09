@@ -4,6 +4,9 @@ import { MODEL_CONFIRMED, quickRange } from './quick';
 import { TOURNAMENTS as DEMO_TOURNAMENTS } from './fixtures';
 import type {
   AiAnalysis,
+  MarketPrices,
+  PriceDeadline,
+  MarketQuote,
   AiFactor,
   QuickAnswer,
   QuickCriteria,
@@ -294,9 +297,10 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     const op = 'quick';
     // The backend's work is bounded (a few provider requests, each with its own timeout, then
     // the model): a longer wait than an ordinary listing, never an endless one.
+    const sent = clocksNow();
     const body = await this.request(op, `/quick/pick?${params.toString()}`, { method: 'GET' }, false, QUICK_TIMEOUT_MS);
     const coverage = this.coverage('football');
-    const answer = body ? readQuick(body, criteria, { from, to }, (raw) => this.readEvent(raw, { ...coverage, delayed: false })) : null;
+    const answer = body ? readQuick(body, criteria, { from, to }, (raw) => this.readEvent(raw, { ...coverage, delayed: false }), sent) : null;
     if (!answer) throw new DataError(op, 'bad_response');
     return answer;
   }
@@ -469,6 +473,7 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     }
     const csrf = this.options.getCsrfToken?.() ?? null;
     if (!csrf) throw new DataError('ai', 'unauthenticated');
+    const sent = clocksNow();
     const body = await this.request(
       'ai',
       '/ai/analysis',
@@ -481,7 +486,7 @@ export class BackendSportsDataProvider implements SportsDataProvider {
       this.aiTimeoutMs,
     );
     if (!body) throw new DataError('ai', 'not_found');
-    const analysis = readAnalysis(body, eventId, event.sport);
+    const analysis = readAnalysis(body, eventId, event.sport, sent);
     if (!analysis) throw new DataError('ai', 'bad_response');
     return analysis;
   }
@@ -492,11 +497,12 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     // Read-only on the backend: no limit reserved, no model called; 404 = not created yet. Asked
     // even when the AI is not connected: an analysis made earlier is still shown then.
     // Longer than the backend's free evidence deadline (20 s): a cold but successful read is never cut.
+    const sent = clocksNow();
     const body = await this.request('ai', `/ai/analysis?${new URLSearchParams({ event_id: eventId }).toString()}`, { method: 'GET' }, true, AI_READ_TIMEOUT_MS);
     if (!body) {
       return this.aiAvailable() ? null : { eventId, sport: event.sport, kind: 'unavailable', probabilities: [], reasons: [], generatedAt: null };
     }
-    const analysis = readAnalysis(body, eventId, event.sport);
+    const analysis = readAnalysis(body, eventId, event.sport, sent);
     if (!analysis) throw new DataError('ai', 'bad_response');
     return analysis;
   }
@@ -842,10 +848,10 @@ function readPick(v: unknown, [home, draw, away]: number[]): AiPick | null {
   return { market, reasons: reasons as PickReason[], probability: expected };
 }
 
-function readAnalysis(b: Json, eventId: string, sport: Sport): AiAnalysis | null {
+function readAnalysis(b: Json, eventId: string, sport: Sport, sent: PriceDeadline = clocksNow()): AiAnalysis | null {
   if (b.eventId !== eventId || !Array.isArray(b.reasons)) return null;
   // v3 (M3.5) answers carry the goal model; answers without a schema are the older v2 shape.
-  if (b.schema === 'v3') return readAnalysisV3(b, eventId, sport);
+  if (b.schema === 'v3') return readAnalysisV3(b, eventId, sport, sent);
   if (b.schema !== undefined) return null;
   const reasons = b.reasons.map((r) => (typeof r === 'string' ? REASONS[r] : undefined));
   if (reasons.some((r) => r === undefined)) return null;
@@ -981,7 +987,67 @@ const TABLE_FACTORS: Record<string, 'home' | 'away'> = { homeTable: 'home', away
  * the recommended market's percent, the alternatives'. The AI only chose factors and
  * reasons; NO_BET carries nothing, and an unproven or limited market is never recommended.
  */
-function readAnalysisV3(b: Json, eventId: string, sport: Sport): AiAnalysis | null {
+/** Markets the odds feed may price (backend: miniapp/odds/book.py). */
+const PRICED_MARKETS: ReadonlySet<string> = new Set(['1', 'X', '2', '1X', 'X2', '12', 'O1.5', 'U1.5', 'O2.5', 'U2.5', 'O3.5', 'U3.5', 'BTTS_Y', 'BTTS_N']);
+
+function finite(v: unknown, min: number, max: number): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : null;
+}
+
+/**
+ * One price against the model, strictly: every figure must agree with the others as the
+ * backend computes them (to its rounding) and the model's figure with the percent shown for
+ * that market — a quote that does not add up is a broken answer, never shown.
+ */
+export function readQuote(v: unknown, shown: number | undefined): MarketQuote | null {
+  if (!isObj(v) || !isMarketKey(v.market) || !PRICED_MARKETS.has(v.market) || shown === undefined) return null;
+  const odds = finite(v.odds, 1.01, 100);
+  const implied = finite(v.impliedProbability, 0, 100);
+  const market = finite(v.marketProbability, 0, 100);
+  const model = finite(v.modelProbability, 0, 100);
+  const edge = finite(v.edge, -100, 100);
+  const ev = finite(v.expectedValue, -100, 10_000);
+  const margin = finite(v.margin, -1, 35);
+  if (odds === null || implied === null || market === null || model === null || edge === null || ev === null || margin === null) return null;
+  if (Math.abs(odds * 100 - Math.round(odds * 100)) > 1e-6) return null;  // the backend sends cents
+  if (Math.abs(implied - 100 / odds) > 0.051) return null;
+  if (Math.abs(model - shown) > SHOWN_TOLERANCE + 0.051) return null;
+  if (Math.abs(edge - (model - market)) > 0.101) return null;
+  if (Math.abs(ev - (model * odds - 100)) > 0.05 * odds + 0.051) return null;
+  return { market: v.market, odds, impliedProbability: implied, marketProbability: market, modelProbability: model, edge, expectedValue: ev, margin };
+}
+
+/** The server's validity is at most 15 minutes (miniapp/odds/store.py MAX_AGE_S). */
+const MAX_VALID_FOR_S = 15 * 60;
+
+/** Both clocks now: taken when a request is sent. */
+function clocksNow(): PriceDeadline {
+  return { mono: performance.now(), wall: Date.now() };
+}
+
+/**
+ * The deadline of prices the server called valid for `v` seconds, counted from when the request
+ * was SENT (the server measured them before answering): transit time never extends them.
+ */
+function priceDeadline(v: unknown, sent: PriceDeadline): PriceDeadline | null {
+  const seconds = int(v);
+  if (seconds === null || seconds < 1 || seconds > MAX_VALID_FOR_S) return null;
+  return { mono: sent.mono + seconds * 1000, wall: sent.wall + seconds * 1000 };
+}
+
+function readPrices(v: unknown, markets: Record<MarketKey, number>, sent: PriceDeadline): MarketPrices | null {
+  if (!isObj(v) || !Array.isArray(v.quotes) || v.quotes.length === 0 || v.quotes.length > PRICED_MARKETS.size) return null;
+  const fetchedAt = str(v.fetchedAt);
+  const expires = priceDeadline(v.validFor, sent);
+  if (!fetchedAt || !ZONED_INSTANT.test(fetchedAt) || !expires) return null;
+  const quotes = v.quotes.map((q) => readQuote(q, isObj(q) && isMarketKey(q.market) ? markets[q.market] : undefined));
+  if (quotes.some((q) => q === null)) return null;
+  const ok = quotes as MarketQuote[];
+  if (new Set(ok.map((q) => q.market)).size !== ok.length) return null;
+  return { fetchedAt, expires, quotes: ok };
+}
+
+function readAnalysisV3(b: Json, eventId: string, sport: Sport, sent: PriceDeadline): AiAnalysis | null {
   const reasons = (b.reasons as unknown[]).map((r) => (typeof r === 'string' ? REASONS[r] : undefined));
   if (reasons.some((r) => r === undefined)) return null;
   const known = reasons as InsufficientReason[];
@@ -1034,10 +1100,19 @@ function readAnalysisV3(b: Json, eventId: string, sport: Sport): AiAnalysis | nu
     if (new Set(markets).size !== markets.length) return null;
     chosen = { market: pick.market, reasons: pickReasons as PickReason[], probability: m[pick.market] };
   }
+  // Prices come only with a complete analysis (READY), and a READY analysis has them.
+  let market: MarketPrices | undefined;
+  if (b.market !== null && b.market !== undefined) {
+    const prices = readPrices(b.market, m, sent);
+    if (!prices) return null;
+    market = prices;
+  }
+  if ((market !== undefined) !== (b.kind === 'ready') || (market && known.length)) return null;
   return {
     eventId,
     sport,
     kind: b.kind,
+    ...(market ? { market } : {}),
     pick: chosen,
     probabilities: [m['1'], m.X, m['2']],
     reasons: known,
@@ -1141,7 +1216,7 @@ function percent(v: unknown): number | null {
   return n !== null && n <= 100 ? n : null;
 }
 
-function readQuickLeg(v: unknown, readEvent: (raw: unknown) => SportEvent | null): QuickLeg | null {
+function readQuickLeg(v: unknown, readEvent: (raw: unknown) => SportEvent | null, sent: PriceDeadline): QuickLeg | null {
   if (!isObj(v) || !isMarketKey(v.market) || v.family !== FAMILY[v.market]) return null;
   const event = readEvent(v.event);
   const probability = percent(v.probability);
@@ -1153,7 +1228,16 @@ function readQuickLeg(v: unknown, readEvent: (raw: unknown) => SportEvent | null
   if (!event || event.sport !== 'football' || event.status !== 'upcoming') return null;
   if (probability === null || leagueRate === null || !expectedGoals || !teams || teams.home === null || teams.away === null) return null;
   if (sample === null || !dataUntil || Number.isNaN(Date.parse(dataUntil))) return null;
+  let price: QuickLeg['price'] = null;
+  if (v.price !== null) {
+    const quote = readQuote(v.price, probability);
+    const fetchedAt = isObj(v.price) ? str(v.price.fetchedAt) : null;
+    const expires = isObj(v.price) ? priceDeadline(v.price.validFor, sent) : null;
+    if (!quote || quote.market !== v.market || !fetchedAt || !ZONED_INSTANT.test(fetchedAt) || !expires) return null;
+    price = { ...quote, fetchedAt, expires };
+  }
   return {
+    price,
     event,
     market: v.market,
     family: v.family as QuickLeg['family'],
@@ -1172,6 +1256,7 @@ export function readQuick(
   criteria: QuickCriteria,
   range: { from: Date; to: Date },
   readEvent: (raw: unknown) => SportEvent | null,
+  sent: PriceDeadline = clocksNow(),
 ): QuickAnswer | null {
   const status = b.status as QuickAnswer['status'];
   if (b.mode !== criteria.mode || !QUICK_STATUSES.has(status) || !Array.isArray(b.legs)) return null;
@@ -1196,7 +1281,7 @@ export function readQuick(
   }
   const unavailable = b.unavailableTournaments.filter((x): x is string => typeof x === 'string');
   if (unavailable.length !== b.unavailableTournaments.length) return null;
-  const legs = b.legs.map((raw) => readQuickLeg(raw, readEvent));
+  const legs = b.legs.map((raw) => readQuickLeg(raw, readEvent, sent));
   if (legs.some((l) => l === null)) return null;
   const ok = legs as QuickLeg[];
   const matches = b.counts.matches as number;
@@ -1231,6 +1316,30 @@ export function readQuick(
     combined = pair;
   } else if (b.combined !== null) return null;
   if ((criteria.mode === 'coupon' && status === 'ok') !== (combined !== null)) return null;
+  // The computed coupon price: only for a coupon whose every leg has a price, equal to their
+  // product (each leg rounded to cents, so within rounding) and dated by the oldest of them.
+  let couponOdds: QuickAnswer['couponOdds'] = null;
+  if (b.couponOdds !== null) {
+    const c = b.couponOdds;
+    const fetchedAt = isObj(c) ? str(c.fetchedAt) : null;
+    // Up to five legs of at most 100 each (backend: miniapp/odds/book.py MAX_ODDS).
+    const odds = isObj(c) ? finite(c.odds, 1, 1e10) : null;
+    const expires = isObj(c) ? priceDeadline(c.validFor, sent) : null;
+    if (odds === null || !fetchedAt || !ZONED_INSTANT.test(fetchedAt) || !expires) return null;
+    if (combined === null || ok.some((l) => l.price === null)) return null;
+    // The backend rounds the product of the legs' (cent) prices to cents: within half a cent of
+    // the exact product (Python and JS may round an exact half cent differently), nothing more.
+    const product = ok.reduce((a, l) => a * l.price!.odds, 1);
+    // Cents, with a tolerance that grows with the number (floating point at nine-digit prices).
+    const cents = odds * 100;
+    if (Math.abs(cents - Math.round(cents)) > Math.max(1e-6, Math.abs(cents) * 8 * Number.EPSILON)) return null;
+    if (Math.abs(odds - product) > 0.005 + Math.abs(product) * 8 * Number.EPSILON) return null;
+    const oldest = ok.map((l) => l.price!.fetchedAt).sort((x, y) => Date.parse(x) - Date.parse(y))[0];
+    if (Date.parse(fetchedAt) !== Date.parse(oldest!)) return null;
+    couponOdds = { odds, fetchedAt, expires };
+  } else if (combined !== null && ok.length > 0 && ok.every((l) => l.price !== null)) {
+    return null;  // every leg priced: the backend always computes the product
+  }
   // Every leg must meet what was asked: period, competitions, market and risk.
   const floor = RISK_FLOOR[criteria.risk];
   for (const l of ok) {
@@ -1256,6 +1365,7 @@ export function readQuick(
     unavailableTournaments: unavailable,
     uncheckedDays,
     nextMatchAt,
+    couponOdds,
     experimental: b.experimental,
     computedAt,
   };

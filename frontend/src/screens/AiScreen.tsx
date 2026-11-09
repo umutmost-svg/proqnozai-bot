@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
+import { DataFootnote } from '../components/SourceNote';
 import { Header } from '../components/Header';
 import { DeferredButton, EmptyState, ErrorState, LoadingState } from '../components/States';
 import { DemoBanner } from '../components/StatusBadge';
 import ui from '../components/ui.module.css';
 import type { AiAnalysis, SportEvent, TeamBasis } from '../data/models';
-import { Facts, Factors, Limitations, Sources } from './ai/Explain';
+import { Facts, Factors } from './ai/Explain';
+import { MarketValue, quoteOf, usePricesLive } from './ai/Market';
 import { Alternatives, MarketsBlock, ModelStats } from './ai/Model';
 import { PickCard } from './ai/PickCard';
 import { ProbabilityBlock } from './ai/ProbabilityBlock';
@@ -14,7 +16,7 @@ import { DataError } from '../data/provider';
 import { useAsync } from '../hooks/useAsync';
 import { useGoBack } from '../hooks/useGoBack';
 import { formatDateTime } from '../i18n/format';
-import { useServices, useSettings } from '../state/contexts';
+import { useFilters, useServices, useSettings } from '../state/contexts';
 import s from './AiScreen.module.css';
 
 function Waiting({ onBack }: { onBack(): void }) {
@@ -62,9 +64,10 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
     home: shortFor(analysis.basis.home, event.home),
     away: shortFor(analysis.basis.away, event.away),
   };
-  const title = !real ? t('ai.probabilities') : analysis.estimated ? t('ai.probabilitiesEstimated') : t('ai.probabilitiesReal');
-  const hasTable = !!basis && (basis.home.tablePosition !== null || basis.away.tablePosition !== null);
+  const title = real ? t('ai.probabilitiesReal') : t('ai.probabilities');
   const forecast = analysis.forecast;
+  const live = usePricesLive(real ? analysis.market?.expires : undefined);
+  const prices = real && live ? analysis.market : undefined;
   const tournament = data.getTournament(event.tournamentId);
   const generated = analysis.generatedAt && (
     <p className={s.snapshot}>
@@ -87,39 +90,29 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
         labels={labels}
         values={analysis.probabilities}
         sport={analysis.sport}
-        badge={forecast?.limited ? t('ai.limitedBadge') : undefined}
       />
       {real && basis && analysis.pick && (
-        <PickCard pick={analysis.pick} event={event} values={analysis.probabilities} basis={basis} forecast={forecast} />
+        <PickCard
+          pick={analysis.pick}
+          event={event}
+          values={analysis.probabilities}
+          basis={basis}
+          forecast={forecast}
+          quote={quoteOf(prices, analysis.pick.market)}
+        />
       )}
-      {real && forecast && <Alternatives items={analysis.alternatives ?? []} event={event} experimental={forecast.experimental} />}
-      {real && forecast && <MarketsBlock forecast={forecast} event={event} />}
+      {prices && <MarketValue prices={prices} event={event} />}
+      {real && forecast && <Alternatives items={analysis.alternatives ?? []} event={event} prices={prices} />}
+      {real && forecast && <MarketsBlock forecast={forecast} event={event} prices={prices} />}
       {real && basis && analysis.factors && analysis.factors.length > 0 && (
         <Factors factors={analysis.factors} basis={basis} forecast={forecast} />
       )}
       {real && basis && forecast ? (
-        <>
-          <Facts basis={basis} tournament={tournament} provider={null} attribution={null} title={t('ai.stats.title')}>
-            <ModelStats forecast={forecast} event={event} />
-          </Facts>
-          <Sources
-            forecast={forecast}
-            provider={event.source?.provider ?? null}
-            attribution={event.source?.attribution ?? null}
-            generatedAt={generated}
-          />
-          <Limitations hasTable={hasTable} forecast={forecast} />
-        </>
+        <Facts basis={basis} tournament={tournament} title={t('ai.stats.title')}>
+          <ModelStats forecast={forecast} event={event} />
+        </Facts>
       ) : real && basis ? (
-        <>
-          <Facts
-            basis={basis}
-            tournament={tournament}
-            provider={event.source?.provider ?? null}
-            attribution={event.source?.attribution ?? null}
-          />
-          <Limitations hasTable={hasTable} />
-        </>
+        <Facts basis={basis} tournament={tournament} />
       ) : (
         <section className={ui.section} data-testid="ai-basis">
           <h3 className={ui.sectionTitle}>{t('ai.basisTitle')}</h3>
@@ -129,7 +122,6 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
       )}
       {/* AI history ships in M4. */}
       <DeferredButton label={t('ai.saveAnalysis')} />
-      <p className={ui.notice}>{t('ai.disclaimer')}</p>
     </>
   );
 }
@@ -179,6 +171,7 @@ export function AiScreen() {
   const { t } = useSettings();
   const navigate = useNavigate();
   const goBack = useGoBack(`/event/${id}`);
+  const f = useFilters();
   const event = useAsync(() => data.getEvent(id), `ai-event:${id}`);
   // Opening the screen only READS (an analysis already made, or one that costs nothing); a new
   // paid analysis starts only from the explicit "Create AI analysis" button below.
@@ -269,6 +262,8 @@ export function AiScreen() {
     <AppShell scrollKey={`/event/${id}/ai`}>
       <Header variant="screen" title={t('ai.title')} backTo={`/event/${id}`} />
       {body}
+      {/* The provider attribution its terms require: the app's common footer, not the analysis text. */}
+      {event.status === 'success' && event.data && <DataFootnote sport={event.data.sport} today={f.today} />}
     </AppShell>
   );
 }

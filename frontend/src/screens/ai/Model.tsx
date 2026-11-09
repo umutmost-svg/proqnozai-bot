@@ -1,7 +1,6 @@
-import type { MarketChance, MarketKey, ModelForecast, SportEvent } from '../../data/models';
+import type { MarketChance, MarketKey, MarketPrices, ModelForecast, SportEvent } from '../../data/models';
 import { DISPLAY_ROWS, FAMILY } from '../../data/markets';
 import { LOCALES, type Lang, type Translate } from '../../i18n';
-import { formatDateTime } from '../../i18n/format';
 import { useSettings } from '../../state/contexts';
 import s from './Ai.module.css';
 
@@ -22,9 +21,9 @@ function cellText(t: Translate, key: MarketKey, home: string, away: string): str
   return marketText(t, key, home, away);
 }
 
-/** Up to three other markets that passed the same frozen selection rules. */
-export function Alternatives({ items, event, experimental }: { items: readonly MarketChance[]; event: SportEvent; experimental: boolean }) {
-  const { t } = useSettings();
+/** Up to three other markets that passed the same selection rules, with their prices when known. */
+export function Alternatives({ items, event, prices }: { items: readonly MarketChance[]; event: SportEvent; prices?: MarketPrices }) {
+  const { t, settings } = useSettings();
   if (!items.length) return null;
   return (
     <section className={s.card} data-testid="ai-alternatives">
@@ -36,28 +35,33 @@ export function Alternatives({ items, event, experimental }: { items: readonly M
               {marketText(t, a.market, event.home.name, event.away.name)}
               <span className={s.marketFamily}>{t(`ai.family.${FAMILY[a.market]}`)}</span>
             </span>
-            <span className={s.marketValue}>{a.probability}%</span>
+            <span className={s.marketValue}>
+              {a.probability}%
+              {prices?.quotes.some((q) => q.market === a.market) && (
+                <span className={s.cellOdds}>
+                  {t('ai.markets.odds', { odds: decimal(settings.lang, prices.quotes.find((q) => q.market === a.market)!.odds) })}
+                </span>
+              )}
+            </span>
           </li>
         ))}
       </ul>
-      <p className={s.hint}>{t('ai.alt.note')}</p>
-      {experimental && <p className={s.hint}>{t('ai.pick.experimentalBadge')}</p>}
     </section>
   );
 }
 
-/** Every market of the score distribution, grouped by family; unproven families are marked as reference only. */
-export function MarketsBlock({ forecast, event }: { forecast: ModelForecast; event: SportEvent }) {
-  const { t } = useSettings();
+/** Every market of the score distribution, grouped by family, with the current price where there is one. */
+export function MarketsBlock({ forecast, event, prices }: { forecast: ModelForecast; event: SportEvent; prices?: MarketPrices }) {
+  const { t, settings } = useSettings();
+  const odds = new Map((prices?.quotes ?? []).map((q) => [q.market, q.odds]));
   const m = forecast.markets;
   const families = Object.keys(DISPLAY_ROWS) as (keyof typeof DISPLAY_ROWS)[];
   return (
     <section className={s.card} data-testid="ai-markets">
       <h3 className={s.cardTitle}>{t('ai.markets.title')}</h3>
       {families.map((family) => {
-        const unproven = forecast.unprovenFamilies.includes(family);
         return (
-          <div key={family} className={s.marketGroup} data-family={family} data-unproven={unproven || undefined}>
+          <div key={family} className={s.marketGroup} data-family={family}>
             <h4 className={s.marketGroupTitle}>{t(`ai.family.${family}`)}</h4>
             {DISPLAY_ROWS[family].map((row, i) => (
               <div key={row.join()}>
@@ -69,13 +73,17 @@ export function MarketsBlock({ forecast, event }: { forecast: ModelForecast; eve
                   {row.map((key) => (
                     <div key={key} className={s.marketCell} data-market={key}>
                       <span className={s.marketCellName}>{cellText(t, key, event.home.name, event.away.name)}</span>
-                      <span className={s.marketCellValue}>{m[key]}%</span>
+                      <span className={s.marketCellValue}>
+                        {m[key]}%
+                        {odds.has(key) && (
+                          <span className={s.cellOdds}>{t('ai.markets.odds', { odds: decimal(settings.lang, odds.get(key)!) })}</span>
+                        )}
+                      </span>
                     </div>
                   ))}
                 </div>
               </div>
             ))}
-            {unproven && <p className={s.unproven}>{t('ai.markets.unproven')}</p>}
           </div>
         );
       })}
@@ -89,10 +97,8 @@ export function MarketsBlock({ forecast, event }: { forecast: ModelForecast; eve
               </span>
             ))}
           </div>
-          <p className={s.hint}>{t('ai.markets.scoresNote')}</p>
         </div>
       )}
-      <p className={s.hint}>{t('ai.markets.note')}</p>
     </section>
   );
 }
@@ -124,23 +130,5 @@ export function ModelStats({ forecast, event }: { forecast: ModelForecast; event
         {t('ai.stats.league', { home: decimal(lang, forecast.leagueGoals.home), away: decimal(lang, forecast.leagueGoals.away) })}
       </p>
     </div>
-  );
-}
-
-/** Which model, how much data and how fresh: shown with the provider's attribution. */
-export function ModelSource({ forecast }: { forecast: ModelForecast }) {
-  const { t, timeZone } = useSettings();
-  return (
-    <>
-      <p className={s.source} data-testid="ai-model-source">
-        {t('ai.sources.model', {
-          version: forecast.version,
-          kind: t(`ai.sources.kind.${forecast.kind}`),
-          sample: forecast.sample,
-          date: formatDateTime(new Date(forecast.dataUntil), timeZone),
-        })}
-      </p>
-      <p className={s.hint}>{t('ai.sources.validated')}</p>
-    </>
   );
 }

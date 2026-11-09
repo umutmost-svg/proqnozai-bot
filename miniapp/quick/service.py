@@ -28,7 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from collections import Counter, deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
 from miniapp.ai.analysis import ModelForecaster
@@ -37,6 +37,8 @@ from miniapp.forecast.markets import FAMILY
 from miniapp.forecast.quick import STATUS_UNAVAILABLE, Criteria, Leg, Option, QuickResult, choose
 from miniapp.forecast.selection import NO_BET_EARLY
 from miniapp.forecast.version import MODEL_VERSION
+from miniapp.odds.store import OddsStore
+from miniapp.odds.value import MarketQuote, compare
 from miniapp.sports.client import LOW_PRIORITY_RESERVE, UpstreamError
 from miniapp.sports.models import FootballEvent
 from miniapp.sports.service import ModelHistory, RequestError, SportsService, parse_instant
@@ -72,6 +74,8 @@ class QuickAnswer:
     # Kickoff of the earliest match of the period not on today's UTC day (it can be picked only
     # on its own match day): tells the user when to come back. None when there is none.
     next_match_at: str | None = None
+    # Current prices of the chosen legs, by event id (strictly matched, fresh; see miniapp/odds).
+    prices: dict[str, tuple[MarketQuote, float, float]] = field(default_factory=dict)  # quote, fetched at, valid for
 
     def to_json(self) -> dict:
         combined = self.result.combined
@@ -89,6 +93,9 @@ class QuickAnswer:
             "unavailableTournaments": list(self.unavailable),
             "uncheckedDays": self.unchecked_days,
             "nextMatchAt": self.next_match_at,
+            # The product of the legs' current prices, only when every leg has one. A figure
+            # computed from separate quotes, not a price offered for the combination.
+            "couponOdds": self._coupon_odds(),
             "experimental": FROZEN.experimental,
             "modelVersion": MODEL_VERSION,
             "computedAt": self.computed_at,
@@ -99,10 +106,21 @@ class QuickAnswer:
         low, high = self.result.combined  # type: ignore[misc]
         return [max(0, math.floor(low * 100 + 1e-9)), min(100, math.ceil(high * 100 - 1e-9))]
 
+    def _coupon_odds(self) -> dict | None:
+        legs = self.result.legs
+        if self.criteria.mode != "coupon" or not legs or any(l.option.event_id not in self.prices for l in legs):
+            return None
+        product = math.prod(self.prices[l.option.event_id][0].odds for l in legs)
+        oldest = min(self.prices[l.option.event_id][1] for l in legs)
+        valid = min(self.prices[l.option.event_id][2] for l in legs)
+        return {"odds": round(product, 2), "fetchedAt": _iso(oldest), "validFor": int(valid)}
+
     def _leg(self, leg: Leg) -> dict:
         f: MatchForecast = leg.option.forecast
         market = leg.candidate.market
+        price = self.prices.get(leg.option.event_id)
         return {
+            "price": {**price[0].to_json(), "fetchedAt": _iso(price[1]), "validFor": int(price[2])} if price else None,
             "event": self.events[leg.option.event_id].to_json(),
             "market": market,
             "family": FAMILY[market],
@@ -118,8 +136,10 @@ class QuickAnswer:
 
 class QuickService:
     def __init__(self, sports: SportsService, *, clock: Callable[[], float] = time.time,
-                 forecaster: ModelForecaster | None = None, reserve: int = UPSTREAM_RESERVE) -> None:
+                 forecaster: ModelForecaster | None = None, reserve: int = UPSTREAM_RESERVE,
+                 odds: OddsStore | None = None) -> None:
         self.sports = sports
+        self.odds = odds
         self._clock = clock
         # Its own engine: the batch runs in a thread, the AI analysis on the event loop.
         self.forecaster = forecaster or ModelForecaster(sports, ForecastEngine(), clock=clock)
@@ -265,9 +285,25 @@ class QuickService:
             # judged against the previous day. Never a mixed answer; asked again it is consistent.
             result, next_match_at = QuickResult(STATUS_UNAVAILABLE, (), 0, None), None
         matches = sum(1 for e in events.values() if parse_instant(e.starts_at).timestamp() > now)
-        return QuickAnswer(criteria, result, {e.id: e for e in usable}, matches, forecasts, reasons,
+        by_id = {e.id: e for e in usable}
+        return QuickAnswer(criteria, result, by_id, matches, forecasts, reasons,
                            tuple(unavailable), unchecked,
-                           datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), next_match_at)
+                           datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), next_match_at,
+                           self._prices(result, by_id))
+
+    def _prices(self, result: QuickResult, events: dict[str, FootballEvent]) -> dict[str, tuple[MarketQuote, float, float]]:
+        """The chosen legs' prices: no request, only what the bot has pushed (matched strictly)."""
+        prices: dict[str, tuple[MarketQuote, float, float]] = {}
+        if self.odds is None:
+            return prices
+        for leg in result.legs:
+            found = self.odds.lookup(events[leg.option.event_id])
+            if found is None:
+                continue
+            quote = compare(found.book, leg.option.forecast.exact).get(leg.candidate.market)
+            if quote is not None:
+                prices[leg.option.event_id] = (quote, found.fetched_at, found.valid_for)
+        return prices
 
     def _forecast_all(self, events: list[FootballEvent], histories: dict[str, ModelHistory | None]):
         return [self.forecaster.compute(e, histories[e.tournament_id]) for e in events]
@@ -280,3 +316,6 @@ def _utc_days(start: datetime, end: datetime) -> list[date]:
         day += timedelta(days=1)
     return days
 
+
+def _iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -24,6 +24,9 @@ from miniapp.security import CsrfTokens, LoginRateLimiter, origin_allowed
 from miniapp.settings import Settings
 from miniapp.ai.analysis import AI_ERROR_CODES, AiError, AiService, build_ai_service
 from miniapp.forecast.history import ForecastHistory, history_path
+from miniapp.odds.feed import FeedReceiver
+from miniapp.odds.routes import register_odds_routes
+from miniapp.odds.store import OddsStore
 from miniapp.quick.routes import register_quick_routes
 from miniapp.quick.service import QuickService
 from miniapp.sports.client import UpstreamError
@@ -513,10 +516,14 @@ def create_app(
     # Forecast history in its own file next to the database (rollback-safe, see forecast/history.py).
     history = ForecastHistory(history_path(settings.db_path), clock)
     history.init_schema()
-    ai = ai or build_ai_service(settings, sports, clock=clock, ledger=store, history=history)
+    # Odds pushed by the bot: in memory only, served after strict matching (miniapp/odds).
+    odds = OddsStore(clock, enabled=settings.odds_feed_enabled)
+    receiver = FeedReceiver(settings.odds_feed_secret.encode(), clock) if settings.odds_feed_secret else None
+    register_odds_routes(app, receiver, odds, clock)
+    ai = ai or build_ai_service(settings, sports, clock=clock, ledger=store, history=history, odds=odds)
     register_sports_routes(app, sports, current_session,
                            ai_status=lambda: "connected" if ai.connected else "not_connected")
-    register_quick_routes(app, QuickService(sports, clock=clock), current_session)
+    register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), current_session)
 
     @app.get("/api/ai/analysis")
     async def ai_analysis_cached(request: Request) -> JSONResponse:

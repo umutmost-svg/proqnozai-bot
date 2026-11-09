@@ -122,10 +122,10 @@ describe('v3 analysis is read strictly', () => {
 });
 
 describe('AI screen with the goal model', () => {
-  it('shows the sections in order, the pick with its caveat, alternatives and every market', async () => {
+  it('shows the sections in order: the pick, alternatives, every market, factors and the numbers', async () => {
     renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3()) });
     const pick = await screen.findByTestId('ai-pick');
-    const order = ['ai-result', 'ai-pick', 'ai-alternatives', 'ai-markets', 'ai-factors', 'ai-basis', 'ai-sources', 'ai-limitations']
+    const order = ['ai-result', 'ai-pick', 'ai-alternatives', 'ai-markets', 'ai-factors', 'ai-basis']
       .map((id) => screen.getByTestId(id));
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -136,45 +136,131 @@ describe('AI screen with the goal model', () => {
     expect(pick).toHaveTextContent('Liverpool не проиграет');
     expect(pick).toHaveTextContent(`Расчетная вероятность: ${M.X2}%`);
     expect(pick).toHaveTextContent('Liverpool сильнее по модели: атака 1,45, оборона 0,75');
-    expect(pick).toHaveTextContent('Это модельная оценка, а не гарантия результата. Без букмекерских коэффициентов выгодность ставки определить нельзя.');
-    expect(pick).toHaveTextContent('а не просто как самый вероятный');
-    expect(screen.getByTestId('ai-pick-experimental')).toHaveTextContent('Экспериментально');
-    expect(pick).toHaveTextContent('еще не подтверждены на новых матчах');
     const alt = screen.getByTestId('ai-alternatives');
     expect(alt).toHaveTextContent('Фора Liverpool (+1.5)');
     expect(alt).toHaveTextContent(`${M['H2+1.5']}%`);
     const markets = screen.getByTestId('ai-markets');
     expect(within(markets).getByText('Тотал больше 2.5').parentElement).toHaveTextContent(`${M['O2.5']}%`);
-    const totals = markets.querySelector('[data-family="total"]')!;
-    expect(totals).toHaveAttribute('data-unproven', 'true');
-    expect(totals).toHaveTextContent('не точнее среднего по турниру');
-    expect(markets.querySelector('[data-family="handicap"]')).not.toHaveAttribute('data-unproven');
     expect(screen.getByTestId('ai-scores')).toHaveTextContent('0:1');
     expect(screen.getByTestId('ai-model-stats')).toHaveTextContent('1,90');
-    expect(screen.getByTestId('ai-model-source')).toHaveTextContent('goals-1 (Пуассон): 240 матчей');
     expect(screen.getByTestId('ai-factors')).toHaveTextContent('Домашний фактор турнира');
-    expect(screen.getByTestId('ai-limitations')).toHaveTextContent('без xG, составов, травм и мотивации');
+    // Without prices: no market block, and no boilerplate anywhere.
+    expect(screen.queryByTestId('ai-market-value')).toBeNull();
+    expect(screen.queryByTestId('price-line')).toBeNull();
+    for (const id of ['ai-sources', 'ai-limitations', 'ai-pick-caveat', 'ai-pick-experimental', 'ai-limited', 'ai-model-source', 'ai-source']) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
+    expect(document.body.textContent).not.toMatch(/гаранти|Экспериментально|оценочн|football-data|goals-1|Пуассон|AI может ошибаться|не точнее среднего/);
   });
 
-  it('the Champions League is limited data: probabilities shown, no recommendation', async () => {
+  it('the Champions League: probabilities shown, no recommendation, its reason stated once', async () => {
     const body = v3({ pick: { market: 'NO_BET', reasons: [], probability: null }, alternatives: [] },
       { limited: true, noBetReason: 'limited_competition' });
     renderApp('#/event/fd%3A4/ai', { data: aiBackend(body, CL) });
     const pick = await screen.findByTestId('ai-pick');
     expect(pick).toHaveAttribute('data-market', 'NO_BET');
     expect(pick).toHaveTextContent('В Лиге чемпионов у модели мало матчей на команду');
-    expect(screen.getByTestId('ai-limited')).toHaveTextContent('Ограниченные данные');
+    expect(screen.queryByTestId('ai-limited')).toBeNull();
     expect(screen.queryByTestId('ai-alternatives')).toBeNull();
-    expect(screen.getByTestId('ai-limitations')).toHaveTextContent('данные ограничены');
+    expect(screen.queryByTestId('ai-limitations')).toBeNull();
   });
 
-  it.each(LANGS)('renders every new block in %s without a missing translation', async (lang) => {
-    renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3()), settings: { lang } });
-    await screen.findByTestId('ai-markets');
+  it.each(LANGS)('renders every block in %s without a missing translation', async (lang) => {
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3(READY_OVER)), settings: { lang } });
+    await screen.findByTestId('ai-market-value');
     const text = document.body.textContent ?? '';
-    expect(text).not.toMatch(/ai\.(pick|family|markets|stats|sources|alt|limits)\./);
+    expect(text).not.toMatch(/ai\.(pick|family|markets|stats|sources|alt|limits|value|price)\./);
     expect(text).not.toMatch(/\{\w+\}/);
-    expect(screen.getByTestId('ai-pick-caveat').textContent).toBe(dictionaries[lang]['ai.pick.caveat']);
+    expect(screen.getByTestId('ai-market-value')).toHaveTextContent(dictionaries[lang]['ai.value.title']);
+  });
+});
+
+// --- prices against the model ---------------------------------------------------------------
+
+/** The backend's quote for one market at these odds and market probability (same rounding). */
+function quote(market: MarketKey, odds: number, marketP: number, modelP = M[market]) {
+  const r = (x: number) => Math.round(x * 10) / 10;
+  return { market, odds, impliedProbability: r(100 / odds), marketProbability: marketP, modelProbability: modelP,
+    edge: r(modelP - marketP), expectedValue: r((modelP / 100) * odds * 100 - 100), margin: 4.8 };
+}
+const PRICES = { fetchedAt: '2026-11-08T05:58:00Z', validFor: 840, quotes: [quote('1', 4.2, 22.6), quote('X', 3.9, 24.3), quote('2', 1.85, 53.1),
+  quote('X2', 1.3, 77.4), quote('O2.5', 1.8, 53.0)] };
+const READY_OVER = { kind: 'ready', reasons: [], estimated: false, market: PRICES };
+
+describe('the model against the market', () => {
+  it('accepts consistent prices only with a complete analysis', async () => {
+    const a = await aiBackend(v3(READY_OVER)).requestAnalysis('fd:4');
+    expect(a.kind).toBe('ready');
+    expect(a.market?.quotes.map((q) => q.market)).toEqual(['1', 'X', '2', 'X2', 'O2.5']);
+    expect(a.market?.fetchedAt).toBe('2026-11-08T05:58:00Z');
+  });
+
+  it.each([
+    ['prices with an incomplete analysis', v3({ market: PRICES })],
+    ['a complete analysis without prices', v3({ kind: 'ready', reasons: [], estimated: false })],
+    ['an implied probability that is not 1/odds', v3({ ...READY_OVER, market: { ...PRICES, quotes: [{ ...quote('2', 1.85, 53.1), impliedProbability: 60 }] } })],
+    ['a model figure that is not the shown percent', v3({ ...READY_OVER, market: { ...PRICES, quotes: [quote('2', 1.85, 53.1, M['2'] + 5)] } })],
+    ['an expected value that does not follow', v3({ ...READY_OVER, market: { ...PRICES, quotes: [{ ...quote('2', 1.85, 53.1), expectedValue: 30 }] } })],
+    ['an edge that does not follow', v3({ ...READY_OVER, market: { ...PRICES, quotes: [{ ...quote('2', 1.85, 53.1), edge: 9 }] } })],
+    ['odds below 1.01', v3({ ...READY_OVER, market: { ...PRICES, quotes: [quote('2', 1.0, 53.1)] } })],
+    ['a market the feed never prices', v3({ ...READY_OVER, market: { ...PRICES, quotes: [quote('H2+1.5', 1.2, 80)] } })],
+    ['a repeated market', v3({ ...READY_OVER, market: { ...PRICES, quotes: [quote('2', 1.85, 53.1), quote('2', 1.85, 53.1)] } })],
+    ['no time', v3({ ...READY_OVER, market: { ...PRICES, fetchedAt: '2026-11-08 05:58' } })],
+    ['no quotes', v3({ ...READY_OVER, market: { ...PRICES, quotes: [] } })],
+    ['no validity', v3({ ...READY_OVER, market: { ...PRICES, validFor: undefined } })],
+    ['an expired validity', v3({ ...READY_OVER, market: { ...PRICES, validFor: 0 } })],
+    ['a validity beyond the longest the server gives', v3({ ...READY_OVER, market: { ...PRICES, validFor: 901 } })],
+  ])('rejects %s', async (_, body) => {
+    await expect(aiBackend(body).requestAnalysis('fd:4')).rejects.toThrow();
+  });
+
+  it('shows the price of the pick and every priced outcome, largest model advantage first', async () => {
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3(READY_OVER)) });
+    const pick = await screen.findByTestId('ai-pick');
+    const x2 = PRICES.quotes.find((q) => q.market === 'X2')!;
+    expect(within(pick).getByTestId('price-line')).toHaveTextContent(
+      `Коэффициент 1,30 · рынок ${String(x2.marketProbability).replace('.', ',')}% · модель ${M.X2}% · матожидание`);
+    const block = screen.getByTestId('ai-market-value');
+    const rows = [...block.querySelectorAll('li[data-market]')].map((r) => r.getAttribute('data-market'));
+    const byEdge = [...PRICES.quotes].sort((a, b) => b.edge - a.edge).map((q) => q.market);
+    expect(rows).toEqual(byEdge);
+    expect(screen.getByTestId('ai-market-asof')).toHaveTextContent('Коэффициенты на');
+    expect(screen.getByTestId('ai-market-asof')).toHaveTextContent('маржа на исход матча 4,8%');
+    expect(within(screen.getByTestId('ai-markets')).getByText('кэф 1,80')).toBeInTheDocument();
+    // Only numbers: no bookmaker is named anywhere.
+    expect(document.body.textContent).not.toMatch(/mostbet|bookmaker name/i);
+  });
+
+  it('prices disappear on screen once their validity ends; the analysis stays', async () => {
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3({ ...READY_OVER, market: { ...PRICES, validFor: 1 } })) });
+    expect(await screen.findByTestId('ai-market-value')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId('ai-market-value')).toBeNull(), { timeout: 3000 });
+    expect(screen.queryByTestId('price-line')).toBeNull();
+    expect(within(screen.getByTestId('ai-markets')).queryByText(/кэф/)).toBeNull();
+    expect(screen.getByTestId('ai-pick')).toHaveTextContent('Liverpool не проиграет');
+  });
+
+  it('the provider attribution is in the screen footer, not in the analysis', async () => {
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3(READY_OVER)) });
+    expect(await screen.findByTestId('source-footer')).toHaveTextContent(ATTR);
+    expect(screen.getByTestId('ai-result')).not.toHaveTextContent(ATTR);
+  });
+
+  it('a large gap below the market is named too, never reported as agreement', async () => {
+    // 1X2: the model 3.8 points under the market on the draw, 1.9 over on each win.
+    const quotes = [quote('1', 4.2, M['1'] - 1.9), quote('X', 3.9, M.X + 3.8), quote('2', 1.85, M['2'] - 1.9)];
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3({ ...READY_OVER, market: { ...PRICES, quotes } })) });
+    const verdict = await screen.findByTestId('ai-market-verdict');
+    expect(verdict).toHaveTextContent('Наибольшее расхождение — Ничья');
+    expect(verdict).toHaveTextContent(/\([-−]3,8 п\.п\.\)/);
+  });
+
+  it('names the largest difference, or says the model agrees with the market', async () => {
+    const best = [...PRICES.quotes].sort((a, b) => b.edge - a.edge)[0]!;
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3(READY_OVER)) });
+    const verdict = await screen.findByTestId('ai-market-verdict');
+    if (best.edge >= 2) expect(verdict).toHaveTextContent('Наибольшее расхождение');
+    else expect(verdict).toHaveTextContent('Модель и рынок оценивают матч одинаково');
   });
 });
 

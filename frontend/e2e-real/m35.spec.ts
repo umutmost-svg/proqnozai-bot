@@ -66,7 +66,12 @@ for (const width of [360, 390, 430]) {
     await page.goto(`/#/event/${enc(MATCH)}/ai`);
     await page.getByTestId('ai-create').click();
     await expect(page.getByTestId('ai-markets')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('ai-pick-caveat')).toBeVisible();
+    await expect(page.getByTestId('ai-market-value')).toBeVisible();
+    await expect(page.getByTestId('ai-pick').getByTestId('price-line')).toBeVisible();
+    await expect(page.getByTestId('ai-pick-caveat')).toHaveCount(0);
+    await expect(page.getByTestId('ai-limitations')).toHaveCount(0);
+    await page.getByTestId('ai-market-value').scrollIntoViewIfNeeded();
+    await shot(page, `ai-market-ru-${width}`);
     await noHorizontalScroll(page, width);
     await page.goBack(); // the match opened from the team
     await page.goBack(); // team

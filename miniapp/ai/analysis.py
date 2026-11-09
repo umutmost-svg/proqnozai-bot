@@ -28,14 +28,17 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Protocol
 
 from miniapp.forecast.data import results_from_events
 from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast, Unavailable
 from miniapp.forecast.history import ForecastHistory, ForecastRecord
+from miniapp.forecast.markets import KEYS as MARKET_KEYS
 from miniapp.forecast.version import MODEL_VERSION
+from miniapp.odds.store import OddsStore
+from miniapp.odds.value import compare
 from miniapp.sports import football_data
 from miniapp.sports.cache import Cached, SportsCache
 from miniapp.sports.client import UpstreamError
@@ -141,6 +144,9 @@ class AnalysisResult:
     pick: Pick | None = None  # None only for results without a model answer
     forecast: dict | None = None  # the goal model's figures (MatchForecast.to_json)
     alternatives: tuple[dict, ...] = ()  # [{"market", "probability"}], never with NO_BET
+    # Current odds against the model (miniapp/odds/value.py), attached when served, never
+    # part of the language model's cached answer: prices move, the explanation does not.
+    market: dict | None = None
 
     def to_json(self) -> dict:
         return {
@@ -157,6 +163,7 @@ class AnalysisResult:
             "pick": self.pick.to_json() if self.pick else None,
             "forecast": self.forecast,
             "alternatives": list(self.alternatives),
+            "market": self.market,
         }
 
 
@@ -237,8 +244,9 @@ class AiService:
     def __init__(self, sports: SportsService, client: ModelClient | None, *, per_user_daily: int,
                  daily_budget: int, ledger: QuotaLedger | None = None,
                  clock: Callable[[], float] = time.time, forecaster: Forecaster | None = None,
-                 history: ForecastHistory | None = None) -> None:
+                 history: ForecastHistory | None = None, odds: OddsStore | None = None) -> None:
         self.sports = sports
+        self.odds = odds
         self.client = client
         self.forecaster = forecaster or ModelForecaster(sports, clock=clock)
         self.history = history
@@ -422,10 +430,27 @@ class AiService:
         step.add_done_callback(_retrieve)
         found = await asyncio.shield(step)
         if isinstance(found, AnalysisResult):
-            return found
-        if isinstance(found, Cached):
-            return found.value
-        return (await asyncio.shield(found)).value
+            result = found
+        elif isinstance(found, Cached):
+            result = found.value
+        else:
+            result = (await asyncio.shield(found)).value
+        return self._with_odds(result, event, forecast)
+
+    def _with_odds(self, result: AnalysisResult, event: FootballEvent, forecast: MatchForecast) -> AnalysisResult:
+        """The current prices of this match against the model, when a fresh strictly matched
+        line exists; with them the analysis has every input it can have (READY)."""
+        if self.odds is None or result.pick is None or result.kind not in ("ready", "partial"):
+            return result
+        found = self.odds.lookup(event)
+        if found is None:
+            return result
+        quotes = compare(found.book, forecast.exact)
+        if not quotes:
+            return result
+        market = {"fetchedAt": _iso_ts(found.fetched_at), "validFor": int(found.valid_for),
+                  "quotes": [quotes[k].to_json() for k in MARKET_KEYS if k in quotes]}
+        return replace(result, kind="ready", reasons=(), estimated=False, market=market)
 
     async def _evidence(self, event_id: str):
         event, tournament = await self.sports.event(event_id)
@@ -596,10 +621,15 @@ AI_ERROR_CODES = frozenset({"not_configured", "limit_reached", "budget_exhausted
 
 def build_ai_service(settings, sports: SportsService, *, clock: Callable[[], float] = time.time,
                      client: ModelClient | None = None, ledger: QuotaLedger | None = None,
-                     forecaster: Forecaster | None = None, history: ForecastHistory | None = None) -> AiService:
+                     forecaster: Forecaster | None = None, history: ForecastHistory | None = None,
+                     odds: OddsStore | None = None) -> AiService:
     """No Anthropic key → the AI is reported "not connected"; no model is ever called."""
     if client is None and settings.anthropic_api_key:
         client = AnthropicModelClient(settings.anthropic_api_key, settings.ai_model)
     return AiService(sports, client, per_user_daily=settings.ai_per_user_daily,
                      daily_budget=settings.ai_daily_budget, ledger=ledger, clock=clock, forecaster=forecaster,
-                     history=history)
+                     history=history, odds=odds)
+
+
+def _iso_ts(ts: float) -> str:
+    return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

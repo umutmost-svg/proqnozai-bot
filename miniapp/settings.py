@@ -111,6 +111,12 @@ class Settings:
     football_data_per_day: int = 3000
     # Event ids never seen in a listing may cost an upstream call: capped per hour.
     sports_unknown_lookups_per_hour: int = 20
+    # Odds pushed by the bot (HMAC-signed, POST /api/internal/odds). Unset: the route is off
+    # and no odds are shown anywhere.
+    odds_feed_secret: str | None = field(default=None, repr=False)
+    # Kill switch: false answers signed pushes with 410 (the bot then asks the source for no
+    # prices) and shows no odds anywhere, without touching the secret or the bot.
+    odds_feed_enabled: bool = True
     # AI analysis (M3.2). Without a key the analysis is reported "not connected".
     anthropic_api_key: str | None = field(default=None, repr=False)
     ai_model: str = "claude-opus-5-5"
@@ -159,6 +165,11 @@ class Settings:
             or not self.edge_secret.isprintable() or " " in self.edge_secret
         ):
             raise SettingsError(f"edge secret must be >= {MIN_EDGE_SECRET_CHARS} printable ASCII chars without spaces")
+        if self.odds_feed_secret is not None and (
+            len(self.odds_feed_secret) < MIN_EDGE_SECRET_CHARS or not self.odds_feed_secret.isascii()
+            or not self.odds_feed_secret.isprintable() or " " in self.odds_feed_secret
+        ):
+            raise SettingsError(f"odds feed secret must be >= {MIN_EDGE_SECRET_CHARS} printable ASCII chars without spaces")
         if self.cookie_samesite == "none" and not self.cookie_secure:
             raise SettingsError("SameSite=None requires Secure cookies (production)")
         if self.football_data_key is not None and (
@@ -266,6 +277,8 @@ class Settings:
             football_data_per_minute=integer("MINIAPP_FOOTBALL_DATA_PER_MINUTE", 8),
             football_data_per_day=integer("MINIAPP_FOOTBALL_DATA_PER_DAY", 3000),
             sports_unknown_lookups_per_hour=integer("MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR", 20),
+            odds_feed_secret=optional("MINIAPP_ODDS_FEED_SECRET"),
+            odds_feed_enabled=boolean("MINIAPP_ODDS_FEED_ENABLED", True),
             anthropic_api_key=optional("MINIAPP_ANTHROPIC_API_KEY"),
             ai_model=optional("MINIAPP_AI_MODEL") or "claude-opus-5-5",
             ai_per_user_daily=integer("MINIAPP_AI_PER_USER_DAILY", 10),

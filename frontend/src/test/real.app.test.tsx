@@ -164,7 +164,7 @@ describe('real mode', () => {
     // The card only opens the AI screen; this mock answers the read with a made analysis.
     await user.click(await screen.findByRole('button', { name: 'Открыть AI-разбор' }));
     const result = await screen.findByTestId('ai-result');
-    expect(screen.getByTestId('ai-probabilities-title')).toHaveTextContent('Оценка вероятностей');
+    expect(screen.getByTestId('ai-probabilities-title')).not.toHaveTextContent('Оценка');
     expect(result).toHaveTextContent('52%');
     const factors = screen.getByTestId('ai-factors');
     expect(factors).toHaveTextContent('За последние 5 матчей у Arsenal FC: 4 победы, 1 ничья и 0 поражений (13 очков).');
@@ -174,10 +174,10 @@ describe('real mode', () => {
     expect(screen.getByTestId('ai-basis')).toHaveTextContent('Слева самый новый матч');
     expect(screen.queryByText('ДЕМО')).toBeNull();
     expect(screen.queryByText(/иллюстративные/)).toBeNull();
-    const credit = within(screen.getByTestId('ai-basis')).getByTestId('ai-source');
-    expect(credit).toHaveTextContent('Источник: football-data.org');
-    expect(credit).toHaveTextContent(ATTR);
-    expect(screen.getByTestId('ai-limitations')).toHaveTextContent('Учтены только последние матчи команд и турнирная таблица.');
+    // No source credit, limitations block or disclaimer inside the analysis (attribution lives in the app footer).
+    expect(within(screen.getByTestId('ai-basis')).queryByTestId('ai-source')).toBeNull();
+    expect(screen.queryByTestId('ai-limitations')).toBeNull();
+    expect(result).not.toHaveTextContent(ATTR);
   });
 
   it('AI basis uses the short name only for the same club; another name keeps its own label', async () => {
@@ -208,7 +208,7 @@ describe('real mode', () => {
     expect(factors).not.toHaveTextContent('Chelsea');
   });
 
-  it('AI without the table: the limitation does not claim the table was used', async () => {
+  it('AI without the table: nothing claims the table was used', async () => {
     const upcoming = ev(7, 'upcoming', 'Arsenal FC', 'Chelsea FC');
     const team = (name: string) => ({ name, matches: 5, form: 'WWDWW', wins: 4, draws: 1, losses: 0, points: 13, goalsFor: 9, goalsAgainst: 2, tablePosition: null, tablePoints: null });
     const analysis = {
@@ -223,9 +223,9 @@ describe('real mode', () => {
     );
     const data = new BackendSportsDataProvider({ waitForSession: async () => true, getCsrfToken: () => 'c', fetchImpl });
     renderApp('#/event/fd%3A7/ai', { data });
-    const limits = await screen.findByTestId('ai-limitations');
-    expect(limits).toHaveTextContent('турнирная таблица была недоступна');
-    expect(screen.getByTestId('ai-basis')).not.toHaveTextContent('Таблица — положение');
+    const basis = await screen.findByTestId('ai-basis');
+    expect(basis).not.toHaveTextContent('Таблица — положение');
+    expect(screen.queryByTestId('ai-limitations')).toBeNull();
   });
 
   it('AI not connected: a real match offers no AI button', async () => {

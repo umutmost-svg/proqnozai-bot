@@ -1,9 +1,10 @@
-import type { AiPick, ModelForecast, PickReason, SportEvent, TeamBasis } from '../../data/models';
+import type { AiPick, MarketQuote, ModelForecast, PickReason, SportEvent, TeamBasis } from '../../data/models';
 import { FAMILY } from '../../data/markets';
 import type { Translate } from '../../i18n';
 import { plural } from '../../i18n';
 import { useSettings } from '../../state/contexts';
 import s from './Ai.module.css';
+import { PriceLine } from './Market';
 import { decimal, marketText } from './Model';
 
 type Basis = { home: TeamBasis; away: TeamBasis };
@@ -74,11 +75,11 @@ function arithmetic(t: Translate, pick: AiPick, values: readonly number[], home:
 }
 
 /**
- * "Recommended bet": the market the goal model's frozen rules selected. Without bookmaker
- * odds its value cannot be judged, so it is always labelled as a model estimate, never as
- * profitable; when nothing passes the rules it says so (NO_BET is a full result).
+ * "Recommended bet": the market the goal model's selection rules chose, with its current price
+ * against the model when there is one; when nothing passes the rules it says so (NO_BET is a
+ * full result).
  */
-export function PickCard({ pick, event, values, basis, forecast }: { pick: AiPick; event: SportEvent; values: readonly number[]; basis: Basis; forecast?: ModelForecast }) {
+export function PickCard({ pick, event, values, basis, forecast, quote }: { pick: AiPick; event: SportEvent; values: readonly number[]; basis: Basis; forecast?: ModelForecast; quote?: MarketQuote }) {
   const { t, settings } = useSettings();
   const home = event.home.name;
   const away = event.away.name;
@@ -89,23 +90,18 @@ export function PickCard({ pick, event, values, basis, forecast }: { pick: AiPic
         <h3 className={s.cardTitle}>{t('ai.pick.title')}</h3>
         <p className={s.pickKicker}>{t('ai.pick.noBetTitle')}</p>
         <p className={s.body}>{why}</p>
-        <p className={s.hint} data-testid="ai-pick-caveat">{t('ai.pick.caveat')}</p>
       </section>
     );
   }
   return (
     <section className={`${s.card} ${s.pick}`} data-testid="ai-pick" data-market={pick.market}>
       <h3 className={s.cardTitle}>{t('ai.pick.title')}</h3>
-      {forecast?.experimental && (
-        <span className={s.limited} data-testid="ai-pick-experimental">
-          {t('ai.pick.experimentalBadge')}
-        </span>
-      )}
       <p className={s.pickKicker}>
         {t('ai.pick.preferred')} · {t(`ai.family.${FAMILY[pick.market]}`)}
       </p>
       <p className={s.pickOutcome}>{pickOutcomeText(t, pick.market, home, away)}</p>
       <p className={s.pickProbability}>{t('ai.pick.probability', { value: pick.probability ?? 0 })}</p>
+      {quote && <PriceLine quote={quote} />}
       <div className={s.why}>
         <p className={s.whyTitle}>{t('ai.pick.why')}</p>
         <ul className={s.list}>
@@ -115,9 +111,6 @@ export function PickCard({ pick, event, values, basis, forecast }: { pick: AiPic
           ))}
         </ul>
       </div>
-      {forecast && <p className={s.hint}>{t('ai.pick.selectionNote')}</p>}
-      {forecast?.experimental && <p className={s.hint}>{t('ai.pick.experimentalNote')}</p>}
-      <p className={s.hint} data-testid="ai-pick-caveat">{t('ai.pick.caveat')}</p>
     </section>
   );
 }

@@ -42,6 +42,7 @@ const leg = (id: number, home: string, away: string, market = '1', family = '1x2
   sample: 240,
   teamMatches: { home: 24, away: 23 },
   dataUntil: '2026-11-06T20:00:00Z',
+  price: null,
 });
 const answer = (over: Record<string, unknown> = {}) => ({
   mode: 'single',
@@ -55,6 +56,7 @@ const answer = (over: Record<string, unknown> = {}) => ({
   unavailableTournaments: [],
   uncheckedDays: 0,
   nextMatchAt: null,
+  couponOdds: null,
   experimental: true,
   modelVersion: 'goals-1',
   computedAt: '2026-11-08T06:00:00Z',
@@ -210,9 +212,11 @@ describe('quick prediction screen', () => {
     expect(within(result).getByTestId('quick-leg')).toHaveTextContent('Arsenal FC');
     expect(result).toHaveTextContent('Вероятность по модели: 84%');
     expect(result).toHaveTextContent('такой исход бывает в 45% матчей');
-    expect(within(result).getByTestId('quick-experimental')).toHaveTextContent('Экспериментально');
-    expect(within(result).getByTestId('quick-caveat')).toHaveTextContent('не гарантия');
-    expect(within(result).getByTestId('source-note')).toHaveTextContent('Football data provided by the Football-Data.org API');
+    // No boilerplate labels or source notes in the result.
+    for (const id of ['quick-experimental', 'quick-caveat', 'source-note', 'price-line', 'quick-coupon-odds']) {
+      expect(within(result).queryByTestId(id)).toBeNull();
+    }
+    expect(result).not.toHaveTextContent(/Экспериментально|гаранти|football-data/i);
     expect(screen.getByTestId('quick-counts')).toHaveTextContent('Предстоящих матчей в периоде: 9. Подходят под условия: 3.');
     expect(screen.getByTestId('quick-counts')).toHaveTextContent('Не в день матча по UTC: 4');
     // "Change criteria" returns to the same, remembered criteria.
@@ -243,7 +247,7 @@ describe('quick prediction screen', () => {
     expect(within(result).getAllByTestId('quick-leg')).toHaveLength(2);
     expect(result).toHaveTextContent('Купон из 2 матчей');
     expect(within(result).getByTestId('quick-combined')).toHaveTextContent('от 45% до 64%');
-    expect(within(result).getByTestId('quick-combined')).toHaveTextContent('Вероятности не перемножаются');
+    expect(within(result).getByTestId('quick-combined')).toHaveTextContent('диапазон верен при любой связи');
     await user.click(screen.getByTestId('quick-repeat'));
     await waitFor(() => expect(calls).toBe(3));
   });
@@ -712,5 +716,112 @@ describe('local day', () => {
     now = new Date('2026-11-08T20:00:05Z');
     document.dispatchEvent(new Event('visibilitychange'));
     await waitFor(() => expect(within(screen.getByTestId('date-strip')).getByRole('button', { name: /9 ноября/ })).toHaveAttribute('aria-pressed', 'true'));
+  });
+});
+
+describe('quick prediction prices', () => {
+  const r1 = (x: number) => Math.round(x * 10) / 10;
+  const price = (market: string, odds: number, marketP: number, modelP: number, fetchedAt = '2026-11-08T05:50:00Z') => ({
+    market, odds, impliedProbability: r1(100 / odds), marketProbability: marketP, modelProbability: modelP,
+    edge: r1(modelP - marketP), expectedValue: r1((modelP / 100) * odds * 100 - 100), margin: 5.1, fetchedAt, validFor: 840,
+  });
+  const priced = (id: number, home: string, away: string, odds: number, fetchedAt?: string) =>
+    ({ ...leg(id, home, away), price: price('1', odds, 58.2, 64, fetchedAt) });
+  const coupon = (over: Record<string, unknown> = {}) => answer({
+    mode: 'coupon', size: 2, combined: [28, 64],
+    legs: [priced(1, 'A', 'B', 1.7, '2026-11-08T05:50:00Z'), priced(2, 'C', 'D', 1.8, '2026-11-08T05:55:00Z')],
+    couponOdds: { odds: 3.06, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 }, ...over,
+  });
+
+  it('accepts priced legs and the product of their prices', () => {
+    const single = readQuick(answer({ legs: [priced(1, 'A', 'B', 1.7)] }), SINGLE, RANGE, asEvent);
+    expect(single?.legs[0]?.price?.odds).toBe(1.7);
+    expect(readQuick(coupon(), COUPON, RANGE, asEvent)?.couponOdds).toMatchObject({ odds: 3.06, fetchedAt: '2026-11-08T05:50:00Z' });
+    const half = answer({ mode: 'coupon', size: 2, combined: [28, 64], legs: [priced(1, 'A', 'B', 1.7), leg(2, 'C', 'D')] });
+    expect(readQuick(half, COUPON, RANGE, asEvent)?.couponOdds).toBeNull();
+  });
+
+  it.each([
+    ['a price of another market', answer({ legs: [{ ...leg(1, 'A', 'B'), price: price('X', 3.4, 24, 23) }] })],
+    ['a price whose expected value does not follow', answer({ legs: [{ ...leg(1, 'A', 'B'), price: { ...price('1', 1.7, 58.2, 64), expectedValue: 40 } }] })],
+    ['a model figure far from the shown percent', answer({ legs: [{ ...leg(1, 'A', 'B'), price: price('1', 1.7, 58.2, 70) }] })],
+    ['a price without its time', answer({ legs: [{ ...leg(1, 'A', 'B'), price: { ...price('1', 1.7, 58.2, 64), fetchedAt: undefined } }] })],
+    ['a coupon price that is not the product', coupon({ couponOdds: { odds: 4.5, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } })],
+    ['a coupon price a few cents off the product', coupon({ couponOdds: { odds: 3.09, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } })],
+    ['a coupon price below a cent', coupon({ couponOdds: { odds: 3.061, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } })],
+    ['a coupon price dated by the newer leg', coupon({ couponOdds: { odds: 3.06, fetchedAt: '2026-11-08T05:55:00Z', validFor: 840 } })],
+    ['a coupon price without validity', coupon({ couponOdds: { odds: 3.06, fetchedAt: '2026-11-08T05:50:00Z' } })],
+    ['a leg price without validity', answer({ legs: [{ ...leg(1, 'A', 'B'), price: { ...price('1', 1.7, 58.2, 64), validFor: undefined } }] })],
+    ['every leg priced but no coupon price', coupon({ couponOdds: null })],
+    ['a coupon price with an unpriced leg', coupon({ legs: [priced(1, 'A', 'B', 1.7), leg(2, 'C', 'D')] })],
+    ['a coupon price for a single', answer({ legs: [priced(1, 'A', 'B', 1.7)], couponOdds: { odds: 1.7, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } })],
+    ['a missing price field', answer({ legs: [{ ...leg(1, 'A', 'B'), price: undefined }] })],
+  ])('rejects %s', (_, body) => {
+    const criteria = (body as { mode: string }).mode === 'coupon' ? COUPON : SINGLE;
+    expect(readQuick(body as Record<string, unknown>, criteria, RANGE, asEvent)).toBeNull();
+  });
+
+  it('validity counts from when the request was sent: a slow answer never extends it', () => {
+    const tenMinutesAgo = { mono: performance.now() - 600_000, wall: Date.now() - 600_000 };
+    const read = readQuick(answer({ legs: [priced(1, 'A', 'B', 1.7)] }), SINGLE, RANGE, asEvent, tenMinutesAgo);
+    const left = read!.legs[0]!.price!.expires.mono - performance.now();
+    expect(left).toBeGreaterThan(230_000);
+    expect(left).toBeLessThanOrEqual(240_000);
+  });
+
+  it('a five-leg coupon of long prices is accepted (the product may be large)', () => {
+    const five = Array.from({ length: 5 }, (_, i) => priced(i + 1, `H${i}`, `A${i}`, 20));
+    const body = answer({ mode: 'coupon', size: 5, suitable: 5, combined: [0, 64], legs: five,
+      couponOdds: { odds: 3_200_000, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } });
+    const read = readQuick(body, { ...COUPON, size: 5 }, RANGE, asEvent);
+    expect(read?.couponOdds?.odds).toBe(3_200_000);
+  });
+
+  it('a coupon price of nine digits is still read in cents (floating point at that size)', () => {
+    const five = Array.from({ length: 5 }, (_, i) => priced(i + 1, `H${i}`, `A${i}`, 98.03));
+    const body = answer({ mode: 'coupon', size: 5, suitable: 5, combined: [0, 64], legs: five,
+      couponOdds: { odds: 9_053_051_963.72, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } });
+    expect(readQuick(body, { ...COUPON, size: 5 }, RANGE, asEvent)?.couponOdds?.odds).toBe(9_053_051_963.72);
+  });
+
+  it('a coupon shows each price and the computed coupon odds as a product, not an offered price', async () => {
+    const user = userEvent.setup();
+    resetQuickMemory();
+    const { data } = backend(() => coupon({ legs: [priced(1, 'A FC', 'B FC', 1.7, '2026-11-08T05:50:00Z'), priced(2, 'C FC', 'D FC', 1.8, '2026-11-08T05:55:00Z')] }));
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByRole('button', { name: 'Купон' }));
+    await user.click(within(screen.getByTestId('quick-size')).getByRole('button', { name: '2' }));
+    await user.click(screen.getByTestId('quick-submit'));
+    const result = await screen.findByTestId('quick-result');
+    const lines = within(result).getAllByTestId('price-line');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toHaveTextContent('Коэффициент 1,70 · рынок 58,2% · модель 64% · матожидание +8,8%');
+    const odds = within(result).getByTestId('quick-coupon-odds');
+    expect(odds).toHaveTextContent('Расчётный коэффициент купона: 3,06');
+    expect(odds).toHaveTextContent('коэффициент экспресса у букмекера может отличаться');
+    expect(odds).not.toHaveTextContent(/матожидание/i);  // no expected value for the combination
+    expect(result).toHaveTextContent('Коэффициенты на');
+  });
+
+  it('prices go when their validity ends, also from a pick kept while away; the pick stays', async () => {
+    const user = userEvent.setup();
+    resetQuickMemory();
+    const short = (id: number, home: string, away: string) =>
+      ({ ...leg(id, home, away), price: { ...price('1', 1.7, 58.2, 64), validFor: 1 } });
+    const { data } = backend(() => answer({ legs: [short(1, 'A FC', 'B FC')] }));
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    const result = await screen.findByTestId('quick-result');
+    expect(within(result).getByTestId('price-line')).toBeInTheDocument();
+    await waitFor(() => expect(within(screen.getByTestId('quick-result')).queryByTestId('price-line')).toBeNull(), { timeout: 3000 });
+    expect(screen.getByTestId('quick-result')).toHaveTextContent('Вероятность по модели: 64%');
+    expect(screen.getByTestId('quick-result')).not.toHaveTextContent('Коэффициенты на');
+    // Away and back: the kept pick is shown without the expired prices from the first paint.
+    window.location.hash = '#/matches';
+    await screen.findByTestId('catalog-title').catch(() => undefined);
+    window.location.hash = '#/quick';
+    const again = await screen.findByTestId('quick-result');
+    expect(within(again).queryByTestId('price-line')).toBeNull();
+    expect(screen.getByTestId('source-footer')).toHaveTextContent('Football-Data.org');
   });
 });

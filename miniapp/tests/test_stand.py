@@ -587,7 +587,7 @@ def test_stand_image_ships_every_runtime_module() -> None:
     # or the container fails at import time (tests here run from the source tree).
     root = Path(__file__).resolve().parents[2]
     dockerfile = (root / "deploy" / "miniapp" / "Dockerfile").read_text()
-    runtime = {p.name for p in (root / "miniapp").glob("*.py")} - {"live_check.py"}
+    runtime = {p.name for p in (root / "miniapp").glob("*.py")} - {"live_check.py", "odds_push.py"}  # manual tools
     for name in runtime:
         assert f"miniapp/{name}" in dockerfile, name
     assert "COPY miniapp/sports/ miniapp/sports/" in dockerfile

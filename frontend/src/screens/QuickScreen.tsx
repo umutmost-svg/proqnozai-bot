@@ -3,11 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { Emblem } from '../components/Emblem';
 import { Header } from '../components/Header';
-import { SourceNote } from '../components/SourceNote';
+import { DataFootnote } from '../components/SourceNote';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { ALL_TOURNAMENTS } from '../data/filter';
 import { DataError } from '../data/provider';
-import type { QuickAnswer, QuickCriteria, QuickLeg, QuickReason } from '../data/models';
+import type { PriceDeadline, QuickAnswer, QuickCriteria, QuickLeg, QuickReason } from '../data/models';
 import { QUICK_REASONS } from '../data/models';
 import {
   COUPON_SIZES,
@@ -21,8 +21,9 @@ import {
 import type { Translate } from '../i18n';
 import { formatDateTime, formatDayMonth } from '../i18n/format';
 import { useAsync } from '../hooks/useAsync';
-import { useServices, useSettings } from '../state/contexts';
+import { useFilters, useServices, useSettings } from '../state/contexts';
 import { dayKeyOf, timeOf } from '../time/zoned';
+import { PriceLine, pricesExpired, usePricesLive } from './ai/Market';
 import { decimal, marketText } from './ai/Model';
 import s from './QuickScreen.module.css';
 
@@ -76,7 +77,9 @@ function restore(run: Run | null, deviceNow: number): { run: Run | null; expired
   if (!run || run.state.status === 'loading') return { run: null, expired: false };
   if (run.state.status !== 'success') return { run, expired: false };
   const why = staleness(run.state, deviceNow);
-  return why === null ? { run, expired: false } : { run: null, expired: why === 'kickoff' };
+  if (why !== null) return { run: null, expired: why === 'kickoff' };
+  const answer = withoutExpiredPrices(run.state.answer);
+  return { run: answer === run.state.answer ? run : { ...run, state: { ...run.state, answer } }, expired: false };
 }
 
 /** The last pick survives a trip to a match and back (until the app is reloaded). */
@@ -224,7 +227,7 @@ function Criteria({ criteria, onChange }: { criteria: QuickCriteria; onChange: (
   );
 }
 
-function Leg({ leg, index }: { leg: QuickLeg; index: number | null }) {
+function Leg({ leg, index, priced }: { leg: QuickLeg; index: number | null; priced: boolean }) {
   const { t, timeZone, settings } = useSettings();
   const { data } = useServices();
   const navigate = useNavigate();
@@ -253,6 +256,7 @@ function Leg({ leg, index }: { leg: QuickLeg; index: number | null }) {
       <p className={s.legKicker}>{t(`ai.family.${leg.family}`)}</p>
       <p className={s.legOutcome}>{marketText(t, leg.market, event.home.name, event.away.name)}</p>
       <p className={s.legProbability}>{t('quick.leg.probability', { value: leg.probability })}</p>
+      {priced && leg.price && <PriceLine quote={leg.price} />}
       <ul className={s.why}>
         <li>
           {t('quick.leg.why', {
@@ -261,7 +265,6 @@ function Leg({ leg, index }: { leg: QuickLeg; index: number | null }) {
             away: decimal(settings.lang, leg.expectedGoals.away),
           })}
         </li>
-        <li>{t('quick.leg.sample', { sample: leg.sample, home: leg.teamMatches.home, away: leg.teamMatches.away })}</li>
       </ul>
     </article>
   );
@@ -339,8 +342,22 @@ function NextSteps({ answer, period, onWeek }: { answer: QuickAnswer; period: Qu
   );
 }
 
+/** The earliest of the answer's price deadlines: every price goes at once (a coupon is one view). */
+function firstDeadline(answer: QuickAnswer): PriceDeadline | undefined {
+  const all = [...answer.legs.map((l) => l.price?.expires), answer.couponOdds?.expires].filter((d): d is PriceDeadline => !!d);
+  return all.sort((a, b) => a.mono - b.mono)[0];
+}
+
+/** An answer kept from an earlier visit loses prices that expired meanwhile (before it is shown again). */
+function withoutExpiredPrices(answer: QuickAnswer): QuickAnswer {
+  const deadline = firstDeadline(answer);
+  if (!deadline || !pricesExpired(deadline)) return answer;
+  return { ...answer, couponOdds: null, legs: answer.legs.map((l) => ({ ...l, price: null })) };
+}
+
 function Result({ answer, period, onWeek }: { answer: QuickAnswer; period: QuickCriteria['period']; onWeek: () => void }) {
-  const { t, timeZone } = useSettings();
+  const { t, timeZone, settings } = useSettings();
+  const priced = usePricesLive(firstDeadline(answer));
   if (answer.status !== 'ok') {
     const empty = answer.counts.matches === 0;
     return (
@@ -368,19 +385,19 @@ function Result({ answer, period, onWeek }: { answer: QuickAnswer; period: Quick
     );
   }
   const coupon = answer.mode === 'coupon';
+  // When the shown prices were taken: the oldest of them.
+  const pricedAt = answer.legs
+    .map((l) => l.price?.fetchedAt)
+    .filter((x): x is string => !!x)
+    .sort((a, b) => Date.parse(a) - Date.parse(b))[0];
   return (
     <>
       <section className={`${s.card} ${s.result}`} data-testid="quick-result" data-mode={answer.mode}>
         <div className={s.resultHead}>
           <h2 className={s.resultTitle}>{coupon ? t('quick.result.coupon', { n: answer.legs.length }) : t('quick.result.single')}</h2>
-          {answer.experimental && (
-            <span className={s.badge} data-testid="quick-experimental">
-              {t('ai.pick.experimentalBadge')}
-            </span>
-          )}
         </div>
         {answer.legs.map((leg, i) => (
-          <Leg key={leg.event.id} leg={leg} index={coupon ? i + 1 : null} />
+          <Leg key={leg.event.id} leg={leg} index={coupon ? i + 1 : null} priced={priced} />
         ))}
         {coupon && answer.combined !== null && (
           <div className={s.combined} data-testid="quick-combined">
@@ -392,12 +409,20 @@ function Result({ answer, period, onWeek }: { answer: QuickAnswer; period: Quick
             <p className={s.hint}>{t('quick.combinedNote')}</p>
           </div>
         )}
-        {answer.experimental && <p className={s.hint}>{t('quick.experimentalNote')}</p>}
-        <p className={s.hint} data-testid="quick-caveat">
-          {t('ai.pick.caveat')}
+        {coupon && priced && answer.couponOdds && (
+          <div className={s.combined} data-testid="quick-coupon-odds">
+            <p className={s.combinedValue}>{t('quick.couponOdds', { odds: decimal(settings.lang, answer.couponOdds.odds) })}</p>
+            <p className={s.hint}>{t('quick.couponOddsNote')}</p>
+          </div>
+        )}
+        <p className={s.meta}>
+          {[
+            t('quick.computedAt', { date: formatDateTime(new Date(answer.computedAt), timeZone) }),
+            priced && pricedAt ? t('ai.value.asOf', { time: formatDateTime(new Date(pricedAt), timeZone) }) : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
         </p>
-        <p className={s.meta}>{t('quick.computedAt', { date: formatDateTime(new Date(answer.computedAt), timeZone) })}</p>
-        {answer.legs[0]?.event.source && <SourceNote source={answer.legs[0].event.source} />}
       </section>
       <Counts answer={answer} />
     </>
@@ -419,6 +444,7 @@ function PickError({ reason, onRetry }: { reason: string | undefined; onRetry: (
 export function QuickScreen() {
   const { data, clock } = useServices();
   const { t, timeZone } = useSettings();
+  const f = useFilters();
   const known = new Set(data.listTournaments('football').map((x) => x.id));
   const [criteria, setCriteria] = useState<QuickCriteria>(() => lastRun?.criteria ?? loadCriteria(known));
   // Decided once, before the first render (see restore): nothing stale is ever painted.
@@ -540,6 +566,7 @@ export function QuickScreen() {
           )}
         </>
       )}
+      <DataFootnote sport="football" today={f.today} />
     </AppShell>
   );
 }

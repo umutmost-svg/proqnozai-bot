@@ -115,6 +115,42 @@ def _publish_generation(fresh: list, last_id, complete: bool, prev: list) -> lis
 
 # ─── Mostbet Odds Checker API ─────────────────────────────────────────────────
 
+# When the API last answered 429 (any endpoint, any caller). Background work that
+# shares the API with users (the Mini App odds export) pauses after it, so the
+# bot's own requests keep the API's rate budget first.
+last_rate_limited_at: float = 0.0
+
+
+# When each line was last present in a page actually fetched (not in a tail merged from an
+# earlier generation): the generation's own timestamp can be newer than some of its entries.
+# Background callers that rely on a line's fresh state (e.g. "not live yet") check this.
+line_seen_at: dict[int, float] = {}
+
+
+def _note_lines_seen(matches: list, now: float) -> None:
+    for m in matches:
+        line_id = m.get("id")
+        if isinstance(line_id, int) and not isinstance(line_id, bool):
+            line_seen_at[line_id] = now
+    for line_id in [i for i, t in line_seen_at.items() if now - t > 86400]:
+        del line_seen_at[line_id]  # bounded memory
+
+
+# Lines whose latest odds fetch did not read every page (failed page, bad JSON, the page cap,
+# an exception): their cached set may be incomplete. Background callers skip such lines.
+_partial_odds: set[int] = set()
+
+
+def odds_complete(line_id: int) -> bool:
+    """Was the latest odds fetch of this line read in full (its cached set is the whole line)?"""
+    return line_id not in _partial_odds
+
+
+def _note_rate_limited() -> None:
+    global last_rate_limited_at
+    last_rate_limited_at = time.time()
+
+
 def cached_matches() -> list:
     """The match list already in memory, without ever touching the network.
 
@@ -172,6 +208,7 @@ async def _mostbet_load_matches() -> list:
                         params={"lastId": last_id, "locale": "en", "limit": _PAGE_LIMIT}
                     )
                     if r.status_code == 429:
+                        _note_rate_limited()
                         rate_hits += 1
                         retry_after = min(int(r.headers.get("Retry-After", 15)), 30)
                         logger.warning(f"Mostbet 429 on page {page} (hit {rate_hits}/{_MAX_429}) "
@@ -216,7 +253,9 @@ async def _mostbet_load_matches() -> list:
         if all_matches:
             _, prev = mostbet_cache.get(cache_key, (0, []))
             published = _publish_generation(all_matches, last_id, complete, prev)
-            mostbet_cache[cache_key] = (time.time(), published)
+            now = time.time()
+            mostbet_cache[cache_key] = (now, published)
+            _note_lines_seen(all_matches, now)
             logger.info(f"Mostbet cache updated: {len(published)} total matches "
                         f"({'complete' if complete else 'merged/partial'})")
             return published
@@ -284,8 +323,12 @@ async def mostbet_find_match(team1: str, team2: str) -> dict | None:
     return None
 
 
-async def mostbet_get_odds(line_id: int) -> dict:
-    """Get odds for a match from Mostbet with caching."""
+async def mostbet_get_odds(line_id: int, *, retry_on_429: bool = True) -> dict:
+    """Get odds for a match from Mostbet with caching.
+
+    retry_on_429=False (background callers such as the Mini App odds export): the first 429
+    ends the fetch at once, and that interrupted result is NOT cached, so a bot user asking
+    for the same line right after still gets a real fetch instead of an empty cached one."""
     cache_key = f"odds_{line_id}"
     now = time.time()
     if cache_key in mostbet_cache:
@@ -323,6 +366,8 @@ async def mostbet_get_odds(line_id: int) -> dict:
     # via lastId (cursor = last outcomeId); only "Oddschecker"-labelled
     # outcomes are returned, so the full set is usually small.
     outcomes: list = []
+    rate_limited = False
+    complete = False  # every page was read to the cursor's natural end
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as h:
             last_id = 0
@@ -335,6 +380,10 @@ async def mostbet_get_odds(line_id: int) -> dict:
                         params={"lastId": last_id, "locale": "en", "limit": 100}
                     )
                     if r.status_code == 429:
+                        _note_rate_limited()
+                        if not retry_on_429:
+                            rate_limited = True
+                            break
                         retry_after = min(int(r.headers.get("Retry-After", 10)), 30)
                         logger.warning(f"Mostbet odds 429 (attempt {attempt+1}) — waiting {retry_after}s")
                         await asyncio.sleep(retry_after)
@@ -344,19 +393,30 @@ async def mostbet_get_odds(line_id: int) -> dict:
                     logger.error(f"Mostbet odds error: {r.status_code if r else 'no response'}")
                     break
                 try:
-                    page = r.json().get("lineMatchOutcomes", [])
+                    page = r.json().get("lineMatchOutcomes")
                 except Exception:
                     logger.error(f"Mostbet odds invalid JSON for line_id={line_id}")
                     break
+                if not isinstance(page, list):
+                    # A 200 without the outcomes list is not "the last page": the set stays incomplete.
+                    logger.error(f"Mostbet odds without an outcomes list for line_id={line_id}")
+                    break
                 if not page:
+                    complete = True
                     break
                 outcomes.extend(page)
                 if len(page) < 100:
+                    complete = True
                     break
                 last_id = page[-1].get("outcomeId", 0)
                 if not last_id:
                     break
 
+        if rate_limited or (not complete and not retry_on_429):
+            # Interrupted (a 429, a failed or unreadable page, the page cap) for a background
+            # caller: a partial page set is never used nor cached.
+            _partial_odds.add(line_id)
+            return result
         if outcomes:
             # Handicap lines collected as {abs_value: {"w1": (val, odd), "w2": (val, odd)}}
             # so the W1/W2 pair is always read from the SAME line.
@@ -469,6 +529,13 @@ async def mostbet_get_odds(line_id: int) -> dict:
 
     except Exception as e:
         logger.error(f"mostbet_get_odds: {e}")
+        complete = False
+    # The bot's own callers keep their behaviour (a partial set is cached as before), but the
+    # line is remembered as partial so background callers never pass that set on.
+    if complete:
+        _partial_odds.discard(line_id)
+    else:
+        _partial_odds.add(line_id)
     mostbet_cache[f"odds_{line_id}"] = (time.time(), result)
     return result
 

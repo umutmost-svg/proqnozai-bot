@@ -3,7 +3,7 @@ import type { AiFactor, ModelForecast, TeamBasis, Tournament } from '../../data/
 import { listOf, plural, type Lang, type Translate } from '../../i18n';
 import { useSettings } from '../../state/contexts';
 import s from './Ai.module.css';
-import { decimal, ModelSource } from './Model';
+import { decimal } from './Model';
 
 type Basis = { home: TeamBasis; away: TeamBasis };
 
@@ -108,8 +108,8 @@ function TeamFacts({ team }: { team: TeamBasis }) {
   );
 }
 
-/** Verified numbers of both teams and what they cover; v2 answers also carry the source here. */
-export function Facts({ basis, tournament, provider, attribution, title, children }: { basis: Basis; tournament?: Tournament; provider: string | null; attribution: string | null; title?: string; children?: ReactNode }) {
+/** Verified numbers of both teams and what they cover. */
+export function Facts({ basis, tournament, title, children }: { basis: Basis; tournament?: Tournament; title?: string; children?: ReactNode }) {
   const { t } = useSettings();
   const hasTable = basis.home.tablePosition !== null || basis.away.tablePosition !== null;
   return (
@@ -124,59 +124,6 @@ export function Facts({ basis, tournament, provider, attribution, title, childre
         <li>{t('ai.facts.formNote')}</li>
         {hasTable && <li>{t('ai.facts.tableNote', { tournament: tournament?.name ?? '' })}</li>}
       </ul>
-      {provider && (
-        <p className={s.source} data-testid="ai-source">
-          {t('ai.basisSource', { provider })}
-          {attribution && (
-            <>
-              <br />
-              {attribution}
-            </>
-          )}
-        </p>
-      )}
-    </section>
-  );
-}
-
-export function Limitations({ hasTable, forecast }: { hasTable: boolean; forecast?: ModelForecast }) {
-  const { t } = useSettings();
-  return (
-    <section className={s.card} data-testid="ai-limitations">
-      <h3 className={s.cardTitle}>{t('ai.limitsTitle')}</h3>
-      <ul className={s.list}>
-        <li>{t('ai.limits.odds')}</li>
-        {forecast ? <li>{t('ai.limits.model')}</li> : <li>{t('ai.limits.lineups')}</li>}
-        {!forecast && <li>{t(hasTable ? 'ai.limits.data' : 'ai.limits.dataNoTable')}</li>}
-        {forecast?.limited && (
-          <li>{t(forecast.noBetReason === 'unvalidatedCompetition' ? 'ai.limits.unvalidated' : 'ai.limits.limited')}</li>
-        )}
-        {forecast && forecast.unprovenFamilies.length > 0 && <li>{t('ai.limits.unproven')}</li>}
-        <li>{t('ai.limits.guarantee')}</li>
-      </ul>
-    </section>
-  );
-}
-
-/** Which data and model the analysis rests on, and how fresh they are (v3). */
-export function Sources({ forecast, provider, attribution, generatedAt }: { forecast: ModelForecast; provider: string | null; attribution: string | null; generatedAt: ReactNode }) {
-  const { t } = useSettings();
-  return (
-    <section className={s.card} data-testid="ai-sources">
-      <h3 className={s.cardTitle}>{t('ai.sources.title')}</h3>
-      {generatedAt}
-      <ModelSource forecast={forecast} />
-      {provider && (
-        <p className={s.source} data-testid="ai-source">
-          {t('ai.basisSource', { provider })}
-          {attribution && (
-            <>
-              <br />
-              {attribution}
-            </>
-          )}
-        </p>
-      )}
     </section>
   );
 }
