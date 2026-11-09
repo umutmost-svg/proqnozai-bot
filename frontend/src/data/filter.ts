@@ -66,21 +66,13 @@ export function compareEvents(a: SportEvent, b: SportEvent): number {
 const FEATURABLE: ReadonlySet<EventStatus> = new Set(['live', 'upcoming', 'finished']);
 
 /**
- * Featured event for the home hero: an explicitly featured one first, then the next
- * relevant. Postponed, suspended, cancelled or unknown events are never the
- * "match of the day" — the hero shows a kickoff time, not a status.
+ * Demo only: the day's top matches without real tables — the featured one first, then
+ * live, upcoming and finished by tournament priority (the real ranking is the backend's).
  */
-export function pickFeatured(events: readonly SportEvent[], rank: (tournamentId: string) => number = () => 0): SportEvent | null {
-  // Only events of the day being shown are passed in (filterEvents keeps the chosen day in
-  // the chosen zone): an older match can never stand in for this day's.
-  const candidates = events.filter((e) => FEATURABLE.has(e.status));
-  const byRank = (list: SportEvent[]) =>
-    [...list].sort((a, b) => rank(a.tournamentId) - rank(b.tournamentId) || a.startsAt.localeCompare(b.startsAt));
-  return (
-    candidates.find((e) => e.featured) ??
-    byRank(candidates.filter((e) => e.status === 'live'))[0] ??
-    byRank(candidates.filter((e) => e.status === 'upcoming'))[0] ??
-    byRank(candidates)[0] ??
-    null
-  );
+export function pickTop(events: readonly SportEvent[], rank: (tournamentId: string) => number = () => 0, max = 5): SportEvent[] {
+  const status = (e: SportEvent) => (e.status === 'finished' ? 1 : 0);
+  return events
+    .filter((e) => FEATURABLE.has(e.status))
+    .sort((a, b) => Number(!!b.featured) - Number(!!a.featured) || status(a) - status(b) || rank(a.tournamentId) - rank(b.tournamentId) || a.startsAt.localeCompare(b.startsAt) || a.id.localeCompare(b.id))
+    .slice(0, max);
 }

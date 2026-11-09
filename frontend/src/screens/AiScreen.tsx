@@ -6,7 +6,8 @@ import { DeferredButton, EmptyState, ErrorState, LoadingState } from '../compone
 import { DemoBanner } from '../components/StatusBadge';
 import ui from '../components/ui.module.css';
 import type { AiAnalysis, SportEvent, TeamBasis } from '../data/models';
-import { Facts, Factors, Limitations } from './ai/Explain';
+import { Facts, Factors, Limitations, Sources } from './ai/Explain';
+import { Alternatives, MarketsBlock, ModelStats } from './ai/Model';
 import { PickCard } from './ai/PickCard';
 import { ProbabilityBlock } from './ai/ProbabilityBlock';
 import { DataError } from '../data/provider';
@@ -63,27 +64,57 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
   };
   const title = !real ? t('ai.probabilities') : analysis.estimated ? t('ai.probabilitiesEstimated') : t('ai.probabilitiesReal');
   const hasTable = !!basis && (basis.home.tablePosition !== null || basis.away.tablePosition !== null);
+  const forecast = analysis.forecast;
+  const tournament = data.getTournament(event.tournamentId);
+  const generated = analysis.generatedAt && (
+    <p className={s.snapshot}>
+      {t(real ? 'ai.generated' : 'ai.snapshot', { date: formatDateTime(new Date(analysis.generatedAt), timeZone) })}
+    </p>
+  );
   return (
     <>
       {!real && <DemoBanner label={t('ai.exampleBadge')} />}
       <h2 className={s.matchTitle}>{`${event.home.name} — ${event.away.name}`}</h2>
-      {analysis.generatedAt && (
-        <p className={s.snapshot}>
-          {t(real ? 'ai.generated' : 'ai.snapshot', { date: formatDateTime(new Date(analysis.generatedAt), timeZone) })}
+      {forecast ? (
+        <p className={s.snapshot} data-testid="ai-match-meta">
+          {[tournament?.name, formatDateTime(new Date(event.startsAt), timeZone)].filter(Boolean).join(' · ')}
         </p>
+      ) : (
+        generated
       )}
-      <ProbabilityBlock title={title} labels={labels} values={analysis.probabilities} sport={analysis.sport} />
+      <ProbabilityBlock
+        title={title}
+        labels={labels}
+        values={analysis.probabilities}
+        sport={analysis.sport}
+        badge={forecast?.limited ? t('ai.limitedBadge') : undefined}
+      />
       {real && basis && analysis.pick && (
-        <PickCard pick={analysis.pick} event={event} values={analysis.probabilities} basis={basis} />
+        <PickCard pick={analysis.pick} event={event} values={analysis.probabilities} basis={basis} forecast={forecast} />
       )}
+      {real && forecast && <Alternatives items={analysis.alternatives ?? []} event={event} experimental={forecast.experimental} />}
+      {real && forecast && <MarketsBlock forecast={forecast} event={event} />}
       {real && basis && analysis.factors && analysis.factors.length > 0 && (
-        <Factors factors={analysis.factors} basis={basis} />
+        <Factors factors={analysis.factors} basis={basis} forecast={forecast} />
       )}
-      {real && basis ? (
+      {real && basis && forecast ? (
+        <>
+          <Facts basis={basis} tournament={tournament} provider={null} attribution={null} title={t('ai.stats.title')}>
+            <ModelStats forecast={forecast} event={event} />
+          </Facts>
+          <Sources
+            forecast={forecast}
+            provider={event.source?.provider ?? null}
+            attribution={event.source?.attribution ?? null}
+            generatedAt={generated}
+          />
+          <Limitations hasTable={hasTable} forecast={forecast} />
+        </>
+      ) : real && basis ? (
         <>
           <Facts
             basis={basis}
-            tournament={data.getTournament(event.tournamentId)}
+            tournament={tournament}
             provider={event.source?.provider ?? null}
             attribution={event.source?.attribution ?? null}
           />

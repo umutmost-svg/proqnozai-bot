@@ -8,6 +8,7 @@ and stay ``None`` / "unavailable".
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -39,6 +40,8 @@ KNOWN_COMPETITIONS: dict[str, tuple[str, str]] = {
     "WC": ("FIFA World Cup", "World"),
 }
 
+_STAGE = re.compile(r"[A-Z0-9_]{1,40}")
+
 _STATUS: dict[str, EventStatus] = {
     "SCHEDULED": "upcoming",
     "TIMED": "upcoming",
@@ -65,6 +68,8 @@ NOT_FOUND_TTL_S = 15 * 60.0
 # refreshed every 15 minutes, every 2 minutes while one of its matches is live.
 CALENDAR_TTL_S = 15 * 60.0
 CALENDAR_LIVE_TTL_S = 120.0
+# A past season no longer changes (only rare result corrections): one request a day per competition.
+PAST_SEASON_TTL_S = 24 * 3600.0
 # Competition emblems rarely change: the competition list is asked at most once a day.
 EMBLEMS_TTL_S = 24 * 3600.0
 EMBLEMS_RETRY_S = 15 * 60.0
@@ -152,6 +157,20 @@ def _pair(node: object) -> tuple[int, int] | None:
     return (home, away) if home is not None and away is not None else None
 
 
+def ninety_minute_score(score: object) -> tuple[int, int] | None:
+    """The score after regular time. With extra time or a shoot-out the provider's
+    ``fullTime`` also counts those goals (and, for shoot-outs, may count the penalties),
+    so ``regularTime`` is the only 90-minute figure then; when it is missing there is none."""
+    if not isinstance(score, dict):
+        return None
+    duration = score.get("duration")
+    if duration == "REGULAR":
+        return _pair(score.get("fullTime"))
+    if duration in ("EXTRA_TIME", "PENALTY_SHOOTOUT"):
+        return _pair(score.get("regularTime"))
+    return None
+
+
 def _iso_utc(value: object) -> str | None:
     if not isinstance(value, str):
         return None
@@ -198,8 +217,10 @@ def normalize_match(raw: object, fetched_at: str, allowed_codes: frozenset[str])
     score_node = raw.get("score") if isinstance(raw.get("score"), dict) else {}
     score = _pair(score_node.get("fullTime")) if status in ("live", "finished", "suspended") else None
     half_time = _pair(score_node.get("halfTime")) if status in ("live", "finished", "suspended") else None
+    regular = ninety_minute_score(score_node) if status == "finished" and source_status == "FINISHED" else None
     minute = _int_or_none(raw.get("minute")) if status == "live" else None
     matchday = raw.get("matchday")
+    stage = raw.get("stage")
     return FootballEvent(
         id=event_id(raw["id"]),
         tournament_id=tournament_id(code),
@@ -212,6 +233,8 @@ def normalize_match(raw: object, fetched_at: str, allowed_codes: frozenset[str])
         half_time=half_time,
         minute=minute,
         awarded=source_status == "AWARDED",
+        regular_score=regular,
+        stage=stage if isinstance(stage, str) and _STAGE.fullmatch(stage) else None,
         matchday=matchday if _id(matchday) is not None and matchday <= 100 else None,
         provenance=Provenance(PROVIDER, fetched_at, _iso_utc(raw.get("lastUpdated"))),
     )
@@ -391,11 +414,18 @@ class FootballDataAdapter:
         data, _ = await self.client.get_json(f"/teams/{team}/matches", {"status": "FINISHED", "limit": str(FORM_MATCHES)})
         return normalize_form(data.get("matches"), team), FORM_TTL_S
 
-    async def standings(self, code: str) -> tuple[dict[str, StandingRow], float]:
+    async def standings(self, code: str) -> tuple[Standings, float]:
+        """The competition's current tables: one request, shared by the table screen and the AI."""
         if code not in self._allowed:
             raise UpstreamError("not_found")
         data, _ = await self.client.get_json(f"/competitions/{code}/standings")
-        return normalize_standings(data), STANDINGS_TTL_S
+        top = data.get("competition") if isinstance(data, dict) else None
+        # The answer must name the competition asked for (as a calendar must): a missing or
+        # different identity could put another table under this tournament.
+        if not isinstance(top, dict) or top.get("code") != code:
+            raise UpstreamError("bad_response")
+        self._learn_emblem(data)
+        return parse_standings(data), STANDINGS_TTL_S
 
     async def competition_emblems(self) -> tuple[dict[str, str], float]:
         """Emblem URLs of the served competitions, from the provider's competition list."""
@@ -426,6 +456,22 @@ class FootballDataAdapter:
         if code not in self._allowed:
             raise UpstreamError("not_found")
         data, _ = await self.client.get_json(f"/competitions/{code}/matches")
+        ordered, season = self._season_payload(code, data)
+        ttl = CALENDAR_LIVE_TTL_S if any(e.status == "live" for e in ordered) else CALENDAR_TTL_S
+        return (ordered, season), ttl
+
+    async def past_season(self, code: str, year: int) -> tuple[tuple[list[FootballEvent], Season], float]:
+        """A finished earlier season (the goal model's history): asked at most once a day."""
+        if code not in self._allowed:
+            raise UpstreamError("not_found")
+        data, _ = await self.client.get_json(f"/competitions/{code}/matches", {"season": str(year)})
+        ordered, season = self._season_payload(code, data)
+        # The answer must be the season asked for, never the current one in its place.
+        if season.start is None or int(season.start[:4]) != year:
+            raise UpstreamError("bad_response")
+        return (ordered, season), PAST_SEASON_TTL_S
+
+    def _season_payload(self, code: str, data: dict) -> tuple[list[FootballEvent], Season]:
         matches = data.get("matches")
         top = data.get("competition")
         # The answer must be about the competition asked for, even with no matches at all.
@@ -456,8 +502,7 @@ class FootballDataAdapter:
                 raise UpstreamError("bad_response")
             events[event.id] = event
         ordered = sorted(events.values(), key=lambda e: (e.starts_at, e.id))
-        ttl = CALENDAR_LIVE_TTL_S if any(e.status == "live" for e in ordered) else CALENDAR_TTL_S
-        return (ordered, season_of(matches)), ttl
+        return ordered, season_of(matches)
 
     async def match(self, match_id: int) -> tuple[FootballEvent | None, float]:
         try:
@@ -480,10 +525,11 @@ class FootballDataAdapter:
 
 
 # --- verified context for the AI analysis (M3.2) ---------------------------------
-# Form and standings change at most after each round: cached for hours, shared by
-# every match of those teams, so an analysis rarely costs more than one request.
+# Form changes at most after each round: cached for hours, shared by every match of
+# those teams, so an analysis rarely costs more than one request. The table is also a
+# screen of its own: refreshed every 30 minutes (≤ 48 requests a day per competition).
 FORM_TTL_S = 6 * 3600.0
-STANDINGS_TTL_S = 6 * 3600.0
+STANDINGS_TTL_S = 30 * 60.0
 FORM_MATCHES = 10
 
 
@@ -554,24 +600,102 @@ def normalize_form(raw_matches: object, team: int) -> list[FormMatch]:
     return form[:FORM_MATCHES]
 
 
-def normalize_standings(data: object) -> dict[str, StandingRow]:
-    """The overall ("TOTAL") table, keyed by our team id."""
+@dataclass(frozen=True)
+class StandingEntry:
+    position: int
+    team: Competitor
+    played: int
+    won: int
+    draw: int
+    lost: int
+    goals_for: int
+    goals_against: int
+    goal_difference: int
+    points: int
+
+    def to_json(self) -> dict:
+        return {"position": self.position, "team": self.team.to_json(), "played": self.played, "won": self.won,
+                "draw": self.draw, "lost": self.lost, "goalsFor": self.goals_for,
+                "goalsAgainst": self.goals_against, "goalDifference": self.goal_difference, "points": self.points}
+
+
+@dataclass(frozen=True)
+class StandingBlock:
+    stage: str | None  # provider stage, e.g. REGULAR_SEASON, LEAGUE_STAGE, GROUP_STAGE
+    group: str | None  # provider label of the table inside that stage, as given
+    rows: tuple[StandingEntry, ...]  # in the provider's order (its tie-break rules), never re-sorted
+
+    def to_json(self) -> dict:
+        return {"stage": self.stage, "group": self.group, "rows": [r.to_json() for r in self.rows]}
+
+
+@dataclass(frozen=True)
+class Standings:
+    season: Season
+    blocks: tuple[StandingBlock, ...]  # overall ("TOTAL") tables only; empty: no table for this competition
+
+    def rows_by_team(self) -> dict[str, StandingRow]:
+        rows: dict[str, StandingRow] = {}
+        for block in self.blocks:
+            for e in block.rows:
+                rows.setdefault(e.team.id, StandingRow(e.position, e.team.id, e.played, e.won, e.draw, e.lost,
+                                                       e.points, e.goals_for, e.goals_against))
+        return rows
+
+
+_STANDING_FIELDS = ("position", "playedGames", "won", "draw", "lost", "goalsFor", "goalsAgainst")
+
+
+def _signed_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def parse_standings(data: object) -> Standings:
+    """The provider's overall tables, block by block and row by row, exactly as given.
+
+    Strict: a table with an unreadable row is broken as a whole (the cache keeps serving
+    the last good one) — a silently missing team would shift every position below it."""
     standings = data.get("standings") if isinstance(data, dict) else None
     if not isinstance(standings, list):
         raise UpstreamError("bad_response")
-    total = next((s for s in standings if isinstance(s, dict) and s.get("type") == "TOTAL"), None)
-    table = total.get("table") if isinstance(total, dict) else None
-    if not isinstance(table, list):
-        return {}
-    rows: dict[str, StandingRow] = {}
-    for raw in table:
-        if not isinstance(raw, dict) or not isinstance(raw.get("team"), dict):
-            continue
-        team = _id(raw["team"].get("id"))
-        values = [_int_or_none(raw.get(k)) for k in
-                  ("position", "playedGames", "won", "draw", "lost", "points", "goalsFor", "goalsAgainst")]
-        if team is None or any(v is None for v in values):
-            continue
-        tid = f"{ID_PREFIX}:team:{team}"
-        rows[tid] = StandingRow(values[0], tid, *values[1:])  # type: ignore[arg-type]
-    return rows
+    season_node = data.get("season")
+    if season_node is not None and not isinstance(season_node, dict):
+        raise UpstreamError("bad_response")
+    season = _season_facts(season_node) if isinstance(season_node, dict) else Season(None, None, None)
+    blocks: list[StandingBlock] = []
+    for node in standings:
+        if not isinstance(node, dict):
+            raise UpstreamError("bad_response")
+        kind = node.get("type")
+        if kind in ("HOME", "AWAY"):
+            continue  # home / away splits: not shown
+        if kind != "TOTAL":
+            raise UpstreamError("bad_response")  # a block of unknown kind is never read as "no table"
+        table = node.get("table")
+        stage, group = node.get("stage"), node.get("group")
+        if not isinstance(table, list) or not (stage is None or isinstance(stage, str)) \
+                or not (group is None or isinstance(group, str)):
+            raise UpstreamError("bad_response")
+        rows: list[StandingEntry] = []
+        seen: set[str] = set()
+        for raw in table:
+            team = _team(raw.get("team")) if isinstance(raw, dict) else None
+            values = [_int_or_none(raw.get(k)) for k in _STANDING_FIELDS] if isinstance(raw, dict) else [None]
+            # Points may be negative after a deduction: any whole number is valid, as given.
+            values.append(_signed_int(raw.get("points")) if isinstance(raw, dict) else None)
+            if team is None or any(v is None for v in values) or team.id in seen:
+                raise UpstreamError("bad_response")
+            seen.add(team.id)
+            position, played, won, draw, lost, gf, ga, points = values  # type: ignore[misc]
+            # As given; only when the provider leaves it out is it the plain arithmetic gf − ga.
+            difference = _signed_int(raw.get("goalDifference")) if "goalDifference" in raw else gf - ga
+            if difference is None:
+                raise UpstreamError("bad_response")
+            rows.append(StandingEntry(position, team, played, won, draw, lost, gf, ga, difference, points))
+        blocks.append(StandingBlock(stage, group.strip() or None if group else None, tuple(rows)))
+    return Standings(season, tuple(blocks))
+
+
+def normalize_standings(data: object) -> dict[str, StandingRow]:
+    """The overall table(s), keyed by our team id (the AI analysis' table evidence)."""
+    return parse_standings(data).rows_by_team()

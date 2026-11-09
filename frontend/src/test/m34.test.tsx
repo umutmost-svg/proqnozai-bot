@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BackendSportsDataProvider } from '../data/BackendSportsDataProvider';
-import { pickFeatured } from '../data/filter';
+import { pickTop } from '../data/filter';
 import type { SportEvent } from '../data/models';
 import { CLOSE_MARGIN, outcomeTones, pickProbability } from '../data/probabilities';
 import { reportText, supportUsername, validEventId } from '../data/support';
@@ -81,13 +81,13 @@ describe('recommended bet', () => {
     renderApp('#/event/fd%3A4/ai', { data: aiBackend(analysis({ market: 'X2', reasons: ['away_better_form', 'away_higher_table'], probability: 76 })) });
     const pick = await screen.findByTestId('ai-pick');
     expect(pick).toHaveAttribute('data-market', 'X2');
-    expect(pick).toHaveTextContent('Предпочтительный исход модели · Двойной шанс · X2');
+    expect(pick).toHaveTextContent('Предпочтительный исход модели · Двойной шанс');
     expect(pick).toHaveTextContent('Liverpool не проиграет');
     expect(pick).toHaveTextContent('Расчетная вероятность: 76%');
     expect(pick).toHaveTextContent('Liverpool — 52%, Ничья — 24%: вместе 76%.');
     expect(pick).toHaveTextContent('У Liverpool 13 очков в последних матчах, у Crystal Palace — 4 очка.');
     expect(pick).toHaveTextContent('Liverpool выше в таблице: 2-е место против 19-го у Crystal Palace.');
-    expect(pick).toHaveTextContent('Коэффициентов нет');
+    expect(pick).toHaveTextContent('Это модельная оценка, а не гарантия результата. Без букмекерских коэффициентов выгодность ставки определить нельзя.');
     const order = ['ai-result', 'ai-pick', 'ai-factors', 'ai-basis', 'ai-limitations'].map((id) => screen.getByTestId(id));
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -97,7 +97,7 @@ describe('recommended bet', () => {
   it('NO_BET says so without inventing a pick', async () => {
     renderApp('#/event/fd%3A4/ai', { data: aiBackend(analysis({ market: 'NO_BET', reasons: [], probability: null })) });
     const pick = await screen.findByTestId('ai-pick');
-    expect(pick).toHaveTextContent('Нет обоснованной рекомендации');
+    expect(pick).toHaveTextContent('Нет достаточно надежного прогноза');
     expect(pick).toHaveTextContent('Модель не выбрала исход для рекомендации.');
     expect(pick).not.toHaveTextContent('%');
   });
@@ -275,23 +275,25 @@ describe('home calendar', () => {
   });
 });
 
-describe('match of the day', () => {
+describe('top matches of the day', () => {
   const at = (id: string, status: SportEvent['status'], tournamentId: string, startsAt: string) =>
     ({ id, sport: 'football', status, tournamentId, startsAt, home: { id: 'a', name: 'A' }, away: { id: 'b', name: 'B' }, ai: { kind: 'unavailable' } }) as SportEvent;
 
-  it('prefers live, then upcoming by tournament priority, then the rest', () => {
+  it('demo order: tournament priority, live and upcoming alike (a kickoff never reorders), finished last, never a stopped match', () => {
     const rank = (id: string) => ['cl', 'pl'].indexOf(id);
-    expect(pickFeatured([at('1', 'upcoming', 'pl', '2026-11-08T10:00:00Z'), at('2', 'upcoming', 'cl', '2026-11-08T20:00:00Z')], rank)?.id).toBe('2');
-    expect(pickFeatured([at('1', 'upcoming', 'cl', '2026-11-08T10:00:00Z'), at('2', 'live', 'pl', '2026-11-08T09:00:00Z')], rank)?.id).toBe('2');
-    expect(pickFeatured([at('1', 'finished', 'pl', '2026-11-08T10:00:00Z'), at('2', 'postponed', 'cl', '2026-11-08T09:00:00Z')], rank)?.id).toBe('1');
+    const ids = (list: SportEvent[]) => pickTop(list, rank).map((e) => e.id);
+    expect(ids([at('1', 'upcoming', 'pl', '2026-11-08T10:00:00Z'), at('2', 'upcoming', 'cl', '2026-11-08T20:00:00Z')])).toEqual(['2', '1']);
+    expect(ids([at('1', 'upcoming', 'cl', '2026-11-08T10:00:00Z'), at('2', 'live', 'pl', '2026-11-08T09:00:00Z')])).toEqual(['1', '2']);
+    expect(ids([at('1', 'finished', 'cl', '2026-11-08T10:00:00Z'), at('2', 'postponed', 'cl', '2026-11-08T09:00:00Z'), at('3', 'upcoming', 'pl', '2026-11-08T21:00:00Z')])).toEqual(['3', '1']);
+    expect(pickTop(Array.from({ length: 8 }, (_, i) => at(String(i), 'upcoming', 'pl', `2026-11-08T1${i}:00:00Z`)))).toHaveLength(5);
   });
 
   it('says "match of the day" only for today, the chosen date otherwise, with the real status', async () => {
     const user = userEvent.setup();
     renderApp('#/');
-    expect(await screen.findByTestId('hero-title')).toHaveTextContent('Матч дня');
+    expect(await screen.findByTestId('hero-title')).toHaveTextContent('Главные матчи дня');
     await user.click(screen.getByRole('button', { name: '7 ноября' }));
-    await waitFor(() => expect(screen.getByTestId('hero-title')).toHaveTextContent('Главный матч · 7 ноября'));
+    await waitFor(() => expect(screen.getByTestId('hero-title')).toHaveTextContent('Главные матчи · 7 ноября'));
   });
 });
 
@@ -301,7 +303,9 @@ describe('coming soon', () => {
     const fetchImpl = vi.fn<typeof fetch>(async (input) =>
       String(input).startsWith('/api/sports/football/events')
         ? ok({ coverage: COVERAGE, tournaments: TOURNAMENTS, events: [ev(1, '2026-11-08T15:00:00Z')] })
-        : ok({ sport: 'football', coverage: COVERAGE, tournaments: TOURNAMENTS }),
+        : String(input).startsWith('/api/sports/football/top')
+          ? ok({ coverage: COVERAGE, tournaments: TOURNAMENTS, top: [{ event: ev(1, '2026-11-08T15:00:00Z'), leaders: false }] })
+          : ok({ sport: 'football', coverage: COVERAGE, tournaments: TOURNAMENTS }),
     );
     renderApp('#/', { data: new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl }) });
     await screen.findByTestId('hero');

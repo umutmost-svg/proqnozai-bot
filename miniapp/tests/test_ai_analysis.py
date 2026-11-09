@@ -1,9 +1,10 @@
-"""AI analysis (M3.2): offline — the provider and the model are fakes."""
+"""AI analysis (M3.2, v3 since M3.5): offline — the provider, the goal model and the language model are fakes."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,12 +27,19 @@ from miniapp.settings import Settings, SettingsError
 from miniapp.sports.cache import SportsCache
 from miniapp.sports.football_data import FootballDataAdapter, normalize_form, normalize_standings
 from miniapp.sports.service import SportsService, build_service
+from miniapp.forecast.engine import Unavailable
+from miniapp.forecast.history import ForecastHistory
 from miniapp.tests.conftest import ORIGIN, FakeClock, fresh, login
+from miniapp.tests.forecast_fakes import FakeForecaster, fake_forecast
 from miniapp.tests.signing import TEST_BOT_TOKEN
 from miniapp.tests.test_sports import DAY, KEY, FakeTransport, make_client, match, no_sleep, run
 
-NB = {"market": "NO_BET", "reasons": []}
-GOOD = json.dumps({"home_win": 48, "draw": 27, "away_win": 25, "factors": ["home_form", "away_table"], "pick": NB})
+GOOD = json.dumps({"factors": ["home_form", "away_table"], "reasons": []})
+SHOWN = fake_forecast().display  # the fake goal model's whole percents (1 51 · X 25 · 2 24)
+
+
+def answer(*factors: str, reasons: tuple[str, ...] = ()) -> str:
+    return json.dumps({"factors": list(factors), "reasons": list(reasons)})
 ALL = frozenset(FACTORS)
 
 
@@ -73,17 +81,19 @@ def chelsea_form(n: int = 5) -> dict:
 def standings() -> dict:
     row = lambda pos, team, pts: {"position": pos, "team": {"id": team[0], "name": team[1]}, "playedGames": 20,  # noqa: E731
                                   "won": 10, "draw": 5, "lost": 5, "points": pts, "goalsFor": 30, "goalsAgainst": 20}
-    return {"standings": [{"type": "HOME", "table": []}, {"type": "TOTAL", "table": [row(2, ARSENAL, 41), row(7, CHELSEA, 33)]}]}
+    return {"competition": {"code": "PL"},
+            "standings": [{"type": "HOME", "table": []}, {"type": "TOTAL", "table": [row(2, ARSENAL, 41), row(7, CHELSEA, 33)]}]}
 
 
 def make_ai(clock: FakeClock, model: FakeModel | None, *, per_user: int = 5, budget: int = 50, chelsea_games: int = 5,
-            status: str = "TIMED", ledger=None, table=None):
+            status: str = "TIMED", ledger=None, table=None, forecaster=None, history=None):
     t = FakeTransport()
     t.script = [t.ok(match(7, status)), t.ok(arsenal_form()), t.ok(chelsea_form(chelsea_games)), table or t.ok(standings())]
     adapter = FootballDataAdapter(make_client(t, clock), ("PL", "PD"), clock)
     sports = SportsService(adapter, cache=SportsCache(clock=clock), clock=clock)
     sports._known_ids.add("fd:7")
-    return AiService(sports, model, per_user_daily=per_user, daily_budget=budget, ledger=ledger, clock=clock), t
+    return AiService(sports, model, per_user_daily=per_user, daily_budget=budget, ledger=ledger, clock=clock,
+                     forecaster=forecaster or FakeForecaster(), history=history), t
 
 
 # --- verified data -------------------------------------------------------------------
@@ -108,7 +118,9 @@ def test_partial_analysis_from_verified_form_with_python_computed_basis(clock: F
     ai, t = make_ai(clock, model)
     result = run(ai.analyse("fd:7", user_id=1))
     assert result.kind == "partial" and result.estimated is True  # no odds → estimated probabilities
-    assert result.probabilities == {"home": 48, "draw": 27, "away": 25}
+    # Every probability is the goal model's, never the language model's.
+    assert result.probabilities == {"home": SHOWN["1"], "draw": SHOWN["X"], "away": SHOWN["2"]}
+    assert result.forecast["markets"] == SHOWN and result.pick.market == "NO_BET"
     assert result.reasons == ("no_odds_source",)
     home = result.basis["home"]
     assert (home["form"], home["points"], home["goalsFor"], home["goalsAgainst"], home["tablePosition"]) == ("WWDWW", 13, 9, 2, 2)
@@ -118,6 +130,8 @@ def test_partial_analysis_from_verified_form_with_python_computed_basis(clock: F
     assert result.factors == ("home_form", "away_table")
     facts = json.loads(user.split("Facts (JSON):\n", 1)[1])
     assert facts["home"]["form"] == "WWDWW" and facts["fixture"]["kickoffUtc"] == f"{DAY}T15:00:00Z"
+    assert facts["model"]["estimate1x2"] == result.probabilities and facts["model"]["recommended"] == "NO_BET"
+    assert facts["allowedReasons"] == [] and "away_table" in facts["allowedFactors"]
     assert not {"odds", "injuries", "lineups"} & set(json.dumps(facts).lower().split('"'))
 
 
@@ -160,12 +174,13 @@ def test_unknown_event_is_none(clock: FakeClock) -> None:
 
 
 @pytest.mark.parametrize("bad", [
-    json.dumps({"home_win": 50, "draw": 30, "away_win": 30, "factors": ["home_form", "away_form"], "pick": NB}),  # sum 110
-    json.dumps({"home_win": True, "draw": 49, "away_win": 50, "factors": ["home_form", "away_form"], "pick": NB}),
-    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form"], "pick": NB}),  # one factor
-    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "home_form"], "pick": NB}),  # duplicate
-    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "injuries"], "pick": NB}),  # not in the list
-    json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "away_form"], "pick": NB, "summary": "x"}),
+    json.dumps({"factors": ["home_form"], "reasons": []}),  # one factor
+    json.dumps({"factors": ["home_form", "home_form"], "reasons": []}),  # duplicate
+    json.dumps({"factors": ["home_form", "injuries"], "reasons": []}),  # not in the list
+    json.dumps({"factors": ["home_form", "away_form"], "reasons": [], "summary": "x"}),  # extra key
+    json.dumps({"factors": ["home_form", "away_form"]}),  # missing key
+    json.dumps({"factors": ["home_form", "away_form"], "reasons": [], "home_win": 50}),  # a number of its own
+    json.dumps({"factors": ["home_form", "away_form"], "reasons": ["home_better_form"]}),  # not offered
     "not json",
 ])
 def test_model_output_outside_the_contract_is_rejected_not_repaired(bad: str) -> None:
@@ -177,8 +192,19 @@ def test_model_output_outside_the_contract_is_rejected_not_repaired(bad: str) ->
 def test_malformed_factor_items_are_bad_output_not_a_crash() -> None:
     for factors in ([["home_form"], "away_form"], [{"k": 1}, "away_form"], [None, "home_form"]):
         with pytest.raises(AiError) as exc:
-            validate_output(json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": factors, "pick": NB}), ALL)
+            validate_output(json.dumps({"factors": factors, "reasons": []}), ALL)
         assert exc.value.code == "bad_output"
+
+
+def test_reasons_must_be_offered_unique_at_most_three_and_absent_for_no_bet() -> None:
+    offered = ("home_better_form", "home_more_goals", "home_stronger_rating", "home_advantage")
+    ok = answer("home_form", "home_rating", reasons=("home_stronger_rating", "home_better_form"))
+    assert validate_output(ok, ALL, offered) == (("home_form", "home_rating"), ("home_stronger_rating", "home_better_form"))
+    for reasons in (("home_better_form",) * 2, offered, ("away_better_form",)):
+        with pytest.raises(AiError):
+            validate_output(answer("home_form", "away_form", reasons=reasons), ALL, offered)
+    with pytest.raises(AiError):  # NO_BET: nothing to argue for
+        validate_output(answer("home_form", "away_form", reasons=("home_better_form",)), ALL, offered, no_bet=True)
 
 
 def test_a_match_past_kickoff_is_never_analysed_even_if_still_listed_upcoming(clock: FakeClock) -> None:
@@ -282,12 +308,10 @@ def test_a_ledger_failure_after_cancellation_is_retrieved(clock: FakeClock, capl
 def test_without_the_table_the_form_alone_still_gives_a_partial_estimate(clock: FakeClock) -> None:
     from miniapp.sports.client import HttpResponse
 
-    answer = json.dumps({"home_win": 45, "draw": 30, "away_win": 25, "factors": ["home_form", "away_form"], "pick": NB})
-    ai, _ = make_ai(clock, FakeModel(answer), table=HttpResponse(403, {}, b""))
+    ai, _ = make_ai(clock, FakeModel(answer("home_form", "away_form")), table=HttpResponse(403, {}, b""))
     result = run(ai.analyse("fd:7", user_id=1))
     assert result.kind == "partial" and result.basis["home"]["tablePosition"] is None
-    table_answer = json.dumps({"home_win": 45, "draw": 30, "away_win": 25, "factors": ["home_form", "home_table"], "pick": NB})
-    ai2, _ = make_ai(clock, FakeModel(table_answer), table=HttpResponse(403, {}, b""))
+    ai2, _ = make_ai(clock, FakeModel(answer("home_form", "home_table")), table=HttpResponse(403, {}, b""))
     with pytest.raises(Exception) as exc:  # a table factor without a table row is off-contract
         run(ai2.analyse("fd:7", user_id=1))
     assert getattr(exc.value, "code", None) == "bad_output"
@@ -297,8 +321,7 @@ def test_a_slow_table_does_not_use_up_the_forms_deadline(clock: FakeClock, monke
     import miniapp.ai.analysis as analysis
 
     monkeypatch.setattr(analysis, "STANDINGS_TIMEOUT_S", 0.01)
-    answer = json.dumps({"home_win": 45, "draw": 30, "away_win": 25, "factors": ["home_form", "away_form"], "pick": NB})
-    ai, t = make_ai(clock, FakeModel(answer))
+    ai, t = make_ai(clock, FakeModel(answer("home_form", "away_form")))
 
     async def hanging_table(_tournament_id):
         await asyncio.sleep(5)
@@ -316,7 +339,7 @@ def test_both_forms_are_requested_before_the_optional_table(clock: FakeClock) ->
     adapter = FootballDataAdapter(make_client(t, clock), ("PL", "PD"), clock)
     sports = SportsService(adapter, cache=SportsCache(clock=clock), clock=clock)
     sports._known_ids.add("fd:7")
-    ai = AiService(sports, FakeModel(), per_user_daily=5, daily_budget=50, clock=clock)
+    ai = AiService(sports, FakeModel(), per_user_daily=5, daily_budget=50, clock=clock, forecaster=FakeForecaster())
     assert run(ai.analyse("fd:7", user_id=1)).basis["home"]["tablePosition"] == 2
     paths = [url.split("/v4/", 1)[1].split("?")[0] for url, _ in t.calls]
     assert paths[1:] == ["teams/57/matches", "teams/61/matches", "competitions/PL/standings"]
@@ -345,10 +368,10 @@ def test_a_model_call_that_hangs_is_cut_at_the_wall_clock_limit(clock: FakeClock
 
 
 def test_a_table_factor_needs_that_teams_table_row() -> None:
-    answer = json.dumps({"home_win": 50, "draw": 25, "away_win": 25, "factors": ["home_form", "away_table"], "pick": NB})
+    text = answer("home_form", "away_table")
     with pytest.raises(AiError):
-        validate_output(answer, ALL - {"away_table"})
-    assert validate_output(answer, ALL)[:2] == ({"home": 50, "draw": 25, "away": 25}, ("home_form", "away_table"))
+        validate_output(text, ALL - {"away_table"})
+    assert validate_output(text, ALL) == (("home_form", "away_table"), ())
 
 
 def new_analysis(ai: AiService, clock: FakeClock) -> None:
@@ -589,7 +612,7 @@ def api(tmp_path, clock: FakeClock):
     sports = build_service(settings, clock=clock, transport=t)
     sports.football.client._sleep = no_sleep
     model = FakeModel()
-    ai = build_ai_service(settings, sports, clock=clock, client=model)
+    ai = build_ai_service(settings, sports, clock=clock, client=model, forecaster=FakeForecaster())
     client = TestClient(create_app(settings, clock=clock, sports=sports, ai=ai), base_url="http://127.0.0.1:8000")
     return client, t, model
 
@@ -623,7 +646,9 @@ def test_ai_endpoint_returns_the_analysis(api, clock: FakeClock) -> None:
     r = post(client, {"event_id": "fd:7"}, csrf)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["kind"] == "partial" and body["estimated"] is True and body["probabilities"]["home"] == 48
+    assert body["kind"] == "partial" and body["estimated"] is True and body["probabilities"]["home"] == SHOWN["1"]
+    assert body["schema"] == "v3" and body["forecast"]["markets"]["O2.5"] == SHOWN["O2.5"]
+    assert body["alternatives"] == [] and body["forecast"]["version"] == "goals-1"
     assert body["factors"] == ["home_form", "away_table"] and "summary" not in body
     assert body["pick"] == {"market": "NO_BET", "reasons": [], "probability": None}
     assert KEY not in r.text
@@ -636,14 +661,195 @@ def test_ai_status_is_reported_with_sports_data(tmp_path, clock: FakeClock) -> N
     assert client.get("/api/sports/coverage").json()["ai"] == {"status": "not_connected"}
 
 
-def test_a_supported_pick_reaches_the_api_result_and_the_cache_is_versioned(clock: FakeClock) -> None:
-    answer = json.dumps({"home_win": 52, "draw": 26, "away_win": 22, "factors": ["home_form", "away_form"],
-                         "pick": {"market": "1X", "reasons": ["home_better_form", "away_better_form"]}})
-    model = FakeModel(answer)
-    ai, _ = make_ai(clock, model)
+def test_the_models_pick_reaches_the_result_with_only_true_supporting_reasons(clock: FakeClock) -> None:
+    forecaster = FakeForecaster(fake_forecast("1X", alternatives=("H2+1.5",)))
+    model = FakeModel(answer("home_form", "home_rating", reasons=("home_stronger_rating", "home_better_form")))
+    ai, _ = make_ai(clock, model, forecaster=forecaster)
     result = run(ai.analyse("fd:7", user_id=1))
-    # Arsenal (13 pts) has the better form: the home reason stays, the false away reason is dropped.
-    assert result.pick.to_json() == {"market": "1X", "reasons": ["home_better_form"], "probability": 78}
-    assert all(k.startswith("ai:v2:") for k in ai._cache._entries)
+    assert result.pick.to_json() == {"market": "1X", "reasons": ["home_stronger_rating", "home_better_form"],
+                                     "probability": SHOWN["1X"]}
+    assert result.alternatives == ({"market": "H2+1.5", "probability": SHOWN["H2+1.5"]},)
+    facts = json.loads(model.calls[0][1].split("Facts (JSON):\n", 1)[1])
+    # Offered: true for these numbers and on the home side only (Arsenal 13 pts, 2nd vs Chelsea 5 pts, 7th).
+    assert facts["allowedReasons"] == ["home_better_form", "home_higher_table", "home_more_goals",
+                                       "home_fewer_conceded", "home_stronger_rating", "home_advantage"]
+    assert all(k.startswith("ai:v3:goals-1:") for k in ai._cache._entries)
     again = run(ai.analyse("fd:7", user_id=2))  # another user or language: the same cached answer, no call
     assert again.pick == result.pick and len(model.calls) == 1
+
+
+def test_a_reason_against_the_pick_is_bad_output_never_kept(clock: FakeClock) -> None:
+    ai, _ = make_ai(clock, FakeModel(answer("home_form", "away_form", reasons=("away_better_form",))),
+                    forecaster=FakeForecaster(fake_forecast("1X")))
+    with pytest.raises(Exception) as exc:
+        run(ai.analyse("fd:7", user_id=1))
+    assert getattr(exc.value, "code", None) == "bad_output"
+
+
+@pytest.mark.parametrize("reason", ["small_sample", "team_history"])
+def test_without_enough_history_for_the_goal_model_nothing_is_guessed_or_charged(clock: FakeClock, reason: str) -> None:
+    ledger, model = MemoryLedger(), FakeModel()
+    ai, _ = make_ai(clock, model, ledger=ledger, forecaster=FakeForecaster(Unavailable(reason)))
+    result = run(ai.analyse("fd:7", user_id=1))
+    assert result.kind == "insufficient" and result.probabilities is None and result.pick is None
+    assert result.reasons == (f"model_{reason}", "no_odds_source") and not model.calls and not ledger.used
+
+
+def test_each_forecast_shown_is_recorded_once_and_cache_hits_add_nothing(tmp_path, clock: FakeClock) -> None:
+    history = ForecastHistory(tmp_path / "h.db", clock)
+    history.init_schema()
+    model = FakeModel(answer("home_form", "home_rating", reasons=("home_better_form",)))
+    ai, _ = make_ai(clock, model, history=history, forecaster=FakeForecaster(fake_forecast("1X")))
+    run(ai.analyse("fd:7", user_id=1))
+    run(ai.analyse("fd:7", user_id=2))
+    assert history.count() == 1
+    new_analysis(ai, clock)  # evicted / restarted: rebuilt from the history, never paid again
+    again = run(ai.analyse("fd:7", user_id=3))
+    assert history.count() == 1 and len(model.calls) == 1
+    assert again.factors == ("home_form", "home_rating") and again.pick.reasons == ("home_better_form",)
+
+
+def test_a_forecast_that_cannot_be_stored_is_never_shown(tmp_path, clock: FakeClock, caplog) -> None:
+    class Failing(ForecastHistory):
+        def record(self, r):
+            raise OSError("disk full")
+
+    history = Failing(tmp_path / "x.db", clock)
+    history.init_schema()
+    ai, _ = make_ai(clock, FakeModel(), history=history)
+    with pytest.raises(Exception) as exc:
+        run(ai.analyse("fd:7", user_id=1))
+    assert getattr(exc.value, "code", None) == "upstream_error"
+    assert "ai.history_write_failed type=OSError" in caplog.text and history.count() == 0
+
+
+def test_an_unwritable_history_refuses_before_anything_is_paid(tmp_path, clock: FakeClock) -> None:
+    class Locked(ForecastHistory):
+        def writable(self) -> bool:
+            return False
+
+    ledger, model = MemoryLedger(), FakeModel()
+    ai, _ = make_ai(clock, model, ledger=ledger, history=Locked(tmp_path / "x.db", clock))
+    with pytest.raises(Exception) as exc:
+        run(ai.analyse("fd:7", user_id=1))
+    assert getattr(exc.value, "code", None) == "upstream_error" and not model.calls and not ledger.used
+
+
+def test_a_changed_market_percentage_is_a_new_analysis_not_a_stale_cache_hit(clock: FakeClock) -> None:
+    model = FakeModel()
+    forecaster = FakeForecaster(fake_forecast())
+    ai, t = make_ai(clock, model, forecaster=forecaster)
+    run(ai.analyse("fd:7", user_id=1))
+    # Same 1X2 and figures shown to the model, but another market's number differs.
+    base = fake_forecast()
+    forecaster.result = replace(base, exact={**base.exact, "O2.5": base.exact["O2.5"] + 0.01})
+    run(ai.analyse("fd:7", user_id=2))
+    assert len(model.calls) == 2
+
+
+def test_group_tables_give_the_ai_no_cross_group_positions(clock: FakeClock) -> None:
+    groups = {"competition": {"code": "PL"}, "standings": [
+        {"type": "TOTAL", "stage": "GROUP_STAGE", "group": "GROUP_A", "table": [standings()["standings"][1]["table"][0]]},
+        {"type": "TOTAL", "stage": "GROUP_STAGE", "group": "GROUP_B", "table": [standings()["standings"][1]["table"][1]]},
+    ]}
+    t = FakeTransport()
+    ai, t = make_ai(clock, FakeModel(answer("home_form", "away_form")), table=t.ok(groups))
+    result = run(ai.analyse("fd:7", user_id=1))
+    assert result.basis["home"]["tablePosition"] is None and result.basis["away"]["tablePosition"] is None
+
+
+def test_an_unchanged_analysis_is_kept_until_kickoff_and_never_paid_twice(clock: FakeClock) -> None:
+    model = FakeModel()
+    ai, t = make_ai(clock, model)
+    run(ai.analyse("fd:7", user_id=1))
+    clock.advance(6 * 3600 + 60)  # past the old 6-hour lifetime, still before kickoff
+    t.script = [t.ok(match(7)), t.ok(arsenal_form()), t.ok(chelsea_form()), t.ok(standings())]  # source refreshed
+    run(ai.analyse("fd:7", user_id=2))
+    assert len(model.calls) == 1
+
+
+def test_an_evicted_answer_is_restored_without_a_new_paid_call(tmp_path, clock: FakeClock) -> None:
+    history = ForecastHistory(tmp_path / "h.db", clock)
+    history.init_schema()
+    ledger = MemoryLedger()
+    model = FakeModel(answer("home_form", "away_form"), answer("home_rating", "home_form"))
+    ai, _ = make_ai(clock, model, history=history, ledger=ledger)
+    first = run(ai.analyse("fd:7", user_id=1))
+    new_analysis(ai, clock)
+    second = run(ai.analyse("fd:7", user_id=2))
+    assert len(model.calls) == 1 and history.count() == 1 and second.factors == first.factors
+    assert ledger.used[(ai._today(), "all")] == 1  # the restore is free
+
+
+def test_an_analysis_that_keeps_failing_is_not_paid_for_again_and_again(clock: FakeClock) -> None:
+    ledger, model = MemoryLedger(), FakeModel("not json")
+    ai, _ = make_ai(clock, model, ledger=ledger)
+    for _ in range(4):
+        new_analysis(ai, clock)  # the failure backoff has passed
+        with pytest.raises(Exception):
+            run(ai.analyse("fd:7", user_id=1))
+    assert len(model.calls) == 2 and ledger.used[(ai._today(), "all")] == 2
+
+
+def test_an_attempt_that_cannot_be_counted_is_refused_before_any_payment(tmp_path, clock: FakeClock) -> None:
+    class NoCount(ForecastHistory):
+        def add_attempt(self, key, kickoff_at):
+            raise OSError("disk full")
+
+    history = NoCount(tmp_path / "x.db", clock)
+    history.init_schema()
+    ledger, model = MemoryLedger(), FakeModel()
+    ai, _ = make_ai(clock, model, history=history, ledger=ledger)
+    with pytest.raises(Exception) as exc:
+        run(ai.analyse("fd:7", user_id=1))
+    assert getattr(exc.value, "code", None) == "upstream_error" and not model.calls and not ledger.used
+
+
+def test_a_paid_answer_that_cannot_be_stored_is_never_paid_for_again(tmp_path, clock: FakeClock) -> None:
+    class Failing(ForecastHistory):
+        def record(self, r):
+            raise OSError("disk full")
+
+    history = Failing(tmp_path / "x.db", clock)
+    history.init_schema()
+    model = FakeModel()
+    ai, _ = make_ai(clock, model, history=history)
+    for _ in range(3):
+        new_analysis(ai, clock)
+        with pytest.raises(Exception):
+            run(ai.analyse("fd:7", user_id=1))
+    assert len(model.calls) == 1
+
+
+def test_an_attempt_is_counted_before_the_call_so_a_crash_still_counts(tmp_path, clock: FakeClock) -> None:
+    class Crashing(FakeModel):
+        async def complete(self, system, user, schema):
+            self.calls.append((system, user, schema))
+            raise RuntimeError("SDK crashed after dispatch")
+
+    history = ForecastHistory(tmp_path / "h.db", clock)
+    history.init_schema()
+    model = Crashing()
+    ai, _ = make_ai(clock, model, history=history)
+    for _ in range(4):
+        new_analysis(ai, clock)
+        with pytest.raises(Exception):
+            run(ai.analyse("fd:7", user_id=1))
+    assert len(model.calls) == 2
+
+
+def test_a_quota_refusal_does_not_use_up_an_attempt(tmp_path, clock: FakeClock) -> None:
+    class Refusing(MemoryLedger):
+        def reserve_ai_call(self, day, limits):
+            return "all"
+
+    history = ForecastHistory(tmp_path / "h.db", clock)
+    history.init_schema()
+    ai, _ = make_ai(clock, FakeModel(), history=history, ledger=Refusing())
+    for _ in range(3):
+        with pytest.raises(Exception) as exc:
+            run(ai.analyse("fd:7", user_id=1))
+        assert getattr(exc.value, "code", None) == "budget_exhausted"
+    import sqlite3
+    with sqlite3.connect(history.path) as conn:
+        assert conn.execute("SELECT COALESCE(SUM(attempts), 0) FROM ai_paid_attempts").fetchone()[0] == 0

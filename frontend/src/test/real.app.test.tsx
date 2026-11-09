@@ -38,6 +38,12 @@ function backend(overrides: { football?: Response; detail?: Response } = {}) {
   const fetchImpl = vi.fn<typeof fetch>(async (input) => {
     const url = String(input);
     const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+    if (url.startsWith('/api/sports/football/top')) {
+      // The backend's ranking from the same listing: its matches of real states, in order.
+      const listing = (await (overrides.football ?? ok({ coverage: COVERAGE, tournaments: TOURNAMENTS, events: [LIVE, POSTPONED] })).clone().json()) as { events: { status: string }[] };
+      const top = listing.events.filter((e) => ['live', 'upcoming', 'finished'].includes(e.status)).map((event) => ({ event, leaders: false }));
+      return ok({ coverage: COVERAGE, tournaments: TOURNAMENTS, top });
+    }
     if (url.startsWith('/api/sports/football/events')) {
       return (overrides.football ?? ok({ coverage: COVERAGE, tournaments: TOURNAMENTS, events: [LIVE, POSTPONED] })).clone();
     }

@@ -11,6 +11,7 @@ worker); they reset on restart, which the daily budget's margin accounts for.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import time
@@ -24,6 +25,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 logger = logging.getLogger("miniapp.sports")
+
+
+# Set (e.g. by the quick prediction) around work that must leave capacity for interactive
+# features: every attempt it makes, retries included, is refused once fewer than this many
+# requests are left in the current minute. Checked inside _reserve, so it is atomic.
+LOW_PRIORITY_RESERVE: contextvars.ContextVar[int] = contextvars.ContextVar("low_priority_reserve", default=0)
 
 
 @dataclass(frozen=True)
@@ -173,6 +180,14 @@ class ProviderClient:
             "coolingDownSeconds": max(0, int(self._cooldown_until - now)),
         }
 
+    def minute_headroom(self) -> int:
+        """Requests still allowed in the current minute (0 while cooling down)."""
+        now = self._clock()
+        self._trim(now)
+        if now < self._cooldown_until:
+            return 0
+        return max(0, self._limits.per_minute - len(self._minute))
+
     def _trim(self, now: float) -> None:
         while self._minute and now - self._minute[0] >= 60:
             self._minute.popleft()
@@ -189,7 +204,7 @@ class ProviderClient:
             self.last_error = "quota_exhausted"  # coverage must not keep saying "connected"
             raise UpstreamError("quota_exhausted")
         self._trim(now)
-        if len(self._minute) >= self._limits.per_minute:
+        if len(self._minute) >= self._limits.per_minute - LOW_PRIORITY_RESERVE.get():
             raise UpstreamError("rate_limited")
         self._day_used += 1
         self._minute.append(now)

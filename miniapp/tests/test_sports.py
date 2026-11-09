@@ -457,6 +457,12 @@ def test_invalid_sports_settings_are_rejected(tmp_path, kw) -> None:
         base_settings(tmp_path, **kw)
 
 
+def test_a_paid_plan_may_raise_the_per_minute_budget(tmp_path) -> None:
+    assert base_settings(tmp_path, football_data_live_plan=True, football_data_per_minute=30).football_data_per_minute == 30
+    with pytest.raises(SettingsError):
+        base_settings(tmp_path, football_data_live_plan=True, football_data_per_minute=121)
+
+
 def test_from_env_reads_only_miniapp_variables(tmp_path) -> None:
     env = {"MINIAPP_BOT_TOKEN": TEST_BOT_TOKEN, "MINIAPP_DB_PATH": str(tmp_path / "m.db"),
            "MINIAPP_TRUSTED_ORIGINS": ORIGIN, "MINIAPP_ENV": "development",

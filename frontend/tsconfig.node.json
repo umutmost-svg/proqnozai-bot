@@ -20,7 +20,9 @@
     "vite.config.ts",
     "playwright.config.ts",
     "playwright.auth.config.ts",
+    "playwright.real.config.ts",
     "e2e",
-    "e2e-auth"
+    "e2e-auth",
+    "e2e-real"
   ]
 }

@@ -72,10 +72,26 @@ export type InsufficientReason =
   /** Real analysis: only upcoming matches are analysed. */
   | 'notUpcoming'
   /** Real analysis: no bookmaker odds source, so probabilities are an estimate. */
-  | 'noOddsSource';
+  | 'noOddsSource'
+  /** Real analysis: the goal model has too few results of this competition. */
+  | 'modelSmallSample'
+  /** Real analysis: one of the teams has too few results for the goal model. */
+  | 'modelTeamHistory'
+  /** Real analysis: the model's expected goals fell outside the supported range. */
+  | 'modelExtremeRates';
 
 /** Verified numbers behind a real analysis (computed by the backend, not the model). */
-export type AiFactor = 'homeForm' | 'awayForm' | 'homeGoals' | 'awayGoals' | 'homeTable' | 'awayTable';
+export type AiFactor =
+  | 'homeForm'
+  | 'awayForm'
+  | 'homeGoals'
+  | 'awayGoals'
+  | 'homeTable'
+  | 'awayTable'
+  /** Goal-model figures (rendered from the forecast, never from model text). */
+  | 'homeRating'
+  | 'awayRating'
+  | 'homeAdvantage';
 
 export interface TeamBasis {
   name: string;
@@ -169,8 +185,19 @@ export interface MmaEvent extends BaseEvent {
 
 export type SportEvent = FootballEvent | TennisEvent | BasketballEvent | MmaEvent;
 
-/** The model's preferred outcome (no odds source: never a value claim). */
-export type PickMarket = '1' | 'X' | '2' | '1X' | 'X2' | '12' | 'NO_BET';
+/** Markets of the goal model (miniapp/forecast/markets.py keys), all from one score distribution. */
+export const MARKET_KEYS = [
+  '1', 'X', '2', '1X', 'X2', '12',
+  'O1.5', 'U1.5', 'O2.5', 'U2.5', 'O3.5', 'U3.5',
+  'BTTS_Y', 'BTTS_N',
+  'H1-0.5', 'H1-1.5', 'H2+0.5', 'H2+1.5',
+  'HO0.5', 'HU0.5', 'HO1.5', 'HU1.5', 'AO0.5', 'AU0.5', 'AO1.5', 'AU1.5',
+] as const;
+export type MarketKey = (typeof MARKET_KEYS)[number];
+export type MarketFamily = '1x2' | 'double' | 'total' | 'btts' | 'handicap' | 'team_total';
+
+/** The recommended market (no odds source: never a value claim) or NO_BET. */
+export type PickMarket = MarketKey | 'NO_BET';
 export type PickReason =
   | 'homeBetterForm'
   | 'awayBetterForm'
@@ -180,13 +207,85 @@ export type PickReason =
   | 'awayMoreGoals'
   | 'homeFewerConceded'
   | 'awayFewerConceded'
-  | 'evenlyMatched';
+  | 'evenlyMatched'
+  | 'homeStrongerRating'
+  | 'awayStrongerRating'
+  | 'homeAdvantage';
 
 export interface AiPick {
   market: PickMarket;
   reasons: readonly PickReason[];
-  /** Percent computed from the 1X2 estimate; null for NO_BET. */
+  /** Whole percent of that market in the model's numbers; null for NO_BET. */
   probability: number | null;
+}
+
+export type NoBetReason =
+  | 'limitedCompetition'
+  | 'smallSample'
+  | 'noQualifyingMarket'
+  | 'partialHistory'
+  | 'unvalidatedCompetition'
+  | 'earlyForecast';
+
+/** The goal model's figures behind a v3 analysis (M3.5). Every number is computed, none written by the AI. */
+export interface ModelForecast {
+  version: string;
+  kind: 'poisson' | 'dixon_coles';
+  /** Limited-data competition (Champions League): shown, never recommended. */
+  limited: boolean;
+  computedAt: string;
+  /** Kickoff of the latest result the model learnt from. */
+  dataUntil: string;
+  /** Results of this competition in the model's window. */
+  sample: number;
+  teamMatches: { home: number; away: number };
+  expectedGoals: { home: number; away: number };
+  /** Whole percents of every market; identities checked when read (1X = 1 + X, pairs = 100…). */
+  markets: Record<MarketKey, number>;
+  /** Families not more accurate than the league average on the historical check: reference only. */
+  unprovenFamilies: readonly MarketFamily[];
+  topScores: readonly { home: number; away: number; probability: number }[];
+  /** Relative to the competition average (1 = average; defence above 1 concedes more). */
+  ratings: { home: { attack: number; defence: number }; away: { attack: number; defence: number } };
+  homeAdvantage: number;
+  leagueGoals: { home: number; away: number };
+  noBetReason: NoBetReason | null;
+  /** Recommendations not yet confirmed on matches forecast before kickoff: labelled as experimental. */
+  experimental: boolean;
+}
+
+export interface MarketChance {
+  market: MarketKey;
+  probability: number;
+}
+
+/** One table of a tournament exactly as the provider orders it. */
+export interface StandingRow {
+  position: number;
+  team: Competitor;
+  played: number;
+  won: number;
+  draw: number;
+  lost: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  points: number;
+}
+
+export interface StandingBlock {
+  stage: string | null;
+  group: string | null;
+  rows: readonly StandingRow[];
+}
+
+export interface TournamentStandings {
+  tournament: Tournament;
+  season: TournamentCalendar['season'];
+  /** Empty: the competition has no table (e.g. a knockout cup). */
+  blocks: readonly StandingBlock[];
+  fetchedAt: string | null;
+  stale: boolean;
 }
 
 /** Global search over the served competitions (independent of catalogue filters). */
@@ -230,4 +329,82 @@ export interface AiAnalysis {
   estimated?: boolean;
   /** Preferred outcome; absent in analyses made before it existed. */
   pick?: AiPick;
+  /** v3 (M3.5): the goal model's figures; absent in older (v2) answers. */
+  forecast?: ModelForecast;
+  /** v3: up to three other markets that passed the selection rules. */
+  alternatives?: readonly MarketChance[];
+}
+
+/** One of the day's top matches (ranked by the backend from source facts only). */
+export interface TopMatch {
+  event: SportEvent;
+  /** Both teams near the top of the competition's table. */
+  leaders: boolean;
+}
+
+export type QuickMode = 'single' | 'coupon';
+export type QuickPeriod = 'today' | '24h' | '3d' | '7d';
+export type QuickMarket = 'any' | MarketFamily;
+export type QuickRisk = 'conservative' | 'balanced' | 'elevated';
+
+export interface QuickCriteria {
+  mode: QuickMode;
+  period: QuickPeriod;
+  /** Empty: every tournament. */
+  tournaments: readonly string[];
+  market: QuickMarket;
+  risk: QuickRisk;
+  /** Coupon legs, 2–5 (a single is always one). */
+  size: number;
+}
+
+/** Why matches of the period gave no recommendation (stable backend codes). */
+export const QUICK_REASONS = [
+  'limited_competition',
+  'unvalidated_competition',
+  'early_forecast',
+  'small_sample',
+  'no_qualifying_market',
+  'partial_history',
+  'model_small_sample',
+  'model_team_history',
+  'model_extreme_rates',
+  'source_unavailable',
+] as const;
+export type QuickReason = (typeof QUICK_REASONS)[number];
+
+export interface QuickLeg {
+  event: FootballEvent;
+  market: MarketKey;
+  family: MarketFamily;
+  /** Whole percent, as on the AI screen. */
+  probability: number;
+  /** The same market's frequency in this competition's window, whole percent. */
+  leagueRate: number;
+  expectedGoals: { home: number; away: number };
+  sample: number;
+  teamMatches: { home: number; away: number };
+  dataUntil: string;
+}
+
+export interface QuickAnswer {
+  mode: QuickMode;
+  /** unavailable: today's data could not be loaded now (retry later; never a "no bet"). */
+  status: 'ok' | 'no_bet' | 'not_enough' | 'unavailable';
+  legs: readonly QuickLeg[];
+  size: number;
+  /** Matches meeting the criteria (a coupon: how many legs they allow). */
+  suitable: number;
+  /**
+   * Coupon: bounds of the chance that every leg wins, whole percents of the shown legs —
+   * [max(0, Σ − 100·(n−1)), weakest leg]. Valid for any dependence: nothing is multiplied.
+   */
+  combined: readonly [low: number, high: number] | null;
+  counts: { matches: number; forecasts: number };
+  reasons: Partial<Record<QuickReason, number>>;
+  unavailableTournaments: readonly string[];
+  /** Days of the period whose matches could not be loaded now. */
+  uncheckedDays: number;
+  experimental: boolean;
+  computedAt: string;
 }

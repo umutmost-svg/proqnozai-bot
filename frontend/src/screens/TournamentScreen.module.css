@@ -84,3 +84,14 @@
   font-size: 20px;
   color: var(--text-primary);
 }
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.panel[hidden] {
+  display: none;
+}

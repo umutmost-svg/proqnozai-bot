@@ -118,10 +118,17 @@ Mini App (`miniapp/`, `frontend/`) читает только свои перем
 `MINIAPP_FOOTBALL_DATA_KEY` (секрет, только backend; без него футбол —
 «не подключён»), `MINIAPP_FOOTBALL_DATA_COMPETITIONS`,
 `MINIAPP_FOOTBALL_DATA_LIVE_PLAN`, `MINIAPP_FOOTBALL_DATA_PER_MINUTE`,
-`MINIAPP_FOOTBALL_DATA_PER_DAY`, `MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR`.
+`MINIAPP_FOOTBALL_DATA_PER_DAY`, `MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR`
+(`PER_MINUTE` — 1..10 на бесплатном тарифе, до 120 только с `LIVE_PLAN=1`).
 AI-разбор Mini App (M3.2): `MINIAPP_ANTHROPIC_API_KEY` (секрет, только
 backend; без него AI — «не подключён»), `MINIAPP_AI_MODEL`,
 `MINIAPP_AI_PER_USER_DAILY`, `MINIAPP_AI_DAILY_BUDGET`.
+Модель голов и история прогнозов (M3.5, `docs/miniapp/m35-goal-model.md`): новых
+переменных нет; параметры заморожены в `miniapp/forecast/frozen_goals-1.json`,
+история пишется в `<MINIAPP_DB_PATH без расширения>.forecasts.db` рядом с базой.
+Офлайн-бэктест: `python -m miniapp.forecast.backtest validate|test --data DIR --out DIR`.
+«Главные матчи дня» и «Быстрый прогноз» (M3.6, `docs/miniapp/m36-top-and-quick.md`): новых
+переменных нет; веса рейтинга — `miniapp/sports/top_weights.json`.
 Frontend: `VITE_DATA_MODE=demo|real` при сборке (по умолчанию `demo`);
 `VITE_SUPPORT_TELEGRAM` — публичный username аккаунта поддержки (без @, не
 секрет; не задан — раздел поддержки показывает кнопки неактивными).

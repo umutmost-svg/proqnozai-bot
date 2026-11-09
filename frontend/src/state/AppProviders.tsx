@@ -3,7 +3,7 @@ import { ALL_TOURNAMENTS } from '../data/filter';
 import type { Sport } from '../data/models';
 import { createTranslator, DEFAULT_LANG, langFromCode } from '../i18n';
 import { loadSettings, resolveTimeZone, saveSettings, type Settings } from '../settings/settings';
-import { dayKeyOf, type DayKey } from '../time/zoned';
+import { addDays, dayKeyOf, zonedTimeToInstant, type DayKey } from '../time/zoned';
 import {
   FiltersContext,
   ServicesContext,
@@ -63,7 +63,22 @@ export function AppProviders({ services, children }: { services: Services; child
   );
 
   const [filters, setFilters] = useState<Filters>(INITIAL_FILTERS);
+  const [, setTick] = useState(0);
   const today = dayKeyOf(services.clock.now(), timeZone);
+
+  // "Today" moves on at local midnight while the app stays open (and on return to the
+  // foreground, where timers may have slept): the day shown follows it unless one was chosen.
+  useEffect(() => {
+    const midnight = zonedTimeToInstant(addDays(today, 1), '00:00', timeZone).getTime();
+    const advance = () => dayKeyOf(services.clock.now(), timeZone) !== today && setTick((n) => n + 1);
+    const timer = setTimeout(advance, Math.min(Math.max(midnight - services.clock.now().getTime(), 0) + 1000, 2_147_000_000));
+    const onVisible = () => document.visibilityState === 'visible' && advance();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [today, timeZone, services.clock]);
 
   const filtersState = useMemo(
     () => ({

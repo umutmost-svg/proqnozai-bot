@@ -8,9 +8,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: 300px;
+  gap: 4px;
+  width: min(352px, calc(100vw - 24px));
   height: 72px;
-  padding: 8px 12px;
+  padding: 8px 10px;
   border-radius: 40px;
   background: rgba(255, 255, 255, 0.22);
   border: 1px solid var(--line-70);
@@ -23,23 +24,25 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  width: 64px;
+  gap: 2px;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 84px;
   height: 56px;
-  padding: 5px 3px;
+  padding: 4px 3px;
   border-radius: 30px;
   border: 1px solid rgba(255, 255, 255, 0.65);
   background: var(--glass-12);
   color: var(--text-muted);
   font-size: 11px;
-  line-height: 14px;
+  line-height: 13px;
   text-decoration: none;
-  white-space: nowrap;
 }
 
 .item img {
-  width: 20px;
-  height: 20px;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
 }
 
 .active {
@@ -48,7 +51,8 @@
 }
 
 .label {
-  max-width: 58px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 100%;
+  font-size: 10.5px;
+  line-height: 12px;
+  text-align: center;
 }

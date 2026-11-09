@@ -1,9 +1,15 @@
-import { addDays, zonedTimeToInstant, type DayKey } from '../time/zoned';
-import { ALL_TOURNAMENTS, filterEvents, pickFeatured, type EventQuery } from './filter';
+import { addDays, dayKeyOf, zonedTimeToInstant, type DayKey } from '../time/zoned';
+import { ALL_TOURNAMENTS, filterEvents, type EventQuery } from './filter';
+import { MODEL_CONFIRMED, quickRange } from './quick';
 import { TOURNAMENTS as DEMO_TOURNAMENTS } from './fixtures';
 import type {
   AiAnalysis,
   AiFactor,
+  QuickAnswer,
+  QuickCriteria,
+  QuickLeg,
+  QuickReason,
+  TopMatch,
   BasketballEvent,
   InsufficientReason,
   TeamBasis,
@@ -27,7 +33,17 @@ import type {
   SearchCoverage,
   TeamHit,
   TeamMatches,
+  MarketChance,
+  MarketFamily,
+  MarketKey,
+  ModelForecast,
+  NoBetReason,
+  StandingBlock,
+  StandingRow,
+  TournamentStandings,
 } from './models';
+import { MARKET_KEYS, QUICK_REASONS } from './models';
+import { FAMILIES, FAMILY, isMarketKey, marketsConsistent } from './markets';
 import { pickProbability } from './probabilities';
 import { DataError, type SportCoverage, type SportsDataProvider } from './provider';
 
@@ -38,6 +54,10 @@ export const DATA_TIMEOUT_MS = 10_000;
  * reservation ≤ ~10 s, one model attempt ≤ 60 s — plus headroom.
  */
 export const AI_TIMEOUT_MS = 120_000;
+/** Matches the backend's own table cache order of magnitude; tab switches never refetch. */
+export const STANDINGS_CACHE_MS = 5 * 60_000;
+/** Quick prediction: up to ~10 provider requests (≤ 10 s each at worst) plus the model. */
+export const QUICK_TIMEOUT_MS = 60_000;
 
 const STATUSES: ReadonlySet<EventStatus> = new Set([
   'upcoming',
@@ -147,6 +167,7 @@ export class BackendSportsDataProvider implements SportsDataProvider {
   private readonly coverages = new Map<Sport, SportCoverage>();
   private aiStatus: 'connected' | 'not_connected' | 'unknown' = 'unknown';
   private readonly knownDays = new Map<string, Map<DayKey, number>>();
+  private readonly standingsCache = new Map<string, { at: number; promise: Promise<TournamentStandings | null> }>();
   private readonly fetchImpl: typeof fetch;
   private readonly base: string;
   private readonly timeoutMs: number;
@@ -217,8 +238,65 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     return filtered;
   }
 
-  async getFeatured(query: EventQuery): Promise<SportEvent | null> {
-    return pickFeatured(await this.listEvents({ ...query, query: '' }));
+  async getTopMatches(query: EventQuery): Promise<TopMatch[]> {
+    if (!REAL_SPORTS.has(query.sport)) return [];
+    const from = zonedTimeToInstant(query.day, '00:00', query.timeZone).toISOString();
+    const to = zonedTimeToInstant(addDays(query.day, 1), '00:00', query.timeZone).toISOString();
+    const op = 'top';
+    const params = new URLSearchParams({ from, to });
+    if (query.tournamentId !== ALL_TOURNAMENTS) params.set('tournament', query.tournamentId);
+    const body = await this.get(op, `/sports/football/top?${params.toString()}`);
+    if (!body || !Array.isArray(body.top) || !isObj(body.coverage) || !Array.isArray(body.tournaments)) {
+      throw new DataError(op, 'bad_response');
+    }
+    const catalogue = body.tournaments.map((raw) => this.parseTournament(raw));
+    if (catalogue.some((t) => !t || t.sport !== 'football')) throw new DataError(op, 'bad_response');
+    for (const t of catalogue as Tournament[]) this.tournaments.set(t.id, t);
+    const coverage = this.readCoverage('football', body.coverage);
+    this.readAiStatus(body.ai);
+    // As for a listing: an empty day served from stale cache cannot confirm "no matches".
+    if (body.stale === true && body.top.length === 0) throw new DataError(op, 'source_unavailable');
+    const top = body.top.map((raw) => {
+      if (!isObj(raw) || typeof raw.leaders !== 'boolean') return null;
+      const event = this.readEvent(raw.event, coverage);
+      // Postponed, suspended, cancelled or unknown matches are never top matches.
+      if (event && !TOP_STATUSES.has(event.status)) return null;
+      // The day check needs a real instant: a zone-less time would be read in the device's zone.
+      if (event && !ZONED_INSTANT.test(event.startsAt)) return null;
+      // Only the chosen local day, as the backend was asked (never another date's match).
+      if (!event || event.sport !== 'football' || dayKeyOf(new Date(event.startsAt), query.timeZone) !== query.day) return null;
+      if (query.tournamentId !== ALL_TOURNAMENTS && event.tournamentId !== query.tournamentId) return null;
+      return { event, leaders: raw.leaders };
+    });
+    if (top.some((x) => x === null) || top.length > 5) throw new DataError(op, 'bad_response');
+    const ids = new Set(top.map((x) => x!.event.id));
+    if (ids.size !== top.length) throw new DataError(op, 'bad_response');
+    return top as TopMatch[];
+  }
+
+  quickAvailable(): boolean {
+    return true;
+  }
+
+  async quickPick(criteria: QuickCriteria, now: Date, timeZone: string): Promise<QuickAnswer> {
+    const { from, to } = quickRange(criteria.period, now, timeZone);
+    const params = new URLSearchParams({
+      mode: criteria.mode,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      market: criteria.market,
+      risk: criteria.risk,
+    });
+    if (criteria.mode === 'coupon') params.set('size', String(criteria.size));
+    if (criteria.tournaments.length) params.set('tournaments', criteria.tournaments.join(','));
+    const op = 'quick';
+    // The backend's work is bounded (a few provider requests, each with its own timeout, then
+    // the model): a longer wait than an ordinary listing, never an endless one.
+    const body = await this.request(op, `/quick/pick?${params.toString()}`, { method: 'GET' }, false, QUICK_TIMEOUT_MS);
+    const coverage = this.coverage('football');
+    const answer = body ? readQuick(body, criteria, { from, to }, (raw) => this.readEvent(raw, { ...coverage, delayed: false })) : null;
+    if (!answer) throw new DataError(op, 'bad_response');
+    return answer;
   }
 
   async loadTournaments(sport: Sport): Promise<Tournament[]> {
@@ -323,6 +401,40 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     return { tournament, events, season };
   }
 
+  /**
+   * The provider's current tables. Shared per tournament for STANDINGS_CACHE_MS and
+   * de-duplicated while in flight: switching tabs or coming back never asks again.
+   */
+  getStandings(id: string): Promise<TournamentStandings | null> {
+    const now = Date.now();
+    const cached = this.standingsCache.get(id);
+    if (cached && now - cached.at < STANDINGS_CACHE_MS) return cached.promise;
+    const promise = this.loadStandings(id);
+    this.standingsCache.set(id, { at: now, promise });
+    // A failure is not remembered: "try again" asks again.
+    promise.catch(() => {
+      if (this.standingsCache.get(id)?.promise === promise) this.standingsCache.delete(id);
+    });
+    return promise;
+  }
+
+  private async loadStandings(id: string): Promise<TournamentStandings | null> {
+    const sport: Sport = this.tournaments.get(id)?.sport ?? 'football';
+    const op = 'standings';
+    const body = await this.get(op, `/sports/${sport}/tournaments/${encodeURIComponent(id)}/standings`, true);
+    if (body === null) return null;
+    if (body.sport !== sport || !Array.isArray(body.blocks) || !isObj(body.coverage)) throw new DataError(op, 'bad_response');
+    const tournament = this.readTournament(body.tournament);
+    const season = readSeason(body.season);
+    if (!tournament || tournament.id !== id || season === undefined) throw new DataError(op, 'bad_response');
+    this.readCoverage(sport, body.coverage);
+    const blocks = body.blocks.map(readStandingBlock);
+    // One unreadable row would shift every position below it: the whole table is unusable.
+    if (blocks.some((b) => b === null)) throw new DataError(op, 'bad_response');
+    if (body.stale === true && blocks.length === 0) throw new DataError(op, 'source_unavailable');
+    return { tournament, season, blocks: blocks as StandingBlock[], fetchedAt: validInstant(body.fetchedAt), stale: body.stale === true };
+  }
+
   async getEvent(id: string): Promise<SportEvent | null> {
     const body = await this.get('event', `/sports/event/${encodeURIComponent(id)}`, true);
     if (body === null) return null;
@@ -425,6 +537,8 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     if (response.status === 401) throw new DataError(op, 'unauthenticated');
     if (response.status === 429) throw new DataError(op, 'limit_reached');
     if (response.status === 503) throw new DataError(op, await aiReason(response));
+    // A date range the server refused (e.g. a device clock far from the server's) is its own case.
+    if (response.status === 400 && (await errorCode(response)) === 'bad_range') throw new DataError(op, 'bad_range');
     if (!response.ok) throw new DataError(op, 'bad_response');
     try {
       const body: unknown = await response.json();
@@ -575,6 +689,15 @@ const AI_REASONS = new Set([
   'rate_limited',
 ]);
 
+async function errorCode(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.json();
+    return isObj(body) && typeof body.error === 'string' ? body.error : null;
+  } catch {
+    return null;
+  }
+}
+
 async function aiReason(response: Response): Promise<string> {
   try {
     const body: unknown = await response.json();
@@ -594,12 +717,18 @@ const FACTORS: Record<string, AiFactor> = {
   away_goals: 'awayGoals',
   home_table: 'homeTable',
   away_table: 'awayTable',
+  home_rating: 'homeRating',
+  away_rating: 'awayRating',
+  home_advantage: 'homeAdvantage',
 };
 
 const REASONS: Record<string, InsufficientReason> = {
   no_verified_form: 'noVerifiedForm',
   not_upcoming: 'notUpcoming',
   no_odds_source: 'noOddsSource',
+  model_small_sample: 'modelSmallSample',
+  model_team_history: 'modelTeamHistory',
+  model_extreme_rates: 'modelExtremeRates',
 };
 
 function readBasis(v: unknown): TeamBasis | null {
@@ -614,7 +743,11 @@ function readBasis(v: unknown): TeamBasis | null {
   // Optional table numbers: absent/null is fine, anything else must be a valid number.
   const optional = (x: unknown): number | null | undefined => (x === null || x === undefined ? null : (int(x) ?? undefined));
   const tablePosition = optional(v.tablePosition);
-  const tablePoints = optional(v.tablePoints);
+  // Table points may be negative after a deduction (the table itself accepts them).
+  const tablePoints =
+    v.tablePoints === null || v.tablePoints === undefined
+      ? null
+      : typeof v.tablePoints === 'number' && Number.isInteger(v.tablePoints) ? v.tablePoints : undefined;
   if (tablePosition === undefined || tablePoints === undefined) return null;
   // The counts must agree with the form string (they are rendered as words).
   const [wins, draws, losses] = [int(v.wins), int(v.draws), int(v.losses)];
@@ -626,6 +759,16 @@ function readBasis(v: unknown): TeamBasis | null {
 
 /** Strict reading of the backend analysis; anything off-contract is rejected (null), never repaired. */
 const MARKETS: ReadonlySet<PickMarket> = new Set(['1', 'X', '2', '1X', 'X2', '12', 'NO_BET']);
+const V3_ONLY_FACTORS: ReadonlySet<string> = new Set(['home_rating', 'away_rating', 'home_advantage']);
+const V3_ONLY_REASONS: ReadonlySet<string> = new Set(['home_stronger_rating', 'away_stronger_rating', 'home_advantage']);
+const NO_BET_REASONS: Record<string, NoBetReason> = {
+  limited_competition: 'limitedCompetition',
+  small_sample: 'smallSample',
+  no_qualifying_market: 'noQualifyingMarket',
+  partial_history: 'partialHistory',
+  unvalidated_competition: 'unvalidatedCompetition',
+  early_forecast: 'earlyForecast',
+};
 const PICK_REASONS: Record<string, PickReason> = {
   home_better_form: 'homeBetterForm',
   away_better_form: 'awayBetterForm',
@@ -636,6 +779,9 @@ const PICK_REASONS: Record<string, PickReason> = {
   home_fewer_conceded: 'homeFewerConceded',
   away_fewer_conceded: 'awayFewerConceded',
   evenly_matched: 'evenlyMatched',
+  home_stronger_rating: 'homeStrongerRating',
+  away_stronger_rating: 'awayStrongerRating',
+  home_advantage: 'homeAdvantage',
 };
 
 /**
@@ -647,7 +793,8 @@ function readPick(v: unknown, [home, draw, away]: number[]): AiPick | null {
     return null;
   }
   const market = v.market as PickMarket;
-  const reasons = v.reasons.map((r) => (typeof r === 'string' ? PICK_REASONS[r] : undefined));
+  // v2 reasons only: the model-figure reasons exist only with a v3 forecast to render them from.
+  const reasons = v.reasons.map((r) => (typeof r === 'string' && !V3_ONLY_REASONS.has(r) ? PICK_REASONS[r] : undefined));
   if (reasons.some((r) => r === undefined) || new Set(reasons).size !== reasons.length || reasons.length > 3) return null;
   const expected = pickProbability(market, home!, draw!, away!);
   if (market === 'NO_BET') return v.probability === null && reasons.length === 0 ? { market, reasons: [], probability: null } : null;
@@ -657,6 +804,9 @@ function readPick(v: unknown, [home, draw, away]: number[]): AiPick | null {
 
 function readAnalysis(b: Json, eventId: string, sport: Sport): AiAnalysis | null {
   if (b.eventId !== eventId || !Array.isArray(b.reasons)) return null;
+  // v3 (M3.5) answers carry the goal model; answers without a schema are the older v2 shape.
+  if (b.schema === 'v3') return readAnalysisV3(b, eventId, sport);
+  if (b.schema !== undefined) return null;
   const reasons = b.reasons.map((r) => (typeof r === 'string' ? REASONS[r] : undefined));
   if (reasons.some((r) => r === undefined)) return null;
   const known = reasons as InsufficientReason[];
@@ -679,7 +829,9 @@ function readAnalysis(b: Json, eventId: string, sport: Sport): AiAnalysis | null
   const probabilities = [int(p.home), int(p.draw), int(p.away)];
   if (probabilities.some((n) => n === null || n > 100)) return null;
   if ((probabilities as number[]).reduce((a, n) => a + n, 0) !== 100) return null;
-  const factors = Array.isArray(b.factors) ? b.factors.map((f) => (typeof f === 'string' ? FACTORS[f] : undefined)) : [];
+  const factors = Array.isArray(b.factors)
+    ? b.factors.map((f) => (typeof f === 'string' && !V3_ONLY_FACTORS.has(f) ? FACTORS[f] : undefined))
+    : [];
   const generatedAt = validInstant(b.generatedAt);
   if (factors.length < 2 || factors.length > 4 || factors.some((f) => f === undefined) || !generatedAt) return null;
   if (new Set(factors).size !== factors.length) return null;
@@ -704,5 +856,343 @@ function readAnalysis(b: Json, eventId: string, sport: Sport): AiAnalysis | null
     basis,
     // PARTIAL is always an estimate, whatever the flag says.
     estimated: b.kind === 'partial' || b.estimated === true,
+  };
+}
+
+const pos = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 100 ? v : null;
+const nonNegative = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v < 20 ? v : null);
+
+function readRating(v: unknown): { attack: number; defence: number } | null {
+  if (!isObj(v)) return null;
+  const attack = pos(v.attack);
+  const defence = pos(v.defence);
+  return attack !== null && defence !== null ? { attack, defence } : null;
+}
+
+/** The goal model's figures; any off-contract value rejects the whole analysis. */
+function readForecast(v: unknown): ModelForecast | null {
+  if (!isObj(v) || !str(v.version) || (v.kind !== 'poisson' && v.kind !== 'dixon_coles') || typeof v.limited !== 'boolean'
+    || typeof v.experimental !== 'boolean') {
+    return null;
+  }
+  const computedAt = validInstant(v.computedAt);
+  const dataUntil = validInstant(v.dataUntil);
+  const sample = int(v.sample);
+  const tm = isObj(v.teamMatches) ? v.teamMatches : {};
+  const xg = isObj(v.expectedGoals) ? v.expectedGoals : {};
+  const lg = isObj(v.leagueGoals) ? v.leagueGoals : {};
+  const [homeMatches, awayMatches] = [int(tm.home), int(tm.away)];
+  const [xgHome, xgAway, lgHome, lgAway] = [nonNegative(xg.home), nonNegative(xg.away), nonNegative(lg.home), nonNegative(lg.away)];
+  if (!computedAt || !dataUntil || sample === null || homeMatches === null || awayMatches === null) return null;
+  if (xgHome === null || xgAway === null || lgHome === null || lgAway === null) return null;
+  if (!isObj(v.markets) || Object.keys(v.markets).length !== MARKET_KEYS.length) return null;
+  const markets = {} as Record<MarketKey, number>;
+  for (const key of MARKET_KEYS) {
+    const value = int(v.markets[key]);
+    if (value === null) return null;
+    markets[key] = value;
+  }
+  if (!marketsConsistent(markets)) return null;
+  if (!Array.isArray(v.unprovenFamilies) || v.unprovenFamilies.some((f) => !(FAMILIES as readonly unknown[]).includes(f))) {
+    return null;
+  }
+  if (!Array.isArray(v.topScores) || v.topScores.length > 3) return null;
+  const topScores = v.topScores.map((x) => {
+    if (!isObj(x)) return null;
+    const [home, away, probability] = [int(x.home), int(x.away), int(x.probability)];
+    return home !== null && away !== null && probability !== null && probability >= 1 && probability <= 100
+      ? { home, away, probability }
+      : null;
+  });
+  if (topScores.some((x) => x === null)) return null;
+  const ratings = isObj(v.ratings) ? { home: readRating(v.ratings.home), away: readRating(v.ratings.away) } : null;
+  const homeAdvantage = pos(v.homeAdvantage);
+  if (!ratings?.home || !ratings.away || homeAdvantage === null) return null;
+  let noBetReason: NoBetReason | null = null;
+  if (v.noBetReason !== null) {
+    noBetReason = typeof v.noBetReason === 'string' ? (NO_BET_REASONS[v.noBetReason] ?? null) : null;
+    if (noBetReason === null) return null;
+  }
+  return {
+    version: v.version as string,
+    kind: v.kind,
+    limited: v.limited,
+    computedAt,
+    dataUntil,
+    sample,
+    teamMatches: { home: homeMatches, away: awayMatches },
+    expectedGoals: { home: xgHome, away: xgAway },
+    markets,
+    unprovenFamilies: v.unprovenFamilies as MarketFamily[],
+    topScores: topScores as ModelForecast['topScores'],
+    ratings: { home: ratings.home, away: ratings.away },
+    homeAdvantage,
+    leagueGoals: { home: lgHome, away: lgAway },
+    noBetReason,
+    experimental: v.experimental,
+  };
+}
+
+const TABLE_FACTORS: Record<string, 'home' | 'away'> = { homeTable: 'home', awayTable: 'away' };
+
+/**
+ * v3: every number comes from the goal model and must agree with it — the 1X2 bars,
+ * the recommended market's percent, the alternatives'. The AI only chose factors and
+ * reasons; NO_BET carries nothing, and an unproven or limited market is never recommended.
+ */
+function readAnalysisV3(b: Json, eventId: string, sport: Sport): AiAnalysis | null {
+  const reasons = (b.reasons as unknown[]).map((r) => (typeof r === 'string' ? REASONS[r] : undefined));
+  if (reasons.some((r) => r === undefined)) return null;
+  const known = reasons as InsufficientReason[];
+  let basis: { home: TeamBasis; away: TeamBasis } | undefined;
+  if (b.basis !== null && b.basis !== undefined) {
+    const home = isObj(b.basis) ? readBasis(b.basis.home) : null;
+    const away = isObj(b.basis) ? readBasis(b.basis.away) : null;
+    if (!home || !away) return null;
+    basis = { home, away };
+  }
+  if ('summary' in b) return null;
+  if (b.kind === 'insufficient') {
+    if (b.probabilities !== null || b.forecast !== null || b.pick !== null) return null;
+    if (!Array.isArray(b.alternatives) || b.alternatives.length) return null;
+    return { eventId, sport, kind: 'insufficient', probabilities: [], reasons: known, generatedAt: null, basis };
+  }
+  if ((b.kind !== 'partial' && b.kind !== 'ready') || !basis) return null;
+  const forecast = readForecast(b.forecast);
+  const generatedAt = validInstant(b.generatedAt);
+  if (!forecast || !generatedAt) return null;
+  const m = forecast.markets;
+  const p = isObj(b.probabilities) ? b.probabilities : {};
+  if (p.home !== m['1'] || p.draw !== m.X || p.away !== m['2']) return null;
+  const factors = Array.isArray(b.factors) ? b.factors.map((f) => (typeof f === 'string' ? FACTORS[f] : undefined)) : [];
+  if (factors.length < 2 || factors.length > 4 || factors.some((f) => f === undefined)) return null;
+  if (new Set(factors).size !== factors.length) return null;
+  if (factors.some((f) => TABLE_FACTORS[f!] && basis![TABLE_FACTORS[f!]!].tablePosition === null)) return null;
+  const pick = b.pick;
+  if (!isObj(pick) || typeof pick.market !== 'string' || !Array.isArray(pick.reasons)) return null;
+  const pickReasons = pick.reasons.map((r) => (typeof r === 'string' ? PICK_REASONS[r] : undefined));
+  if (pickReasons.some((r) => r === undefined) || new Set(pickReasons).size !== pickReasons.length || pickReasons.length > 3) {
+    return null;
+  }
+  if (!Array.isArray(b.alternatives) || b.alternatives.length > 3) return null;
+  const alternatives: MarketChance[] = [];
+  for (const a of b.alternatives) {
+    if (!isObj(a) || !isMarketKey(a.market) || a.probability !== m[a.market]) return null;
+    // Alternatives passed the same rules as the pick: never an unproven family or a limited competition.
+    if (forecast.limited || forecast.unprovenFamilies.includes(FAMILY[a.market])) return null;
+    alternatives.push({ market: a.market, probability: a.probability as number });
+  }
+  let chosen: AiPick;
+  if (pick.market === 'NO_BET') {
+    if (pick.probability !== null || pickReasons.length || alternatives.length || forecast.noBetReason === null) return null;
+    chosen = { market: 'NO_BET', reasons: [], probability: null };
+  } else {
+    if (!isMarketKey(pick.market) || pick.probability !== m[pick.market] || forecast.noBetReason !== null) return null;
+    if (forecast.limited || forecast.unprovenFamilies.includes(FAMILY[pick.market])) return null;
+    const markets = [pick.market, ...alternatives.map((a) => a.market)];
+    if (new Set(markets).size !== markets.length) return null;
+    chosen = { market: pick.market, reasons: pickReasons as PickReason[], probability: m[pick.market] };
+  }
+  return {
+    eventId,
+    sport,
+    kind: b.kind,
+    pick: chosen,
+    probabilities: [m['1'], m.X, m['2']],
+    reasons: known,
+    generatedAt,
+    factors: factors as AiFactor[],
+    basis,
+    estimated: b.kind === 'partial' || b.estimated === true,
+    forecast,
+    alternatives,
+  };
+}
+
+function readStandingRow(v: unknown): StandingRow | null {
+  if (!isObj(v)) return null;
+  const team = competitor(v.team);
+  const [position, played, won, draw, lost, goalsFor, goalsAgainst] = [
+    int(v.position), int(v.played), int(v.won), int(v.draw), int(v.lost), int(v.goalsFor), int(v.goalsAgainst),
+  ];
+  // Points may be negative after a deduction: any whole number, as the provider gives it.
+  const points = typeof v.points === 'number' && Number.isInteger(v.points) ? v.points : null;
+  const goalDifference = typeof v.goalDifference === 'number' && Number.isInteger(v.goalDifference) ? v.goalDifference : null;
+  if (!team || position === null || position < 1 || played === null || won === null || draw === null || lost === null) return null;
+  if (goalsFor === null || goalsAgainst === null || points === null || goalDifference === null) return null;
+  return { position, team, played, won, draw, lost, goalsFor, goalsAgainst, goalDifference, points };
+}
+
+function readStandingBlock(v: unknown): StandingBlock | null {
+  if (!isObj(v) || !Array.isArray(v.rows)) return null;
+  const stage = v.stage === null ? null : str(v.stage);
+  const group = v.group === null ? null : str(v.group);
+  if ((v.stage !== null && stage === null) || (v.group !== null && group === null)) return null;
+  const rows = v.rows.map(readStandingRow);
+  if (rows.some((r) => r === null)) return null;
+  const teams = new Set((rows as StandingRow[]).map((r) => r.team.id));
+  if (teams.size !== rows.length) return null;
+  // The provider's order is kept as given: never re-sorted here.
+  return { stage, group, rows: rows as StandingRow[] };
+}
+
+const TOP_STATUSES: ReadonlySet<EventStatus> = new Set(['upcoming', 'live', 'finished']);
+const QUICK_STATUSES: ReadonlySet<QuickAnswer['status']> = new Set(['ok', 'no_bet', 'not_enough', 'unavailable']);
+const REASON_SET: ReadonlySet<string> = new Set(QUICK_REASONS);
+/** An ISO instant with an explicit zone (Z or ±hh:mm): never read in the device's own zone. */
+const ZONED_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+/** Whole-percent floors of the risk levels (backend: 0.70 / 0.60 / P_MIN 0.55, rounded half up). */
+const RISK_FLOOR: Record<QuickCriteria['risk'], number> = { conservative: 70, balanced: 60, elevated: 55 };
+/** How far a shown whole percent may be from the exact probability (sums of rounded 1X2 values). */
+const SHOWN_TOLERANCE = 1;
+/** The backend's clock may be ahead of the device's by this much ("from" = its own now). */
+const CLOCK_SLACK_MS = 3_600_000;
+
+/**
+ * Whether [low, high] can be the backend's Fréchet bounds of these legs, for ONE set of exact
+ * probabilities. A shown percent is within SHOWN_TOLERANCE of its exact value (double chance
+ * and handicaps are sums of rounded 1X2 percents, so they may be off by up to one point); the
+ * backend rounds the bounds outward: high = ceil(min p), low = floor(max(0, Σp − 100(n − 1))).
+ */
+export function boundsFit(bounds: readonly [number, number], legs: readonly number[]): boolean {
+  const [low, high] = bounds;
+  const EPS = 1e-9;
+  const n = legs.length;
+  if (low > high || n === 0) return false;
+  // high = ceil(min p): every p > high − 1 and at least one p ≤ high.
+  const lo = legs.map((d) => Math.max(d - SHOWN_TOLERANCE, high - 1 + EPS));
+  const hi = legs.map((d) => d + SHOWN_TOLERANCE - EPS);
+  if (lo.some((x, i) => x > hi[i]!)) return false;
+  const capped = legs.map((_, i) => (lo[i]! <= high ? Math.min(hi[i]!, high) : null));
+  if (capped.every((x) => x === null)) return false;
+  const sumLo = lo.reduce((a, x) => a + x, 0);
+  // Largest sum: every leg at its top, except one held at ≤ high (the cheapest such cut).
+  const cut = Math.min(...capped.map((c, i) => (c === null ? Infinity : hi[i]! - c)));
+  const sumHi = hi.reduce((a, x) => a + x, 0) - cut;
+  const floorLow = (sum: number) => Math.floor(Math.max(0, sum - 100 * (n - 1)) + EPS);
+  return low >= floorLow(sumLo) && low <= floorLow(sumHi);
+}
+
+function goalsPair(v: unknown): { home: number; away: number } | null {
+  if (!isObj(v) || typeof v.home !== 'number' || typeof v.away !== 'number') return null;
+  if (!Number.isFinite(v.home) || !Number.isFinite(v.away) || v.home < 0 || v.away < 0) return null;
+  return { home: v.home, away: v.away };
+}
+
+function percent(v: unknown): number | null {
+  const n = int(v);
+  return n !== null && n <= 100 ? n : null;
+}
+
+function readQuickLeg(v: unknown, readEvent: (raw: unknown) => SportEvent | null): QuickLeg | null {
+  if (!isObj(v) || !isMarketKey(v.market) || v.family !== FAMILY[v.market]) return null;
+  const event = readEvent(v.event);
+  const probability = percent(v.probability);
+  const leagueRate = percent(v.leagueRate);
+  const expectedGoals = goalsPair(v.expectedGoals);
+  const teams = isObj(v.teamMatches) ? { home: int(v.teamMatches.home), away: int(v.teamMatches.away) } : null;
+  const sample = int(v.sample);
+  const dataUntil = str(v.dataUntil);
+  if (!event || event.sport !== 'football' || event.status !== 'upcoming') return null;
+  if (probability === null || leagueRate === null || !expectedGoals || !teams || teams.home === null || teams.away === null) return null;
+  if (sample === null || !dataUntil || Number.isNaN(Date.parse(dataUntil))) return null;
+  return {
+    event,
+    market: v.market,
+    family: v.family as QuickLeg['family'],
+    probability,
+    leagueRate,
+    expectedGoals,
+    sample,
+    teamMatches: { home: teams.home, away: teams.away },
+    dataUntil,
+  };
+}
+
+/** The quick prediction, strictly: one broken leg or an inconsistent answer is a bad response. */
+export function readQuick(
+  b: Json,
+  criteria: QuickCriteria,
+  range: { from: Date; to: Date },
+  readEvent: (raw: unknown) => SportEvent | null,
+): QuickAnswer | null {
+  const status = b.status as QuickAnswer['status'];
+  if (b.mode !== criteria.mode || !QUICK_STATUSES.has(status) || !Array.isArray(b.legs)) return null;
+  const size = int(b.size);
+  const suitable = int(b.suitable);
+  if (size !== (criteria.mode === 'single' ? 1 : criteria.size) || suitable === null) return null;
+  if (!isObj(b.counts) || int(b.counts.matches) === null || int(b.counts.forecasts) === null) return null;
+  if (!isObj(b.reasons) || typeof b.experimental !== 'boolean' || !Array.isArray(b.unavailableTournaments)) return null;
+  // Until the model is confirmed on forecasts stored before kickoff, an unlabelled pick is a broken answer.
+  if (!MODEL_CONFIRMED && !b.experimental) return null;
+  const uncheckedDays = int(b.uncheckedDays);
+  if (uncheckedDays === null) return null;
+  const computedAt = str(b.computedAt);
+  if (!computedAt || !ZONED_INSTANT.test(computedAt) || Number.isNaN(Date.parse(computedAt))) return null;
+  const reasons: Partial<Record<QuickReason, number>> = {};
+  for (const [k, n] of Object.entries(b.reasons)) {
+    if (!REASON_SET.has(k) || int(n) === null) return null;
+    reasons[k as QuickReason] = n as number;
+  }
+  const unavailable = b.unavailableTournaments.filter((x): x is string => typeof x === 'string');
+  if (unavailable.length !== b.unavailableTournaments.length) return null;
+  const legs = b.legs.map((raw) => readQuickLeg(raw, readEvent));
+  if (legs.some((l) => l === null)) return null;
+  const ok = legs as QuickLeg[];
+  const matches = b.counts.matches as number;
+  const forecasts = b.counts.forecasts as number;
+  // Counts must be consistent with each other and with the legs shown.
+  if (forecasts > matches || ok.length > forecasts || ok.length > suitable || suitable > forecasts) return null;
+  // The status must agree with the mode and the count: "no pick" means nothing suitable for a
+  // single; "not enough" means fewer suitable matches than the coupon asked for.
+  const want = criteria.mode === 'single' ? 1 : criteria.size;
+  if (status === 'no_bet' && (criteria.mode !== 'single' || suitable !== 0)) return null;
+  if (status === 'not_enough' && (criteria.mode !== 'coupon' || suitable >= want)) return null;
+  if (status === 'unavailable' && suitable >= want) return null;
+  // With data missing, "nothing qualifies" is not a conclusion the backend may draw (it says
+  // "unavailable" then): such an answer is broken.
+  const missing = (reasons.source_unavailable ?? 0) > 0 || unavailable.length > 0;
+  if ((status === 'no_bet' || status === 'not_enough') && missing) return null;
+  // Shape must match the status: a result has exactly the asked number of different matches.
+  if (status === 'ok' ? ok.length !== size : ok.length !== 0) return null;
+  if (new Set(ok.map((l) => l.event.id)).size !== ok.length) return null;
+  const teams = ok.flatMap((l) => [l.event.home.id, l.event.away.id]);
+  if (new Set(teams).size !== teams.length) return null;
+  let combined: [number, number] | null = null;
+  if (Array.isArray(b.combined)) {
+    const [low, high] = b.combined as unknown[];
+    const pair: [number, number] | null = b.combined.length === 2 && percent(low) !== null && percent(high) !== null ? [low as number, high as number] : null;
+    // Bounds the legs shown cannot produce are a broken answer.
+    if (!pair || !boundsFit(pair, ok.map((l) => l.probability))) return null;
+    combined = pair;
+  } else if (b.combined !== null) return null;
+  if ((criteria.mode === 'coupon' && status === 'ok') !== (combined !== null)) return null;
+  // Every leg must meet what was asked: period, competitions, market and risk.
+  const floor = RISK_FLOOR[criteria.risk];
+  for (const l of ok) {
+    if (!ZONED_INSTANT.test(l.event.startsAt)) return null;
+    const kickoff = Date.parse(l.event.startsAt);
+    if (kickoff < range.from.getTime() - CLOCK_SLACK_MS || kickoff >= range.to.getTime()) return null;
+    // Picks exist only for matches on the pick's own UTC day (the model's match-day rule).
+    if (new Date(kickoff).toISOString().slice(0, 10) !== new Date(computedAt).toISOString().slice(0, 10)) return null;
+    if (criteria.tournaments.length && !criteria.tournaments.includes(l.event.tournamentId)) return null;
+    if (criteria.market !== 'any' && l.family !== criteria.market) return null;
+    // The floor applies to the exact probability; the shown percent may be a point below it.
+    if (l.probability < floor - SHOWN_TOLERANCE) return null;
+  }
+  return {
+    mode: criteria.mode,
+    status,
+    legs: ok,
+    size,
+    suitable,
+    combined,
+    counts: { matches, forecasts },
+    reasons,
+    unavailableTournaments: unavailable,
+    uncheckedDays,
+    experimental: b.experimental,
+    computedAt,
   };
 }

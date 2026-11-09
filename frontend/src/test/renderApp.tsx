@@ -8,7 +8,7 @@ import type { SportsDataProvider } from '../data/provider';
 import { STORAGE_KEY, type Settings } from '../settings/settings';
 import { BootTracker } from '../loading/boot';
 import { createTelegramAdapter } from '../telegram/telegram';
-import { fixedClock } from '../time/clock';
+import { fixedClock, type Clock } from '../time/clock';
 
 /** No backend: every call fails like an unreachable server (plain M1 demo). */
 export const offlineAuthApi: AuthApi = {
@@ -33,12 +33,15 @@ export function renderApp(
     data?: SportsDataProvider;
     initData?: string | null;
     strict?: boolean;
+    /** Another fixed "now" than TEST_NOW. */
+    clockAt?: string;
+    clock?: Clock;
   } = {},
 ) {
   const settings: Settings = { lang: 'ru', timeZone: 'Asia/Baku', reduceMotion: false, haptics: false, ...opts.settings };
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
   window.history.replaceState(null, '', `/${hash}`);
-  const clock = fixedClock(TEST_NOW);
+  const clock = opts.clock ?? fixedClock(opts.clockAt ?? TEST_NOW);
   const services = {
     clock,
     data:

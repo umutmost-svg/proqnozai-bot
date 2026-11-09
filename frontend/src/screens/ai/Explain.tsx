@@ -1,7 +1,9 @@
-import type { AiFactor, TeamBasis, Tournament } from '../../data/models';
+import type { ReactNode } from 'react';
+import type { AiFactor, ModelForecast, TeamBasis, Tournament } from '../../data/models';
 import { listOf, plural, type Lang, type Translate } from '../../i18n';
 import { useSettings } from '../../state/contexts';
 import s from './Ai.module.css';
+import { decimal, ModelSource } from './Model';
 
 type Basis = { home: TeamBasis; away: TeamBasis };
 
@@ -10,9 +12,16 @@ function lastMatches(t: Translate, lang: Lang, n: number): string {
   return plural(t, lang, 'ai.n.lastMatches', n);
 }
 
-/** One factor as a natural sentence, built only from that team's verified numbers. */
-export function factorSentence(t: Translate, lang: Lang, factor: AiFactor, basis: Basis): string {
+/** One factor as a natural sentence, built only from that team's verified numbers (or the model's figures). */
+export function factorSentence(t: Translate, lang: Lang, factor: AiFactor, basis: Basis, forecast?: ModelForecast): string {
   const team = factor.startsWith('home') ? basis.home : basis.away;
+  if (factor === 'homeAdvantage') {
+    return t('ai.sentence.homeAdvantage', { value: decimal(lang, forecast!.homeAdvantage) });
+  }
+  if (factor.endsWith('Rating')) {
+    const rating = forecast!.ratings[factor === 'homeRating' ? 'home' : 'away'];
+    return t('ai.sentence.rating', { team: team.name, attack: decimal(lang, rating.attack), defence: decimal(lang, rating.defence) });
+  }
   if (factor.endsWith('Form')) {
     return t('ai.sentence.form', {
       team: team.name,
@@ -38,14 +47,14 @@ export function factorSentence(t: Translate, lang: Lang, factor: AiFactor, basis
   });
 }
 
-export function Factors({ factors, basis }: { factors: readonly AiFactor[]; basis: Basis }) {
+export function Factors({ factors, basis, forecast }: { factors: readonly AiFactor[]; basis: Basis; forecast?: ModelForecast }) {
   const { t, settings } = useSettings();
   return (
     <section className={s.card} data-testid="ai-factors">
       <h3 className={s.cardTitle}>{t('ai.factorsTitle')}</h3>
       <ul className={s.list}>
         {factors.map((f) => (
-          <li key={f}>{factorSentence(t, settings.lang, f, basis)}</li>
+          <li key={f}>{factorSentence(t, settings.lang, f, basis, forecast)}</li>
         ))}
       </ul>
     </section>
@@ -99,13 +108,14 @@ function TeamFacts({ team }: { team: TeamBasis }) {
   );
 }
 
-/** Verified numbers, what they cover, and whose data they are. */
-export function Facts({ basis, tournament, provider, attribution }: { basis: Basis; tournament?: Tournament; provider: string | null; attribution: string | null }) {
+/** Verified numbers of both teams and what they cover; v2 answers also carry the source here. */
+export function Facts({ basis, tournament, provider, attribution, title, children }: { basis: Basis; tournament?: Tournament; provider: string | null; attribution: string | null; title?: string; children?: ReactNode }) {
   const { t } = useSettings();
   const hasTable = basis.home.tablePosition !== null || basis.away.tablePosition !== null;
   return (
     <section className={s.card} data-testid="ai-basis">
-      <h3 className={s.cardTitle}>{t('ai.factsTitle')}</h3>
+      <h3 className={s.cardTitle}>{title ?? t('ai.factsTitle')}</h3>
+      {children}
       <ul className={s.teams}>
         <TeamFacts team={basis.home} />
         <TeamFacts team={basis.away} />
@@ -129,17 +139,44 @@ export function Facts({ basis, tournament, provider, attribution }: { basis: Bas
   );
 }
 
-export function Limitations({ hasTable }: { hasTable: boolean }) {
+export function Limitations({ hasTable, forecast }: { hasTable: boolean; forecast?: ModelForecast }) {
   const { t } = useSettings();
   return (
     <section className={s.card} data-testid="ai-limitations">
       <h3 className={s.cardTitle}>{t('ai.limitsTitle')}</h3>
       <ul className={s.list}>
         <li>{t('ai.limits.odds')}</li>
-        <li>{t('ai.limits.lineups')}</li>
-        <li>{t(hasTable ? 'ai.limits.data' : 'ai.limits.dataNoTable')}</li>
+        {forecast ? <li>{t('ai.limits.model')}</li> : <li>{t('ai.limits.lineups')}</li>}
+        {!forecast && <li>{t(hasTable ? 'ai.limits.data' : 'ai.limits.dataNoTable')}</li>}
+        {forecast?.limited && (
+          <li>{t(forecast.noBetReason === 'unvalidatedCompetition' ? 'ai.limits.unvalidated' : 'ai.limits.limited')}</li>
+        )}
+        {forecast && forecast.unprovenFamilies.length > 0 && <li>{t('ai.limits.unproven')}</li>}
         <li>{t('ai.limits.guarantee')}</li>
       </ul>
+    </section>
+  );
+}
+
+/** Which data and model the analysis rests on, and how fresh they are (v3). */
+export function Sources({ forecast, provider, attribution, generatedAt }: { forecast: ModelForecast; provider: string | null; attribution: string | null; generatedAt: ReactNode }) {
+  const { t } = useSettings();
+  return (
+    <section className={s.card} data-testid="ai-sources">
+      <h3 className={s.cardTitle}>{t('ai.sources.title')}</h3>
+      {generatedAt}
+      <ModelSource forecast={forecast} />
+      {provider && (
+        <p className={s.source} data-testid="ai-source">
+          {t('ai.basisSource', { provider })}
+          {attribution && (
+            <>
+              <br />
+              {attribution}
+            </>
+          )}
+        </p>
+      )}
     </section>
   );
 }

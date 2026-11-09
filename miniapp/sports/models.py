@@ -81,6 +81,10 @@ class FootballEvent:
     minute: int | None = None
     awarded: bool = False
     matchday: int | None = None
+    # 90-minute score of a match played to the end (not awarded); internal, for the goal model.
+    regular_score: tuple[int, int] | None = None
+    # Provider's stage code (REGULAR_SEASON, LAST_16, FINAL…); internal, ranks the day's top matches.
+    stage: str | None = None
     stats: dict | None = None
     stats_availability: Availability = "unavailable"
     sport: Sport = field(default="football", init=False)

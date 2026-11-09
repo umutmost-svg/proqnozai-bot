@@ -2,12 +2,14 @@ import { NavLink, useLocation } from 'react-router-dom';
 import homeIcon from '../assets/figma/icon-home.svg';
 import calendarIcon from '../assets/figma/icon-calendar.svg';
 import personIcon from '../assets/figma/icon-person.svg';
+import sparkIcon from '../assets/figma/icon-spark.svg';
 import { useT } from '../state/contexts';
 import s from './BottomNavigation.module.css';
 
 const ITEMS = [
   { to: '/', icon: homeIcon, label: 'nav.home', match: (p: string) => p === '/' },
   { to: '/matches', icon: calendarIcon, label: 'nav.matches', match: (p: string) => p.startsWith('/matches') || p.startsWith('/event') || p.startsWith('/tournament') || p.startsWith('/team') },
+  { to: '/quick', icon: sparkIcon, label: 'nav.quick', match: (p: string) => p.startsWith('/quick') },
   { to: '/profile', icon: personIcon, label: 'nav.profile', match: (p: string) => p.startsWith('/profile') },
 ] as const;
 

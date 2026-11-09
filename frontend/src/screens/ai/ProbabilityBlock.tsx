@@ -14,7 +14,7 @@ const TONE_CLASS: Record<OutcomeTone, string> = {
  * favourite (green) and the outsider (red) between the two teams, the draw is orange;
  * teams closer than CLOSE_MARGIN are both neutral — no false favourite.
  */
-export function ProbabilityBlock({ title, labels, values, sport }: { title: string; labels: string[]; values: readonly number[]; sport: string }) {
+export function ProbabilityBlock({ title, labels, values, sport, badge }: { title: string; labels: string[]; values: readonly number[]; sport: string; badge?: string }) {
   const { t } = useSettings();
   const three = values.length === 3;
   const tones = three
@@ -29,6 +29,11 @@ export function ProbabilityBlock({ title, labels, values, sport }: { title: stri
       <h3 className={s.cardTitle} data-testid="ai-probabilities-title">
         {title}
       </h3>
+      {badge && (
+        <span className={s.limited} data-testid="ai-limited">
+          {badge}
+        </span>
+      )}
       {values.map((p, i) => {
         const tone = tones[i]!;
         const badge = tone === 'favourite' ? t('ai.favourite') : tone === 'outsider' ? t('ai.outsider') : null;

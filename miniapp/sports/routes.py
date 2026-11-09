@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -22,6 +23,7 @@ from .service import RequestError, SportsService, parse_instant
 logger = logging.getLogger("miniapp.sports")
 
 SessionCheck = Callable[[Request], Awaitable[Any]]
+MAX_TOP_DAY = timedelta(hours=26)
 
 
 def _error(status: int, code: str, **extra: Any) -> JSONResponse:
@@ -97,6 +99,35 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             "ai": {"status": ai_status()},
         })
 
+    @app.get("/api/sports/football/top")
+    async def top(request: Request) -> JSONResponse:
+        """The day's top matches. `from`/`to`: the user's local day in UTC (as for /events)."""
+        if not await signed_in(request):
+            return _error(401, "unauthenticated")
+        params = request.query_params
+        if set(params) - {"from", "to", "tournament"} or "from" not in params or "to" not in params:
+            return _error(400, "bad_request")
+        try:
+            start, end = parse_instant(params["from"]), parse_instant(params["to"])
+            # One local day (23–25 h with a clock change), never a longer ranking.
+            if not timedelta(0) < end - start <= MAX_TOP_DAY:
+                return _error(400, "bad_range")
+            ranked, result = await service.top(start, end, params.get("tournament") or None)
+        except RequestError as exc:
+            return _error(400, exc.code)
+        except UpstreamError as exc:
+            return _upstream(exc)
+        await service.ensure_emblems()
+        return JSONResponse({
+            "sport": "football",
+            "coverage": _short(service.coverage()["sports"]["football"]),
+            "top": [{"event": r.event.to_json(), "leaders": r.leaders} for r in ranked],
+            "tournaments": [service.tournament_json(t) for t in result.tournaments],
+            "fetchedAt": result.fetched_at,
+            "stale": result.stale,
+            "ai": {"status": ai_status()},
+        })
+
     @app.get("/api/sports/event/{event_id}")
     async def event(event_id: str, request: Request) -> JSONResponse:
         if not await signed_in(request):
@@ -138,6 +169,31 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             "fetchedAt": result.fetched_at,
             "stale": result.stale,
             "ai": {"status": ai_status()},
+        })
+
+    @app.get("/api/sports/{sport}/tournaments/{tournament_id}/standings")
+    async def standings(sport: str, tournament_id: str, request: Request) -> JSONResponse:
+        if not await signed_in(request):
+            return _error(401, "unauthenticated")
+        if sport not in SPORTS or len(tournament_id) > 40:
+            return _error(404, "not_found")
+        if request.query_params:
+            return _error(400, "bad_request")
+        try:
+            result = await service.standings_table(sport, tournament_id)  # type: ignore[arg-type]
+        except UpstreamError as exc:
+            return _upstream(exc)
+        if result is None:
+            return _error(404, "not_found")
+        return JSONResponse({
+            "sport": sport,
+            "coverage": _short(service.coverage()["sports"][sport]),
+            "tournament": service.tournament_json(result.tournament),
+            "season": result.standings.season.to_json(),
+            # Provider order inside every block; an empty list means the competition has no table.
+            "blocks": [b.to_json() for b in result.standings.blocks],
+            "fetchedAt": result.fetched_at,
+            "stale": result.stale,
         })
 
     @app.api_route("/api/crests/{kind}/{ident}", methods=["GET", "HEAD"])

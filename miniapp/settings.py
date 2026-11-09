@@ -171,8 +171,12 @@ class Settings:
         unknown = [c for c in self.football_data_competitions if c not in KNOWN_COMPETITIONS]
         if unknown or not self.football_data_competitions:
             raise SettingsError(f"unsupported football-data.org competitions: {unknown or 'none'}")
-        if not 1 <= self.football_data_per_minute <= 10:
-            raise SettingsError("football_data_per_minute must be 1..10 (free tier: 10/minute)")
+        # Free tier: 10/minute. A paid plan (declared by football_data_live_plan) allows more;
+        # the value must still stay below that plan's own limit (set by the operator).
+        max_per_minute = 120 if self.football_data_live_plan else 10
+        if not 1 <= self.football_data_per_minute <= max_per_minute:
+            raise SettingsError(f"football_data_per_minute must be 1..{max_per_minute} "
+                                "(free tier: 10/minute; more only with MINIAPP_FOOTBALL_DATA_LIVE_PLAN)")
         if not 1 <= self.football_data_per_day <= 14400:
             raise SettingsError("football_data_per_day must be 1..14400")
         if not 0 <= self.sports_unknown_lookups_per_hour <= 600:

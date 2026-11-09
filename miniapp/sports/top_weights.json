@@ -1,0 +1,19 @@
+{
+  "_comment": "Weights of the day's top matches (miniapp/sports/top.py). Popularity of a match from source facts only: competition, stage, table positions, status. Never the model's or Claude's confidence.",
+  "maxMatches": 5,
+  "maxPerCompetition": 2,
+  "competition": {"CL": 30, "WC": 30, "EC": 28, "PL": 26, "PD": 24, "BL1": 22, "SA": 22, "FL1": 18,
+                  "PPL": 14, "DED": 14, "BSA": 14, "ELC": 10},
+  "otherCompetition": 8,
+  "stage": {"FINAL": 30, "SEMI_FINALS": 24, "QUARTER_FINALS": 18, "LAST_16": 12, "THIRD_PLACE": 8,
+            "LAST_32": 8, "LAST_64": 6, "PLAYOFFS": 8, "PLAYOFF_ROUND_1": 6, "PLAYOFF_ROUND_2": 6},
+  "table": 12,
+  "leaders": 10,
+  "leadersTop": 4,
+  "minTableTeams": 6,
+  "standingsMaxAgeHours": 24,
+  "upcoming": 10,
+  "live": 14,
+  "kickoffSoon": 4,
+  "kickoffSoonHours": 3
+}

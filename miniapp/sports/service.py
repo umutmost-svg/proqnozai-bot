@@ -9,18 +9,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 
 from . import football_data
+from . import top as top_matches
 from .cache import Cached, SportsCache
 from .client import UpstreamError
 from .crests import CrestStore
-from .football_data import FootballDataAdapter, Season
+from .football_data import FootballDataAdapter, Season, Standings
 from .search import SearchIndex
-from .models import SPORTS, Provenance, Sport, SportEvent, Tournament
+from .models import SPORTS, FootballEvent, Provenance, Sport, SportEvent, Tournament
 
 logger = logging.getLogger("miniapp.sports")
 
@@ -28,7 +29,10 @@ MAX_RANGE = timedelta(hours=48)
 # How long a page response may wait for the (optional) competition emblem list.
 EMBLEMS_WAIT_S = 2.0
 PAST_WINDOW = timedelta(days=30)
+PAST_SEASON_RETRY_S = 6 * 3600.0
 FUTURE_WINDOW = timedelta(days=60)
+# Day-table snapshots of the top-match ranking kept at most (one per day start and competition).
+TOP_TABLES_MAX = 2000
 
 
 class RequestError(Exception):
@@ -46,6 +50,27 @@ class CalendarResult:
     events: list[SportEvent]
     fetched_at: str
     stale: bool
+
+
+@dataclass(frozen=True)
+class StandingsResult:
+    tournament: Tournament
+    standings: Standings
+    fetched_at: str
+    stale: bool
+
+
+@dataclass(frozen=True)
+class ModelHistory:
+    """What the goal model learns from: the previous season (if the provider has it) and the
+    current one, as normalized events."""
+
+    events: list[SportEvent]
+    season_start: str | None  # current season's first day (ISO date)
+    previous_season: bool
+    # Why the previous season is missing: "absent" (the source has none) or "transient"
+    # (timeout, rate limit, outage: may load on a later try); None when it is there.
+    previous_missing: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +114,12 @@ class SportsService:
         self.search_index = SearchIndex(lambda tid: self.calendar("football", tid),
                                         lambda: [t.id for t in self.tournaments("football")], clock)
         self._unknown_lookups: deque[float] = deque()
+        # Called with every season calendar that loads (e.g. forecast settlement); never fails a request.
+        self.calendar_listeners: list[Callable[[str, list[SportEvent]], None]] = []
+        self._notified: dict[str, float] = {}
+        self._past_retry_at: dict[tuple[str, int], float] = {}
+        self._past_failure: dict[tuple[str, int], str] = {}
+        self._top_tables: OrderedDict[tuple[str, str], top_matches.Table] = OrderedDict()
         self._unknown_per_hour = unknown_lookups_per_hour
 
     # --- coverage ------------------------------------------------------------
@@ -165,10 +196,13 @@ class SportsService:
     def _learn_crests(self, events) -> None:
         """Pictures are served only for URLs the provider itself gave in a payload."""
         for event in events:
-            for side in (event.home, event.away):
-                number = football_data.team_number(side.id)
-                if side.crest_source and number is not None:
-                    self.crests.learn("team", str(number), side.crest_source)
+            self._learn_crests_of((event.home, event.away))
+
+    def _learn_crests_of(self, teams) -> None:
+        for side in teams:
+            number = football_data.team_number(side.id)
+            if side.crest_source and number is not None:
+                self.crests.learn("team", str(number), side.crest_source)
 
     def connected(self, sport: Sport) -> bool:
         return sport == "football" and self.football is not None
@@ -250,6 +284,46 @@ class SportsService:
         tournament = next((t for t in adapter.tournaments() if t.id == event.tournament_id), None)
         return _with_cache_state(event, cached.stale), tournament
 
+    async def top(self, start: datetime, end: datetime,
+                  tournament: str | None = None) -> tuple[list[top_matches.Ranked], EventsResult]:
+        """The day's top matches from the same day listings as the catalogue (no extra request);
+        all competitions unless the user narrowed the day to one."""
+        result = await self.events("football", start, end, tournament)
+        events = [e for e in result.events if isinstance(e, FootballEvent)]
+        tables = {t: self._day_table(start, t) for t in {e.tournament_id for e in events}}
+        return top_matches.rank(events, lambda t: t.removeprefix(f"{football_data.ID_PREFIX}:"), tables,
+                                now=self._clock()), result
+
+    def _day_table(self, start: datetime, tournament_id: str) -> top_matches.Table | None:
+        """The table the day's ranking uses, fixed for that day once known: a cache entry aging
+        out (or refreshing) never reorders the day's cards; only a first table can add weight.
+        Keyed by the day start on a 15-minute grid (every time zone's midnight lies on it) and
+        bounded: finished days go first, then the least recently used."""
+        utc = start.astimezone(UTC)
+        key = (utc.replace(minute=utc.minute - utc.minute % 15, second=0, microsecond=0).isoformat(), tournament_id)
+        if key in self._top_tables:
+            self._top_tables.move_to_end(key)
+            return self._top_tables[key]
+        table = self._cached_table(tournament_id)
+        if table is not None:
+            self._top_tables[key] = table
+            if len(self._top_tables) > TOP_TABLES_MAX:
+                horizon = datetime.fromtimestamp(self._clock() - 2 * 86400, UTC).isoformat()
+                for old in [k for k in self._top_tables if k[0] < horizon]:
+                    del self._top_tables[old]
+                while len(self._top_tables) > TOP_TABLES_MAX:
+                    self._top_tables.popitem(last=False)
+        return table
+
+    def _cached_table(self, tournament_id: str) -> top_matches.Table | None:
+        """A single overall table already in the cache (never loaded for the ranking)."""
+        code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+        entry = self.cache.peek(f"football:standings:{code}")
+        if entry is None or self._clock() - entry.fetched_at > top_matches.WEIGHTS.standings_max_age_s:
+            return None
+        table = entry.value
+        return top_matches.table_of(table.rows_by_team()) if len(table.blocks) == 1 else None
+
     def _calendar_fresh(self, tournament_id: str) -> bool:
         """A cached, unexpired season calendar: answering from it costs no request at all."""
         code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
@@ -278,7 +352,92 @@ class SportsService:
         marked = [_with_cache_state(e, cached.stale) for e in events]
         # The index keeps the same staleness marks as the calendar answer (served-from-cache scores).
         self.search_index.store(tournament_id, marked, cached.fetched_at)
+        # Listeners see each loaded calendar once (not every cache hit of it).
+        if self.calendar_listeners and self._notified.get(tournament_id) != cached.fetched_at:
+            self._notified[tournament_id] = cached.fetched_at
+            for listener in self.calendar_listeners:
+                try:
+                    listener(tournament_id, events)
+                except Exception as exc:  # a listener's failure must never fail a calendar
+                    logger.warning("sports.calendar_listener_failed type=%s", type(exc).__name__)
         return CalendarResult(tournament, season, marked, _iso(cached.fetched_at), cached.stale)
+
+    async def standings_table(self, sport: Sport, tournament_id: str) -> StandingsResult | None:
+        """The provider's current tables of one tournament (None: not a tournament we serve)."""
+        if not self.connected(sport):
+            return None
+        tournament = next((t for t in self.tournaments(sport) if t.id == tournament_id), None)
+        if tournament is None:
+            return None
+        cached = await self._standings(tournament_id)
+        for block in cached.value.blocks:
+            self._learn_crests_of([row.team for row in block.rows])
+        return StandingsResult(tournament, cached.value, _iso(cached.fetched_at), cached.stale)
+
+    def _costs_request(self, key: str) -> bool:
+        """Would reading this cache key now make a provider request? (A fresh value, a load
+        already running and a remembered failure cost nothing.)"""
+        try:
+            return self.cache.existing(key) is None
+        except UpstreamError:
+            return False
+
+    def upstream_headroom(self) -> int:
+        """Provider requests left in this minute for everyone."""
+        return self.football.client.minute_headroom() if self.football is not None else 0
+
+    def day_cost(self, day: date) -> int:
+        return int(self.football is not None and self._costs_request(f"football:day:{day.isoformat()}"))
+
+    def history_cost(self, tournament_id: str) -> int:
+        """Provider requests model_history() would make now (an unknown season counts as one)."""
+        code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+        key = f"football:calendar:{code}"
+        cost = int(self._costs_request(key))
+        entry = self.cache.peek(key)
+        if entry is None:
+            return cost + 1
+        start = entry.value[1].start
+        if start is None:
+            return cost
+        year = int(start[:4]) - 1
+        if self._clock() < self._past_retry_at.get((code, year), 0.0):
+            return cost
+        return cost + int(self._costs_request(f"football:season:{code}:{year}"))
+
+    async def model_history(self, tournament_id: str) -> ModelHistory | None:
+        """Current-season calendar plus the previous season (one request a day, shared)."""
+        current = await self.calendar("football", tournament_id)
+        if current is None:
+            return None
+        assert self.football is not None
+        adapter = self.football
+        code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+        start = current.season.start
+        events: list[SportEvent] = []
+        previous = False
+        missing: str | None = None
+        if start is not None:
+            year = int(start[:4]) - 1
+            if self._clock() < self._past_retry_at.get((code, year), 0.0):
+                missing = self._past_failure.get((code, year), "transient")
+            else:
+                try:
+                    past = await self.cache.get(f"football:season:{code}:{year}",
+                                                lambda: adapter.past_season(code, year))
+                except UpstreamError as exc:
+                    # Optional depth: without it the model shows probabilities but recommends
+                    # nothing (partial_history). Not asked again for PAST_SEASON_RETRY_S, so a
+                    # season the provider cannot supply never costs a request per analysis.
+                    self._past_retry_at[(code, year)] = self._clock() + PAST_SEASON_RETRY_S
+                    missing = "absent" if exc.code == "not_found" else "transient"
+                    self._past_failure[(code, year)] = missing
+                    logger.info("sports.past_season_unavailable tournament=%s code=%s", tournament_id, exc.code)
+                else:
+                    events.extend(past.value[0])
+                    previous = True
+        events.extend(current.events)
+        return ModelHistory(events, start, previous, missing)
 
     # --- verified context for the AI analysis (shared cache, no per-user requests) ---
 
@@ -293,8 +452,16 @@ class SportsService:
         code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
         if self.football is None or code not in self.football.codes:
             return {}
+        table = (await self._standings(tournament_id)).value
+        # Positions compare only inside one table: with groups or several stages there is no
+        # single ranking, so the AI gets no table evidence at all rather than a mixed one.
+        return table.rows_by_team() if len(table.blocks) == 1 else {}
+
+    async def _standings(self, tournament_id: str) -> Cached[Standings]:
+        assert self.football is not None
         adapter = self.football
-        return (await self.cache.get(f"football:standings:{code}", lambda: adapter.standings(code))).value
+        code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+        return await self.cache.get(f"football:standings:{code}", lambda: adapter.standings(code))
 
     def _spend_unknown_lookup(self) -> None:
         """Ids never seen in a listing may cost an upstream call: cap them per hour."""

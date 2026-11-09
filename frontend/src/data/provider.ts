@@ -1,4 +1,16 @@
-import type { AiAnalysis, SearchResults, SportEvent, TeamMatches, Tournament, TournamentCalendar, Sport } from './models';
+import type {
+  AiAnalysis,
+  QuickAnswer,
+  QuickCriteria,
+  TopMatch,
+  SearchResults,
+  SportEvent,
+  TeamMatches,
+  Tournament,
+  TournamentCalendar,
+  TournamentStandings,
+  Sport,
+} from './models';
 import type { DayKey } from '../time/zoned';
 import type { EventQuery } from './filter';
 
@@ -27,11 +39,17 @@ export interface SportsDataProvider {
   /** Asks for the sport's tournaments on its own (not only as a side effect of a match listing). */
   loadTournaments(sport: Sport): Promise<Tournament[]>;
   listEvents(query: EventQuery): Promise<SportEvent[]>;
-  getFeatured(query: EventQuery): Promise<SportEvent | null>;
+  /** Up to five of the day's top matches (query.day in query.timeZone), best first. */
+  getTopMatches(query: EventQuery): Promise<TopMatch[]>;
+  /** The goal model's quick prediction (real data only; see quickAvailable). */
+  quickPick(criteria: QuickCriteria, now: Date, timeZone: string): Promise<QuickAnswer>;
+  quickAvailable(): boolean;
   getEvent(id: string): Promise<SportEvent | null>;
   getTournament(id: string): Tournament | undefined;
   /** The tournament's season schedule; null when it is not a tournament we serve. */
   getTournamentCalendar(id: string): Promise<TournamentCalendar | null>;
+  /** The tournament's current table(s) in the source's order; null when it is not a tournament we serve. */
+  getStandings(id: string): Promise<TournamentStandings | null>;
   /** `lang`: language of the written analysis (the interface language). */
   requestAnalysis(eventId: string): Promise<AiAnalysis>;
   /** The AI analysis can be requested for real events (always true for the demo). */

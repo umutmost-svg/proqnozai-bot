@@ -1,5 +1,5 @@
 import { buildDemoEvents, TOURNAMENTS } from './fixtures';
-import { ALL_TOURNAMENTS, filterEvents, normalize, pickFeatured, type EventQuery } from './filter';
+import { ALL_TOURNAMENTS, filterEvents, normalize, pickTop, type EventQuery } from './filter';
 import { SPORTS } from './models';
 
 const NOW = new Date('2026-11-08T06:00:00Z'); // 10:00 in Baku
@@ -53,9 +53,9 @@ describe('filterEvents', () => {
     expect(normalize('  Tomás   VARGA ')).toBe('tomas varga');
   });
 
-  it('picks the featured event for the hero', () => {
-    expect(pickFeatured(filterEvents(events, TOURNAMENTS, base))?.id).toBe('fb-rm-fcb');
-    expect(pickFeatured([])).toBeNull();
+  it('puts the featured event first among the top matches', () => {
+    expect(pickTop(filterEvents(events, TOURNAMENTS, base))[0]?.id).toBe('fb-rm-fcb');
+    expect(pickTop([])).toEqual([]);
   });
 
   it('generates dates from the clock instead of a fixed mockup date', () => {

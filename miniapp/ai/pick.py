@@ -1,57 +1,48 @@
-"""The model's preferred outcome ("pick"), checked by explicit Python rules.
+"""Reasons that may explain the recommended market — each one checked in Python.
 
-There is no bookmaker odds source, so no pick can be called a *value* bet: it is
-only the outcome the model prefers, shown with its probability computed here from
-the 1X2 estimate. The model chooses one market and up to three reason codes; this
-module keeps a pick only when the probabilities and the verified numbers support
-it, otherwise the answer is NO_BET. A downgrade only ever removes a claim — it
-never invents one.
+Since M3.5 the market itself is chosen by the goal model's frozen rules
+(miniapp/forecast/selection.py); the language model only picks, from the reasons
+listed here as TRUE in the verified numbers and pointing the same way as that
+market, the ones that explain it best. A reason that does not hold, or that argues
+for the other side, is never offered to it.
 
-Rules (shared with the frontend's favourite/outsider colours, see CLOSE_MARGIN):
-- a team is the favourite when its win probability exceeds the other team's by at
-  least CLOSE_MARGIN points; closer than that there is no favourite;
-- "1" / "2": that team is the favourite AND has at least SINGLE_MIN percent;
-- "1X" / "X2": that team is the favourite (a double chance never picks a side the
-  estimate does not favour) AND the pair reaches DOUBLE_MIN percent;
-- "X": the draw is strictly the most likely of the three outcomes;
-- "12": the draw is at most TWELVE_DRAW_MAX percent;
-- every reason must be true in the verified numbers and point the same way as the
-  pick; a pick other than NO_BET needs at least one such reason.
+CLOSE_MARGIN is shared with the frontend's favourite/outsider colours: a team is the
+favourite when its win probability exceeds the other team's by at least that many
+points; closer than that there is no favourite.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
-MARKETS = ("1", "X", "2", "1X", "X2", "12", "NO_BET")
 REASONS = (
     "home_better_form", "away_better_form",
     "home_higher_table", "away_higher_table",
     "home_more_goals", "away_more_goals",
     "home_fewer_conceded", "away_fewer_conceded",
     "evenly_matched",
+    "home_stronger_rating", "away_stronger_rating",
+    "home_advantage",
 )
 MAX_REASONS = 3
 CLOSE_MARGIN = 8
-SINGLE_MIN = 45
-DOUBLE_MIN = 60
-TWELVE_DRAW_MAX = 22
-# Which reasons can support which pick (side of the claim).
-_HOME = {"home_better_form", "home_higher_table", "home_more_goals", "home_fewer_conceded"}
-_AWAY = {"away_better_form", "away_higher_table", "away_more_goals", "away_fewer_conceded"}
-_SUPPORTS = {
-    "1": _HOME, "1X": _HOME,
-    "2": _AWAY, "X2": _AWAY,
-    "X": {"evenly_matched"},
-    "12": _HOME | _AWAY,
-}
+# Ratings closer than this (difference of ln attack − ln defence) are not "stronger".
+RATING_MARGIN = 0.10
+HOME_ADVANTAGE_MIN = 1.10
+_HOME = {"home_better_form", "home_higher_table", "home_more_goals", "home_fewer_conceded", "home_stronger_rating",
+         "home_advantage"}
+_AWAY = {"away_better_form", "away_higher_table", "away_more_goals", "away_fewer_conceded", "away_stronger_rating"}
+# Which reasons can support which market (the side of the claim).
+_HOME_MARKETS = {"1", "1X", "H1-0.5", "H1-1.5"}
+_AWAY_MARKETS = {"2", "X2", "H2+0.5", "H2+1.5"}
 
 
 @dataclass(frozen=True)
 class Pick:
-    market: str
+    market: str  # a market key of miniapp.forecast.markets, or NO_BET
     reasons: tuple[str, ...]
-    probability: int | None  # percent from the 1X2 estimate; None for NO_BET
+    probability: int | None  # whole percent from the model; None for NO_BET
 
     def to_json(self) -> dict:
         return {"market": self.market, "reasons": list(self.reasons), "probability": self.probability}
@@ -69,32 +60,12 @@ def favourite(p: dict) -> str | None:
     return None
 
 
-def market_probability(market: str, p: dict) -> int | None:
-    return {
-        "1": p["home"], "X": p["draw"], "2": p["away"],
-        "1X": p["home"] + p["draw"], "X2": p["draw"] + p["away"], "12": p["home"] + p["away"],
-    }.get(market)
+def _strength(rating: dict) -> float:
+    return math.log(rating["attack"]) - math.log(rating["defence"])
 
 
-def market_allowed(market: str, p: dict) -> bool:
-    fav = favourite(p)
-    if market == "1":
-        return fav == "home" and p["home"] >= SINGLE_MIN
-    if market == "2":
-        return fav == "away" and p["away"] >= SINGLE_MIN
-    if market == "1X":
-        return fav == "home" and p["home"] + p["draw"] >= DOUBLE_MIN
-    if market == "X2":
-        return fav == "away" and p["away"] + p["draw"] >= DOUBLE_MIN
-    if market == "X":
-        return p["draw"] > p["home"] and p["draw"] > p["away"]
-    if market == "12":
-        return p["draw"] <= TWELVE_DRAW_MAX
-    return market == "NO_BET"
-
-
-def reason_holds(reason: str, home: dict, away: dict) -> bool:
-    """True only when the verified basis numbers (the ones shown to the user) say so."""
+def reason_holds(reason: str, home: dict, away: dict, model: dict | None = None) -> bool:
+    """True only when the verified numbers shown to the user say so."""
     hp, ap = home.get("tablePosition"), away.get("tablePosition")
     if reason == "home_better_form":
         return home["points"] > away["points"]
@@ -115,14 +86,29 @@ def reason_holds(reason: str, home: dict, away: dict) -> bool:
     if reason == "evenly_matched":
         close_table = hp is None or ap is None or abs(hp - ap) <= 3
         return abs(home["points"] - away["points"]) <= 2 and close_table
+    if model is None:
+        return False
+    if reason in ("home_stronger_rating", "away_stronger_rating"):
+        gap = _strength(model["ratings"]["home"]) - _strength(model["ratings"]["away"])
+        return gap >= RATING_MARGIN if reason == "home_stronger_rating" else -gap >= RATING_MARGIN
+    if reason == "home_advantage":
+        return model["homeAdvantage"] >= HOME_ADVANTAGE_MIN
     return False
 
 
-def checked_pick(market: str, reasons: tuple[str, ...], p: dict, basis: dict) -> Pick:
-    """The model's pick if the rules support it, else NO_BET (never a stronger claim)."""
-    if market == "NO_BET" or not market_allowed(market, p):
-        return NO_BET
-    kept = tuple(r for r in reasons if r in _SUPPORTS[market] and reason_holds(r, basis["home"], basis["away"]))
-    if not kept:
-        return NO_BET
-    return Pick(market, kept, market_probability(market, p))
+def supporting(market: str) -> frozenset[str]:
+    if market in _HOME_MARKETS:
+        return frozenset(_HOME)
+    if market in _AWAY_MARKETS:
+        return frozenset(_AWAY)
+    if market == "X":
+        return frozenset({"evenly_matched"})
+    if market == "12":
+        return frozenset(_HOME | _AWAY)
+    return frozenset()  # NO_BET and markets without a side: nothing to argue
+
+
+def allowed_reasons(market: str, basis: dict, model: dict | None) -> tuple[str, ...]:
+    """The reasons that are true AND support `market`, in the fixed order of REASONS."""
+    side = supporting(market)
+    return tuple(r for r in REASONS if r in side and reason_holds(r, basis["home"], basis["away"], model))

@@ -23,6 +23,9 @@ from starlette.staticfiles import StaticFiles
 from miniapp.security import CsrfTokens, LoginRateLimiter, origin_allowed
 from miniapp.settings import Settings
 from miniapp.ai.analysis import AI_ERROR_CODES, AiError, AiService, build_ai_service
+from miniapp.forecast.history import ForecastHistory, history_path
+from miniapp.quick.routes import register_quick_routes
+from miniapp.quick.service import QuickService
 from miniapp.sports.client import UpstreamError
 from miniapp.sports.routes import register_sports_routes
 from miniapp.sports.service import SportsService, build_service
@@ -507,9 +510,13 @@ def create_app(
         return response
 
     sports = sports or build_service(settings, clock=clock)
-    ai = ai or build_ai_service(settings, sports, clock=clock, ledger=store)
+    # Forecast history in its own file next to the database (rollback-safe, see forecast/history.py).
+    history = ForecastHistory(history_path(settings.db_path), clock)
+    history.init_schema()
+    ai = ai or build_ai_service(settings, sports, clock=clock, ledger=store, history=history)
     register_sports_routes(app, sports, current_session,
                            ai_status=lambda: "connected" if ai.connected else "not_connected")
+    register_quick_routes(app, QuickService(sports, clock=clock), current_session)
 
     @app.post("/api/ai/analysis")
     async def ai_analysis(request: Request) -> JSONResponse:

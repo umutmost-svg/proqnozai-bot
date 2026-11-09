@@ -28,7 +28,7 @@ for (const width of [360, 390, 430]) {
     await sheet.getByRole('gridcell', { name: '9 ноября', exact: true }).click();
     await expect(sheet).toHaveCount(0);
     await expect(page.getByTestId('date-strip').getByRole('button', { name: '9 ноября' })).toHaveAttribute('aria-pressed', 'true');
-    await page.getByTestId('hero').getByRole('button').click();
+    await page.getByTestId('top-card').first().getByRole('button').click();
     await expect(page).toHaveURL(/#\/event\//);
   });
 

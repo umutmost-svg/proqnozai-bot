@@ -1,8 +1,8 @@
 import type { Clock } from '../time/clock';
 import { buildDemoEvents, TOURNAMENTS } from './fixtures';
-import { ALL_TOURNAMENTS, filterEvents, namesMatch, pickFeatured, type EventQuery } from './filter';
+import { ALL_TOURNAMENTS, filterEvents, namesMatch, pickTop, type EventQuery } from './filter';
 import { dayKeyOf, type DayKey } from '../time/zoned';
-import type { AiAnalysis, Competitor, SearchResults, Sport, SportEvent, TeamHit, TeamMatches, Tournament, TournamentCalendar } from './models';
+import type { AiAnalysis, QuickAnswer, TopMatch, Competitor, SearchResults, Sport, SportEvent, TeamHit, TeamMatches, Tournament, TournamentCalendar, TournamentStandings } from './models';
 import { DataError, type SportCoverage, type SportsDataProvider } from './provider';
 
 export type DemoOperation = 'events' | 'search' | 'ai';
@@ -133,15 +133,47 @@ export class DemoDataProvider implements SportsDataProvider {
     });
   }
 
+  /** Illustrative demo table (marked as demo by the screen): football tournaments only. */
+  getStandings(id: string): Promise<TournamentStandings | null> {
+    return this.respond('events', () => {
+      const tournament = this.getTournament(id);
+      if (!tournament) return null;
+      if (tournament.sport !== 'football') return { tournament, season: null, blocks: [], fetchedAt: null, stale: false };
+      const teams = new Map<string, Competitor>();
+      for (const e of this.events()) {
+        if (e.tournamentId !== id) continue;
+        for (const c of [e.home, e.away]) if (!teams.has(c.id)) teams.set(c.id, c);
+      }
+      const rows = [...teams.values()].map((team, i) => {
+        const won = Math.max(0, 8 - i);
+        const draw = Math.min(10 - won, 1 + (i % 3));
+        const lost = 10 - won - draw;
+        const [goalsFor, goalsAgainst] = [Math.max(4, 20 - i), 8 + i];
+        return { position: i + 1, team, played: 10, won, draw, lost, goalsFor, goalsAgainst, goalDifference: goalsFor - goalsAgainst, points: won * 3 + draw };
+      });
+      return { tournament, season: null, blocks: [{ stage: 'REGULAR_SEASON', group: null, rows }], fetchedAt: null, stale: false };
+    });
+  }
+
   listEvents(query: EventQuery): Promise<SportEvent[]> {
     const op: DemoOperation = query.query.trim() ? 'search' : 'events';
     return this.respond(op, () => filterEvents(this.events(), TOURNAMENTS, query));
   }
 
-  getFeatured(query: EventQuery): Promise<SportEvent | null> {
+  getTopMatches(query: EventQuery): Promise<TopMatch[]> {
+    const order = TOURNAMENTS.filter((t) => t.sport === query.sport).map((t) => t.id);
     return this.respond('events', () =>
-      pickFeatured(filterEvents(this.events(), TOURNAMENTS, { ...query, query: '' })),
+      pickTop(filterEvents(this.events(), TOURNAMENTS, { ...query, query: '' }), (id) => order.indexOf(id)).map((event) => ({ event, leaders: false })),
     );
+  }
+
+  /** The quick prediction needs the real goal model: the demo never invents its numbers. */
+  quickAvailable(): boolean {
+    return false;
+  }
+
+  quickPick(): Promise<QuickAnswer> {
+    return Promise.reject(new DataError('quick', 'not_available'));
   }
 
   getEvent(id: string): Promise<SportEvent | null> {

@@ -11,12 +11,13 @@ import { CatalogScreen } from './screens/CatalogScreen';
 import { EventScreen } from './screens/EventScreen';
 import { HomeScreen } from './screens/HomeScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
+import { QuickScreen } from './screens/QuickScreen';
 import { AppearanceScreen, LanguageScreen, TimezoneScreen } from './screens/SettingsScreens';
 import { AppProviders } from './state/AppProviders';
 import { useServices, type Services } from './state/contexts';
 import { bindViewport } from './telegram/telegram';
 
-const TAB_ROOTS = new Set(['/', '/matches', '/profile']);
+const TAB_ROOTS = new Set(['/', '/matches', '/quick', '/profile']);
 
 /** Keeps Telegram's native BackButton and viewport in sync with the router. */
 function TelegramBridge() {
@@ -56,6 +57,7 @@ export function AppRoutes() {
       <Route path="/event/:id/ai" element={<AiScreen />} />
       <Route path="/tournament/:id" element={<TournamentScreen />} />
       <Route path="/team/:id" element={<TeamScreen />} />
+      <Route path="/quick" element={<QuickScreen />} />
       <Route path="/profile/support" element={<SupportScreen />} />
       <Route path="/profile" element={<ProfileScreen />} />
       <Route path="/profile/language" element={<LanguageScreen />} />

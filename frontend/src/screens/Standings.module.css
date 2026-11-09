@@ -1,0 +1,159 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.meta {
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--text-muted);
+}
+
+.stale {
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: var(--glass-30);
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--tone-draw);
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 0;
+  border-radius: var(--radius-card);
+  background: var(--glass-18);
+  border: 1px solid var(--line-74);
+}
+
+.blockTitle {
+  padding: 0 14px;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 17px;
+  line-height: 23px;
+  color: var(--text-strong);
+}
+
+/* Priority columns (#, team, played, difference, points) fit 360 px; the rest scrolls sideways. */
+.scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.scroll:focus-visible {
+  outline: 2px solid var(--tone-favourite);
+  outline-offset: -2px;
+}
+
+.table {
+  width: 100%;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-primary);
+}
+
+.table th {
+  padding: 0 6px 8px;
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-muted-3);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 6px;
+  border-top: 1px solid var(--line-55);
+  white-space: nowrap;
+}
+
+.table abbr {
+  text-decoration: none;
+}
+
+.pos {
+  width: 30px;
+  padding-left: 14px !important;
+  text-align: left !important;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.team {
+  min-width: 132px;
+  max-width: 160px;
+  text-align: left !important;
+}
+
+/* The first two columns stay in view while the numbers scroll. */
+.sticky,
+.stickyTeam {
+  position: sticky;
+  z-index: 1;
+  background: var(--glass-strong);
+}
+
+.sticky {
+  left: 0;
+}
+
+.stickyTeam {
+  left: 30px;
+  box-shadow: 6px 0 8px -8px rgba(0, 0, 0, 0.25);
+}
+
+.teamButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.teamName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.num {
+  min-width: 30px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.points {
+  font-weight: 700;
+}
+
+.hint {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-muted-3);
+}
+
+.source {
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-footnote);
+}

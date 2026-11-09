@@ -6,6 +6,7 @@ const WIDTHS = [360, 390, 430] as const;
 const ROUTES = [
   ['home', '/'],
   ['catalog', '/matches'],
+  ['quick', '/quick'],
   ['event-football', '/event/fb-rm-fcb'],
   ['event-long-names', '/event/fb-long-names'],
   ['event-tennis-stats', '/event/tn-live?tab=stats'],
@@ -44,7 +45,7 @@ async function layoutProblems(page: Page) {
     for (const el of document.querySelectorAll<HTMLElement>('body *')) {
       const style = getComputedStyle(el);
       const scrollsX = ['auto', 'scroll'].includes(style.overflowX) && el.scrollWidth > el.clientWidth + 1;
-      if (scrollsX && !['date-strip', 'tournament-strip', 'calendar-days'].includes(el.dataset.testid ?? '')) {
+      if (scrollsX && !['date-strip', 'tournament-strip', 'calendar-days', 'top-scroller'].includes(el.dataset.testid ?? '')) {
         problems.push(`unexpected horizontal scroller: ${el.className}`);
       }
       // scrollWidth is unreliable for <button>; measure the laid-out text instead.
@@ -62,7 +63,7 @@ async function layoutProblems(page: Page) {
         const range = document.createRange();
         range.selectNodeContents(el);
         const text = range.getBoundingClientRect();
-        const inStrip = el.closest('[data-testid="date-strip"],[data-testid="tournament-strip"],[data-testid="calendar-days"]');
+        const inStrip = el.closest('[data-testid="date-strip"],[data-testid="tournament-strip"],[data-testid="calendar-days"],[data-testid="top-scroller"]');
         if (!inStrip && (text.right > window.innerWidth + 1 || text.left < -1)) problems.push(`text off-screen: "${el.textContent.trim()}"`);
       }
     }
@@ -92,7 +93,7 @@ for (const width of WIDTHS) {
 for (const lang of ['az', 'en', 'tr', 'uz', 'pt-BR', 'es'] as const) {
   for (const [name, route] of [
     ['home', '/'], ['catalog', '/matches'], ['event', '/event/tn-live'], ['ai', '/event/fb-rm-fcb/ai'],
-    ['profile', '/profile'], ['tournament', '/tournament/premier'], ['support', '/profile/support'], ['language', '/profile/language'],
+    ['profile', '/profile'], ['quick', '/quick'], ['tournament', '/tournament/premier'], ['support', '/profile/support'], ['language', '/profile/language'],
   ] as const) {
     test(`${name} in ${lang.toUpperCase()} @360px fits`, async ({ page }) => {
       await open(page, route, 360, lang);

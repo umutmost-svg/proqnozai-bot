@@ -53,6 +53,7 @@ htmlcov/
 coverage.xml
 **/*.log
 frontend/dist/
+frontend/dist-real/
 frontend/test-results/
 frontend/playwright-report/
 **/.DS_Store

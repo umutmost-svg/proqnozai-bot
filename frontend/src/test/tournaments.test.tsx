@@ -291,8 +291,8 @@ describe('tournament calendar', () => {
   });
 
   it.each([
-    ['az', 'Turnir təqvimi', 'Tur 11'],
-    ['en', 'Tournament calendar', 'Matchday 11'],
+    ['az', 'Turnir', 'Tur 11'],
+    ['en', 'Tournament', 'Matchday 11'],
   ] as const)('is translated (%s)', async (lang, title, round) => {
     const { data } = backend();
     renderApp('#/tournament/fd%3ASA', { data, settings: { lang } });
