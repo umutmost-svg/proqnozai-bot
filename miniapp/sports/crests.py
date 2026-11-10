@@ -80,6 +80,7 @@ _METADATA_NS = frozenset({
     "http://creativecommons.org/ns#", "http://web.resource.org/cc/", "http://www.inkscape.org/namespaces/inkscape",
     "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd",
 })
+MAX_SVG_DEPTH = 40
 _ENCODING = re.compile(rb"""encoding\s*=\s*["']([A-Za-z0-9._-]+)["']""")
 _URL_REF = re.compile(r"url\(\s*['\"]?([^)'\"]*)", re.IGNORECASE)
 
@@ -112,7 +113,9 @@ def is_safe_svg(body: bytes) -> bool:
     if root.tag != f"{{{SVG_NS}}}svg":
         return False
 
-    def walk(node: ElementTree.Element, in_metadata: bool) -> bool:
+    def walk(node: ElementTree.Element, in_metadata: bool, depth: int = 0) -> bool:
+        if depth > MAX_SVG_DEPTH:
+            return False  # a crest is never this deep; refuse instead of exhausting the recursion
         ns, _, local = node.tag[1:].partition("}") if node.tag.startswith("{") else ("", "", node.tag)
         if in_metadata:
             if ns not in _METADATA_NS:
@@ -127,7 +130,7 @@ def is_safe_svg(body: bytes) -> bool:
                 return False
         if local == "style" and not _safe_value(node.text or ""):
             return False
-        return all(walk(child, in_metadata or local == "metadata") for child in node)
+        return all(walk(child, in_metadata or local == "metadata", depth + 1) for child in node)
 
     return walk(root, False)
 

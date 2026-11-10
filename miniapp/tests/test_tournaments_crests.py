@@ -1026,3 +1026,11 @@ def test_svg_csp_is_enforced_even_in_report_only_mode(tmp_path, clock: FakeClock
     r = client.get("/api/crests/team/57")
     assert r.status_code == 200 and r.headers["content-security-policy"] == SVG_CSP
     assert "content-security-policy-report-only" not in r.headers
+
+
+
+def test_deeply_nested_svg_is_refused_not_crashing():
+    from miniapp.sports.crests import is_safe_svg
+
+    deep = b'<svg xmlns="http://www.w3.org/2000/svg">' + b"<g>" * 1200 + b"</g>" * 1200 + b"</svg>"
+    assert is_safe_svg(deep) is False
