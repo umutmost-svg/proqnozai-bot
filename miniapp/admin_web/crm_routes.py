@@ -46,8 +46,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         return [u for u in users if matches(u, rules, set(tags.get(u["id"], [])), u["id"] in blocked, t)]
 
     def broadcast_audience(rules: dict) -> list[dict]:
-        """Recipients of a broadcast: blocked users are always excluded (unless a rule asks for them explicitly)."""
-        return audience(rules if "blocked" in rules else {**rules, "blocked": False})
+        """Recipients of a broadcast: blocked users are always excluded."""
+        return audience({**rules, "blocked": False})  # always: a rule cannot opt blocked users into a broadcast
 
     def decorate(rows: list[dict]) -> list[dict]:
         ids = [r["id"] for r in rows]
@@ -351,7 +351,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         h = ctx.history()
         leagues: list[dict] = []
         if h:
-            _, rows = h.list_forecasts(limit=MAX_SCAN)
+            _, rows = h.list_forecasts(created_since=datetime.fromtimestamp(since, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                       limit=MAX_SCAN)
             counts = Counter(ctx.tournament_name(r["tournamentId"]) for r in rows)
             leagues = [{"name": n, "count": c} for n, c in counts.most_common(8)]
         personal = ctx.can_personal(request)

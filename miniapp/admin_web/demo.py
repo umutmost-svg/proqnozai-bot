@@ -302,9 +302,10 @@ def seed_crm(crm_conn, owner_id: int, now: int) -> None:
         until = now + 20 * 86400
         crm_conn.execute("INSERT INTO credit_accounts (user_id, balance, unlimited_until, updated_at) VALUES (?, 0, ?, ?) "
                          "ON CONFLICT(user_id) DO UPDATE SET unlimited_until = excluded.unlimited_until", (u, until, now))
+        balance = crm_conn.execute("SELECT balance FROM credit_accounts WHERE user_id = ?", (u,)).fetchone()[0]
         crm_conn.execute("INSERT INTO credit_ledger (user_id, kind, delta, balance_after, unlimited_until, reason, admin_id, "
-                         "batch_key, created_at) VALUES (?, 'unlimited', 0, 0, ?, ?, ?, NULL, ?)",
-                         (u, until, "демо: VIP", owner_id, now - 86400))
+                         "batch_key, created_at) VALUES (?, 'unlimited', 0, ?, ?, ?, ?, NULL, ?)",
+                         (u, balance, until, "демо: VIP", owner_id, now - 86400))
     for name, rules in [("Новые за 7 дней", {"registered_within_days": 7}), ("Активные 7 дней", {"active_within_days": 7}),
                         ("Уходящие", {"inactive_for_days": 14}), ("VIP", {"tag_has": "VIP"}),
                         ("Ла Лига", {"tag_has": "Ла Лига", "tag_not": "Жалоба"})]:
