@@ -1137,3 +1137,28 @@ def test_a_passing_emblem_failure_never_leaves_the_flag_for_good():
     clock.advance(3600)
     assert asyncio.run(store.image("competition", "PL")) == emblem  # asked again after the failure TTL
     assert asyncio.run(store.image("competition", "PL")) == emblem and len(images.calls) == 3
+
+
+def test_a_failed_refresh_of_the_emblem_keeps_the_flag_already_shown():
+    import asyncio
+
+    from miniapp.sports.crests import CrestStore
+
+    clock = FakeClock()
+
+    class Images:
+        broken = False
+
+        async def __call__(self, url, timeout_s):
+            if self.broken:
+                raise OSError("network down")
+            return None if url.endswith("PL.png") else PNG
+
+    images = Images()
+    store = CrestStore(images, clock=clock, failure_ttl_s=3600)
+    store.learn("competition", "PL", "https://crests.football-data.org/PL.png", fallback="https://crests.football-data.org/770.svg")
+    assert asyncio.run(store.image("competition", "PL")) == PNG
+    images.broken = True
+    clock.advance(3600)
+    assert asyncio.run(store.image("competition", "PL")) == PNG  # the refresh raised: the flag stays
+    assert asyncio.run(store.image("competition", "PL")) == PNG and "competition:PL" not in store._failed

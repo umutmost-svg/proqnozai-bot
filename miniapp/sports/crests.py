@@ -376,8 +376,12 @@ class CrestStore:
             future.set_result(body)
             return body
         except BaseException as exc:
-            future.set_result(None)
+            kept = self._images.get(key) if self._urls.get(key) == url else None
+            future.set_result(kept)
             if isinstance(exc, Exception):
+                if kept is not None:
+                    self._fell_back[key] = self._clock()  # a failed refresh keeps the flag already shown
+                    return kept
                 if self._urls.get(key) == url:
                     self._failed[key] = self._clock()
                 return None
