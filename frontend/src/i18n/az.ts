@@ -49,7 +49,6 @@ export const az: Dictionary = {
 
   'tournament.label': 'Turnir',
   'tournament.all': 'Bütün turnirlər',
-  'tournament.more': 'Digər turnirlər…',
   'tournaments.title': 'Turnirlər',
   'tournaments.open': '{name}: təqvimi aç',
   'tournaments.errorText': 'Turnirlərin siyahısını yükləmək alınmadı.',

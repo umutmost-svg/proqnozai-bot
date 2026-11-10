@@ -45,7 +45,6 @@ export const ru = {
 
   'tournament.label': 'Турнир',
   'tournament.all': 'Все турниры',
-  'tournament.more': 'Другие турниры…',
   'tournaments.title': 'Турниры',
   'tournaments.open': '{name}: открыть календарь',
   'tournaments.errorText': 'Не удалось загрузить список турниров.',
