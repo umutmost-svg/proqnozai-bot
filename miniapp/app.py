@@ -227,7 +227,11 @@ def create_app(
             response.headers.update(_NO_STORE)
         # A crest SVG opened directly is a document: nothing in it may run or load (style attributes only).
         svg = response.headers.get("content-type", "").startswith("image/svg+xml")
-        response.headers[csp_header] = SVG_CSP if svg else csp_value
+        if svg:
+            # Always ENFORCED for an SVG, whatever the site's CSP mode (report-only would not block anything).
+            response.headers["Content-Security-Policy"] = SVG_CSP
+        else:
+            response.headers[csp_header] = csp_value
         if production:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         response.headers[REQUEST_ID_HEADER] = request_id

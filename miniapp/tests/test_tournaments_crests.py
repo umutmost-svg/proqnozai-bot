@@ -966,6 +966,11 @@ def test_svg_crests_of_national_teams_are_accepted_when_plain():
     b'<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><rect/></a></svg>',
     b'<html><body/></html>',
     b'not xml at all',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><metadata><script>alert(1)</script></metadata></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><metadata><svg:script xmlns:svg="http://www.w3.org/2000/svg">x</svg:script></metadata></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><metadata><h:script xmlns:h="http://www.w3.org/1999/xhtml">x</h:script></metadata></svg>',
+    '<!DOCTYPE svg [<!ENTITY x "y">]><svg xmlns="http://www.w3.org/2000/svg">&x;</svg>'.encode("utf-16"),
+    b'<?xml version="1.0" encoding="ISO-8859-1"?><svg xmlns="http://www.w3.org/2000/svg"/>',
 ])
 def test_unsafe_or_foreign_svg_is_refused(body):
     from miniapp.sports.crests import is_crest, is_safe_svg
@@ -1001,3 +1006,20 @@ def test_competition_without_an_emblem_shows_its_country_flag():
 
     found, _ = asyncio.run(FootballDataAdapter(Client(), all_codes(), lambda: 1.8e9).competition_emblems())
     assert found["TSL"].endswith("/803.svg") and found["PL"].endswith("/PL.png") and "CSL" not in found
+
+
+
+def test_svg_csp_is_enforced_even_in_report_only_mode(tmp_path, clock: FakeClock) -> None:
+    from miniapp.app import SVG_CSP
+
+    t, images = FakeTransport(), FakeImages(FLAG)
+    settings = base_settings(tmp_path, football_data_key=KEY, session_ttl_s=3600, csp_mode="report-only")
+    service = build_service(settings, clock=clock, transport=t, crest_fetch=images, warm_emblems=False)
+    service.football.client._sleep = no_sleep
+    client = TestClient(create_app(settings, clock=clock, sports=service), base_url="http://127.0.0.1:8000")
+    signed_in(client, clock)
+    t.script = [t.ok(season_payload(with_crests(match(1), home="https://crests.football-data.org/57.svg")))]
+    client.get("/api/sports/football/tournaments/fd:PL/calendar")
+    r = client.get("/api/crests/team/57")
+    assert r.status_code == 200 and r.headers["content-security-policy"] == SVG_CSP
+    assert "content-security-policy-report-only" not in r.headers

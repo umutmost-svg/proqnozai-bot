@@ -75,6 +75,12 @@ _SVG_ELEMENTS = frozenset({
     "radialGradient", "stop", "clipPath", "mask", "use", "title", "desc", "symbol", "pattern", "style", "text",
     "tspan", "metadata",
 })
+_METADATA_NS = frozenset({
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#", "http://purl.org/dc/elements/1.1/", "http://purl.org/dc/terms/",
+    "http://creativecommons.org/ns#", "http://web.resource.org/cc/", "http://www.inkscape.org/namespaces/inkscape",
+    "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd",
+})
+_ENCODING = re.compile(rb"""encoding\s*=\s*["']([A-Za-z0-9._-]+)["']""")
 _URL_REF = re.compile(r"url\(\s*['\"]?([^)'\"]*)", re.IGNORECASE)
 
 
@@ -88,6 +94,12 @@ def _safe_value(value: str) -> bool:
 def is_safe_svg(body: bytes) -> bool:
     if len(body) > MAX_IMAGE_BYTES:
         return False
+    # UTF-8 only: another encoding (UTF-16 has NUL bytes or a BOM) would hide a DOCTYPE from the scan below.
+    if b"\x00" in body or body.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return False
+    declared = _ENCODING.search(body[:200])
+    if declared and declared.group(1).lower().replace(b"_", b"-") not in (b"utf-8", b"utf8", b"us-ascii", b"ascii"):
+        return False
     low = body.lower()
     if b"<!doctype" in low or b"<!entity" in low or b"<?xml-stylesheet" in low:
         return False
@@ -100,8 +112,11 @@ def is_safe_svg(body: bytes) -> bool:
 
     def walk(node: ElementTree.Element, in_metadata: bool) -> bool:
         ns, _, local = node.tag[1:].partition("}") if node.tag.startswith("{") else ("", "", node.tag)
-        if not in_metadata and (ns != SVG_NS or local not in _SVG_ELEMENTS):
-            return False  # editor metadata (RDF, Inkscape) is tolerated only inside <metadata>
+        if in_metadata:
+            if ns not in _METADATA_NS:
+                return False  # inside <metadata> only editor data (RDF, Dublin Core, Inkscape) — never SVG/HTML
+        elif ns != SVG_NS or local not in _SVG_ELEMENTS:
+            return False
         for name, value in node.attrib.items():
             attr = name.rpartition("}")[2].lower()
             if attr.startswith("on") or not _safe_value(value):
