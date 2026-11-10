@@ -971,6 +971,9 @@ def test_svg_crests_of_national_teams_are_accepted_when_plain():
     b'<svg xmlns="http://www.w3.org/2000/svg"><metadata><h:script xmlns:h="http://www.w3.org/1999/xhtml">x</h:script></metadata></svg>',
     '<!DOCTYPE svg [<!ENTITY x "y">]><svg xmlns="http://www.w3.org/2000/svg">&x;</svg>'.encode("utf-16"),
     b'<?xml version="1.0" encoding="ISO-8859-1"?><svg xmlns="http://www.w3.org/2000/svg"/>',
+    b'<svg xmlns="http://www.w3.org/2000/svg" xml:base="https://e.vil/x.svg"><use href="#x"/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><style>rect{fill:u\\72l(https://e.vil/x.png)}</style></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:u\\72l(https://e.vil/x)"/></svg>',
 ])
 def test_unsafe_or_foreign_svg_is_refused(body):
     from miniapp.sports.crests import is_crest, is_safe_svg

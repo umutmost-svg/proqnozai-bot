@@ -85,6 +85,8 @@ _URL_REF = re.compile(r"url\(\s*['\"]?([^)'\"]*)", re.IGNORECASE)
 
 
 def _safe_value(value: str) -> bool:
+    if "\\" in value:
+        return False  # CSS escapes could spell url( / @import past the scan: crests never need them
     low = value.lower()
     if "javascript:" in low or "@import" in low or "expression(" in low:
         return False
@@ -119,8 +121,8 @@ def is_safe_svg(body: bytes) -> bool:
             return False
         for name, value in node.attrib.items():
             attr = name.rpartition("}")[2].lower()
-            if attr.startswith("on") or not _safe_value(value):
-                return False
+            if attr.startswith("on") or attr == "base" or not _safe_value(value):
+                return False  # xml:base would resolve even "#x" references against an external document
             if attr == "href" and not value.strip().startswith("#"):
                 return False
         if local == "style" and not _safe_value(node.text or ""):
