@@ -88,6 +88,12 @@ CREATE TABLE IF NOT EXISTS admin_events (
     kind            TEXT NOT NULL CHECK (kind IN ('done', 'requested', 'completed', 'denied', 'failed'))
 );
 CREATE INDEX IF NOT EXISTS admin_events_at ON admin_events(at);
+-- Free-text reasons live OUTSIDE the immutable journal (an owner can erase personal text later);
+-- admin_events.reason stays NULL for new events and the journal references this row by event id.
+CREATE TABLE IF NOT EXISTS admin_event_reasons (
+    event_id INTEGER PRIMARY KEY REFERENCES admin_events(id),
+    reason   TEXT NOT NULL
+);
 -- One completion per request: concurrent retries cannot both record a result.
 CREATE UNIQUE INDEX IF NOT EXISTS admin_events_one_completion ON admin_events(request_id) WHERE kind = 'completed';
 CREATE TRIGGER IF NOT EXISTS admin_events_no_update BEFORE UPDATE ON admin_events
@@ -95,6 +101,12 @@ BEGIN SELECT RAISE(ABORT, 'admin events are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS admin_events_no_delete BEFORE DELETE ON admin_events
 BEGIN SELECT RAISE(ABORT, 'admin events are immutable'); END;
 """
+
+
+# SQL expression of an event's reason (row of admin_events / alias e); old rows may still carry the column.
+REASON = ("COALESCE((SELECT r.reason FROM admin_event_reasons r WHERE r.event_id = admin_events.id), "
+          "admin_events.reason)")
+REASON_OF_E = "COALESCE((SELECT r.reason FROM admin_event_reasons r WHERE r.event_id = e.id), e.reason)"
 
 
 class AuthError(Exception):
@@ -357,7 +369,9 @@ class AdminStore:
             (now, admin_id, action, target_type, target_id,
              json.dumps(before, sort_keys=True) if before is not None else None,
              json.dumps(after, sort_keys=True) if after is not None else None,
-             reason, idempotency_key, request_id, kind))
+             None, idempotency_key, request_id, kind))
+        if reason:
+            conn.execute("INSERT INTO admin_event_reasons (event_id, reason) VALUES (?, ?)", (cur.lastrowid, reason))
         return int(cur.lastrowid)
 
     def events(self, *, since: int | None = None, admin_id: int | None = None, action: str | None = None,
@@ -381,7 +395,7 @@ class AdminStore:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT e.id, e.at, e.admin_id, u.email, e.action, e.target_type, e.target_id, e.before_json, "
-                "e.after_json, e.reason, e.kind FROM admin_events e LEFT JOIN admin_users u ON u.id = e.admin_id "
+                "e.after_json, " + REASON_OF_E + ", e.kind FROM admin_events e LEFT JOIN admin_users u ON u.id = e.admin_id "
                 f"WHERE {' AND '.join(where)} ORDER BY e.id DESC LIMIT ?", (*args, limit)).fetchall()
         return [{"id": r[0], "at": r[1], "adminId": r[2], "adminEmail": r[3], "action": r[4], "targetType": r[5],
                  "targetId": r[6], "before": json.loads(r[7]) if r[7] else None,
@@ -391,7 +405,7 @@ class AdminStore:
                   after: dict | None = None, reason: str | None = None) -> dict | None:
         """The earlier result of the same request, or None. A key is bound to its admin, action, target and
         (when given) result: reusing it for anything else is a conflict, never a silent success."""
-        row = conn.execute("SELECT id, admin_id, action, target_id, after_json, reason FROM admin_events "
+        row = conn.execute("SELECT id, admin_id, action, target_id, after_json, " + REASON + " FROM admin_events "
                            "WHERE idempotency_key = ?", (key,)).fetchone()
         if row is None:
             return None
@@ -519,7 +533,7 @@ class AdminStore:
         `completed`; a request left unfinished (crash between the steps) is handed back to be completed.
         """
         with self._write() as conn:
-            row = conn.execute("SELECT kind, request_id, target_id, admin_id, reason FROM admin_events "
+            row = conn.execute("SELECT kind, request_id, target_id, admin_id, " + REASON + " FROM admin_events "
                                "WHERE idempotency_key = ?", (key,)).fetchone()
             if row is not None:
                 kind, prior_request, target, prior_admin, prior_reason = row
@@ -541,7 +555,7 @@ class AdminStore:
         """Records the outcome once; a concurrent retry that finished first wins and its result is returned."""
         return self.complete_request(action, actor.id, str(user_id), revoked, now, request_id)
 
-    def complete_request(self, action: str, admin_id: int | None, target_id: str, revoked: int, now: int,
+    def complete_request(self, action: str, admin_id: int | None, target_id: str, revoked: int | None, now: int,
                          request_id: str) -> dict:
         with self._write() as conn:
             done = conn.execute("SELECT id, after_json FROM admin_events WHERE kind = 'completed' AND request_id = ?",

@@ -456,12 +456,11 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         items = accounts.events(since=since, admin_id=admin_id, action=q.get("action") or None,
                                 kind=q.get("result") or None, limit=500)
         if not personal:
-            for item in items:  # analysts: no end-user identifiers (§4.8); free-text reasons may name anyone
-                item["reason"] = None
-                item["adminId"] = item["adminEmail"] = None
-                if item["targetType"] in ("user", "admin"):
-                    item["targetId"] = None
-                    item["before"] = item["after"] = None  # e-mails, roles of people, revoked counts per user
+            # Analysts: an explicit allowlist of fields (§4.8) — no actors, targets, values or reasons, whatever
+            # the event type (group credit events, CRM events, future actions).
+            items = [{"id": i["id"], "at": i["at"], "action": i["action"], "targetType": i["targetType"],
+                      "result": i["result"], "adminId": None, "adminEmail": None, "targetId": None, "before": None,
+                      "after": None, "reason": None} for i in items]
         return {"items": items}
 
     crm_routes.register(app, SimpleNamespace(

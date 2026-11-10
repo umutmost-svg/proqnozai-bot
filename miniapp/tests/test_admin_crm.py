@@ -250,3 +250,40 @@ def test_schedule_replay_after_the_time_passed(env):
     assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)}).status_code == 200
     clock.t += 1500  # the scheduled time is now past (the admin session is still alive)
     assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**body, "code": ""}).json()["replayed"] is True
+
+
+def test_analyst_journal_is_an_allowlist_even_for_group_events(env):
+    _, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    post(client, "/api/admin/credits/change", csrf, {"reason": "бонус Ивану", "idempotencyKey": "group-analyst-1", "kind": "grant",
+                                                     "amount": 3, "userIds": [U1, U2], "code": code(secrets_["admin@x.test"], clock)})
+    analyst = TestClient(client.app, base_url=ORIGIN)
+    login(analyst, clock, secrets_, "analyst@x.test")
+    body = analyst.get("/api/admin/events?days=7").text
+    assert str(U1) not in body and "Ивану" not in body and "@x.test" not in body
+
+
+def test_reasons_live_outside_the_immutable_journal(env):
+    config, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    post(client, "/api/admin/credits/change", csrf, {"reason": "личное: Иван Петров", "idempotencyKey": "reason-key-1", "kind": "grant",
+                                                     "amount": 3, "userIds": [U1], "code": code(secrets_["admin@x.test"], clock)})
+    with sqlite3.connect(config.admin_db) as conn:
+        journal = " ".join(str(r) for r in conn.execute("SELECT * FROM admin_events"))
+        ledger = " ".join(str(r) for r in conn.execute("SELECT * FROM credit_ledger"))
+        conn.execute("DELETE FROM admin_event_reasons")  # erasable on request (no immutability trigger)
+    assert "Иван" not in journal and "Иван" not in ledger
+    assert any(e["reason"] is None for e in accounts.events() if e["action"] == "credits.change")
+
+
+def test_recovered_revocation_count_is_unknown(env, monkeypatch):
+    config, clock, client, accounts, secrets_ = env
+    from miniapp.admin_web.app import create_admin_app
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    monkeypatch.setattr(Store, "revoke_user_sessions", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("crash")))
+    post(client, f"/api/admin/users/{U1}/block", csrf, {"reason": "спам", "idempotencyKey": "recover-key-1", "blocked": True,
+                                                         "code": code(secrets_["admin@x.test"], clock)})
+    monkeypatch.undo()
+    create_admin_app(config, clock=clock)
+    done = [e for e in accounts.events(target=("user", str(U1))) if e["result"] == "completed"]
+    assert done and done[0]["after"] == {"revoked": None}

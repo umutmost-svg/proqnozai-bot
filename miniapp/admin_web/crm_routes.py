@@ -33,8 +33,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     for pending in ctx.accounts.pending_requests():
         if pending["action"] in ("user.block", "user.sessions_revoke") and pending["targetId"]:
             t = ctx.now()
-            revoked = store.revoke_user_sessions(int(pending["targetId"]), t, BurnWindow.for_policy(t, 300, 30))
-            ctx.accounts.complete_request(pending["action"], pending["adminId"], pending["targetId"], revoked, t,
+            store.revoke_user_sessions(int(pending["targetId"]), t, BurnWindow.for_policy(t, 300, 30))
+            # The original attempt may have revoked sessions before crashing: the true count is unknown.
+            ctx.accounts.complete_request(pending["action"], pending["adminId"], pending["targetId"], None, t,
                                           pending["requestId"])
 
     def audience(rules: dict, query: str = "") -> list[dict]:
@@ -138,7 +139,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
                 if e["action"] == "user.block" and e["result"] == "completed":
                     continue
                 title = {"user.block": "Доступ заблокирован" if (e["after"] or {}).get("blocked") else "Блокировка снята",
-                         "user.sessions_revoke": f"Отозваны сессии: {(e['after'] or {}).get('revoked', 0)}"}[e["action"]]
+                         "user.sessions_revoke": "Отозваны сессии: " + (
+                             "неизвестно (восстановлено после сбоя)" if (e["after"] or {}).get("revoked") is None
+                             else str((e["after"] or {}).get("revoked")))}[e["action"]]
                 timeline.append({"at": e["at"], "kind": "admin", "title": title, "detail": e["reason"],
                                  "by": e["adminEmail"]})
         for c in ai_calls or []:

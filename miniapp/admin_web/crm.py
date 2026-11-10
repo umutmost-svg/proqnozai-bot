@@ -17,7 +17,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Any
 
-from miniapp.admin_web.accounts import ActionError, Admin, AdminStore
+from miniapp.admin_web.accounts import REASON, ActionError, Admin, AdminStore
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS crm_tags (
@@ -88,9 +88,10 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
     delta           INTEGER NOT NULL,
     balance_after   INTEGER NOT NULL,
     unlimited_until INTEGER,
-    reason          TEXT NOT NULL,
+    reason          TEXT NOT NULL,  -- '' for operations: their reason is the event's (erasable) reason
     admin_id        INTEGER NOT NULL,
     batch_key       TEXT,
+    event_id        INTEGER,
     created_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS credit_ledger_user ON credit_ledger(user_id);
@@ -106,6 +107,8 @@ CREATE TABLE IF NOT EXISTS crm_blocks (
 );
 """
 
+LEDGER_REASON = ("COALESCE(NULLIF(l.reason, ''), (SELECT r.reason FROM admin_event_reasons r "
+                 "WHERE r.event_id = l.event_id), '')")
 MAX_TAG = 32
 MAX_TEXT = 4000
 MAX_GROUP = 5000
@@ -221,7 +224,7 @@ class CrmStore:
                 "SELECT m.id, m.body, m.status, m.created_at, u.email FROM crm_messages m LEFT JOIN admin_users u "
                 "ON u.id = m.admin_id WHERE m.user_id = ? ORDER BY m.id DESC LIMIT 50", (user_id,)).fetchall()
             ledger = conn.execute(
-                "SELECT l.id, l.kind, l.delta, l.balance_after, l.unlimited_until, l.reason, l.created_at, u.email "
+                "SELECT l.id, l.kind, l.delta, l.balance_after, l.unlimited_until, " + LEDGER_REASON + ", l.created_at, u.email "
                 "FROM credit_ledger l LEFT JOIN admin_users u ON u.id = l.admin_id WHERE l.user_id = ? "
                 "ORDER BY l.id DESC LIMIT 50", (user_id,)).fetchall()
             block = conn.execute("SELECT reason, created_at FROM crm_blocks WHERE user_id = ?", (user_id,)).fetchone()
@@ -257,7 +260,7 @@ class CrmStore:
             where, args = "WHERE l.kind = ?", [kind]
         with self.accounts._connect() as conn:
             rows = conn.execute(
-                "SELECT l.id, l.user_id, l.kind, l.delta, l.balance_after, l.unlimited_until, l.reason, l.created_at, "
+                "SELECT l.id, l.user_id, l.kind, l.delta, l.balance_after, l.unlimited_until, " + LEDGER_REASON + ", l.created_at, "
                 f"u.email, l.batch_key FROM credit_ledger l LEFT JOIN admin_users u ON u.id = l.admin_id {where} "
                 "ORDER BY l.id DESC LIMIT ?", (*args, limit)).fetchall()
         return [{"id": r[0], "userId": r[1], "kind": r[2], "delta": r[3], "balanceAfter": r[4], "unlimitedUntil": r[5],
@@ -432,7 +435,7 @@ class CrmStore:
                     raise ActionError("idempotency_key_reused", 409)
                 return prior
             self.accounts.step_up(conn, actor.id, code, now, "manage_users")
-            results = []
+            results, rows = [], []
             for uid in users:
                 row = conn.execute("SELECT balance, unlimited_until FROM credit_accounts WHERE user_id = ?",
                                    (uid,)).fetchone()
@@ -447,19 +450,22 @@ class CrmStore:
                     delta = 0
                     until = now + days * 86400 if days else None
                     ledger_kind = "unlimited" if days else "unlimited_off"
+                rows.append((uid, ledger_kind, delta, balance, until))
+                results.append({"userId": uid, "balance": balance, "unlimitedUntil": until})
+            # The journal keeps the request shape only; per-user ids and balances stay in the CRM tables.
+            after = {"request": request}
+            event = self.accounts._event(conn, now, actor.id, "credits.change", "user" if len(users) == 1 else "group",
+                                         target, None, after, reason, key, "done")
+            for uid, ledger_kind, delta, balance, until in rows:
                 conn.execute("INSERT INTO credit_accounts (user_id, balance, unlimited_until, updated_at) "
                              "VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET balance = excluded.balance, "
                              "unlimited_until = excluded.unlimited_until, updated_at = excluded.updated_at",
                              (uid, balance, until, now))
                 conn.execute("INSERT INTO credit_ledger (user_id, kind, delta, balance_after, unlimited_until, reason, "
-                             "admin_id, batch_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                             (uid, ledger_kind, delta, balance, until, reason, actor.id,
-                              key if len(users) > 1 else None, now))
-                results.append({"userId": uid, "balance": balance, "unlimitedUntil": until})
-            after = {"request": request, "results": results[:20]}
-            event = self.accounts._event(conn, now, actor.id, "credits.change", "user" if len(users) == 1 else "group",
-                                         target, None, after, reason, key, "done")
-        return {"eventId": event, "after": after, "replayed": False}
+                             "admin_id, batch_key, event_id, created_at) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?)",
+                             (uid, ledger_kind, delta, balance, until, actor.id, key if len(users) > 1 else None,
+                              event, now))
+        return {"eventId": event, "after": {**after, "results": results[:20]}, "replayed": False}
 
     def set_block(self, actor: Admin, user_id: int, blocked: bool, reason: str, key: str, code: str,
                   now: int, request_id: str) -> dict:
@@ -467,7 +473,7 @@ class CrmStore:
         (same two-step flow as a session revocation, finished at startup if a crash hit in between).
         Returns {"requestId", "resumed"} when sessions must be revoked now, else the recorded result."""
         with self.accounts._write() as conn:
-            row = conn.execute("SELECT id, kind, request_id, target_id, admin_id, reason, after_json FROM admin_events "
+            row = conn.execute("SELECT id, kind, request_id, target_id, admin_id, " + REASON + ", after_json FROM admin_events "
                                "WHERE idempotency_key = ?", (key,)).fetchone()
             if row is not None:
                 event_id, kind, prior_request, target, prior_admin, prior_reason, after_json = row
@@ -480,7 +486,9 @@ class CrmStore:
                 done = conn.execute("SELECT id, after_json FROM admin_events WHERE kind = 'completed' "
                                     "AND request_id = ?", (prior_request,)).fetchone()
                 if done is not None:  # finished: a replay never revokes sessions created since
-                    return {"eventId": done[0], "after": json.loads(done[1]), "replayed": True}
+                    revoked = json.loads(done[1]).get("revoked")
+                    return {"eventId": done[0], "after": {"blocked": True, "revoked": revoked},
+                            "revokedSessions": revoked, "replayed": True}
                 self.accounts._require_actor(conn, actor.id, "manage_users")  # resuming needs the permission now
                 return {"requestId": prior_request, "resumed": True}
             self.accounts.step_up(conn, actor.id, code, now, "manage_users")
