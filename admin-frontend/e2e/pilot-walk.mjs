@@ -112,7 +112,7 @@ await page.getByRole('button', { name: 'Сбросить фильтры' }).clic
 const azLoaded = page.waitForResponse((r) => r.url().includes('lang=az'));
 await page.getByLabel('Язык').selectOption('az');
 await azLoaded;
-await page.waitForTimeout(200);
+await page.locator('table[aria-busy="false"]').waitFor();
 const langs = await page.locator('tbody .sub').allTextContents();
 check('lang filter', langs.length > 0 && langs.every((t) => t.endsWith('az')), String(langs.length));
 await page.getByLabel('Язык').selectOption('');

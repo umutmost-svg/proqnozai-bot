@@ -18,13 +18,17 @@ export function Forecasts() {
   const open = params.get('open');
   const { sort, onSort } = useSort('kickoff');
 
+  // Patch the CURRENT address: a delayed call (search debounce) must not restore a stale copy of the
+  // filters (react-router's functional form still hands over the render-time params).
   const update = (patch: Record<string, string>) => {
-    const next = new URLSearchParams(params);
+    const next = new URLSearchParams(window.location.search);
     for (const [k, v] of Object.entries(patch)) { if (v) next.set(k, v); else next.delete(k); }
     setParams(next, { replace: true });
   };
   useEffect(() => {
-    const t = setTimeout(() => { if ((params.get('q') ?? '') !== query) update({ q: query, page: '' }); }, 300);
+    const t = setTimeout(() => {
+      if ((new URLSearchParams(window.location.search).get('q') ?? '') !== query) update({ q: query, page: '' });
+    }, 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
