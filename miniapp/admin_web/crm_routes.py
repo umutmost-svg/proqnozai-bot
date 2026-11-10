@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -27,6 +27,15 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     crm = CrmStore(ctx.accounts)
     crm.init_schema()
     store = ctx.store
+
+    # Finish revocations left half-done by a crash (block / session revoke: the request is journalled, the Mini
+    # App write may be missing). Revocation is idempotent; each request completes exactly once.
+    for pending in ctx.accounts.pending_requests():
+        if pending["action"] in ("user.block", "user.sessions_revoke") and pending["targetId"]:
+            t = ctx.now()
+            revoked = store.revoke_user_sessions(int(pending["targetId"]), t, BurnWindow.for_policy(t, 300, 30))
+            ctx.accounts.complete_request(pending["action"], pending["adminId"], pending["targetId"], revoked, t,
+                                          pending["requestId"])
 
     def audience(rules: dict, query: str = "") -> list[dict]:
         t = ctx.now()
@@ -126,6 +135,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
             if e["action"] in ("user.block", "user.sessions_revoke"):
                 if e["action"] == "user.sessions_revoke" and e["result"] != "completed":
                     continue
+                if e["action"] == "user.block" and e["result"] == "completed":
+                    continue
                 title = {"user.block": "Доступ заблокирован" if (e["after"] or {}).get("blocked") else "Блокировка снята",
                          "user.sessions_revoke": f"Отозваны сессии: {(e['after'] or {}).get('revoked', 0)}"}[e["action"]]
                 timeline.append({"at": e["at"], "kind": "admin", "title": title, "detail": e["reason"],
@@ -143,8 +154,11 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         admin = ctx.admin_of(request, "manage_users")
         data = await ctx.body(request)
         ids = user_ids(data)
-        created = sum(crm.add_tag(admin, uid, data.get("tag"), ctx.now())["created"] for uid in ids)
-        return {"tagged": created}
+        _, everyone = store.list_users(ctx.now(), limit=MAX_SCAN)
+        known = {u["id"] for u in everyone}
+        if not set(ids) <= known:
+            raise ActionError("not_found", 404)
+        return {"tagged": crm.add_tags(admin, ids, data.get("tag"), ctx.now())}
 
     @app.post("/api/admin/users/{user_id}/tags")
     async def add_tag(user_id: int, request: Request) -> dict:
@@ -178,13 +192,17 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         flag = data.get("blocked")
         if not isinstance(flag, bool):
             raise ActionError("invalid_value")
-        result = ctx.step_up_guard(admin, lambda: crm.set_block(admin, user_id, flag, reason, key, code, ctx.now()))
-        if flag and crm.blocked().get(user_id) is not None:
-            # A block also signs the user out everywhere. Run on every (re)try, replays included: if a crash
-            # hit between the block and this write, the retry completes it (revocation is idempotent).
-            t = ctx.now()
-            result["revokedSessions"] = store.revoke_user_sessions(user_id, t, BurnWindow.for_policy(t, 300, 30))
-        return result
+        rid = request.state.request_id
+        step = ctx.step_up_guard(admin, lambda: crm.set_block(admin, user_id, flag, reason, key, code, ctx.now(), rid))
+        if "requestId" not in step:
+            return step
+        # No await between the checks above and this write (single pilot process). Sessions are revoked once per
+        # request; a crash here is finished by the next retry or at startup (pending_requests).
+        t = ctx.now()
+        revoked = store.revoke_user_sessions(user_id, t, BurnWindow.for_policy(t, 300, 30))
+        result = ctx.accounts.revoke_completed(admin, user_id, revoked, t, step["requestId"], action="user.block")
+        return {**result, "after": {"blocked": True, "revoked": result["after"]["revoked"]},
+                "revokedSessions": result["after"]["revoked"], "resumed": step["resumed"]}
 
     @app.get("/api/admin/tags")
     async def tags(request: Request) -> dict:
@@ -310,8 +328,10 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         new = [u for u in everyone if u["createdAt"] >= since]
         by_day = Counter(datetime.fromtimestamp(u["createdAt"], UTC).strftime("%Y-%m-%d") for u in new)
         series = []
-        for back in range(days - 1, -1, -1):
-            day = datetime.fromtimestamp(t - back * 86400, UTC).strftime("%Y-%m-%d")
+        first = datetime.fromtimestamp(since, UTC).date()
+        last = datetime.fromtimestamp(t, UTC).date()
+        for offset in range((last - first).days + 1):  # every UTC day the rolling window touches
+            day = (first + timedelta(days=offset)).strftime("%Y-%m-%d")
             series.append({"day": day, "new": by_day.get(day, 0)})
         # Registrations by weekday x hour, Baku time (UTC+4, no DST): real, from users.created_at.
         heat = [[0] * 24 for _ in range(7)]

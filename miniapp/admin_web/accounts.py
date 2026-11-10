@@ -536,13 +536,27 @@ class AdminStore:
                         "requested", request_id)
         return {"requestId": request_id, "resumed": False}
 
-    def revoke_completed(self, actor: Admin, user_id: int, revoked: int, now: int, request_id: str) -> dict:
+    def revoke_completed(self, actor: Admin, user_id: int, revoked: int, now: int, request_id: str,
+                         action: str = "user.sessions_revoke") -> dict:
         """Records the outcome once; a concurrent retry that finished first wins and its result is returned."""
+        return self.complete_request(action, actor.id, str(user_id), revoked, now, request_id)
+
+    def complete_request(self, action: str, admin_id: int | None, target_id: str, revoked: int, now: int,
+                         request_id: str) -> dict:
         with self._write() as conn:
             done = conn.execute("SELECT id, after_json FROM admin_events WHERE kind = 'completed' AND request_id = ?",
                                 (request_id,)).fetchone()
             if done is not None:
                 return {"eventId": done[0], "after": json.loads(done[1]), "replayed": True}
-            event = self._event(conn, now, actor.id, "user.sessions_revoke", "user", str(user_id), None,
+            event = self._event(conn, now, admin_id, action, "user", target_id, None,
                                 {"revoked": revoked}, None, None, "completed", request_id)
         return {"eventId": event, "after": {"revoked": revoked}, "replayed": False}
+
+    def pending_requests(self) -> list[dict]:
+        """`requested` events whose Mini App write never completed (crash between the steps)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT e.action, e.target_id, e.request_id, e.admin_id FROM admin_events e WHERE e.kind = 'requested' "
+                "AND NOT EXISTS (SELECT 1 FROM admin_events c WHERE c.kind = 'completed' AND c.request_id = e.request_id)"
+            ).fetchall()
+        return [{"action": r[0], "targetId": r[1], "requestId": r[2], "adminId": r[3]} for r in rows]

@@ -378,8 +378,6 @@ class CrmStore:
 
     def schedule_broadcast(self, actor: Admin, broadcast_id: int, at: int, recipients: int, reason: str, key: str,
                            code: str, now: int) -> dict:
-        if not now - 60 <= at <= now + 90 * 86400:
-            raise ActionError("invalid_time")
         with self.accounts._write() as conn:
             # A retry returns the recorded result even if the audience size changed since (only the time binds).
             if (prior := self.accounts._replayed(conn, key, actor.id, "broadcast.schedule", str(broadcast_id),
@@ -387,6 +385,8 @@ class CrmStore:
                 if (prior["after"] or {}).get("scheduledAt") != at:
                     raise ActionError("idempotency_key_reused", 409)
                 return prior
+            if not now - 60 <= at <= now + 90 * 86400:  # only for a new schedule: a replay may come later
+                raise ActionError("invalid_time")
             self.accounts.step_up(conn, actor.id, code, now, "manage_users")
             status = conn.execute("SELECT status FROM crm_broadcasts WHERE id = ?", (broadcast_id,)).fetchone()
             if status is None:
@@ -462,17 +462,51 @@ class CrmStore:
         return {"eventId": event, "after": after, "replayed": False}
 
     def set_block(self, actor: Admin, user_id: int, blocked: bool, reason: str, key: str, code: str,
-                  now: int) -> dict:
+                  now: int, request_id: str) -> dict:
+        """Block = flag + `requested` event; the caller then revokes the sessions and records `completed`
+        (same two-step flow as a session revocation, finished at startup if a crash hit in between).
+        Returns {"requestId", "resumed"} when sessions must be revoked now, else the recorded result."""
         with self.accounts._write() as conn:
-            if (prior := self.accounts._replayed(conn, key, actor.id, "user.block", str(user_id),
-                                                 {"blocked": blocked}, reason)) is not None:
-                return prior
+            row = conn.execute("SELECT id, kind, request_id, target_id, admin_id, reason, after_json FROM admin_events "
+                               "WHERE idempotency_key = ?", (key,)).fetchone()
+            if row is not None:
+                event_id, kind, prior_request, target, prior_admin, prior_reason, after_json = row
+                after = json.loads(after_json) if after_json else None
+                if (target, prior_admin, prior_reason, (after or {}).get("blocked")) != (str(user_id), actor.id, reason,
+                                                                                        blocked):
+                    raise ActionError("idempotency_key_reused", 409)
+                if kind != "requested":
+                    return {"eventId": event_id, "after": after, "replayed": True}
+                done = conn.execute("SELECT id, after_json FROM admin_events WHERE kind = 'completed' "
+                                    "AND request_id = ?", (prior_request,)).fetchone()
+                if done is not None:  # finished: a replay never revokes sessions created since
+                    return {"eventId": done[0], "after": json.loads(done[1]), "replayed": True}
+                self.accounts._require_actor(conn, actor.id, "manage_users")  # resuming needs the permission now
+                return {"requestId": prior_request, "resumed": True}
             self.accounts.step_up(conn, actor.id, code, now, "manage_users")
             if blocked:
                 conn.execute("INSERT OR REPLACE INTO crm_blocks (user_id, reason, created_at, admin_id) "
                              "VALUES (?, ?, ?, ?)", (user_id, reason, now, actor.id))
-            else:
-                conn.execute("DELETE FROM crm_blocks WHERE user_id = ?", (user_id,))
+                self.accounts._event(conn, now, actor.id, "user.block", "user", str(user_id), None, {"blocked": True},
+                                     reason, key, "requested", request_id)
+                return {"requestId": request_id, "resumed": False}
+            conn.execute("DELETE FROM crm_blocks WHERE user_id = ?", (user_id,))
             event = self.accounts._event(conn, now, actor.id, "user.block", "user", str(user_id), None,
-                                         {"blocked": blocked}, reason, key, "done")
-        return {"eventId": event, "after": {"blocked": blocked}, "replayed": False}
+                                         {"blocked": False}, reason, key, "done")
+        return {"eventId": event, "after": {"blocked": False}, "replayed": False}
+
+    def add_tags(self, actor: Admin, user_ids: list[int], tag: str, now: int) -> int:
+        """One transaction for the whole batch: all users get the tag (and journal rows) or none."""
+        tag = _text(tag, "tag", MAX_TAG)
+        created = 0
+        with self.accounts._write() as conn:
+            self.accounts._require_actor(conn, actor.id, "manage_users")
+            for uid in sorted(set(user_ids)):
+                if conn.execute("INSERT OR IGNORE INTO crm_tags (user_id, tag, created_at, admin_id) VALUES (?, ?, ?, ?)",
+                                (uid, tag, now, actor.id)).rowcount:
+                    ev = conn.execute("INSERT INTO crm_tag_events (user_id, tag, action, created_at, admin_id) "
+                                      "VALUES (?, ?, 'add', ?, ?)", (uid, tag, now, actor.id)).lastrowid
+                    self.accounts._event(conn, now, actor.id, "user.tag_add", "user", str(uid), None,
+                                         {"tagEventId": ev}, None, None, "done")
+                    created += 1
+        return created

@@ -128,7 +128,10 @@ def test_analytics_real_parts_and_demo_only_on_request(env):
     login(client, clock, secrets_, "owner@x.test")
     a = client.get("/api/admin/analytics?days=90").json()
     assert a["real"]["totalUsers"] == 64 and sum(l["count"] for l in a["real"]["languages"]) == 64
-    assert len(a["real"]["newByDay"]) == 90 and sum(map(sum, a["real"]["registrationHeat"])) == a["real"]["newUsers"]
+    assert len(a["real"]["newByDay"]) == 91 and sum(map(sum, a["real"]["registrationHeat"])) == a["real"]["newUsers"]
+    assert sum(d["new"] for d in a["real"]["newByDay"]) == a["real"]["newUsers"]
+    day = client.get("/api/admin/analytics?days=1").json()["real"]
+    assert sum(d["new"] for d in day["newByDay"]) == day["newUsers"] and len(day["newByDay"]) == 2
     assert a["demo"] is None and a["real"]["leagues"]
     assert client.get("/api/admin/analytics?days=30&demo=1").json()["demo"]["source"] == "demo"
     assert client.get("/api/admin/dialogs").json() == {"source": "not_collected"}
@@ -163,7 +166,7 @@ def test_block_retry_after_a_crash_still_signs_the_user_out(env, monkeypatch):
     assert store.get_session("tok-crash").revoked_at is None
     clock.t += 30
     retry = post(client, f"/api/admin/users/{U1}/block", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)})
-    assert retry.json()["replayed"] is True and retry.json()["revokedSessions"] == 1
+    assert retry.json()["resumed"] is True and retry.json()["revokedSessions"] == 1
     assert store.get_session("tok-crash").revoked_at is not None
 
 
@@ -196,3 +199,54 @@ def test_analytics_names_its_dataset(env):
     _, clock, client, _, secrets_ = env
     login(client, clock, secrets_, "owner@x.test")
     assert client.get("/api/admin/analytics?days=7").json()["dataset"] == "demo"
+
+
+def test_completed_block_replay_never_revokes_later_sessions(env):
+    config, clock, client, _, secrets_ = env
+    store = Store(config.miniapp_db)
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    body = {"reason": "спам", "idempotencyKey": "block-done-1", "blocked": True}
+    assert post(client, f"/api/admin/users/{U1}/block", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)}).status_code == 200
+    store.create_session("tok-later", U1, "init-later", int(clock()), 86400)  # e.g. the Mini App ignored the flag
+    replay = post(client, f"/api/admin/users/{U1}/block", csrf, {**body, "code": ""})
+    assert replay.json()["replayed"] is True
+    assert store.get_session("tok-later").revoked_at is None
+
+
+def test_pending_block_is_completed_at_startup(env, monkeypatch):
+    config, clock, client, accounts, secrets_ = env
+    from miniapp.admin_web.app import create_admin_app
+    store = Store(config.miniapp_db)
+    store.create_session("tok-pend", U1, "init-pend", int(clock()), 86400)
+    csrf = login(client, clock, secrets_, "admin@x.test")
+
+    def crash(*_a, **_k):
+        raise RuntimeError("crash")
+
+    monkeypatch.setattr(Store, "revoke_user_sessions", crash)
+    post(client, f"/api/admin/users/{U1}/block", csrf, {"reason": "спам", "idempotencyKey": "block-pend-1", "blocked": True,
+                                                         "code": code(secrets_["admin@x.test"], clock)})
+    monkeypatch.undo()
+    assert accounts.pending_requests()
+    create_admin_app(config, clock=clock)  # a restart finishes it
+    assert not accounts.pending_requests()
+    assert store.get_session("tok-pend").revoked_at is not None
+
+
+def test_bulk_tags_are_atomic_and_need_existing_users(env):
+    _, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    r = post(client, "/api/admin/users/bulk/tags", csrf, {"userIds": [U1, 123], "tag": "x"})
+    assert r.status_code == 404 and client.get("/api/admin/users?tag=x").json()["total"] == 0
+    assert post(client, "/api/admin/users/bulk/tags", csrf, {"userIds": [U1, U1, U2], "tag": "x"}).json()["tagged"] == 2
+
+
+def test_schedule_replay_after_the_time_passed(env):
+    _, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "x", "body": "y"}).json()["id"]
+    at = int(clock()) + 120
+    body = {"reason": "план", "idempotencyKey": "sched-late-1", "at": at}
+    assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)}).status_code == 200
+    clock.t += 1500  # the scheduled time is now past (the admin session is still alive)
+    assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**body, "code": ""}).json()["replayed"] is True
