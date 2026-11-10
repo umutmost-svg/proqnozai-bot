@@ -454,7 +454,7 @@ def test_no_season_guess_when_the_minute_has_no_room_for_a_wrong_one(clock: Fake
     old = season_payload(match(1, "FINISHED", utc="2026-01-10T15:00:00Z", full=(3, 1)), season=PAST)
     t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": old,
                          "/competitions/PL/matches?season=2024": old})
-    service = make_service(t, clock, per_minute=9, per_day=100)
+    service = make_service(t, clock, per_minute=11, per_day=100)
     _hinted(service, "2025-08-15")  # wrong guess: could spend requests the right season needs
     history = run(service.model_history("fd:PL"))
     assert history.previous_season and not any(u.endswith("season=2024") for u in t.calls)

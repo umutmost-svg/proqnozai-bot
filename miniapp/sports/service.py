@@ -32,8 +32,8 @@ EMBLEMS_WAIT_S = 2.0
 PAST_WINDOW = timedelta(days=30)
 PAST_SEASON_RETRY_S = 6 * 3600.0
 # Requests left in the minute before a cold calendar may guess its previous season in parallel:
-# guess (1 + 2 retries) + calendar (1 + 2 retries) + the right season (1) + users' reserve (3).
-SPECULATE_MIN_HEADROOM = 10
+# guess, calendar and the right season with all their attempts (3 each) + users' reserve (3).
+SPECULATE_MIN_HEADROOM = 12
 FUTURE_WINDOW = timedelta(days=60)
 # Day-table snapshots of the top-match ranking kept at most (one per day start and competition).
 TOP_TABLES_MAX = 2000
