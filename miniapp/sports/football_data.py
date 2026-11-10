@@ -250,6 +250,12 @@ def parse_event_id(value: str) -> int | None:
 FEATURED: tuple[str, ...] = ("CL", "EL", "UCL", "PL", "PD", "SA", "BL1", "FL1", "TSL", "RFPL", "PPL", "DED")
 
 
+# Competitions whose tables the background warm-up keeps fresh in a large catalogue (top matches, AI facts);
+# every other table is loaded when a user opens it.
+STANDINGS_WARM: tuple[str, ...] = FEATURED + ("ELC", "BSA", "WC", "EC")
+MAX_COMPETITIONS_FILTER = 90  # the provider's limit for the `competitions` query parameter
+
+
 def all_codes() -> tuple[str, ...]:
     """Every known competition: the featured ones first, then by area and name."""
     rest = sorted((c for c in KNOWN_COMPETITIONS if c not in FEATURED),
@@ -495,14 +501,20 @@ class FootballDataAdapter:
 
     async def day(self, day: date) -> tuple[list[FootballEvent], float]:
         """All configured-competition matches whose kickoff is on this UTC day."""
-        data, _ = await self.client.get_json("/matches", {
-            "competitions": ",".join(self.codes),
-            "dateFrom": day.isoformat(),
-            "dateTo": (day + timedelta(days=1)).isoformat(),
-        })
+        params = {"dateFrom": day.isoformat(), "dateTo": (day + timedelta(days=1)).isoformat()}
+        joined = ",".join(self.codes)
+        # The provider rejects a `competitions` filter longer than 90 characters. A large catalogue (e.g. all
+        # competitions) asks for the whole day instead — one request — and keeps only served competitions below.
+        if len(joined) <= MAX_COMPETITIONS_FILTER:
+            params["competitions"] = joined
+        data, _ = await self.client.get_json("/matches", params)
         matches = data.get("matches")
         if not isinstance(matches, list):
             raise UpstreamError("bad_response")
+        result_set = data.get("resultSet")
+        count = result_set.get("count") if isinstance(result_set, dict) else None
+        if count is not None and count != len(matches):
+            raise UpstreamError("bad_response")  # a truncated page must never pass for the whole day
         fetched = self._now_iso()
         seen: set[str] = set()
         events: list[FootballEvent] = []

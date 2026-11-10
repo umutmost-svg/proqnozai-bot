@@ -152,6 +152,8 @@ class SearchIndex:
                     await self._load(tournament_id)
                 except UpstreamError as exc:
                     logger.info("search.warm_skipped tournament=%s code=%s", tournament_id, exc.code)
+                    if exc.low_priority_only:
+                        break  # the background budget is spent: the next search starts a new pass
                 except Exception as exc:  # optional background work: log and go on
                     logger.warning("search.warm_failed tournament=%s type=%s", tournament_id, type(exc).__name__)
         finally:

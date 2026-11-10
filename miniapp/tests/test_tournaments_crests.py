@@ -839,3 +839,45 @@ def test_search_pacing_adapts_to_competitions_and_budget():
     assert spacing < WARM_SPACING_S and refresh > REFRESH_AFTER_S
     # the warm-up stays within a quarter of the daily budget
     assert 117 * 86400 / refresh <= 10000 * 0.25 + 1
+
+
+def test_large_catalogue_day_listing_asks_the_whole_day_and_checks_completeness():
+    import asyncio
+    from datetime import date
+
+    from miniapp.sports.client import UpstreamError
+    from miniapp.sports.football_data import FootballDataAdapter, all_codes
+
+    calls = []
+
+    class Client:
+        def __init__(self, payload):
+            self.payload = payload
+
+        async def get_json(self, path, params=None):
+            calls.append(dict(params or {}))
+            return self.payload, None
+
+    match = {"id": 1, "utcDate": "2026-11-08T15:00:00Z", "status": "FINISHED", "stage": "REGULAR_SEASON",
+             "competition": {"code": "TSL", "name": "Süper Lig"},
+             "homeTeam": {"id": 10, "name": "A"}, "awayTeam": {"id": 11, "name": "B"},
+             "score": {"fullTime": {"home": 1, "away": 0}, "regularTime": None}}
+    foreign = {**match, "id": 2, "competition": {"code": "ZZZ", "name": "x"}}
+    adapter = FootballDataAdapter(Client({"matches": [match, foreign], "resultSet": {"count": 2}}), all_codes(), lambda: 1.8e9)
+    events, _ = asyncio.run(adapter.day(date(2026, 11, 8)))
+    assert "competitions" not in calls[-1] and [e.id for e in events] == ["fd:1"]
+    truncated = FootballDataAdapter(Client({"matches": [match], "resultSet": {"count": 2}}), all_codes(), lambda: 1.8e9)
+    try:
+        asyncio.run(truncated.day(date(2026, 11, 8)))
+        raise AssertionError("a truncated day must not pass")
+    except UpstreamError as exc:
+        assert exc.code == "bad_response"
+    small = FootballDataAdapter(Client({"matches": []}), ("PL", "PD"), lambda: 1.8e9)
+    asyncio.run(small.day(date(2026, 11, 8)))
+    assert calls[-1]["competitions"] == "PL,PD"
+
+
+def test_minor_cup_final_cannot_outrank_the_main_leagues():
+    from miniapp.sports.top import WEIGHTS
+
+    assert WEIGHTS.other_competition + min(WEIGHTS.stage["FINAL"], WEIGHTS.other_stage_cap) < WEIGHTS.competition["PL"]

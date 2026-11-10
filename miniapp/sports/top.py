@@ -32,6 +32,7 @@ class TopWeights:
     max_per_competition: int  # while other competitions still have matches to offer
     competition: Mapping[str, float]
     other_competition: float
+    other_stage_cap: float  # the most a knockout stage adds for a competition without its own weight
     stage: Mapping[str, float]
     table: float
     leaders: float
@@ -57,6 +58,7 @@ def load_weights(path: Path) -> TopWeights:
         max_per_competition=int(number(raw["maxPerCompetition"])),
         competition={str(k): number(v) for k, v in raw["competition"].items()},
         other_competition=number(raw["otherCompetition"]),
+        other_stage_cap=number(raw.get("otherStageCap", 6)),
         stage={str(k): number(v) for k, v in raw["stage"].items()},
         table=number(raw["table"]),
         leaders=number(raw["leaders"]),
@@ -107,7 +109,9 @@ def _closeness(position: int, teams: int) -> float:
 def score(event: FootballEvent, code: str, table: Table | None, w: TopWeights = WEIGHTS,
           now: float | None = None) -> Ranked:
     total = w.competition.get(code, w.other_competition)
-    total += w.stage.get(event.stage or "", 0.0)
+    stage = w.stage.get(event.stage or "", 0.0)
+    # A knockout stage lifts a match within its own level: a minor cup's final must not outrank the main leagues.
+    total += stage if code in w.competition else min(stage, w.other_stage_cap)
     leaders = False
     if table is not None and table.teams >= w.min_table_teams:
         home, away = table.positions.get(event.home.id), table.positions.get(event.away.id)

@@ -21,6 +21,7 @@
     "RFPL": 12
   },
   "otherCompetition": 8,
+  "otherStageCap": 6,
   "stage": {
     "FINAL": 30,
     "SEMI_FINALS": 24,

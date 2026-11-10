@@ -132,7 +132,7 @@ class SportsService:
             usage = football.client.usage()
             spacing, refresh = search_pacing(len(football.codes), int(usage["perMinuteLimit"]),
                                              int(usage["dailyLimit"]))
-        self.search_index = SearchIndex(lambda tid: self.calendar("football", tid),
+        self.search_index = SearchIndex(self._search_warm_load,
                                         lambda: [t.id for t in self.tournaments("football")], clock,
                                         spacing_s=spacing, refresh_after_s=refresh)
         self._unknown_lookups: deque[float] = deque()
@@ -499,8 +499,11 @@ class SportsService:
     def _standings_due(self) -> list[str]:
         now = self._clock()
         due = []
-        for t in self.tournaments("football"):
-            code = t.id.removeprefix(f"{football_data.ID_PREFIX}:")
+        codes = [t.id.removeprefix(f"{football_data.ID_PREFIX}:") for t in self.tournaments("football")]
+        if len(codes) > len(football_data.STANDINGS_WARM):
+            # Large catalogue: only the main competitions are warmed; the rest load on demand.
+            codes = [c for c in codes if c in football_data.STANDINGS_WARM]
+        for code in codes:
             if now < self._standings_warm_retry_at.get(code, 0.0):
                 continue  # the warm-up's own pause after a failed attempt
             key = f"football:standings:{code}"
@@ -531,6 +534,19 @@ class SportsService:
             return await self.calendar("football", tournament_id)
         finally:
             self._background_loads -= 1
+            LOW_PRIORITY_DAY_SHARE.reset(share)
+            LOW_PRIORITY_RESERVE.reset(reserve)
+
+    async def _search_warm_load(self, tournament_id: str) -> CalendarResult | None:
+        """A calendar for the team-search warm-up: same low priority and day share as the other
+        background work (users' requests keep the minute's reserve); refused when the budget is spent."""
+        if self.football is None or not self._warm_budget_left():
+            raise UpstreamError("rate_limited", low_priority_only=True)
+        reserve = LOW_PRIORITY_RESERVE.set(STANDINGS_WARM_RESERVE)
+        share = LOW_PRIORITY_DAY_SHARE.set(STANDINGS_WARM_DAY_SHARE)
+        try:
+            return await self.calendar("football", tournament_id)
+        finally:
             LOW_PRIORITY_DAY_SHARE.reset(share)
             LOW_PRIORITY_RESERVE.reset(reserve)
 
@@ -583,6 +599,10 @@ class SportsService:
                     # The refresh failed and the cache kept what it had: not asked again soon.
                     self._standings_warm_retry_at[code] = self._clock() + STANDINGS_WARM_RETRY_S
                     logger.info("sports.standings_warm_skipped code=%s reason=kept", code)
+                    continue
+                if not cached.value.blocks:
+                    # A competition without a table (a cup): not worth asking again soon.
+                    self._standings_warm_retry_at[code] = self._clock() + STANDINGS_WARM_NOT_FOUND_S
                     continue
                 self._standings_warm_retry_at.pop(code, None)
                 for block in cached.value.blocks:

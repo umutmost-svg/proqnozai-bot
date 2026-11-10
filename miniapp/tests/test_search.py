@@ -271,3 +271,22 @@ def test_a_query_naming_both_sides_finds_the_fixture(clock: FakeClock) -> None:
     assert result.teams == [] and [e.id for e in result.events] == ["fd:5"]
     assert index(clock, seasons()).search("arsenal city").events[0].id == "fd:6"
     assert index(clock, seasons()).search("arsenal betis").events == []  # never played each other here
+
+
+def test_warm_up_stops_when_its_background_budget_is_spent(clock: FakeClock) -> None:
+    loads = []
+
+    async def load(tid):
+        loads.append(tid)
+        raise UpstreamError("rate_limited", low_priority_only=True)
+
+    async def sleep(seconds):
+        pass
+
+    idx = SearchIndex(load, lambda: ["fd:PL", "fd:PD", "fd:CL"], clock, sleep=sleep)
+
+    async def scenario():
+        await idx.ensure_warm()
+
+    run(scenario())
+    assert loads == ["fd:PL"]  # no spinning through the rest: the next search starts a new pass

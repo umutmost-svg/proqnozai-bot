@@ -1,9 +1,12 @@
 import type { Tournament } from './models';
 
-/** The quick-filter subset: the featured competitions plus any already chosen. A catalogue
- *  without featured marks (demo data, few competitions) is shown whole. */
+/** The quick-filter subset: the featured competitions plus any already chosen. A small catalogue or
+ *  one without featured marks (demo data) is shown whole. */
+export const QUICK_MAX = 12;
+
 export function quickPicks(list: readonly Tournament[], keep: readonly string[] = []): Tournament[] {
-  if (!list.some((t) => t.featured)) return [...list];
+  // A small catalogue (the classic ten competitions) keeps every chip.
+  if (list.length <= QUICK_MAX || !list.some((t) => t.featured)) return [...list];
   return list.filter((t) => t.featured || keep.includes(t.id));
 }
 
