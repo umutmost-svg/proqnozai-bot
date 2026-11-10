@@ -432,3 +432,18 @@ def test_a_users_own_failure_after_the_warm_up_window_still_pauses_the_season(cl
     clock.advance(31)
     assert run(service.model_history("fd:PL")).previous_missing == "transient"  # its own fresh failure
     assert ("PL", 2025) in service._past_retry_at  # the usual pause: never a request per analysis
+
+
+def test_a_rate_limit_never_starts_the_long_season_pause(clock: FakeClock) -> None:
+    current = season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))
+    old = season_payload(match(1, "FINISHED", utc="2026-01-10T15:00:00Z", full=(3, 1)), season=PAST)
+    t = RoutedTransport({"/competitions/PL/matches": current,
+                         "/competitions/PL/matches?season=2025": HttpResponse(429, {"retry-after": "120"}, b"")})
+    service = make_service(t, clock, per_minute=100, per_day=10000)
+    assert run(service.model_history("fd:PL")).previous_missing == "transient"
+    clock.advance(60)  # cache backoff over, the client still cooling down: refused locally
+    assert run(service.model_history("fd:PL")).previous_missing == "transient"
+    assert not service._past_retry_at
+    t.routes["/competitions/PL/matches?season=2025"] = old
+    clock.advance(121)
+    assert run(service.model_history("fd:PL")).previous_season

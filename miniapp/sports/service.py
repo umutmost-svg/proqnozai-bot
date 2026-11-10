@@ -500,7 +500,9 @@ class SportsService:
             if exc.low_priority_only:
                 raise  # only the background budget said no: a user's request may still load it
             replayed = self._clock() - self._past_warm_failed.get((code, year), float("-inf")) <= self.cache.failure_backoff_s
-            if exc.code != "not_found" and (background or replayed):
+            # A rate limit is our own pacing (or the provider's minute), not a missing season: it passes
+            # within minutes and a refused request costs nothing, so it never starts the long pause.
+            if exc.code != "not_found" and (background or replayed or exc.code == "rate_limited"):
                 if background:
                     self._past_warm_failed[(code, year)] = self._clock()
                     raise  # the source may recover: a user's own request tries again after the cache's backoff
