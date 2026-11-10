@@ -31,6 +31,9 @@ MAX_RANGE = timedelta(hours=48)
 EMBLEMS_WAIT_S = 2.0
 PAST_WINDOW = timedelta(days=30)
 PAST_SEASON_RETRY_S = 6 * 3600.0
+# Requests left in the minute before a cold calendar may guess its previous season in parallel:
+# guess (1 + 2 retries) + calendar (1 + 2 retries) + the right season (1) + users' reserve (3).
+SPECULATE_MIN_HEADROOM = 10
 FUTURE_WINDOW = timedelta(days=60)
 # Day-table snapshots of the top-match ranking kept at most (one per day start and competition).
 TOP_TABLES_MAX = 2000
@@ -458,9 +461,11 @@ class SportsService:
         # decides below; a wrong hint only leaves an unused (cached) season behind.
         speculative: asyncio.Task | None = None
         hint = self.football.season_hints.get(code) if self.football is not None else None
-        # Only with room for a wrong guess too (calendar + guess + the right season): a tight minute
-        # keeps the plain sequence, where every request it makes is one the history needs.
-        if hint is not None and self._costs_request(f"football:calendar:{code}") and self.upstream_headroom() >= 3:
+        # Only with ample room in the minute: a wrong guess with all its retries, the calendar's, the right
+        # season and the reserve other users keep (quick picks) must all still fit. A tighter minute keeps
+        # the plain sequence, where every request it makes is one the history needs.
+        if (hint is not None and self._costs_request(f"football:calendar:{code}")
+                and self.upstream_headroom() >= SPECULATE_MIN_HEADROOM):
             speculative = asyncio.ensure_future(self._past_season(tournament_id, int(hint[:4]) - 1))
             # A discarded guess (wrong season, failed calendar) never leaves its exception unretrieved.
             speculative.add_done_callback(lambda task: task.cancelled() or task.exception())

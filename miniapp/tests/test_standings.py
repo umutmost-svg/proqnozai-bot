@@ -259,7 +259,7 @@ def test_a_cold_calendar_and_the_previous_season_load_together_with_a_season_hin
     t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": old})
 
     async def scenario():
-        service = make_service(t, clock)
+        service = make_service(t, clock, per_minute=100, per_day=10000)
         _hinted(service)
         t.gates["/competitions/PL/matches"] = asyncio.Event()
         task = asyncio.ensure_future(service.model_history("fd:PL"))
@@ -280,7 +280,7 @@ def test_a_wrong_season_hint_never_feeds_the_model_the_wrong_season(clock: FakeC
                            season={"id": 7, "startDate": "2024-08-15", "endDate": "2025-05-24", "currentMatchday": 38})
     t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": old,
                          "/competitions/PL/matches?season=2024": wrong})
-    service = make_service(t, clock)
+    service = make_service(t, clock, per_minute=100, per_day=10000)
     _hinted(service, "2025-08-15")  # stale hint: points at 2024
     history = run(service.model_history("fd:PL"))
     assert [e.id for e in history.events] == ["fd:1", "fd:2"] and history.previous_season  # 2025, the calendar's
@@ -289,7 +289,7 @@ def test_a_wrong_season_hint_never_feeds_the_model_the_wrong_season(clock: FakeC
 
 def test_a_warm_calendar_makes_no_speculative_season_request(clock: FakeClock) -> None:
     t = FakeTransport()
-    service = make_service(t, clock)
+    service = make_service(t, clock, per_minute=100, per_day=10000)
     current = match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0))
     t.script = [t.ok(season_payload(current)), HttpResponse(404, {}, b"")]
     run(service.model_history("fd:PL"))
@@ -306,7 +306,7 @@ def test_a_cancelled_analysis_leaves_the_season_loads_running_for_the_next_one(c
     t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": old})
 
     async def scenario():
-        service = make_service(t, clock)
+        service = make_service(t, clock, per_minute=100, per_day=10000)
         _hinted(service)
         gate = t.gates["/competitions/PL/matches"] = asyncio.Event()
         with pytest.raises(TimeoutError):  # the evidence deadline ends this waiter only
@@ -364,7 +364,7 @@ def test_calendar_warm_up_runs_only_where_enabled(clock: FakeClock) -> None:
     t = RoutedTransport({"/competitions/PL/matches": season_payload(match(2, "FINISHED", full=(1, 0)))})
 
     async def scenario(enabled: bool):
-        service = make_service(t, clock)
+        service = make_service(t, clock, per_minute=100, per_day=10000)
         service._warm_calendars = enabled
         return service.ensure_calendars_warm()
 
@@ -409,7 +409,7 @@ def test_a_discarded_speculative_season_leaves_no_unretrieved_exception(clock: F
 
     async def scenario():
         asyncio.get_running_loop().set_exception_handler(lambda _loop, ctx: unretrieved.append(ctx))
-        service = make_service(t, clock)
+        service = make_service(t, clock, per_minute=100, per_day=10000)
         _hinted(service, "2025-08-15")  # a wrong guess whose load fails unexpectedly
         await service.model_history("fd:PL")
         await asyncio.sleep(0.05)
@@ -454,7 +454,7 @@ def test_no_season_guess_when_the_minute_has_no_room_for_a_wrong_one(clock: Fake
     old = season_payload(match(1, "FINISHED", utc="2026-01-10T15:00:00Z", full=(3, 1)), season=PAST)
     t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": old,
                          "/competitions/PL/matches?season=2024": old})
-    service = make_service(t, clock, per_minute=2, per_day=100)
-    _hinted(service, "2025-08-15")  # wrong guess: would spend the request the right season needs
+    service = make_service(t, clock, per_minute=9, per_day=100)
+    _hinted(service, "2025-08-15")  # wrong guess: could spend requests the right season needs
     history = run(service.model_history("fd:PL"))
     assert history.previous_season and not any(u.endswith("season=2024") for u in t.calls)
