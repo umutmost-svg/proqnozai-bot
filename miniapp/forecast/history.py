@@ -337,6 +337,65 @@ class ForecastHistory:
         with self._connect() as conn:
             return int(conn.execute("SELECT COUNT(*) FROM ai_forecasts").fetchone()[0])
 
+    # ---- operator reads (admin panel) ----
+
+    _LIST_SORTS = {"kickoff": "kickoff_at", "created": "created_at", "status": "settled_status",
+                   "tournament": "tournament_id"}
+
+    def list_forecasts(self, *, status: str | None = None, tournament: str | None = None,
+                       created_since: str | None = None, event_ids: list[str] | None = None, sort: str = "kickoff",
+                       descending: bool = True, limit: int = 50, offset: int = 0) -> tuple[int, list[dict]]:
+        """A page of stored forecasts (one row per forecast key) without the explanation texts."""
+        where, args = ["1 = 1"], []
+        if status in ("pending", "settled", "void"):
+            where.append("settled_status = ?")
+            args.append(status)
+        if tournament:
+            where.append("tournament_id = ?")
+            args.append(tournament)
+        if created_since:
+            where.append("created_at >= ?")
+            args.append(created_since)
+        if event_ids is not None:
+            if not event_ids:
+                return 0, []
+            where.append(f"event_id IN ({', '.join('?' * len(event_ids))})")
+            args += event_ids
+        order = self._LIST_SORTS.get(sort, "kickoff_at")
+        direction = "DESC" if descending else "ASC"
+        sql_where = " AND ".join(where)
+        with self._connect() as conn:
+            total = int(conn.execute(f"SELECT COUNT(*) FROM ai_forecasts WHERE {sql_where}", args).fetchone()[0])
+            rows = conn.execute(
+                "SELECT forecast_key, event_id, tournament_id, home_team_id, away_team_id, created_at, kickoff_at, "
+                "model_version, pick_market, pick_probability, no_bet_reason, final_home, final_away, "
+                f"settled_status, settled_at, revision FROM ai_forecasts WHERE {sql_where} "
+                f"ORDER BY {order} {direction}, rowid {direction} LIMIT ? OFFSET ?", (*args, limit, offset)).fetchall()
+        return total, [_list_row(r) for r in rows]
+
+    def forecast_detail(self, key: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT forecast_key, event_id, tournament_id, home_team_id, away_team_id, created_at, kickoff_at, "
+                "model_version, pick_market, pick_probability, no_bet_reason, final_home, final_away, "
+                "settled_status, settled_at, revision, display_json, expected_home, expected_away, sample, "
+                "data_until, llm_model, source FROM ai_forecasts WHERE forecast_key = ?", (key,)).fetchone()
+            if row is None:
+                return None
+            journal = conn.execute(
+                "SELECT revision, final_home, final_away, settled_status, recorded_at FROM forecast_settlements "
+                "WHERE forecast_key = ? ORDER BY revision", (key,)).fetchall()
+        detail = _list_row(row[:16])
+        detail.update({"display": json.loads(row[16]), "expectedGoals": [row[17], row[18]], "sample": row[19],
+                       "dataUntil": row[20], "llmModel": row[21], "source": row[22],
+                       "settlements": [{"revision": r[0], "score": None if r[1] is None else [r[1], r[2]],
+                                        "status": r[3], "recordedAt": r[4]} for r in journal]})
+        return detail
+
+    def tournaments(self) -> list[str]:
+        with self._connect() as conn:
+            return [r[0] for r in conn.execute("SELECT DISTINCT tournament_id FROM ai_forecasts ORDER BY 1")]
+
     def evaluate(self) -> dict:
         """Quality of settled forecasts (latest row per event created before kickoff):
         1X2 log loss / Brier, per-market log loss, calibration, picks — per model version
@@ -406,3 +465,10 @@ def _evaluate(items: list[tuple]) -> dict:
                          for t, v in by_tournament.items()},
         "prospectiveGate": _gate(items),
     }
+
+
+def _list_row(r: tuple) -> dict:
+    return {"key": r[0], "eventId": r[1], "tournamentId": r[2], "homeTeamId": r[3], "awayTeamId": r[4],
+            "createdAt": r[5], "kickoffAt": r[6], "modelVersion": r[7], "pick": r[8], "pickProbability": r[9],
+            "noBetReason": r[10], "score": None if r[11] is None else [r[11], r[12]], "status": r[13],
+            "settledAt": r[14], "revision": r[15]}
