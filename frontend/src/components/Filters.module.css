@@ -132,6 +132,32 @@
   font-weight: 500;
 }
 
+.tournamentSearch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tournamentFound {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--line-55);
+  background: var(--glass-12);
+  font-size: 14px;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.tournamentNone {
+  margin: 4px 2px;
+  font-size: 13px;
+  color: var(--text-muted-2);
+}
+
 .logoSlot {
   display: flex;
   align-items: center;
