@@ -592,7 +592,10 @@ def test_stand_image_ships_every_runtime_module() -> None:
         assert f"miniapp/{name}" in dockerfile, name
     assert "COPY miniapp/sports/ miniapp/sports/" in dockerfile
     # Every application package next to the modules ships as well (tests never do).
-    packages = {p.name for p in (root / "miniapp").iterdir() if (p / "__init__.py").exists()} - {"tests"}
+    # admin_web is the LOCAL admin pilot (loopback only): deliberately not in the stand image
+    # until its own deployment stage (docs/miniapp/admin-dashboard.md, D9).
+    packages = {p.name for p in (root / "miniapp").iterdir() if (p / "__init__.py").exists()} - {"tests", "admin_web"}
+    assert "admin_web" not in dockerfile
     for package in packages:
         assert f"COPY miniapp/{package}/ miniapp/{package}/" in dockerfile, package
     assert "tests" not in dockerfile.split("COPY miniapp/sports/")[1].split("\n")[0]
