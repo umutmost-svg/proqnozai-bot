@@ -458,7 +458,9 @@ class SportsService:
         # decides below; a wrong hint only leaves an unused (cached) season behind.
         speculative: asyncio.Task | None = None
         hint = self.football.season_hints.get(code) if self.football is not None else None
-        if hint is not None and self._costs_request(f"football:calendar:{code}"):
+        # Only with room for a wrong guess too (calendar + guess + the right season): a tight minute
+        # keeps the plain sequence, where every request it makes is one the history needs.
+        if hint is not None and self._costs_request(f"football:calendar:{code}") and self.upstream_headroom() >= 3:
             speculative = asyncio.ensure_future(self._past_season(tournament_id, int(hint[:4]) - 1))
             # A discarded guess (wrong season, failed calendar) never leaves its exception unretrieved.
             speculative.add_done_callback(lambda task: task.cancelled() or task.exception())
