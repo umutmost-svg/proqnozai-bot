@@ -42,6 +42,10 @@ export function Users() {
   const qs = new URLSearchParams({ q: params.get('q') ?? '', segment, lang, page: String(page), size: '15',
     sort: sort.field, order: sort.desc ? 'desc' : 'asc' });
   const { data, error, loading, reload } = useLoad<UsersPage>(`/api/admin/users?${qs}`);
+  // The selection belongs to the list it was made in: a new filter or page clears it.
+  const listKey = qs.toString();
+  const [selectedIn, setSelectedIn] = useState(listKey);
+  if (selectedIn !== listKey) { setSelectedIn(listKey); setSelected(null); }
   const filtered = Boolean(params.get('q') || segment !== 'all' || lang);
 
   return (
@@ -101,7 +105,7 @@ export function Users() {
                   ))}
                 </tbody>
               </table>
-              <Pager page={data.page} size={data.size} total={data.total} onPage={(p) => update({ page: String(p) })} />
+              {!loading && <Pager page={data.page} size={data.size} total={data.total} onPage={(p) => update({ page: String(p) })} />}
             </>
           )}
         </section>

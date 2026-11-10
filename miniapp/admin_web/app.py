@@ -137,8 +137,13 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         return _err(exc.code, exc.status, request)
 
     async def body(request: Request) -> dict:
+        raw = bytearray()
+        async for chunk in request.stream():  # the limit holds without Content-Length (chunked) too
+            raw += chunk
+            if len(raw) > MAX_BODY:
+                raise ActionError("too_large", 413)
         try:
-            data = await request.json()
+            data = json.loads(raw or b"null")
         except ValueError:
             raise ActionError("bad_json") from None
         if not isinstance(data, dict):
@@ -175,7 +180,7 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         try:
             pre = accounts.login_password(str(data.get("email") or ""), str(data.get("password") or ""), now())
         except AuthError as exc:
-            return _err(str(exc), 401 if str(exc) != "locked" else 423, request)
+            return _err(str(exc), 401, request)
         response = JSONResponse({"next": "totp"})
         response.set_cookie(PRE_COOKIE, pre, max_age=300, httponly=True, samesite="strict", path="/api/admin/auth")
         return response
@@ -271,9 +276,9 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         upcoming: list[dict] = []
         in_period = 0
         if h:
-            _, rows = h.list_forecasts(status="pending", sort="kickoff", descending=False, limit=200)
-            iso_now = today().strftime("%Y-%m-%dT%H:%M:%SZ")
-            upcoming = label_rows([r for r in rows if r["kickoffAt"] >= iso_now][:5])
+            _, rows = h.list_forecasts(status="pending", kickoff_from=today().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                       sort="kickoff", descending=False, limit=5)
+            upcoming = label_rows(rows)
             in_period, _ = h.list_forecasts(
                 created_since=datetime.fromtimestamp(since, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), limit=1)
         return {
@@ -328,7 +333,8 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         if step.get("replayed"):
             return JSONResponse(step)
         t = now()
-        # Revocation is idempotent: completing a resumed request only revokes what is still active.
+        # No await between the permission check above and this write: the pilot's single process cannot
+        # interleave another request (e.g. a demotion) here. Revocation is idempotent on resume.
         revoked = store.revoke_user_sessions(user_id, t, BurnWindow.for_policy(t, 300, 30))
         result = accounts.revoke_completed(admin, user_id, revoked, t, step["requestId"])
         return JSONResponse({**result, "resumed": step["resumed"]})

@@ -228,7 +228,8 @@ class AdminStore:
             raise AuthError("invalid_credentials")
         admin_id, _, _, locked_until = row
         if locked_until > now:
-            raise AuthError("locked")
+            # Same answer as a wrong e-mail/password: a lock must not reveal that the account exists.
+            raise AuthError("invalid_credentials")
         if not ok:
             self._fail(admin_id, now)
             raise AuthError("invalid_credentials")
@@ -321,17 +322,21 @@ class AdminStore:
 
         The actor's state and role are re-read HERE, in the write transaction: a request that passed the
         route check and was then disabled or demoted (e.g. while its body was arriving) cannot finish."""
-        secret, last_step, locked_until, state, role = conn.execute(
-            "SELECT totp_secret, last_totp_step, locked_until, state, role FROM admin_users WHERE id = ?",
-            (admin_id,)).fetchone()
-        if state != "active" or not can(role, permission):
-            raise ActionError("forbidden", 403)
+        self._require_actor(conn, admin_id, permission)
+        secret, last_step, locked_until = conn.execute(
+            "SELECT totp_secret, last_totp_step, locked_until FROM admin_users WHERE id = ?", (admin_id,)).fetchone()
         if locked_until > now:
             raise ActionError("locked", 423)
         step = totp.matching_step(secret, code, now) if secret else None
         if step is None or step <= last_step:
             raise ActionError("invalid_code", 403)
         conn.execute("UPDATE admin_users SET last_totp_step = ? WHERE id = ?", (step, admin_id))
+
+    @staticmethod
+    def _require_actor(conn: sqlite3.Connection, admin_id: int, permission: str) -> None:
+        state, role = conn.execute("SELECT state, role FROM admin_users WHERE id = ?", (admin_id,)).fetchone()
+        if state != "active" or not can(role, permission):
+            raise ActionError("forbidden", 403)
 
     def step_up_failed(self, admin_id: int, now: int) -> None:
         """A wrong step-up code counts toward the lockout (outside the rolled-back action)."""
@@ -524,6 +529,7 @@ class AdminStore:
                                     "AND request_id = ?", (prior_request,)).fetchone()
                 if done is not None:
                     return {"eventId": done[0], "after": json.loads(done[1]), "replayed": True}
+                self._require_actor(conn, actor.id, "manage_users")  # resuming needs the permission NOW
                 return {"requestId": prior_request, "resumed": True}
             self.step_up(conn, actor.id, code, now, "manage_users")
             self._event(conn, now, actor.id, "user.sessions_revoke", "user", str(user_id), None, None, reason, key,

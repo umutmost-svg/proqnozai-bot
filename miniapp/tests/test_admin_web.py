@@ -120,7 +120,7 @@ def test_lockout_survives_restart(env):
     for _ in range(5):
         client.post("/api/admin/auth/login", json={"email": "admin@x.test", "password": "bad"}, headers={"Origin": ORIGIN})
     fresh = AdminStore(config.admin_db)  # a new process sees the same lock
-    with pytest.raises(AuthError, match="locked"):
+    with pytest.raises(AuthError, match="invalid_credentials"):
         fresh.login_password("admin@x.test", "pw-admin", int(clock()))
     clock.t += 15 * 60 + 1
     assert fresh.login_password("admin@x.test", "pw-admin", int(clock()))
@@ -323,7 +323,7 @@ def test_wrong_totp_codes_reach_the_lockout(env):
     errors = [client.post("/api/admin/auth/totp", json={"code": "000000"}, headers=h).json()["error"] for _ in range(5)]
     assert errors == ["invalid_code"] * 4 + ["locked"]
     assert any(e["action"] == "auth.locked" for e in accounts.events())
-    with pytest.raises(AuthError, match="locked"):
+    with pytest.raises(AuthError, match="invalid_credentials"):
         accounts.login_password("owner@x.test", "pw-owner", int(clock()))
 
 
@@ -508,3 +508,59 @@ def test_actor_is_rechecked_inside_the_write_transaction(env):
     with pytest.raises(ActionError, match="forbidden"):
         accounts.revoke_requested(stale, DEMO_ID_BASE + 1000, "late", "late-key-2",
                                   code(secrets_["admin@x.test"], clock), int(clock()), "rid-late")
+
+
+def test_resumed_revocation_needs_the_permission_now(env, monkeypatch):
+    config, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    user = DEMO_ID_BASE + 1000
+
+    def crash(*_a, **_k):
+        raise RuntimeError("crash")
+
+    monkeypatch.setattr(Store, "revoke_user_sessions", crash)
+    body = {"reason": "support", "idempotencyKey": "rev-demoted-1", "code": code(secrets_["admin@x.test"], clock)}
+    assert post(client, f"/api/admin/users/{user}/sessions/revoke", csrf, body).status_code == 500
+    monkeypatch.undo()
+    row = next(a for a in accounts.admins() if a["email"] == "admin@x.test")
+    from miniapp.admin_web.accounts import Admin
+    with sqlite3.connect(accounts.path) as conn:
+        conn.execute("UPDATE admin_users SET role = 'analyst' WHERE id = ?", (row["id"],))
+    with pytest.raises(ActionError, match="forbidden"):
+        accounts.revoke_requested(Admin(row["id"], row["email"], "admin", "active"), user, "support", "rev-demoted-1",
+                                  "000000", int(clock()), "rid-x")
+
+
+def test_body_limit_holds_without_content_length(env):
+    _, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "owner@x.test")
+
+    def chunks():
+        yield b'{"reason": "'
+        for _ in range(40):
+            yield b"x" * 1024
+        yield b'"}'
+
+    r = client.post("/api/admin/settings/ai.enabled", content=chunks(),
+                    headers={"Origin": ORIGIN, CSRF_HEADER: csrf, "Content-Type": "application/json"})
+    assert r.status_code == 413
+
+
+def test_locked_account_looks_like_wrong_credentials(env):
+    _, _, client, _, _ = env
+    h = {"Origin": ORIGIN}
+    for _ in range(5):
+        client.post("/api/admin/auth/login", json={"email": "admin@x.test", "password": "bad"}, headers=h)
+    locked = client.post("/api/admin/auth/login", json={"email": "admin@x.test", "password": "pw-admin"}, headers=h)
+    unknown = client.post("/api/admin/auth/login", json={"email": "ghost@x.test", "password": "pw-admin"}, headers=h)
+    assert (locked.status_code, locked.json()["error"]) == (unknown.status_code, unknown.json()["error"])
+
+
+def test_upcoming_forecasts_are_filtered_in_sql(tmp_path):
+    seed(tmp_path)
+    history = ForecastHistory(tmp_path / "miniapp.forecasts.db", read_only=True)
+    _, rows = history.list_forecasts(status="pending", kickoff_from="2000-01-01T00:00:00Z", sort="kickoff",
+                                     descending=False, limit=500)
+    later = rows[len(rows) // 2]["kickoffAt"]
+    _, upcoming = history.list_forecasts(status="pending", kickoff_from=later, sort="kickoff", descending=False, limit=3)
+    assert upcoming and all(r["kickoffAt"] >= later for r in upcoming)

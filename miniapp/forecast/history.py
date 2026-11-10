@@ -343,7 +343,8 @@ class ForecastHistory:
                    "tournament": "tournament_id"}
 
     def list_forecasts(self, *, status: str | None = None, tournament: str | None = None,
-                       created_since: str | None = None, event_ids: list[str] | None = None, sort: str = "kickoff",
+                       created_since: str | None = None, kickoff_from: str | None = None,
+                       event_ids: list[str] | None = None, sort: str = "kickoff",
                        descending: bool = True, limit: int = 50, offset: int = 0) -> tuple[int, list[dict]]:
         """A page of stored forecasts (one row per forecast key) without the explanation texts."""
         where, args = ["1 = 1"], []
@@ -356,6 +357,9 @@ class ForecastHistory:
         if created_since:
             where.append("created_at >= ?")
             args.append(created_since)
+        if kickoff_from:
+            where.append("kickoff_at >= ?")
+            args.append(kickoff_from)
         if event_ids is not None:
             if not event_ids:
                 return 0, []
