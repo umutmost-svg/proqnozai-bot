@@ -10,7 +10,7 @@ import { EmptyState, LoadingState } from '../components/States';
 import { DataFootnote } from '../components/SourceNote';
 import { NoEvents } from '../components/NoEvents';
 import { ComingSoon } from '../components/ComingSoon';
-import { TournamentList } from '../components/TournamentList';
+import { TournamentList, useTournamentCatalogue } from '../components/TournamentList';
 import { TournamentStrip } from '../components/TournamentStrip';
 import { TopMatches } from '../components/TopMatches';
 import type { EventStatus } from '../data/models';
@@ -28,6 +28,7 @@ export function HomeScreen() {
   const navigate = useNavigate();
   const { query, key } = useEventQuery();
   const available = data.sportAvailable(f.filters.sport);
+  const catalogue = useTournamentCatalogue(f.filters.sport, available);
   // The day's top matches; only when there are none, the day itself tells "no matches"
   // from "only stopped matches" (both answered from the backend's shared cache).
   const top = useAsync(async () => {
@@ -53,7 +54,7 @@ export function HomeScreen() {
       <div className={s.filters}>
         <DateStrip today={f.today} value={f.day} onChange={f.setDay} />
         <TournamentStrip
-          tournaments={data.listTournaments(f.filters.sport)}
+          tournaments={catalogue.tournaments}
           value={f.filters.tournamentId}
           onChange={f.setTournament}
         />
@@ -91,7 +92,7 @@ export function HomeScreen() {
           </span>
         </button>
       </div>
-      <TournamentList sport={f.filters.sport} />
+      <TournamentList catalogue={catalogue} />
       <DataFootnote sport={f.filters.sport} today={f.today} />
         </>
       )}

@@ -484,6 +484,7 @@ class FootballDataAdapter:
         self._clock = clock
         # Competition emblem URLs as the provider gives them (validated), learned from payloads.
         self.emblems: dict[str, str] = {}
+        self.emblem_fallbacks: dict[str, str] = {}  # the country's flag, when the emblem itself cannot be shown
         self._withdrawn: set[str] = set()  # codes the competition list gave no emblem for
         # Current-season start per competition as match payloads state it: only a hint that lets the
         # model's previous season load alongside a cold calendar; the calendar's own season decides.
@@ -590,6 +591,7 @@ class FootballDataAdapter:
         if not isinstance(items, list):
             raise UpstreamError("bad_response")
         found: dict[str, str] = {}
+        flags: dict[str, str] = {}
         for item in items:
             code = item.get("code") if isinstance(item, dict) else None
             if not isinstance(code, str):
@@ -597,9 +599,12 @@ class FootballDataAdapter:
             if code in self._allowed:
                 # Many competitions have no emblem of their own: their country's flag stands in (same host).
                 area = item.get("area")
-                source = crest_source(item.get("emblem")) or crest_source(area.get("flag") if isinstance(area, dict) else None)
+                flag = crest_source(area.get("flag") if isinstance(area, dict) else None)
+                source = crest_source(item.get("emblem")) or flag
                 if source is not None:
                     found[code] = source
+                if flag is not None and flag != source:
+                    flags[code] = flag  # also when the emblem's own picture turns out unusable
         # Applied only after the whole list validated. The list is the authority: a served
         # competition it omits (or gives no usable emblem) has none, and match payloads may not
         # bring it back until the next list says otherwise.
@@ -607,6 +612,7 @@ class FootballDataAdapter:
         for code in self._withdrawn:
             self.emblems.pop(code, None)
         self.emblems.update(found)
+        self.emblem_fallbacks = flags
         return found, EMBLEMS_TTL_S
 
     async def calendar(self, code: str) -> tuple[tuple[list[FootballEvent], Season], float]:

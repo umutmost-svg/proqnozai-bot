@@ -222,7 +222,7 @@ def create_app(
             response.headers["Cache-Control"] = _IMMUTABLE
         elif request.url.path.startswith("/api/crests/") and response.status_code == 200:
             # A crest is a verified public PNG with no user data: cacheable for a day, also at the edge.
-            response.headers["Cache-Control"] = _CREST_CACHE
+            response.headers.setdefault("Cache-Control", _CREST_CACHE)  # a stand-in flag sets a shorter one
         else:
             response.headers.update(_NO_STORE)
         # A crest SVG opened directly is a document: nothing in it may run or load (style attributes only).

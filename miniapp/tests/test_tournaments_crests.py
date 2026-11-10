@@ -645,7 +645,7 @@ def test_emblems_are_refreshed_daily_even_when_all_are_known(clock: FakeClock) -
     run(service.ensure_emblems())
     assert len(t.calls) == 2 and service.football.emblems["PL"].endswith("PL-2027.png")
     service.tournament_json(service.tournaments("football")[0])
-    assert service.crests._urls["competition:PL"].endswith("PL-2027.png")
+    assert service.crests._urls["competition:PL"][0].endswith("PL-2027.png")
 
 
 def test_an_emblem_failure_never_breaks_the_list_and_is_retried_later(warm_api, clock: FakeClock) -> None:
@@ -977,6 +977,23 @@ def test_svg_crests_of_national_teams_are_accepted_when_plain():
     b'<svg xmlns="http://www.w3.org/2000/svg" xml:base="https://e.vil/x.svg"><use href="#x"/></svg>',
     b'<svg xmlns="http://www.w3.org/2000/svg"><style>rect{fill:u\\72l(https://e.vil/x.png)}</style></svg>',
     b'<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:u\\72l(https://e.vil/x)"/></svg>',
+    # the wider allowlist for real crests stays closed to anything that loads or runs
+    b'<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/svg+xml;base64,PHN2Zy8+"/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><image href="data:text/html;base64,PHNjcmlwdD4="/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><image/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/png;base64,AAAA"/></svg>',  # not a PNG
+    b'<svg xmlns="http://www.w3.org/2000/svg"><image href="#x"/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:o="urn:other"><image o:href="#x"/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><filter><feGaussianBlur stdDeviation="9999"/></filter></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><filter><feMorphology radius="9999"/></filter></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><filter>' + b'<feOffset/>' * 33 + b'</filter></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><filter><feImage href="https://e.vil/x.png"/></filter></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd">'
+    b'<s:namedview><script>alert(1)</script></s:namedview></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd">'
+    b'<s:namedview onload="alert(1)"/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:i="http://www.inkscape.org/namespaces/inkscape">'
+    b'<i:grid><h:script xmlns:h="http://www.w3.org/1999/xhtml">x</h:script></i:grid></svg>',
 ])
 def test_unsafe_or_foreign_svg_is_refused(body):
     from miniapp.sports.crests import is_crest, is_safe_svg
@@ -1037,3 +1054,152 @@ def test_deeply_nested_svg_is_refused_not_crashing():
 
     deep = b'<svg xmlns="http://www.w3.org/2000/svg">' + b"<g>" * 1200 + b"</g>" * 1200 + b"</svg>"
     assert is_safe_svg(deep) is False
+
+
+def test_real_crests_with_editor_data_filters_or_an_embedded_picture_are_accepted():
+    import base64
+
+    from miniapp.sports.crests import is_safe_svg
+
+    # Inkscape's view settings outside <metadata> (Liga Profesional, Women's World Cup crests)
+    editor = (b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"'
+              b' xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"><sodipodi:namedview pagecolor="#fff"'
+              b' inkscape:zoom="1"/><rect width="1" height="1"/></svg>')
+    # a colour filter and an embedded PNG (Copa Libertadores, also the South American area flag)
+    raster = (b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><defs>'
+              b'<filter id="f"><feColorMatrix type="matrix" values="1 0 0 0 0"/></filter></defs>'
+              b'<image width="1" height="1" filter="url(#f)" xlink:href="data:image/png;base64,'
+              + base64.encodebytes(PNG) + b'"/></svg>')
+    assert is_safe_svg(editor) and is_safe_svg(raster)
+
+
+def test_a_competition_emblem_that_cannot_be_shown_falls_back_to_the_country_flag():
+    import asyncio
+
+    from miniapp.sports.crests import CrestStore
+
+    class Images:
+        def __init__(self):
+            self.calls = []
+
+        async def __call__(self, url, timeout_s):
+            self.calls.append(url)
+            return b"RIFF....WEBPVP8X" if url.endswith("fa_cup.png") else PNG  # the provider's .png is a WebP
+
+    images = Images()
+    store = CrestStore(images, clock=FakeClock())
+    store.learn("competition", "FAC", "https://crests.football-data.org/fa_cup.png",
+                fallback="https://crests.football-data.org/770.svg")
+    assert asyncio.run(store.image("competition", "FAC")) == PNG
+    assert images.calls == ["https://crests.football-data.org/fa_cup.png", "https://crests.football-data.org/770.svg"]
+    assert asyncio.run(store.image("competition", "FAC")) == PNG and len(images.calls) == 2  # cached
+
+
+def test_the_competition_list_keeps_the_flag_as_the_emblems_fallback(clock: FakeClock) -> None:
+    import asyncio
+
+    from miniapp.sports.football_data import FootballDataAdapter
+    from miniapp.tests.test_sports import FakeTransport, make_client
+
+    t = FakeTransport()
+    adapter = FootballDataAdapter(make_client(t, clock), ("PL", "PD"), clock)
+    t.script = [t.ok({"competitions": [
+        {"code": "PL", "emblem": "https://crests.football-data.org/PL.png", "area": {"flag": "https://crests.football-data.org/770.svg"}},
+        {"code": "PD", "emblem": None, "area": {"flag": "https://crests.football-data.org/760.svg"}}]})]
+    asyncio.run(adapter.competition_emblems())
+    assert adapter.emblems == {"PL": "https://crests.football-data.org/PL.png", "PD": "https://crests.football-data.org/760.svg"}
+    assert adapter.emblem_fallbacks == {"PL": "https://crests.football-data.org/770.svg"}
+
+
+def test_a_passing_emblem_failure_never_leaves_the_flag_for_good():
+    import asyncio
+
+    from miniapp.sports.crests import CrestStore
+
+    clock = FakeClock()
+    emblem = PNG + b"emblem"
+
+    class Images:
+        def __init__(self):
+            self.emblem_ok = False
+            self.calls = []
+
+        async def __call__(self, url, timeout_s):
+            self.calls.append(url)
+            if url.endswith("PL.png"):
+                return emblem if self.emblem_ok else None
+            return PNG  # the flag
+
+    images = Images()
+    store = CrestStore(images, clock=clock, failure_ttl_s=3600)
+    store.learn("competition", "PL", "https://crests.football-data.org/PL.png", fallback="https://crests.football-data.org/770.svg")
+    assert asyncio.run(store.image("competition", "PL")) == PNG  # the emblem is down: the flag
+    clock.advance(60)
+    assert asyncio.run(store.image("competition", "PL")) == PNG and len(images.calls) == 2  # served from memory
+    images.emblem_ok = True
+    clock.advance(3600)
+    assert asyncio.run(store.image("competition", "PL")) == emblem  # asked again after the failure TTL
+    assert asyncio.run(store.image("competition", "PL")) == emblem and len(images.calls) == 3
+
+
+def test_a_failed_refresh_of_the_emblem_keeps_the_flag_already_shown():
+    import asyncio
+
+    from miniapp.sports.crests import CrestStore
+
+    clock = FakeClock()
+
+    class Images:
+        broken = False
+
+        async def __call__(self, url, timeout_s):
+            if self.broken:
+                raise OSError("network down")
+            return None if url.endswith("PL.png") else PNG
+
+    images = Images()
+    store = CrestStore(images, clock=clock, failure_ttl_s=3600)
+    store.learn("competition", "PL", "https://crests.football-data.org/PL.png", fallback="https://crests.football-data.org/770.svg")
+    assert asyncio.run(store.image("competition", "PL")) == PNG
+    images.broken = True
+    clock.advance(3600)
+    assert asyncio.run(store.image("competition", "PL")) == PNG  # the refresh raised: the flag stays
+    assert asyncio.run(store.image("competition", "PL")) == PNG and "competition:PL" not in store._failed
+
+
+def test_a_busy_refresh_still_shows_the_flag_and_a_stand_in_is_cached_briefly(api, clock: FakeClock) -> None:
+    import asyncio
+
+    from miniapp.sports.crests import CrestStore
+    from miniapp.sports.routes import FALLBACK_CREST_CACHE
+
+    calls = []
+
+    async def fetch(url, timeout_s):
+        calls.append(url)
+        return None if url.endswith("PL.png") else PNG
+
+    store = CrestStore(fetch, clock=clock, failure_ttl_s=3600, per_minute=2)
+    store.learn("competition", "PL", "https://crests.football-data.org/PL.png", fallback="https://crests.football-data.org/770.svg")
+    assert asyncio.run(store.image("competition", "PL")) == PNG and store.is_fallback("competition", "PL")
+    clock.advance(3600)
+    store._recent.extend([clock.now] * 2)  # the per-minute download budget is used up
+    assert asyncio.run(store.image("competition", "PL")) == PNG and len(calls) == 2  # the flag, no fetch
+
+
+def test_a_stand_in_flag_is_cached_only_until_the_emblem_is_asked_again(tmp_path, clock: FakeClock) -> None:
+    from miniapp.sports.routes import FALLBACK_CREST_CACHE
+
+    async def fetch(url, timeout_s):
+        return None if url.endswith("PL.png") else PNG
+
+    settings = base_settings(tmp_path, football_data_key=KEY, session_ttl_s=3600)
+    service = build_service(settings, clock=clock, transport=FakeTransport(), crest_fetch=fetch, warm_emblems=False)
+    client = TestClient(create_app(settings, clock=clock, sports=service), base_url="http://127.0.0.1:8000")
+    service.crests.learn("competition", "PL", "https://crests.football-data.org/PL.png",
+                         fallback="https://crests.football-data.org/770.svg")
+    service.crests.learn("competition", "PD", "https://crests.football-data.org/PD.svg")
+    flag = client.get("/api/crests/competition/PL")
+    assert flag.status_code == 200 and flag.headers["cache-control"] == FALLBACK_CREST_CACHE
+    own = client.get("/api/crests/competition/PD")
+    assert own.status_code == 200 and own.headers["cache-control"] == "public, max-age=86400"

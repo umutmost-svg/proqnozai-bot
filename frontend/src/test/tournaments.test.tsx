@@ -312,3 +312,128 @@ describe('tournament calendar', () => {
     expect(cards.length).toBeGreaterThan(0);
   });
 });
+
+describe('tournament search in the filter', () => {
+  // A large catalogue: two featured competitions in the strip, a dozen more found only by search.
+  const MANY = [
+    { ...PL, featured: true },
+    { ...SA, featured: true },
+    ...Array.from({ length: 12 }, (_, i) => ({
+      id: `fd:X${i}`, sport: 'football', name: `League ${i}`, area: 'Germany', provider: 'football-data.org', emblem: null,
+    })),
+    { id: 'fd:RBY', sport: 'football', name: 'Regionalliga Bayern', area: 'Germany', provider: 'football-data.org', emblem: null },
+  ];
+
+  function manyBackend() {
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === '/api/sports/football/tournaments') return ok({ sport: 'football', coverage: COVERAGE, tournaments: MANY });
+      if (/\/api\/sports\/\w+\/tournaments$/.test(url)) {
+        return ok({ sport: 'x', coverage: { status: 'not_connected', provider: null, attribution: null }, tournaments: [] });
+      }
+      if (url.startsWith('/api/sports/football/events')) {
+        return ok({ coverage: COVERAGE, tournaments: MANY, events: [ev(9, '2026-11-08T15:00:00Z', 'upcoming', { tournamentId: 'fd:RBY' })] });
+      }
+      return ok({ coverage: { status: 'not_connected', provider: null, attribution: null }, tournaments: [], events: [] });
+    });
+    return new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl });
+  }
+
+  it('keeps the main tournaments in the strip and finds the others by name or country', async () => {
+    const user = userEvent.setup();
+    renderApp('#/matches', { data: manyBackend() });
+    const strip = await screen.findByTestId('tournament-strip');
+    await waitFor(() => expect(within(strip).getByRole('button', { name: /Premier League/ })).toBeInTheDocument());
+    expect(within(strip).queryByRole('button', { name: /Regionalliga/ })).toBeNull();
+    expect(screen.queryByTestId('tournament-search')).toBeNull(); // no long list, nothing until asked
+
+    await user.click(within(strip).getByTestId('tournament-search-toggle'));
+    const panel = screen.getByTestId('tournament-search');
+    expect(within(panel).queryAllByRole('button')).toHaveLength(0); // an empty query lists nothing
+    await user.type(within(panel).getByRole('searchbox'), 'Bayern');
+    await user.click(within(panel).getByRole('button', { name: /Regionalliga Bayern/ }));
+
+    expect(screen.queryByTestId('tournament-search')).toBeNull();
+    expect(within(screen.getByTestId('tournament-strip')).getByTestId('tournament-search-toggle')).toHaveFocus();
+    expect(within(screen.getByTestId('tournament-strip')).getByRole('button', { name: /Regionalliga Bayern/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('finds by country too, and Escape closes the search with focus back on its button', async () => {
+    const user = userEvent.setup();
+    renderApp('#/matches', { data: manyBackend() });
+    const strip = await screen.findByTestId('tournament-strip');
+    await waitFor(() => expect(within(strip).getByTestId('tournament-search-toggle')).toBeInTheDocument());
+    await user.click(within(strip).getByTestId('tournament-search-toggle'));
+    const panel = screen.getByTestId('tournament-search');
+    await user.type(within(panel).getByRole('searchbox'), 'Герман'); // the translated country, not a name
+    const answers = within(panel).getAllByRole('button');
+    expect(answers).toHaveLength(8); // thirteen German competitions: the first eight
+    expect(answers.every((b) => b.textContent?.startsWith('Германия · '))).toBe(true);
+    within(panel).getAllByRole('button')[0]?.focus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('tournament-search')).toBeNull();
+    expect(within(strip).getByTestId('tournament-search-toggle')).toHaveFocus();
+  });
+
+  it('home lists only the main tournaments; every other one is found by the search', async () => {
+    const user = userEvent.setup();
+    renderApp('#/', { data: manyBackend() });
+    const list = await screen.findByTestId('tournament-list');
+    await waitFor(() => expect(within(list).getByRole('link', { name: /Premier League/ })).toBeInTheDocument());
+    expect(within(list).queryByRole('link', { name: /Regionalliga/ })).toBeNull();
+    expect(within(list).queryAllByTestId('tournament-group')).toHaveLength(0);
+    await user.type(within(list).getByRole('searchbox'), '   '); // blanks are no query: still the main ones only
+    expect(within(list).queryByRole('link', { name: /Regionalliga/ })).toBeNull();
+    await user.type(within(list).getByRole('searchbox'), 'Bayern');
+    expect(within(list).getByRole('link', { name: /Regionalliga Bayern/ })).toBeInTheDocument();
+    // the strip on home uses the same loaded catalogue: its search is there too
+    expect(within(screen.getByTestId('tournament-strip')).getByTestId('tournament-search-toggle')).toBeInTheDocument();
+  });
+
+  it('shows at most eight answers and says when nothing matches', async () => {
+    const user = userEvent.setup();
+    renderApp('#/matches', { data: manyBackend() });
+    const strip = await screen.findByTestId('tournament-strip');
+    await waitFor(() => expect(within(strip).getByTestId('tournament-search-toggle')).toBeInTheDocument());
+    await user.click(within(strip).getByTestId('tournament-search-toggle'));
+    const panel = screen.getByTestId('tournament-search');
+    await user.type(within(panel).getByRole('searchbox'), 'League');
+    expect(within(panel).getAllByRole('button')).toHaveLength(8);
+    await user.clear(within(panel).getByRole('searchbox'));
+    await user.type(within(panel).getByRole('searchbox'), 'zzzz');
+    expect(within(panel).getByText('Ничего не найдено')).toBeInTheDocument();
+  });
+
+  it('has no search button when the whole catalogue fits the strip', async () => {
+    const { data } = backend();
+    renderApp('#/matches', { data });
+    const strip = await screen.findByTestId('tournament-strip');
+    await waitFor(() => expect(within(strip).getByRole('button', { name: /Serie A/ })).toBeInTheDocument());
+    expect(within(strip).queryByTestId('tournament-search-toggle')).toBeNull();
+  });
+});
+
+it('the search button stays after choosing the only other tournament', async () => {
+  const user = userEvent.setup();
+  const FEATURED = Array.from({ length: 12 }, (_, i) => ({
+    id: `fd:F${i}`, sport: 'football', name: `Main ${i}`, area: 'England', provider: 'football-data.org', emblem: null, featured: true,
+  }));
+  const ONE = { id: 'fd:RBY', sport: 'football', name: 'Regionalliga Bayern', area: 'Germany', provider: 'football-data.org', emblem: null };
+  const list = [...FEATURED, ONE];
+  const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+    const url = String(input);
+    if (url === '/api/sports/football/tournaments') return ok({ sport: 'football', coverage: COVERAGE, tournaments: list });
+    if (url.startsWith('/api/sports/football/events')) return ok({ coverage: COVERAGE, tournaments: list, events: [] });
+    return ok({ coverage: { status: 'not_connected', provider: null, attribution: null }, tournaments: [], events: [] });
+  });
+  renderApp('#/matches', { data: new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl }) });
+  const strip = await screen.findByTestId('tournament-strip');
+  await waitFor(() => expect(within(strip).getByTestId('tournament-search-toggle')).toBeInTheDocument());
+  await user.click(within(strip).getByTestId('tournament-search-toggle'));
+  await user.type(within(screen.getByTestId('tournament-search')).getByRole('searchbox'), 'Bayern');
+  await user.click(within(screen.getByTestId('tournament-search')).getByRole('button', { name: /Regionalliga Bayern/ }));
+  expect(within(screen.getByTestId('tournament-strip')).getByTestId('tournament-search-toggle')).toHaveFocus();
+});

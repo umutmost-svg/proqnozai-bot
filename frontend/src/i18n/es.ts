@@ -47,7 +47,6 @@ export const es: Dictionary = {
 
   'tournament.label': 'Torneo',
   'tournament.all': 'Todos los torneos',
-  'tournament.more': 'Otros torneos…',
   'tournaments.title': 'Torneos',
   'tournaments.open': '{name}: abrir el calendario',
   'tournaments.errorText': 'No se pudo cargar la lista de torneos.',

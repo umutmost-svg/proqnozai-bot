@@ -47,7 +47,6 @@ export const uz: Dictionary = {
 
   'tournament.label': 'Turnir',
   'tournament.all': 'Barcha turnirlar',
-  'tournament.more': 'Boshqa turnirlar…',
   'tournaments.title': 'Turnirlar',
   'tournaments.open': '{name}: taqvimni ochish',
   'tournaments.errorText': 'Turnirlar roʻyxatini yuklab boʻlmadi.',
