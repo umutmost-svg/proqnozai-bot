@@ -32,6 +32,8 @@ export interface Tournament {
   area?: string;
   /** A licensed local asset, or the provider's emblem served by our backend. */
   logo?: ImageAsset;
+  /** One of the main competitions: offered as a quick filter (the others are in the full list). */
+  featured?: boolean;
 }
 
 /** A tournament's season schedule: every known match, grouped into days by the screen. */

@@ -1,4 +1,5 @@
 import { ALL_TOURNAMENTS } from '../data/filter';
+import { quickPicks } from '../data/tournaments';
 import type { Tournament } from '../data/models';
 import { useHaptic } from '../hooks/useHaptic';
 import { useT } from '../state/contexts';
@@ -18,7 +19,7 @@ export function TournamentStrip({
   const haptic = useHaptic();
   return (
     <div className={s.tournaments} role="group" aria-label={t('tournament.label')} data-testid="tournament-strip">
-      {tournaments.map((tournament) => (
+      {quickPicks(tournaments, [value]).map((tournament) => (
         <button
           key={tournament.id}
           type="button"

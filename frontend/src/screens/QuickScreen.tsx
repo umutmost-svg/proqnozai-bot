@@ -6,6 +6,7 @@ import { Header } from '../components/Header';
 import { DataFootnote } from '../components/SourceNote';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { ALL_TOURNAMENTS } from '../data/filter';
+import { quickPicks } from '../data/tournaments';
 import { DataError } from '../data/provider';
 import type { PriceDeadline, QuickAnswer, QuickCriteria, QuickLeg, QuickReason } from '../data/models';
 import { QUICK_REASONS } from '../data/models';
@@ -131,6 +132,9 @@ function Criteria({ criteria, onChange }: { criteria: QuickCriteria; onChange: (
   const loaded = useAsync(() => data.loadTournaments('football'), 'quick:tournaments');
   const tournaments = loaded.status === 'success' && loaded.data.length ? loaded.data : data.listTournaments('football');
   const set = (patch: Partial<QuickCriteria>) => onChange({ ...criteria, ...patch });
+  const [showAll, setShowAll] = useState(false);
+  const picks = quickPicks(tournaments, criteria.tournaments);
+  const chips = showAll ? tournaments : picks;
   // A remembered competition the catalogue no longer has is dropped (and the cleaned choice
   // saved) once the catalogue is known: an invisible chip must never keep filtering picks.
   const catalogue = loaded.status === 'success' ? loaded.data : null;
@@ -191,7 +195,7 @@ function Criteria({ criteria, onChange }: { criteria: QuickCriteria; onChange: (
               </button>
             </span>
           )}
-          {tournaments.map((x) => (
+          {chips.map((x) => (
             <button
               key={x.id}
               type="button"
@@ -203,6 +207,11 @@ function Criteria({ criteria, onChange }: { criteria: QuickCriteria; onChange: (
               {x.name}
             </button>
           ))}
+          {picks.length < tournaments.length && (
+            <button type="button" className={s.link} aria-expanded={showAll} onClick={() => setShowAll((v) => !v)} data-testid="quick-tournaments-more">
+              {showAll ? t('quick.tournaments.less') : t('quick.tournaments.more', { count: tournaments.length })}
+            </button>
+          )}
         </div>
       </fieldset>
       <Choice

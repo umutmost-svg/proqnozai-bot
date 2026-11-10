@@ -23,21 +23,127 @@ ATTRIBUTION = "Football data provided by the Football-Data.org API"
 BASE_URL = "https://api.football-data.org/v4"
 ID_PREFIX = "fd"
 
-# Codes and names of competitions football-data.org documents; the operator
-# chooses which of them to serve (MINIAPP_FOOTBALL_DATA_COMPETITIONS).
+# Codes, names and areas of every competition football-data.org serves on our plan (Pro, read from
+# /v4/competitions on 2026-11-10; names as the provider gives them, LaLiga kept as before). The operator
+# chooses which to serve (MINIAPP_FOOTBALL_DATA_COMPETITIONS, or "all").
 KNOWN_COMPETITIONS: dict[str, tuple[str, str]] = {
-    "PL": ("Premier League", "England"),
-    "PD": ("LaLiga", "Spain"),
-    "SA": ("Serie A", "Italy"),
-    "BL1": ("Bundesliga", "Germany"),
-    "FL1": ("Ligue 1", "France"),
-    "CL": ("UEFA Champions League", "Europe"),
-    "DED": ("Eredivisie", "Netherlands"),
-    "PPL": ("Primeira Liga", "Portugal"),
-    "ELC": ("Championship", "England"),
+    "AC": ("Africa Cup Of Nations", "Africa"),
+    "ACQ": ("Africa Cup Of Nations - Qualification", "Africa"),
+    "QCAF": ("WC Qualification CAF", "Africa"),
+    "CAR": ("Copa Argentina", "Argentina"),
+    "ASL": ("Liga Profesional", "Argentina"),
+    "PBN": ("Primera B Nacional", "Argentina"),
+    "SCA": ("Supercopa Argentina", "Argentina"),
+    "QAFC": ("WC Qualification AFC", "Asia"),
+    "AAL": ("A League", "Australia"),
+    "ABL": ("Bundesliga", "Austria"),
+    "AEL": ("Liga Zwa", "Austria"),
+    "BJL": ("Jupiler Pro League", "Belgium"),
+    "BJPP": ("Playoffs", "Belgium"),
+    "SDB": ("Supercoupe de Belgique", "Belgium"),
     "BSA": ("Campeonato Brasileiro Série A", "Brazil"),
+    "BSB": ("Campeonato Brasileiro Série B", "Brazil"),
+    "CDB": ("Copa do Brasil", "Brazil"),
+    "CPD": ("Primera División", "Chile"),
+    "CSL": ("Chinese Super League", "China PR"),
+    "CLP": ("Primera A", "Colombia"),
+    "PRVA": ("Prva Liga", "Croatia"),
+    "CFD": ("Cyprus First Division", "Cyprus"),
+    "CFL": ("Czech First League", "Czech Republic"),
+    "DSU": ("Superliga", "Denmark"),
+    "ELC": ("Championship", "England"),
+    "COM": ("FA Community Shield", "England"),
+    "FAC": ("FA Cup", "England"),
+    "FLC": ("Football League Cup", "England"),
+    "EL1": ("League One", "England"),
+    "EL2": ("League Two", "England"),
+    "ENL": ("National League", "England"),
+    "PL": ("Premier League", "England"),
+    "WSL": ("Women's Super League", "England"),
+    "CLQ": ("Champions League Qualification", "Europe"),
+    "COLQ": ("Conference League Qualification", "Europe"),
+    "ELQ": ("Europa League Qualification", "Europe"),
     "EC": ("European Championship", "Europe"),
+    "ECQ": ("European Championship Qualifiers", "Europe"),
+    "CL": ("UEFA Champions League", "Europe"),
+    "UCL": ("UEFA Conference League", "Europe"),
+    "EL": ("UEFA Europa League", "Europe"),
+    "UNL": ("UEFA Nations League", "Europe"),
+    "ESC": ("UEFA Super Cup", "Europe"),
+    "ECF": ("UEFA Women's Euro", "Europe"),
+    "QUFA": ("WC Qualification UEFA", "Europe"),
+    "VEI": ("Veikkausliiga", "Finland"),
+    "CDF": ("Coupe de France", "France"),
+    "FL1": ("Ligue 1", "France"),
+    "FL2": ("Ligue 2", "France"),
+    "FPL": ("Playoffs 1/2", "France"),
+    "TDC": ("Trophée des Champions", "France"),
+    "BL2": ("2. Bundesliga", "Germany"),
+    "BL3": ("3. Bundesliga", "Germany"),
+    "BL1": ("Bundesliga", "Germany"),
+    "DFB": ("DFB-Pokal", "Germany"),
+    "GSC": ("DFL Super Cup", "Germany"),
+    "RBY": ("Regionalliga Bayern", "Germany"),
+    "RLN": ("Regionalliga Nord", "Germany"),
+    "RNO": ("Regionalliga Nordost", "Germany"),
+    "RSW": ("Regionalliga Südwest", "Germany"),
+    "RLW": ("Regionalliga West", "Germany"),
+    "BLREL": ("Relegation", "Germany"),
+    "GSL": ("Super League", "Greece"),
+    "HNB": ("NB I", "Hungary"),
+    "ILH": ("Ligat ha'Al", "Israel"),
+    "CIT": ("Coppa Italia", "Italy"),
+    "SA": ("Serie A", "Italy"),
+    "SB": ("Serie B", "Italy"),
+    "ISCA": ("Serie C - Girone A", "Italy"),
+    "ISCB": ("Serie C - Girone B", "Italy"),
+    "ISCC": ("Serie C - Girone C", "Italy"),
+    "ISC": ("Supercoppa", "Italy"),
+    "JJL": ("J. League", "Japan"),
+    "J2L": ("J. League Division 2", "Japan"),
+    "LMX": ("Liga MX", "Mexico"),
+    "DJL": ("Eerste Divisie", "Netherlands"),
+    "DED": ("Eredivisie", "Netherlands"),
+    "JCS": ("Johan Cruijff Schaal", "Netherlands"),
+    "KNV": ("KNVB Beker", "Netherlands"),
+    "NIP": ("Premiership", "Northern Ireland"),
+    "TIP": ("Tippeligaen", "Norway"),
+    "PCDP": ("Copa de Primera", "Paraguay"),
+    "PPD": ("Primera División", "Peru"),
+    "PD1": ("Division 1", "Poland"),
+    "PEK": ("Exstraklasa", "Poland"),
+    "PSL": ("Liga2 Cabovisão", "Portugal"),
+    "PPL": ("Primeira Liga", "Portugal"),
+    "SCO": ("Supertaça Cândido de Oliveira", "Portugal"),
+    "TDL": ("Taça da Liga", "Portugal"),
+    "TDP": ("Taça de Portugal", "Portugal"),
+    "RL1": ("Liga I", "Romania"),
+    "RFPL": ("RFPL", "Russia"),
+    "SPL": ("Premier League", "Scotland"),
+    "SPRV": ("PrvaLiga", "Slovenia"),
+    "CA": ("Copa America", "South America"),
+    "CLI": ("Copa Libertadores", "South America"),
+    "CS": ("Copa Sudamericana", "South America"),
+    "QCBL": ("WC Qualification CONMEBOL", "South America"),
+    "CDR": ("Copa del Rey", "Spain"),
+    "LLP": ("La Liga Play-Offs", "Spain"),
+    "PD": ("LaLiga", "Spain"),
+    "SD": ("Segunda División", "Spain"),
+    "SDE": ("Supercopa de España", "Spain"),
+    "ALL": ("Allsvenskan", "Sweden"),
+    "SC": ("Schweizer Pokal", "Switzerland"),
+    "SSL": ("Super League", "Switzerland"),
+    "T1L": ("1. Lig", "Turkey"),
+    "TSL": ("Süper Lig", "Turkey"),
+    "UPL": ("Premier Liha", "Ukraine"),
+    "MLS": ("MLS", "United States"),
+    "UPD": ("Primera División", "Uruguay"),
+    "WPL": ("Welsh Premier League", "Wales"),
+    "FCWC": ("FIFA Club World Cup", "World"),
+    "WCF": ("FIFA Women's World Cup", "World"),
     "WC": ("FIFA World Cup", "World"),
+    "OLY": ("Summer Olympics", "World"),
+    "QCCF": ("WC Qualification CONCACAF", "World"),
 }
 
 _STAGE = re.compile(r"[A-Z0-9_]{1,40}")
@@ -139,9 +245,22 @@ def parse_event_id(value: str) -> int | None:
     return int(raw)
 
 
+# The main competitions for our audience: shown first and offered as quick filters in the app; every other
+# served competition stays reachable through the full (searchable, grouped) list.
+FEATURED: tuple[str, ...] = ("CL", "EL", "UCL", "PL", "PD", "SA", "BL1", "FL1", "TSL", "RFPL", "PPL", "DED")
+
+
+def all_codes() -> tuple[str, ...]:
+    """Every known competition: the featured ones first, then by area and name."""
+    rest = sorted((c for c in KNOWN_COMPETITIONS if c not in FEATURED),
+                  key=lambda c: (KNOWN_COMPETITIONS[c][1], KNOWN_COMPETITIONS[c][0]))
+    return tuple(c for c in FEATURED if c in KNOWN_COMPETITIONS) + tuple(rest)
+
+
 def tournaments(codes: Iterable[str]) -> list[Tournament]:
     return [
-        Tournament(tournament_id(code), "football", KNOWN_COMPETITIONS[code][0], KNOWN_COMPETITIONS[code][1], PROVIDER)
+        Tournament(tournament_id(code), "football", KNOWN_COMPETITIONS[code][0], KNOWN_COMPETITIONS[code][1], PROVIDER,
+                   featured=code in FEATURED)
         for code in codes
     ]
 

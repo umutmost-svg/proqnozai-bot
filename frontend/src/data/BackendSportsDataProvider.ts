@@ -610,7 +610,7 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     // An explicit emblem field is the current truth (null = withdrawn); without the field, keep what we had.
     const logo = LOCAL_LOGOS[id] ?? ('emblem' in raw ? remoteImage(raw.emblem) : this.tournaments.get(id)?.logo);
     const area = str(raw.area) ?? undefined;
-    return { id, sport, name, ...(area ? { area } : {}), ...(logo ? { logo } : {}) };
+    return { id, sport, name, ...(area ? { area } : {}), ...(logo ? { logo } : {}), ...(raw.featured === true ? { featured: true } : {}) };
   }
 
   private readEvent(raw: unknown, coverage: SportCoverage & { delayed: boolean }): SportEvent | null {

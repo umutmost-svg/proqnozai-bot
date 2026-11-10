@@ -57,6 +57,14 @@ def is_bot_database_path(path: Path) -> bool:
     return any(name.casefold().startswith("bot.db") for name in names)
 
 
+def _competitions(raw: str) -> tuple[str, ...]:
+    """Comma-separated competition codes, or "all": every competition the provider serves on our plan."""
+    if raw.strip().lower() == "all":
+        from .sports.football_data import all_codes  # local: settings stay importable alone
+        return all_codes()
+    return tuple(c.strip().upper() for c in raw.split(",") if c.strip())
+
+
 def normalize_origin(raw: str) -> str:
     """Canonical `scheme://host[:port]`; rejects paths, wildcards and `null`."""
     value = raw.strip()
@@ -268,11 +276,7 @@ class Settings:
             csp_mode=(optional("MINIAPP_CSP_MODE") or "enforce").lower(),  # type: ignore[arg-type]
             edge_secret=edge_secret,
             football_data_key=optional("MINIAPP_FOOTBALL_DATA_KEY"),
-            football_data_competitions=tuple(
-                c.strip().upper()
-                for c in (optional("MINIAPP_FOOTBALL_DATA_COMPETITIONS") or DEFAULT_COMPETITIONS).split(",")
-                if c.strip()
-            ),
+            football_data_competitions=_competitions(optional("MINIAPP_FOOTBALL_DATA_COMPETITIONS") or DEFAULT_COMPETITIONS),
             football_data_live_plan=boolean("MINIAPP_FOOTBALL_DATA_LIVE_PLAN", False),
             football_data_per_minute=integer("MINIAPP_FOOTBALL_DATA_PER_MINUTE", 8),
             football_data_per_day=integer("MINIAPP_FOOTBALL_DATA_PER_DAY", 3000),

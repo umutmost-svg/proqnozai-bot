@@ -31,6 +31,20 @@ MAX_TEAMS = 10
 MAX_EVENTS = 30
 WARM_SPACING_S = 15.0  # between upstream calendar loads of the warm-up
 REFRESH_AFTER_S = 30 * 60.0  # an indexed calendar older than this is refreshed in the background
+# With many competitions the warm-up adapts to the plan (search_pacing): it may use at most this share of
+# the per-minute and of the daily request budget, so users' own requests always keep the rest.
+WARM_MINUTE_SHARE = 0.25
+WARM_DAY_SHARE = 0.25
+MIN_WARM_SPACING_S = 2.0
+
+
+def search_pacing(competitions: int, per_minute: int, per_day: int) -> tuple[float, float]:
+    """(spacing between warm-up loads, refresh age) for this many competitions and request budget.
+    Ten competitions on the free tier keep the original 15 s / 30 min; more competitions on a paid plan
+    load faster and refresh less often, staying inside WARM_*_SHARE of the budget."""
+    spacing = min(WARM_SPACING_S, max(MIN_WARM_SPACING_S, 60.0 / max(1.0, per_minute * WARM_MINUTE_SHARE)))
+    refresh = max(REFRESH_AFTER_S, competitions * 86400.0 / max(1.0, per_day * WARM_DAY_SHARE))
+    return spacing, refresh
 FIRST_WAIT_S = 3.0  # a search on a cold index waits this long for the first calendars
 # A calendar older than this is neither searched nor counted as covered (same bound as the
 # shared sports cache serves stale data): refresh failures can never pass old fixtures off
@@ -91,11 +105,14 @@ class SearchIndex:
     """Season calendars of the served competitions, searchable by team."""
 
     def __init__(self, load_calendar: Callable, tournament_ids: Callable[[], list[str]],
-                 clock: Callable[[], float], sleep: Callable = asyncio.sleep) -> None:
+                 clock: Callable[[], float], sleep: Callable = asyncio.sleep, *,
+                 spacing_s: float = WARM_SPACING_S, refresh_after_s: float = REFRESH_AFTER_S) -> None:
         self._load = load_calendar  # async (tournament_id) -> CalendarResult | None (uses the shared cache)
         self._ids = tournament_ids
         self._clock = clock
         self._sleep = sleep
+        self.spacing_s = spacing_s
+        self.refresh_after_s = refresh_after_s
         self._seasons: dict[str, tuple[float, list[FootballEvent]]] = {}
         self._warm: asyncio.Task | None = None
 
@@ -113,7 +130,7 @@ class SearchIndex:
 
     def _due(self) -> list[str]:
         now = self._clock()
-        return [t for t in self._ids() if t not in self._seasons or now - self._seasons[t][0] > REFRESH_AFTER_S]
+        return [t for t in self._ids() if t not in self._seasons or now - self._seasons[t][0] > self.refresh_after_s]
 
     @property
     def warming(self) -> bool:
@@ -129,7 +146,7 @@ class SearchIndex:
             first = True
             for tournament_id in self._due():
                 if not first:
-                    await self._sleep(WARM_SPACING_S)
+                    await self._sleep(self.spacing_s)
                 first = False
                 try:
                     await self._load(tournament_id)

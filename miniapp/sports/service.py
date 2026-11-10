@@ -21,7 +21,7 @@ from .cache import Cached, SportsCache
 from .client import LOW_PRIORITY_DAY_SHARE, LOW_PRIORITY_RESERVE, UpstreamError
 from .crests import CrestStore
 from .football_data import FootballDataAdapter, Season, Standings
-from .search import SearchIndex
+from .search import REFRESH_AFTER_S, WARM_SPACING_S, SearchIndex, search_pacing
 from .models import SPORTS, FootballEvent, Provenance, Sport, SportEvent, Tournament
 
 logger = logging.getLogger("miniapp.sports")
@@ -127,8 +127,14 @@ class SportsService:
         self._warm_emblems = warm_emblems
         self._emblems_retry_at = 0.0
         self._emblems_task: asyncio.Task[None] | None = None
+        spacing, refresh = WARM_SPACING_S, REFRESH_AFTER_S
+        if football is not None:
+            usage = football.client.usage()
+            spacing, refresh = search_pacing(len(football.codes), int(usage["perMinuteLimit"]),
+                                             int(usage["dailyLimit"]))
         self.search_index = SearchIndex(lambda tid: self.calendar("football", tid),
-                                        lambda: [t.id for t in self.tournaments("football")], clock)
+                                        lambda: [t.id for t in self.tournaments("football")], clock,
+                                        spacing_s=spacing, refresh_after_s=refresh)
         self._unknown_lookups: deque[float] = deque()
         # Called with every season calendar that loads (e.g. forecast settlement); never fails a request.
         self.calendar_listeners: list[Callable[[str, list[SportEvent]], None]] = []

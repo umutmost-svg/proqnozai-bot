@@ -59,10 +59,11 @@ class Tournament:
     name: str
     area: str | None = None
     provider: str = ""
+    featured: bool = False  # one of the main competitions (quick filters); the others are in the full list
 
     def to_json(self, emblem: str | None = None) -> dict:
         return {"id": self.id, "sport": self.sport, "name": self.name, "area": self.area, "provider": self.provider,
-                "emblem": emblem}
+                "emblem": emblem, "featured": self.featured}
 
 
 @dataclass(frozen=True)

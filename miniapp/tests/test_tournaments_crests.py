@@ -353,7 +353,7 @@ def test_calendar_api(api, clock: FakeClock) -> None:
     body = r.json()
     assert body["tournament"] == {"id": "fd:PL", "sport": "football", "name": "Premier League",
                                   "area": "England", "provider": "football-data.org",
-                                  "emblem": "/api/crests/competition/PL"}
+                                  "emblem": "/api/crests/competition/PL", "featured": True}
     assert body["season"]["currentMatchday"] == 21 and body["stale"] is False
     assert body["events"][0]["home"] == {"id": "fd:team:57", "name": "Arsenal FC", "shortName": "Arsenal",
                                          "crest": "/api/crests/team/57"}
@@ -815,3 +815,27 @@ def test_failure_records_are_bounded_with_the_learned_urls(clock: FakeClock) -> 
         store.learn("team", str(n), f"https://crests.football-data.org/{n}.png")
         run(store.image("team", str(n)))
     assert len(store._urls) == 2 and set(store._failed) <= set(store._urls)
+
+
+def test_all_competitions_mode_and_featured_order():
+    from miniapp.settings import _competitions
+    from miniapp.sports.football_data import FEATURED, KNOWN_COMPETITIONS, all_codes, tournaments
+
+    codes = _competitions("all")
+    assert len(codes) == len(KNOWN_COMPETITIONS) == len(set(codes)) >= 100
+    assert codes[:len(FEATURED)] == FEATURED
+    assert _competitions(" pl , pd ") == ("PL", "PD")
+    listed = tournaments(all_codes())
+    assert [t.featured for t in listed[:len(FEATURED)]] == [True] * len(FEATURED)
+    assert not any(t.featured for t in listed[len(FEATURED):])
+    assert all(t.area for t in listed)
+
+
+def test_search_pacing_adapts_to_competitions_and_budget():
+    from miniapp.sports.search import REFRESH_AFTER_S, WARM_SPACING_S, search_pacing
+
+    assert search_pacing(10, 8, 3000) == (WARM_SPACING_S, REFRESH_AFTER_S)  # free tier: unchanged
+    spacing, refresh = search_pacing(117, 100, 10000)
+    assert spacing < WARM_SPACING_S and refresh > REFRESH_AFTER_S
+    # the warm-up stays within a quarter of the daily budget
+    assert 117 * 86400 / refresh <= 10000 * 0.25 + 1
