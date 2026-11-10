@@ -143,6 +143,9 @@ class SportsService:
         self._notified: dict[str, float] = {}
         self._past_retry_at: dict[tuple[str, int], float] = {}
         self._past_failure: dict[tuple[str, int], str] = {}
+        # Seasons whose last load failed transiently in the warm-up: the cache replays that failure for its
+        # short backoff, and a user's analysis meanwhile must not turn it into the long retry pause.
+        self._past_warm_failed: dict[tuple[str, int], float] = {}  # -> when
         self._top_tables: OrderedDict[tuple[str, str], top_matches.Table] = OrderedDict()
         self._unknown_per_hour = unknown_lookups_per_hour
         self._warm_standings = warm_standings
@@ -494,8 +497,15 @@ class SportsService:
         try:
             past = await self.cache.get(f"football:season:{code}:{year}", lambda: adapter.past_season(code, year))
         except UpstreamError as exc:
-            if exc.low_priority_only or (background and exc.code != "not_found"):
-                raise  # the background budget said no, or the source may recover: a user's request still tries
+            if exc.low_priority_only:
+                raise  # only the background budget said no: a user's request may still load it
+            replayed = self._clock() - self._past_warm_failed.get((code, year), float("-inf")) <= self.cache.failure_backoff_s
+            if exc.code != "not_found" and (background or replayed):
+                if background:
+                    self._past_warm_failed[(code, year)] = self._clock()
+                    raise  # the source may recover: a user's own request tries again after the cache's backoff
+                logger.info("sports.past_season_unavailable tournament=%s code=%s", tournament_id, exc.code)
+                return None, "transient"
             # Optional depth: without it the model shows probabilities but recommends
             # nothing (partial_history). Not asked again for PAST_SEASON_RETRY_S, so a
             # season the provider cannot supply never costs a request per analysis.
@@ -504,6 +514,7 @@ class SportsService:
             self._past_failure[(code, year)] = missing
             logger.info("sports.past_season_unavailable tournament=%s code=%s", tournament_id, exc.code)
             return None, missing
+        self._past_warm_failed.pop((code, year), None)
         return past.value[0], None
 
     # --- verified context for the AI analysis (shared cache, no per-user requests) ---

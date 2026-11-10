@@ -381,6 +381,9 @@ def test_a_transient_warm_up_failure_never_pauses_a_users_season_load(clock: Fak
     with pytest.raises(UpstreamError):
         run(service._search_warm_load("fd:PL"))  # the warm-up skips this competition, remembers nothing
     assert not service._past_retry_at
+    # A user right away: the cache still replays the warm-up's failure, but no long pause follows from it.
+    assert run(service.model_history("fd:PL")).previous_missing == "transient"
+    assert not service._past_retry_at
     t.routes["/competitions/PL/matches?season=2025"] = old
     clock.advance(31)  # past the cache's failure backoff: the source has recovered
     assert run(service.model_history("fd:PL")).previous_season
@@ -414,3 +417,18 @@ def test_a_discarded_speculative_season_leaves_no_unretrieved_exception(clock: F
 
     run(scenario())
     assert not unretrieved
+
+
+def test_a_users_own_failure_after_the_warm_up_window_still_pauses_the_season(clock: FakeClock) -> None:
+    current = season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))
+    t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": HttpResponse(500, {}, b"")})
+    service = make_service(t, clock, per_minute=100, per_day=10000)
+    service.search_index.warm_past_seasons = True
+    with pytest.raises(UpstreamError):
+        run(service._search_warm_load("fd:PL"))
+    run(service.model_history("fd:PL"))
+    run(service.model_history("fd:PL"))  # twice inside the window: still no long pause
+    assert not service._past_retry_at
+    clock.advance(31)
+    assert run(service.model_history("fd:PL")).previous_missing == "transient"  # its own fresh failure
+    assert ("PL", 2025) in service._past_retry_at  # the usual pause: never a request per analysis
