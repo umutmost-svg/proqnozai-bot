@@ -222,3 +222,100 @@ def tasks(today: datetime) -> list[dict]:
         {"name": "Прогрев таблиц", "lastOkAt": t - 1300, "lastError": None, "state": "ok"},
         {"name": "Индекс поиска", "lastOkAt": t - 5400, "lastError": "rate_limited", "state": "warning"},
     ]
+
+
+def audience(days: int, today: datetime) -> dict:
+    """Pilot-only audience analytics that are not collected yet (geo, platforms, activity, cohorts, sources)."""
+    r = random.Random(f"audience:{today:%Y-%m-%d}:{days}")
+    profile = [0.05, 0.03, 0.02, 0.02, 0.02, 0.04, 0.08, 0.15, 0.22, 0.25, 0.28, 0.32, 0.38, 0.36, 0.33, 0.35, 0.42,
+               0.5, 0.62, 0.78, 0.95, 0.9, 0.6, 0.25]
+    heat = []
+    for d in range(7):
+        weekend = d >= 5
+        heat.append([round(min(1.0, p * (1.15 if weekend and 12 <= h <= 22 else 1.0) + (0.15 if weekend and 14 <= h <= 18
+                                                                                       else 0.0)) * 400 * r.uniform(0.9, 1.1))
+                     for h, p in enumerate(profile)])
+    return {
+        "source": "demo",
+        "summary": {"countries": 23, "peak": "20:00–22:00", "avgSessionS": 400, "mobileShare": 0.86},
+        "geo": [{"code": c, "name": n, "count": v} for c, n, v in [
+            ("AZ", "Азербайджан", 5180), ("TR", "Турция", 3210), ("UZ", "Узбекистан", 2050), ("KZ", "Казахстан", 770),
+            ("RU", "Россия", 640), ("GE", "Грузия", 380), ("—", "Другие (17)", 610)]],
+        "platforms": [{"name": n, "count": v} for n, v in [("Android", 5780), ("iOS", 5260),
+                                                           ("Telegram Desktop", 1410), ("Telegram Web", 390)]],
+        "activityHeat": heat,
+        "cohorts": [{"week": w, "size": s, "retention": ret} for w, s, ret in [
+            ("13–19 окт", 1120, [46, 34, 29, 26, 24]), ("20–26 окт", 1340, [48, 36, 31, 27]),
+            ("27 окт–2 ноя", 1510, [51, 38, 32]), ("3–9 ноя", 1690, [53, 40]), ("10–16 ноя", 412, [55])]],
+        "sources": [{"name": n, "count": v} for n, v in [("Органика / поиск в Telegram", 1420), ("Партнёр Bet1", 980),
+                                                         ("Реферальные ссылки", 760), ("Каналы и посевы", 640),
+                                                         ("Рассылки (реактивация)", 370)]],
+        "features": [{"name": n, "share": v} for n, v in [("AI-разбор матча", 0.68), ("Быстрый прогноз", 0.48),
+                                                          ("Купон", 0.22), ("Избранные команды", 0.17),
+                                                          ("Смена языка", 0.10)]],
+        "activeByDay": [{"day": (today - timedelta(days=b)).strftime("%Y-%m-%d"), "dau": 900 + int(400 * (1 - b / max(days, 1)))
+                         + r.randint(-60, 60)} for b in range(days - 1, -1, -1)],
+        "funnel": [("Запустили бота", 12840), ("Открыли Mini App", 8214), ("Первый AI-разбор", 5102),
+                   ("Вернулись за 7 дней", 2377)],
+    }
+
+
+def dialogs(today: datetime) -> list[dict]:
+    t = int(today.timestamp())
+    base = DEMO_ID_BASE + 1000
+    return [
+        {"userId": base + 37 * 3, "name": "Zeynep Kaya", "username": "zeynep_k", "unread": True, "tag": ["Жалоба", "danger"],
+         "messages": [{"from": "user", "text": "Разбор «Галатасарай — Фенербахче» не открывается, пишет «ошибка».", "at": t - 86400},
+                      {"from": "admin", "text": "Проверили: был сбой у провайдера данных, уже исправлено. Попробуйте ещё раз 🙏",
+                       "at": t - 85700, "by": "admin@sporbot.local"},
+                      {"from": "user", "text": "Опять ошибка((", "at": t - 120}],
+         "system": "последний AI-запрос пользователя — ошибка upstream_timeout"},
+        {"userId": base, "name": "Айгерим К.", "username": "aigerim_k", "unread": True, "tag": ["VIP", "violet"],
+         "messages": [{"from": "user", "text": "Спасибо за безлимит! А будет Ла Лига?", "at": t - 840}], "system": None},
+        {"userId": base + 37, "name": "Elvin G.", "username": "elvin_g", "unread": True, "tag": None,
+         "messages": [{"from": "user", "text": "Как поменять язык на азербайджанский?", "at": t - 3600}], "system": None},
+        {"userId": base + 74, "name": "Rustam H.", "username": "rustam_h", "unread": False, "tag": None,
+         "messages": [{"from": "user", "text": "Ответ на рассылку «Матч дня»: 👍", "at": t - 3 * 3600}], "system": None},
+    ]
+
+
+def seed_crm(crm_conn, owner_id: int, now: int) -> None:
+    """Demo CRM records for the pilot set: tags, notes, credits, segments, broadcasts (reason «демо»)."""
+    import json as _json
+    r = random.Random(7)
+    ids = [DEMO_ID_BASE + 1000 + i * 37 for i in range(64)]
+    tags = {"VIP": ids[:5], "Партнёр: Bet1": ids[3:11], "Жалоба": ids[11:13], "Тестер": ids[13:16], "Ла Лига": ids[16:26]}
+    for tag, users in tags.items():
+        for u in users:
+            crm_conn.execute("INSERT OR IGNORE INTO crm_tags (user_id, tag, created_at, admin_id) VALUES (?, ?, ?, ?)",
+                             (u, tag, now - r.randint(1, 20) * 86400, owner_id))
+    crm_conn.execute("INSERT INTO crm_notes (user_id, body, created_at, admin_id) VALUES (?, ?, ?, ?)",
+                     (ids[0], "Пишет в поддержку по-русски, интересуется Ла Лигой. Не предлагать купоны.",
+                      now - 7 * 86400, owner_id))
+    for u, amount in [(ids[1], 50), (ids[2], 20), (ids[20], 20), (ids[21], 10)]:
+        crm_conn.execute("INSERT INTO credit_accounts (user_id, balance, unlimited_until, updated_at) VALUES (?, ?, NULL, ?)",
+                         (u, amount, now))
+        crm_conn.execute("INSERT INTO credit_ledger (user_id, kind, delta, balance_after, unlimited_until, reason, admin_id, "
+                         "batch_key, created_at) VALUES (?, 'grant', ?, ?, NULL, ?, ?, NULL, ?)",
+                         (u, amount, amount, "демо: бонус", owner_id, now - r.randint(1, 9) * 86400))
+    for u in ids[:3]:
+        until = now + 20 * 86400
+        crm_conn.execute("INSERT INTO credit_accounts (user_id, balance, unlimited_until, updated_at) VALUES (?, 0, ?, ?) "
+                         "ON CONFLICT(user_id) DO UPDATE SET unlimited_until = excluded.unlimited_until", (u, until, now))
+        crm_conn.execute("INSERT INTO credit_ledger (user_id, kind, delta, balance_after, unlimited_until, reason, admin_id, "
+                         "batch_key, created_at) VALUES (?, 'unlimited', 0, 0, ?, ?, ?, NULL, ?)",
+                         (u, until, "демо: VIP", owner_id, now - 86400))
+    for name, rules in [("Новые за 7 дней", {"registered_within_days": 7}), ("Активные 7 дней", {"active_within_days": 7}),
+                        ("Уходящие", {"inactive_for_days": 14}), ("VIP", {"tag_has": "VIP"}),
+                        ("Ла Лига", {"tag_has": "Ла Лига", "tag_not": "Жалоба"})]:
+        crm_conn.execute("INSERT INTO crm_segments (name, rules_json, created_at, updated_at, admin_id) VALUES (?, ?, ?, ?, ?)",
+                         (name, _json.dumps(rules, sort_keys=True), now, now, owner_id))
+    for name, rules, body, status, at in [
+            ("Лига чемпионов: прогнозы тура", {"lang_in": ["ru"]}, "⚽ Тур Лиги чемпионов уже завтра! Мы подготовили AI-разборы на 8 матчей.",
+             "draft", None),
+            ("Вернись за бесплатным разбором", {"inactive_for_days": 14}, "Мы скучаем! Новый AI-разбор ждёт вас 👇", "scheduled",
+             now + 2 * 86400)]:
+        crm_conn.execute("INSERT INTO crm_broadcasts (name, rules_json, body, buttons_json, status, scheduled_at, recipients, "
+                         "created_at, updated_at, admin_id) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+                         (name, _json.dumps(rules), body, _json.dumps([{"text": "Открыть Mini App", "url": "miniapp"}]),
+                          status, at, now - 3600, now - 3600, owner_id))

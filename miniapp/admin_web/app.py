@@ -18,12 +18,13 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from miniapp.admin_web import demo
+from miniapp.admin_web import crm_routes, demo
 from miniapp.admin_web.accounts import ActionError, Admin, AdminStore, AuthError, can
 from miniapp.admin_web.config import AdminWebConfig
 from miniapp.forecast.history import GATE_MIN_FORECASTS, ForecastHistory
@@ -292,36 +293,6 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
 
     # ---- users -------------------------------------------------------------------------------
 
-    @app.get("/api/admin/users")
-    async def users(request: Request) -> dict:
-        admin_of(request, "read_personal")
-        q = request.query_params
-        size, offset = page(request)
-        t = now()
-        segment = q.get("segment", "all")
-        inactive_days = 14
-        total, rows = store.list_users(
-            t, query=q.get("q", "")[:64], sort=q.get("sort", "created"), descending=q.get("order", "desc") != "asc",
-            limit=size, offset=offset,
-            created_since=t - 7 * 86400 if segment == "new" else None,
-            login_since=t - 7 * 86400 if segment == "active" else None,
-            login_before=t - inactive_days * 86400 if segment == "inactive" else None,
-            lang=q.get("lang") or None)
-        return {"total": total, "page": offset // size + 1, "size": size, "items": rows,
-                "counts": store.user_counts(t, t - 7 * 86400)}
-
-    @app.get("/api/admin/users/{user_id}")
-    async def user(user_id: int, request: Request) -> Response:
-        admin_of(request, "read_personal")
-        profile = store.user_profile(user_id, now())
-        if profile is None:
-            return _err("not_found", 404, request)
-        profile["events"] = accounts.events(target=("user", str(user_id)), limit=50)
-        profile["aiCalls"] = ([c for c in demo.ai_calls(30, today()) if c["userId"] == user_id][:20]
-                              if demo_allowed(request) else None)
-        profile["credits"] = {"enabled": False, "balance": None, "unlimited": True}
-        return JSONResponse(profile)
-
     @app.post("/api/admin/users/{user_id}/sessions/revoke")
     async def revoke(user_id: int, request: Request) -> Response:
         admin = admin_of(request, "manage_users")
@@ -493,10 +464,10 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
                     item["before"] = item["after"] = None  # e-mails, roles of people, revoked counts per user
         return {"items": items}
 
-    @app.get("/api/admin/credits")
-    async def credits(request: Request) -> dict:
-        admin_of(request)
-        return {"enabled": False, "balance": None, "accruals": None, "debits": None}
+    crm_routes.register(app, SimpleNamespace(
+        accounts=accounts, store=store, now=now, today=today, page=page, period=period, admin_of=admin_of,
+        body=body, dangerous=dangerous, step_up_guard=step_up_guard, demo_allowed=demo_allowed, history=history,
+        tournament_name=tournament_name))
 
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def api_not_found(rest: str, request: Request) -> Response:

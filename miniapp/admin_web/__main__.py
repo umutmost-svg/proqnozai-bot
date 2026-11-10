@@ -45,6 +45,12 @@ def _init(config: AdminWebConfig) -> int:
         assert secret is not None
         lines += [f"{role}: {email}", f"  password: {password}", f"  2FA secret: {secret}",
                   f"  otpauth: {totp.provisioning_uri(secret, email)}", ""]
+    from miniapp.admin_web.crm import CrmStore
+    from miniapp.admin_web.demo import seed_crm
+    CrmStore(accounts).init_schema()
+    owner_id = next(a["id"] for a in accounts.admins() if a["role"] == "owner")
+    with accounts._write() as conn:
+        seed_crm(conn, owner_id, int(time.time()))
     path = config.data_dir / "credentials.txt"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
