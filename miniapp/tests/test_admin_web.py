@@ -414,3 +414,42 @@ def test_analyst_never_sees_free_text_reasons(env):
     login(analyst, clock, secrets_, "analyst@x.test")
     assert all(e["reason"] is None for e in analyst.get("/api/admin/events?days=7").json()["items"])
     assert any(e["reason"] for e in client.get("/api/admin/events?days=7").json()["items"])
+
+
+def test_pilot_directory_inside_the_repository_is_refused():
+    repo = Path(__file__).resolve().parents[2]
+    with pytest.raises(ConfigError, match="outside the repository"):
+        AdminWebConfig(data_dir=repo / "pilot-data", port=PORT, static_dir=None).validate()
+
+
+def test_analyst_journal_has_no_people_values(env):
+    _, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "owner@x.test")
+    post(client, "/api/admin/admins", csrf, {"email": "person@x.test", "role": "analyst", "reason": "hire",
+                                             "idempotencyKey": "inv-redact-1", "code": code(secrets_["owner@x.test"], clock)})
+    analyst = TestClient(client.app, base_url=ORIGIN)
+    login(analyst, clock, secrets_, "analyst@x.test")
+    body = analyst.get("/api/admin/events?days=7").text
+    assert "person@x.test" not in body
+
+
+def test_revocation_key_needs_the_same_admin_and_reason(env):
+    _, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    user = DEMO_ID_BASE + 1000
+    body = {"reason": "support", "idempotencyKey": "rev-same-1", "code": code(secrets_["admin@x.test"], clock)}
+    assert post(client, f"/api/admin/users/{user}/sessions/revoke", csrf, body).status_code == 200
+    clock.t += 30
+    changed = post(client, f"/api/admin/users/{user}/sessions/revoke", csrf,
+                   {**body, "reason": "other", "code": code(secrets_["admin@x.test"], clock)})
+    assert changed.status_code == 409
+
+
+def test_demo_activity_is_consistent():
+    from datetime import UTC, datetime
+
+    from miniapp.admin_web.demo import telemetry
+    for days in (1, 7, 30, 90):
+        t = telemetry(days, datetime(2026, 11, 10, 0, 10, tzinfo=UTC))
+        assert t["series"][-1]["dau"] <= t["wau"] <= t["mau"]
+    assert len(telemetry(1, datetime(2026, 11, 10, 0, 10, tzinfo=UTC))["series"]) == 2

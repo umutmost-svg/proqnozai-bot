@@ -244,6 +244,7 @@ const ACTIONS: Record<string, string> = {
 };
 
 function describe(e: AdminEvent): string {
+  if (!e.after && !e.before) return e.action === 'auth.login' || !e.targetId ? '' : `#${e.targetId}`; // hidden for analysts
   const after = e.after ?? {};
   if (e.action === 'settings.update') return `${String(after.key)}: ${JSON.stringify(e.before?.value)} → ${JSON.stringify(after.value)}`;
   if (e.action === 'admin.update') return `${e.targetId ? `#${e.targetId} ` : ''}${JSON.stringify(e.before)} → ${JSON.stringify(after)}`;

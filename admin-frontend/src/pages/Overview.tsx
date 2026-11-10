@@ -45,7 +45,11 @@ export function Overview() {
                     <tbody>
                       {data.upcoming.map((f) => (
                         <tr key={f.key} className="clickable" onClick={() => navigate(`/forecasts?open=${encodeURIComponent(f.key)}`)}>
-                          <td className="strong">{f.match ?? f.eventId}<span className="sub">{f.tournament}</span></td>
+                          <td className="strong">
+                            <Link to={`/forecasts?open=${encodeURIComponent(f.key)}`} style={{ color: 'var(--ink)' }}
+                              onClick={(e) => e.stopPropagation()}>{f.match ?? f.eventId}</Link>
+                            <span className="sub">{f.tournament}</span>
+                          </td>
                           <td>{utc(f.kickoffAt)}</td>
                           <td><Status value={f.status} /></td>
                         </tr>

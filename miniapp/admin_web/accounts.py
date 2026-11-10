@@ -375,17 +375,17 @@ class AdminStore:
                  "after": json.loads(r[8]) if r[8] else None, "reason": r[9], "result": r[10]} for r in rows]
 
     def _replayed(self, conn: sqlite3.Connection, key: str, admin_id: int, action: str, target_id: str | None,
-                  after: dict | None = None) -> dict | None:
+                  after: dict | None = None, reason: str | None = None) -> dict | None:
         """The earlier result of the same request, or None. A key is bound to its admin, action, target and
         (when given) result: reusing it for anything else is a conflict, never a silent success."""
-        row = conn.execute("SELECT id, admin_id, action, target_id, after_json FROM admin_events "
+        row = conn.execute("SELECT id, admin_id, action, target_id, after_json, reason FROM admin_events "
                            "WHERE idempotency_key = ?", (key,)).fetchone()
         if row is None:
             return None
-        event_id, prior_admin, prior_action, prior_target, prior_after = row
+        event_id, prior_admin, prior_action, prior_target, prior_after, prior_reason = row
         stored = json.loads(prior_after) if prior_after else None
         if (prior_admin, prior_action, prior_target) != (admin_id, action, target_id) or (
-                after is not None and stored != after):
+                after is not None and stored != after) or (reason is not None and prior_reason != reason):
             raise ActionError("idempotency_key_reused", 409)
         return {"eventId": event_id, "after": stored, "replayed": True}
 
@@ -408,7 +408,7 @@ class AdminStore:
             prior_row = conn.execute("SELECT target_id FROM admin_events WHERE idempotency_key = ?", (key,)).fetchone()
             if prior_row is not None and (prior := self._replayed(
                     conn, key, actor.id, "admin.invite", prior_row[0],
-                    {"email": email, "role": role, "state": "invited"})) is not None:
+                    {"email": email, "role": role, "state": "invited"}, reason)) is not None:
                 return prior
             self.step_up(conn, actor.id, code, now)
             if conn.execute("SELECT 1 FROM admin_users WHERE email = ?", (email,)).fetchone():
@@ -427,7 +427,7 @@ class AdminStore:
         if state is not None and state not in ("active", "disabled"):
             raise ActionError("invalid_state")
         with self._write() as conn:
-            if (prior := self._replayed(conn, key, actor.id, "admin.update", str(target_id))) is not None:
+            if (prior := self._replayed(conn, key, actor.id, "admin.update", str(target_id), None, reason)) is not None:
                 if any(v is not None and prior["after"].get(k) != v for k, v in (("role", role), ("state", state))):
                     raise ActionError("idempotency_key_reused", 409)
                 return prior
@@ -479,7 +479,7 @@ class AdminStore:
             raise ActionError("invalid_value")
         with self._write() as conn:
             if (prior := self._replayed(conn, idem, actor.id, "settings.update", key,
-                                        {"key": key, "value": value})) is not None:
+                                        {"key": key, "value": value}, reason)) is not None:
                 return prior
             self.step_up(conn, actor.id, code, now)
             row = conn.execute("SELECT value_json, version FROM runtime_settings WHERE key = ?", (key,)).fetchone()
@@ -505,11 +505,11 @@ class AdminStore:
         `completed`; a request left unfinished (crash between the steps) is handed back to be completed.
         """
         with self._write() as conn:
-            row = conn.execute("SELECT kind, request_id, target_id FROM admin_events WHERE idempotency_key = ?",
-                               (key,)).fetchone()
+            row = conn.execute("SELECT kind, request_id, target_id, admin_id, reason FROM admin_events "
+                               "WHERE idempotency_key = ?", (key,)).fetchone()
             if row is not None:
-                kind, prior_request, target = row
-                if kind != "requested" or target != str(user_id):
+                kind, prior_request, target, prior_admin, prior_reason = row
+                if (kind, target, prior_admin, prior_reason) != ("requested", str(user_id), actor.id, reason):
                     raise ActionError("idempotency_key_reused", 409)
                 done = conn.execute("SELECT id, after_json FROM admin_events WHERE kind = 'completed' "
                                     "AND request_id = ?", (prior_request,)).fetchone()

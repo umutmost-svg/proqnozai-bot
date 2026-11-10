@@ -69,6 +69,9 @@ class AdminWebConfig:
             raise ConfigError(f"{self.data_dir} must be private (0700), found {oct(mode)}")
 
     def validate(self) -> None:
+        repo = Path(__file__).resolve().parents[2]
+        if self.data_dir.expanduser().resolve().is_relative_to(repo):
+            raise ConfigError("the pilot directory holds passwords and 2FA secrets: it must be outside the repository")
         if not 1024 <= self.port <= 65535:
             raise ConfigError("port must be 1024..65535")
         if is_bot_database_path(self.miniapp_db):

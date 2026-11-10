@@ -56,3 +56,7 @@ admin-frontend/node_modules/
 admin-frontend/dist/
 admin-frontend/test-results/
 admin-frontend/playwright-report/
+
+# Admin pilot secrets must never be committed (the pilot refuses directories inside the repo anyway)
+credentials.txt
+.sporbot-admin-pilot/

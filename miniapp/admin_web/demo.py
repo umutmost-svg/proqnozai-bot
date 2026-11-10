@@ -141,7 +141,8 @@ def _day_rng(day: str, salt: str) -> random.Random:
 def telemetry(days: int, today: datetime) -> dict:
     """Daily series for the requested period, deterministic per calendar day."""
     series = []
-    for back in range(days - 1, -1, -1):
+    # Calendar days covering the window: a 24-hour window spans yesterday and today.
+    for back in range(max(days - 1, 1), -1, -1):
         day = (today - timedelta(days=back)).strftime("%Y-%m-%d")
         r = _day_rng(day, "activity")
         dau = r.randint(18, 46)
@@ -153,8 +154,10 @@ def telemetry(days: int, today: datetime) -> dict:
             "apiAttempts": r.randint(800, 1600), "api429": r.choice([0, 0, 0, 1, 2, 4]),
             "apiErrors": r.choice([0, 0, 1, 2, 3]),
         })
-    return {"source": "demo", "series": series,
-            "wau": min(64, sum(d["dau"] for d in series[-7:]) // 3), "mau": min(64, sum(d["dau"] for d in series) // 6)}
+    last = series[-1]["dau"]
+    wau = max(last, min(64, sum(d["dau"] for d in series[-7:]) // 3))
+    mau = max(wau, min(64, sum(d["dau"] for d in series[-30:]) // 6))
+    return {"source": "demo", "series": series, "wau": wau, "mau": mau}  # DAU <= WAU <= MAU
 
 
 _ERRORS = ["upstream_timeout", "rate_limited", "invalid_answer", "refusal", "upstream_error"]

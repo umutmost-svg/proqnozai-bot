@@ -480,8 +480,9 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         if not can(request.state.admin.role, "read_personal"):
             for item in items:  # analysts: no end-user identifiers (§4.8); free-text reasons may name anyone
                 item["reason"] = None
-                if item["targetType"] == "user":
+                if item["targetType"] in ("user", "admin"):
                     item["targetId"] = None
+                    item["before"] = item["after"] = None  # e-mails, roles of people, revoked counts per user
         return {"items": items}
 
     @app.get("/api/admin/credits")
