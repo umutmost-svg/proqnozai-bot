@@ -116,7 +116,10 @@ export interface QualityVersion {
   byTournament: Record<string, { forecasts: number; logLoss1x2: number }>;
   prospectiveGate: { forecasts: number; minimum: number; passed: boolean };
 }
-export interface Quality { settled: number; minimum: number; versions: Record<string, QualityVersion> }
+export interface Quality {
+  settled: number; minimum: number; currentVersion: string; currentGateForecasts: number;
+  versions: Record<string, QualityVersion>;
+}
 export interface Overview {
   period: number;
   users: { total: number; new: number; loggedIn: number; withActiveSession: number };

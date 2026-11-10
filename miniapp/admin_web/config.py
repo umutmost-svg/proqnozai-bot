@@ -60,6 +60,14 @@ class AdminWebConfig:
         except (OSError, ValueError, KeyError):
             return "local"
 
+    def require_pilot_data(self) -> None:
+        """Serve only a directory created by `init` with the demo set: never a stand/production data dir."""
+        if self.dataset() != "demo":
+            raise ConfigError(f"{self.data_dir} is not a pilot directory created by `init` (pilot.json missing)")
+        mode = self.data_dir.stat().st_mode & 0o777
+        if mode & 0o077:
+            raise ConfigError(f"{self.data_dir} must be private (0700), found {oct(mode)}")
+
     def validate(self) -> None:
         if not 1024 <= self.port <= 65535:
             raise ConfigError("port must be 1024..65535")

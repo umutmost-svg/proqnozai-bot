@@ -24,16 +24,18 @@ PILOT_ACCOUNTS = (("owner@sporbot.local", "owner"), ("admin@sporbot.local", "adm
                   ("analyst@sporbot.local", "analyst"))
 
 
-def _init(config: AdminWebConfig, empty: bool) -> int:
+def _init(config: AdminWebConfig) -> int:
+    # Only a NEW (or empty) directory: an existing data directory of a stand or production is never
+    # touched — no chmod, no accounts, no demo files.
+    if config.data_dir.exists() and any(config.data_dir.iterdir()):
+        print(f"refused: {config.data_dir} is not empty (choose a new ADMIN_PILOT_DIR or delete the old pilot)",
+              file=sys.stderr)
+        return 2
     config.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(config.data_dir, 0o700)
-    if config.admin_db.exists():
-        print(f"refused: {config.admin_db} exists (delete {config.data_dir} to start over)", file=sys.stderr)
-        return 2
-    if not empty:
-        from miniapp.admin_web.demo import seed
-        meta = seed(config.data_dir)
-        print(f"demo data: {meta['users']} users, {meta['forecasts']} forecasts (dataset=demo)")
+    from miniapp.admin_web.demo import seed
+    meta = seed(config.data_dir)
+    print(f"demo data: {meta['users']} users, {meta['forecasts']} forecasts (dataset=demo)")
     accounts = AdminStore(config.admin_db)
     accounts.init_schema()
     lines = ["# SporBot admin LOCAL PILOT accounts. Demo only; delete the pilot directory when done.", ""]
@@ -78,8 +80,7 @@ def _code(config: AdminWebConfig, email: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m miniapp.admin_web")
     sub = parser.add_subparsers(dest="command", required=True)
-    init = sub.add_parser("init")
-    init.add_argument("--empty", action="store_true", help="accounts only, no demo data")
+    sub.add_parser("init")
     sub.add_parser("serve")
     code = sub.add_parser("code")
     code.add_argument("email")
@@ -90,7 +91,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
     if args.command == "init":
-        return _init(config, args.empty)
+        return _init(config)
+    try:
+        config.require_pilot_data()
+    except ConfigError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
     if args.command == "serve":
         return _serve(config)
     return _code(config, args.email)

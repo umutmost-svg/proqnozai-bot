@@ -252,20 +252,31 @@ class AdminStore:
                 raise AuthError("locked")
             step = totp.matching_step(secret, code, now) if secret else None
             if step is None or step <= last_step:
-                failed = self._fail_in(conn, admin_id, now)
-                if failed:
+                # The failure is COMMITTED (raising here would roll the counter back with the transaction).
+                if self._fail_in(conn, admin_id, now):
                     conn.execute("UPDATE admin_sessions SET revoked_at = ? WHERE token_hash = ?",
                                  (now, _digest(pre_token)))
-                    raise AuthError("locked")
-                raise AuthError("invalid_code")
-            conn.execute("UPDATE admin_sessions SET revoked_at = ? WHERE token_hash = ?", (now, _digest(pre_token)))
-            token = secrets.token_urlsafe(32)
-            conn.execute(
-                "INSERT INTO admin_sessions (token_hash, admin_id, stage, created_at, last_seen_at, expires_at) "
-                "VALUES (?, ?, 'full', ?, ?, ?)", (_digest(token), admin_id, now, now, now + ABSOLUTE_S))
-            conn.execute("UPDATE admin_users SET last_totp_step = ?, failed_logins = 0, last_login_at = ? "
-                         "WHERE id = ?", (step, now, admin_id))
-            self._event(conn, now, admin_id, "auth.login", "admin", str(admin_id), None, None, None, None, "done")
+                    failure = "locked"
+                else:
+                    failure = "invalid_code"
+                token = None
+            else:
+                failure = None
+                token = self._open_session(conn, pre_token, admin_id, step, now)
+        if failure is not None:
+            raise AuthError(failure)
+        assert token is not None
+        return token
+
+    def _open_session(self, conn: sqlite3.Connection, pre_token: str, admin_id: int, step: int, now: int) -> str:
+        conn.execute("UPDATE admin_sessions SET revoked_at = ? WHERE token_hash = ?", (now, _digest(pre_token)))
+        token = secrets.token_urlsafe(32)
+        conn.execute(
+            "INSERT INTO admin_sessions (token_hash, admin_id, stage, created_at, last_seen_at, expires_at) "
+            "VALUES (?, ?, 'full', ?, ?, ?)", (_digest(token), admin_id, now, now, now + ABSOLUTE_S))
+        conn.execute("UPDATE admin_users SET last_totp_step = ?, failed_logins = 0, last_login_at = ? "
+                     "WHERE id = ?", (step, now, admin_id))
+        self._event(conn, now, admin_id, "auth.login", "admin", str(admin_id), None, None, None, None, "done")
         return token
 
     def _fail(self, admin_id: int, now: int) -> None:
@@ -472,15 +483,28 @@ class AdminStore:
     # ---- user sessions (the only write into miniapp.db, §4.6) ---------------------------------
 
     def revoke_requested(self, actor: Admin, user_id: int, reason: str, key: str, code: str, now: int,
-                         request_id: str) -> dict | None:
-        """Step 1: step-up + `requested` event. Returns the earlier result on an idempotent replay."""
+                         request_id: str) -> dict:
+        """Step 1: step-up + `requested` event. Returns {"requestId"} for the revocation to run now.
+
+        A retry with the same idempotency key returns the earlier result only once that request is
+        `completed`; a request left unfinished (crash between the steps) is handed back to be completed.
+        """
         with self._write() as conn:
-            if (prior := self._replayed(conn, key)) is not None:
-                return prior
+            row = conn.execute("SELECT kind, request_id, target_id FROM admin_events WHERE idempotency_key = ?",
+                               (key,)).fetchone()
+            if row is not None:
+                kind, prior_request, target = row
+                if kind != "requested" or target != str(user_id):
+                    raise ActionError("idempotency_key_reused", 409)
+                done = conn.execute("SELECT id, after_json FROM admin_events WHERE kind = 'completed' "
+                                    "AND request_id = ?", (prior_request,)).fetchone()
+                if done is not None:
+                    return {"eventId": done[0], "after": json.loads(done[1]), "replayed": True}
+                return {"requestId": prior_request, "resumed": True}
             self.step_up(conn, actor.id, code, now)
             self._event(conn, now, actor.id, "user.sessions_revoke", "user", str(user_id), None, None, reason, key,
                         "requested", request_id)
-        return None
+        return {"requestId": request_id, "resumed": False}
 
     def revoke_completed(self, actor: Admin, user_id: int, revoked: int, now: int, request_id: str) -> int:
         with self._write() as conn:

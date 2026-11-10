@@ -9,7 +9,7 @@ export function Overview() {
   const navigate = useNavigate();
   const { data, error, loading, reload } = useLoad<OverviewData>(`/api/admin/overview?days=${period}${demo ? '&demo=1' : ''}`);
   const t = data?.telemetry;
-  const version = data ? Object.values(data.quality.versions)[0] : undefined;
+  const version = data ? data.quality.versions[data.quality.currentVersion] : undefined;
   const series = t && t.source === 'demo' ? t.series : null;
   const last = series?.[series.length - 1];
 
@@ -30,7 +30,7 @@ export function Overview() {
             <Metric label="Прогнозы в истории" value={<Link className="metric-link" to="/forecasts">{num(data.forecasts.total)}</Link>}
               caption={`${num(data.forecasts.createdInPeriod)} за период · из истории модели`} />
             <Metric label="Сверено" value={num(data.forecasts.settled)}
-              caption={`до порога качества: ${num(Math.max(0, data.quality.minimum - data.quality.settled))}`} />
+              caption={`до порога качества (${data.quality.currentVersion}): ${num(Math.max(0, data.quality.minimum - data.quality.currentGateForecasts))}`} />
           </Metrics>
 
           <div className="cols">
@@ -75,13 +75,13 @@ export function Overview() {
             <aside>
               <SectionHead title="Качество модели" />
               <ul className="kv">
-                <li><span className="k">Матчей сверено</span><span className="v">{num(data.quality.settled)}</span></li>
+                <li><span className="k">В проверке версии {data.quality.currentVersion}</span><span className="v">{num(data.quality.currentGateForecasts)}</span></li>
                 <li><span className="k">Минимум для оценки</span><span className="v">{num(data.quality.minimum)}</span></li>
                 <li><span className="k">LogLoss / Brier</span><span className="v">{version ? `${version.logLoss1x2.toFixed(3)} / ${version.brier1x2.toFixed(3)}` : '—'}</span></li>
                 <li><span className="k">Состояние сервиса</span><Link to="/system" className="small">Система и логи →</Link></li>
               </ul>
-              {version && data.quality.settled < data.quality.minimum && (
-                <Note title="Предварительные значения">Метрики посчитаны на {data.quality.settled} матчах — до порога {data.quality.minimum} они не являются оценкой качества.</Note>
+              {version && data.quality.currentGateForecasts < data.quality.minimum && (
+                <Note title="Предварительные значения">Метрики посчитаны на {version.forecasts} матчах — до {data.quality.minimum} матчей в проспективной проверке они не являются оценкой качества.</Note>
               )}
               <Note title="О данных">Просмотры, активность и затраты начнут учитываться после D1. Пользователи и прогнозы — из файлов Mini App{' '}
                 (в пилоте — демо-набор).</Note>

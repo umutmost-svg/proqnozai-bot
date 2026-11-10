@@ -34,7 +34,7 @@ export function Forecasts() {
     sort: sort.field, order: sort.desc ? 'desc' : 'asc' });
   const list = useLoad<ListPage>(`/api/admin/forecasts?${qs}`);
   const s = summary.data;
-  const v = s ? Object.entries(s.quality.versions)[0] : undefined;
+  const v = s ? Object.entries(s.quality.versions).find(([name]) => name === s.quality.currentVersion) : undefined;
   const filtered = Boolean(params.get('q') || status || tournament || days !== 'all');
 
   return (
@@ -62,7 +62,7 @@ export function Forecasts() {
           <Metric label="Прогнозов модели" value={num(s.counts.total)} caption="строк в истории" />
           <Metric label="Ожидают результата" value={num(s.counts.pending)} caption="включая перенесённые" />
           <Metric label="Сверено" value={num(s.counts.settled)} caption={`аннулировано: ${num(s.counts.void)}`} />
-          <Metric label="Порог качества" value={num(s.quality.minimum)} caption={`сверено для оценки: ${num(s.quality.settled)}`} />
+          <Metric label="Порог качества" value={num(s.quality.minimum)} caption={`в проверке ${s.quality.currentVersion}: ${num(s.quality.currentGateForecasts)}`} />
         </Metrics>
       )}
 
@@ -116,7 +116,7 @@ export function Forecasts() {
                   <li key={name}><span className="k">{name} <span className="small">({t.forecasts})</span></span><span className="v" style={{ fontSize: 14 }}>{t.logLoss1x2.toFixed(3)}</span></li>
                 ))}
               </ul>
-              {s && s.quality.settled < s.quality.minimum && (
+              {s && s.quality.currentGateForecasts < s.quality.minimum && (
                 <Note title="Предварительные значения">До {s.quality.minimum} сверенных матчей метрики не являются оценкой качества.</Note>
               )}
             </>

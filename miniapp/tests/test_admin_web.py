@@ -32,7 +32,7 @@ class Clock:
 @pytest.fixture()
 def env(tmp_path: Path):
     config = AdminWebConfig(data_dir=tmp_path / "pilot", port=PORT, static_dir=None)
-    config.data_dir.mkdir()
+    config.data_dir.mkdir(mode=0o700)
     seed(config.data_dir)
     clock = Clock()
     app = create_admin_app(config, clock=clock)
@@ -314,3 +314,78 @@ def accounts_admin(accounts: AdminStore):
     from miniapp.admin_web.accounts import Admin
     a = accounts.admins()[0]
     return Admin(a["id"], a["email"], a["role"], a["state"])
+
+
+def test_wrong_totp_codes_reach_the_lockout(env):
+    _, clock, client, accounts, secrets_ = env
+    h = {"Origin": ORIGIN}
+    client.post("/api/admin/auth/login", json={"email": "owner@x.test", "password": "pw-owner"}, headers=h)
+    errors = [client.post("/api/admin/auth/totp", json={"code": "000000"}, headers=h).json()["error"] for _ in range(5)]
+    assert errors == ["invalid_code"] * 4 + ["locked"]
+    assert any(e["action"] == "auth.locked" for e in accounts.events())
+    with pytest.raises(AuthError, match="locked"):
+        accounts.login_password("owner@x.test", "pw-owner", int(clock()))
+
+
+def test_unfinished_revocation_is_completed_on_retry(env, monkeypatch):
+    config, clock, client, accounts, secrets_ = env
+    store = Store(config.miniapp_db)
+    user = DEMO_ID_BASE + 1000
+    store.create_session("tok-b", user, "init-b", int(clock()), 86400)
+    csrf = login(client, clock, secrets_, "admin@x.test")
+
+    def crash(*_a, **_k):
+        raise RuntimeError("crash between requested and the revocation")
+
+    monkeypatch.setattr(Store, "revoke_user_sessions", crash)
+    body = {"reason": "support", "idempotencyKey": "rev-crash-1", "code": code(secrets_["admin@x.test"], clock)}
+    assert post(client, f"/api/admin/users/{user}/sessions/revoke", csrf, body).status_code == 500
+    assert store.get_session("tok-b").revoked_at is None
+    monkeypatch.undo()
+    clock.t += 30
+    retry = post(client, f"/api/admin/users/{user}/sessions/revoke", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)})
+    assert retry.status_code == 200 and retry.json()["replayed"] is False and retry.json()["resumed"] is True
+    assert store.get_session("tok-b").revoked_at is not None
+    kinds = [e["result"] for e in accounts.events(target=("user", str(user)))]
+    assert kinds == ["completed", "requested"]
+    other = post(client, f"/api/admin/users/{user + 37}/sessions/revoke", csrf, {**body, "code": "000000"})
+    assert other.status_code == 409  # one key cannot be reused for another user
+
+
+def test_analyst_journal_hides_user_targets_and_reasons(env):
+    _, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    user = DEMO_ID_BASE + 1000
+    post(client, f"/api/admin/users/{user}/sessions/revoke", csrf,
+         {"reason": "user @someone asked", "idempotencyKey": "rev-an-1x", "code": code(secrets_["admin@x.test"], clock)})
+    analyst = TestClient(client.app, base_url=ORIGIN)
+    login(analyst, clock, secrets_, "analyst@x.test")
+    items = [e for e in analyst.get("/api/admin/events?days=7").json()["items"] if e["targetType"] == "user"]
+    assert items and all(e["targetId"] is None and e["reason"] is None for e in items)
+
+
+def test_quality_gate_is_per_model_version(env):
+    _, clock, client, _, secrets_ = env
+    login(client, clock, secrets_, "owner@x.test")
+    q = client.get("/api/admin/forecasts/summary").json()["quality"]
+    assert q["currentGateForecasts"] == q["versions"][q["currentVersion"]]["prospectiveGate"]["forecasts"]
+    assert q["minimum"] == 300
+
+
+def test_pilot_refuses_foreign_or_shared_directories(tmp_path, monkeypatch):
+    from miniapp.admin_web.__main__ import main
+
+    foreign = tmp_path / "data"
+    foreign.mkdir()
+    (foreign / "miniapp.db").write_bytes(b"")  # e.g. a stand data directory
+    monkeypatch.setenv("ADMIN_PILOT_DIR", str(foreign))
+    assert main(["init"]) == 2 and not (foreign / "admin").exists()
+    assert main(["serve"]) == 2
+    with pytest.raises(ConfigError):
+        create_admin_app(AdminWebConfig(data_dir=foreign, port=PORT, static_dir=None))
+    seeded = tmp_path / "open"
+    seeded.mkdir(mode=0o755)
+    seed(seeded)
+    seeded.chmod(0o755)
+    with pytest.raises(ConfigError, match="private"):
+        create_admin_app(AdminWebConfig(data_dir=seeded, port=PORT, static_dir=None))

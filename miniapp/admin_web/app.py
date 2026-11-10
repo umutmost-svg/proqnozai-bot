@@ -27,6 +27,7 @@ from miniapp.admin_web import demo
 from miniapp.admin_web.accounts import ActionError, Admin, AdminStore, AuthError, can
 from miniapp.admin_web.config import AdminWebConfig
 from miniapp.forecast.history import GATE_MIN_FORECASTS, ForecastHistory
+from miniapp.forecast.version import MODEL_VERSION
 from miniapp.sports.football_data import KNOWN_COMPETITIONS
 from miniapp.store import BurnWindow, Store
 
@@ -58,6 +59,7 @@ def _finite(value: Any) -> Any:
 
 
 def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.time) -> FastAPI:
+    config.require_pilot_data()  # the pilot never opens a stand or production data directory
     accounts = AdminStore(config.admin_db)
     accounts.init_schema()
     store = Store(config.miniapp_db)
@@ -248,11 +250,14 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         return datetime.fromtimestamp(now(), UTC).replace(microsecond=0)
 
     def quality(h: ForecastHistory | None) -> dict:
+        """Quality per model version; the 300-match gate is per version, never a sum across versions."""
         if h is None:
-            return {"settled": 0, "minimum": GATE_MIN_FORECASTS, "versions": {}}
+            return {"settled": 0, "minimum": GATE_MIN_FORECASTS, "currentVersion": MODEL_VERSION,
+                    "currentGateForecasts": 0, "versions": {}}
         evaluated = _finite(h.evaluate())
-        settled = sum(v["forecasts"] for v in evaluated.values())
-        return {"settled": settled, "minimum": GATE_MIN_FORECASTS, "versions": evaluated}
+        current = evaluated.get(MODEL_VERSION, {}).get("prospectiveGate", {}).get("forecasts", 0)
+        return {"settled": h.status_counts()["settled"], "minimum": GATE_MIN_FORECASTS,
+                "currentVersion": MODEL_VERSION, "currentGateForecasts": current, "versions": evaluated}
 
     # ---- overview ----------------------------------------------------------------------------
 
@@ -319,13 +324,15 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         if store.user_profile(user_id, now()) is None:
             return _err("not_found", 404, request)
         rid = request.state.request_id
-        prior = step_up_guard(admin, lambda: accounts.revoke_requested(admin, user_id, reason, key, code, now(), rid))
-        if prior is not None:
-            return JSONResponse(prior)
+        step = step_up_guard(admin, lambda: accounts.revoke_requested(admin, user_id, reason, key, code, now(), rid))
+        if step.get("replayed"):
+            return JSONResponse(step)
         t = now()
+        # Revocation is idempotent: completing a resumed request only revokes what is still active.
         revoked = store.revoke_user_sessions(user_id, t, BurnWindow.for_policy(t, 300, 30))
-        event = accounts.revoke_completed(admin, user_id, revoked, t, rid)
-        return JSONResponse({"eventId": event, "after": {"revoked": revoked}, "replayed": False})
+        event = accounts.revoke_completed(admin, user_id, revoked, t, step["requestId"])
+        return JSONResponse({"eventId": event, "after": {"revoked": revoked}, "replayed": False,
+                             "resumed": step["resumed"]})
 
     # ---- forecasts ---------------------------------------------------------------------------
 
@@ -474,6 +481,7 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
             for item in items:  # analysts: no end-user identifiers (§4.8)
                 if item["targetType"] == "user":
                     item["targetId"] = None
+                    item["reason"] = None  # free text may name the user
         return {"items": items}
 
     @app.get("/api/admin/credits")
