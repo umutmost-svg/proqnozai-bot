@@ -330,9 +330,8 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         t = now()
         # Revocation is idempotent: completing a resumed request only revokes what is still active.
         revoked = store.revoke_user_sessions(user_id, t, BurnWindow.for_policy(t, 300, 30))
-        event = accounts.revoke_completed(admin, user_id, revoked, t, step["requestId"])
-        return JSONResponse({"eventId": event, "after": {"revoked": revoked}, "replayed": False,
-                             "resumed": step["resumed"]})
+        result = accounts.revoke_completed(admin, user_id, revoked, t, step["requestId"])
+        return JSONResponse({**result, "resumed": step["resumed"]})
 
     # ---- forecasts ---------------------------------------------------------------------------
 
@@ -445,7 +444,7 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
 
     @app.get("/api/admin/admins")
     async def admins(request: Request) -> dict:
-        admin_of(request)
+        admin_of(request, "read_personal")  # e-mails of colleagues: not for analysts
         return {"items": accounts.admins()}
 
     @app.post("/api/admin/admins")
@@ -480,6 +479,7 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         if not can(request.state.admin.role, "read_personal"):
             for item in items:  # analysts: no end-user identifiers (§4.8); free-text reasons may name anyone
                 item["reason"] = None
+                item["adminId"] = item["adminEmail"] = None
                 if item["targetType"] in ("user", "admin"):
                     item["targetId"] = None
                     item["before"] = item["after"] = None  # e-mails, roles of people, revoked counts per user

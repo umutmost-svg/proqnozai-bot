@@ -247,7 +247,7 @@ function describe(e: AdminEvent): string {
   if (!e.after && !e.before) return e.action === 'auth.login' || !e.targetId ? '' : `#${e.targetId}`; // hidden for analysts
   const after = e.after ?? {};
   if (e.action === 'settings.update') return `${String(after.key)}: ${JSON.stringify(e.before?.value)} → ${JSON.stringify(after.value)}`;
-  if (e.action === 'admin.update') return `${e.targetId ? `#${e.targetId} ` : ''}${JSON.stringify(e.before)} → ${JSON.stringify(after)}`;
+  if (e.action === 'admin.update') return `${e.targetId ? `#${e.targetId} ` : ''}${String(e.before?.role)}/${String(e.before?.state)} → ${String(after.role)}/${String(after.state)}`;
   if (e.action === 'admin.invite' || e.action === 'admin.create_cli') return `${String(after.email)} (${String(after.role)})`;
   if (e.action === 'user.sessions_revoke') return `пользователь ${e.targetId}${after.revoked !== undefined ? `, отозвано: ${String(after.revoked)}` : ''}`;
   return e.targetId ? `#${e.targetId}` : '';
@@ -293,7 +293,7 @@ export function SettingsJournal() {
                 {data.items.map((e) => (
                   <tr key={e.id}>
                     <td>{utc(e.at)}</td>
-                    <td>{e.adminEmail ?? 'CLI'}</td>
+                    <td>{e.adminEmail ?? (e.action === 'admin.create_cli' ? 'CLI' : '—')}</td>
                     <td className="strong">{ACTIONS[e.action] ?? e.action}<span className="sub">{describe(e)}</span></td>
                     <td>{e.reason ?? '—'}</td>
                     <td><Status value={e.result} /></td>

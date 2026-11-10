@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS admin_events (
     kind            TEXT NOT NULL CHECK (kind IN ('done', 'requested', 'completed', 'denied', 'failed'))
 );
 CREATE INDEX IF NOT EXISTS admin_events_at ON admin_events(at);
+-- One completion per request: concurrent retries cannot both record a result.
+CREATE UNIQUE INDEX IF NOT EXISTS admin_events_one_completion ON admin_events(request_id) WHERE kind = 'completed';
 CREATE TRIGGER IF NOT EXISTS admin_events_no_update BEFORE UPDATE ON admin_events
 BEGIN SELECT RAISE(ABORT, 'admin events are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS admin_events_no_delete BEFORE DELETE ON admin_events
@@ -428,7 +430,7 @@ class AdminStore:
             raise ActionError("invalid_state")
         with self._write() as conn:
             if (prior := self._replayed(conn, key, actor.id, "admin.update", str(target_id), None, reason)) is not None:
-                if any(v is not None and prior["after"].get(k) != v for k, v in (("role", role), ("state", state))):
+                if (prior["after"] or {}).get("requested") != {"role": role, "state": state}:
                     raise ActionError("idempotency_key_reused", 409)
                 return prior
             self.step_up(conn, actor.id, code, now)
@@ -451,6 +453,7 @@ class AdminStore:
             if after["state"] != "active" or after["role"] != before["role"]:
                 conn.execute("UPDATE admin_sessions SET revoked_at = ? WHERE admin_id = ? AND revoked_at IS NULL",
                              (now, target_id))
+            after = {**after, "requested": {"role": role, "state": state}}  # binds the idempotency key to the input
             event = self._event(conn, now, actor.id, "admin.update", "admin", str(target_id), before, after, reason,
                                 key, "done")
         return {"eventId": event, "after": after, "replayed": False}
@@ -521,7 +524,13 @@ class AdminStore:
                         "requested", request_id)
         return {"requestId": request_id, "resumed": False}
 
-    def revoke_completed(self, actor: Admin, user_id: int, revoked: int, now: int, request_id: str) -> int:
+    def revoke_completed(self, actor: Admin, user_id: int, revoked: int, now: int, request_id: str) -> dict:
+        """Records the outcome once; a concurrent retry that finished first wins and its result is returned."""
         with self._write() as conn:
-            return self._event(conn, now, actor.id, "user.sessions_revoke", "user", str(user_id), None,
-                               {"revoked": revoked}, None, None, "completed", request_id)
+            done = conn.execute("SELECT id, after_json FROM admin_events WHERE kind = 'completed' AND request_id = ?",
+                                (request_id,)).fetchone()
+            if done is not None:
+                return {"eventId": done[0], "after": json.loads(done[1]), "replayed": True}
+            event = self._event(conn, now, actor.id, "user.sessions_revoke", "user", str(user_id), None,
+                                {"revoked": revoked}, None, None, "completed", request_id)
+        return {"eventId": event, "after": {"revoked": revoked}, "replayed": False}

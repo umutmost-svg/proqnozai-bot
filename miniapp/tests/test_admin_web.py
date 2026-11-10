@@ -453,3 +453,39 @@ def test_demo_activity_is_consistent():
         t = telemetry(days, datetime(2026, 11, 10, 0, 10, tzinfo=UTC))
         assert t["series"][-1]["dau"] <= t["wau"] <= t["mau"]
     assert len(telemetry(1, datetime(2026, 11, 10, 0, 10, tzinfo=UTC))["series"]) == 2
+
+
+def test_revocation_completion_is_recorded_once(env):
+    _, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    user = DEMO_ID_BASE + 1000
+    post(client, f"/api/admin/users/{user}/sessions/revoke", csrf,
+         {"reason": "support", "idempotencyKey": "rev-once-1", "code": code(secrets_["admin@x.test"], clock)})
+    done = [e for e in accounts.events(target=("user", str(user))) if e["result"] == "completed"]
+    rid = sqlite3.connect(accounts.path).execute(
+        "SELECT request_id FROM admin_events WHERE id = ?", (done[0]["id"],)).fetchone()[0]
+    admin = accounts_admin(accounts)
+    late = accounts.revoke_completed(admin, user, 0, int(clock()), rid)  # a concurrent retry finishing second
+    assert late["replayed"] is True and late["after"] == done[0]["after"]
+    with sqlite3.connect(accounts.path) as conn, pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO admin_events (at, action, kind, request_id) VALUES (1, 'x', 'completed', ?)", (rid,))
+
+
+def test_analyst_cannot_list_admins_or_see_actors(env):
+    _, clock, client, _, secrets_ = env
+    analyst = TestClient(client.app, base_url=ORIGIN)
+    login(analyst, clock, secrets_, "analyst@x.test")
+    assert analyst.get("/api/admin/admins").status_code == 403
+    assert "@x.test" not in analyst.get("/api/admin/events?days=7").text
+
+
+def test_admin_update_replay_must_match_the_whole_input(env):
+    _, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "owner@x.test")
+    target = next(a["id"] for a in accounts.admins() if a["email"] == "analyst@x.test")
+    body = {"role": "admin", "state": "disabled", "reason": "role change", "idempotencyKey": "upd-full-1"}
+    assert post(client, f"/api/admin/admins/{target}", csrf, {**body, "code": code(secrets_["owner@x.test"], clock)}).status_code == 200
+    clock.t += 30
+    partial = post(client, f"/api/admin/admins/{target}", csrf,
+                   {**body, "state": None, "code": code(secrets_["owner@x.test"], clock)})
+    assert partial.status_code == 409
