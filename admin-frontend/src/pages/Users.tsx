@@ -87,7 +87,7 @@ export function Users() {
         <Link to="/segments" className="small">+ сегмент</Link>
       </div>
       <div className="filters" style={{ marginBottom: 14 }}>
-        <input className="control" type="search" placeholder="Поиск по TG ID, username или имени" aria-label="Поиск"
+        <input className="control" type="search" placeholder="Поиск по TG ID, ID MB, username или имени" aria-label="Поиск"
           value={query} onChange={(e) => setQuery(e.target.value)} />
         <select className="control" aria-label="Язык" value={lang} onChange={(e) => update({ lang: e.target.value, page: '' })}>
           <option value="">Язык: все</option>
@@ -134,7 +134,7 @@ export function Users() {
                   <td>
                     <div className="who"><Avatar name={userName(u)} />
                       <div><Link to={`/users/${u.id}`} className="name" onClick={(e) => e.stopPropagation()}>{userName(u)}</Link>
-                        <div className="handle">{u.username ? `@${u.username}` : '—'}{u.blocked && <> · <span style={{ color: 'var(--bad)' }}>заблокирован</span></>}</div></div>
+                        <div className="handle">{u.username ? `@${u.username}` : '—'}{u.mbId && <> · MB <span className="mono">{u.mbId}</span></>}{u.blocked && <> · <span style={{ color: 'var(--bad)' }}>заблокирован</span></>}</div></div>
                     </div>
                   </td>
                   <td className="mono">{u.id}</td>

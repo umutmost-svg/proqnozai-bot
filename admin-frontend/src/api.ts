@@ -82,6 +82,8 @@ const MESSAGES: Record<string, string> = {
   not_a_draft: 'Изменять можно только черновик.',
   invalid_time: 'Время отправки: от текущего момента до 90 дней вперёд.',
   idempotency_key_reused: 'Повтор с другими данными. Откройте диалог заново.',
+  invalid_mb_id: 'ID MB: только латиница, цифры, «-» и «_», до 32 символов.',
+  mb_id_taken: 'Этот ID MB уже указан у другого пользователя.',
   invalid_amount: 'Сумма от 1 до 100 000.',
   invalid_message: 'Введите текст сообщения.',
   invalid_note: 'Введите текст заметки.',
@@ -172,7 +174,7 @@ export type Rules = Partial<{
   tag_has: string; tag_not: string; has_active_session: boolean; blocked: boolean;
 }>;
 export interface CrmUserRow extends UserRow {
-  tags: string[]; credits: { balance: number; unlimitedUntil: number | null }; blocked: boolean;
+  tags: string[]; credits: { balance: number; unlimitedUntil: number | null }; blocked: boolean; mbId: string | null;
 }
 export interface Segment { id: number; name: string; rules: Rules; updatedAt: number; size?: number }
 export interface TagCount { tag: string; users: number }
@@ -194,6 +196,7 @@ export interface CrmProfile extends UserProfile {
   ledger: LedgerRow[];
   credits: { balance: number; unlimitedUntil: number | null; enabled: false; unlimited: boolean };
   blocked: { reason: string; at: number } | null;
+  mbId: string | null;
   timeline: TimelineItem[];
 }
 export interface Broadcast {

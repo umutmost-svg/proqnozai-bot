@@ -27,6 +27,8 @@ function UserCard({ id }: { id: string }) {
   const [toast, setToast] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [note, setNote] = useState('');
+  const [mbEdit, setMbEdit] = useState<string | null>(null);
+  const [mbError, setMbError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
@@ -52,7 +54,7 @@ function UserCard({ id }: { id: string }) {
                 {data.blocked ? <Tag tone="danger">Заблокирован</Tag> : active > 0 ? <Tag tone="success">Активна сессия</Tag> : null}
               </h2>
               <div className="small muted" style={{ marginTop: 6 }}>
-                {data.username ? `@${data.username}` : 'без username'} · Telegram ID <span className="mono">{data.id}</span> · язык {data.lang} · с нами с {utcDay(data.createdAt)}
+                {data.username ? `@${data.username}` : 'без username'} · Telegram ID <span className="mono">{data.id}</span> · ID MB {data.mbId ? <span className="mono">{data.mbId}</span> : <span className="muted">не указан</span>} · язык {data.lang} · с нами с {utcDay(data.createdAt)}
               </div>
             </div>
             <div className="row">
@@ -140,6 +142,32 @@ function UserCard({ id }: { id: string }) {
                   <button type="button" className="btn" disabled={!manage || busy || !note.trim()}
                     onClick={() => void act(() => api(`/api/admin/users/${data.id}/notes`, { method: 'POST', body: { body: note } }), 'Заметка добавлена', () => setNote(''))}>+ заметка</button>
                 </div>
+              </Card>
+              <Card title="ID MB">
+                {mbEdit === null ? (
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    {data.mbId ? <b className="mono">{data.mbId}</b> : <span className="muted">Не указан</span>}
+                    <button type="button" className="btn" disabled={!manage} onClick={() => { setMbError(null); setMbEdit(data.mbId ?? ''); }}>{data.mbId ? 'Изменить' : 'Добавить'}</button>
+                  </div>
+                ) : (
+                  <form onSubmit={(e) => {
+                    e.preventDefault();
+                    const v = mbEdit.trim();
+                    setBusy(true); setMbError(null);
+                    api(`/api/admin/users/${data.id}/mb-id`, { method: 'POST', body: { mbId: v } })
+                      .then(() => { setMbEdit(null); setToast(v ? 'ID MB сохранён' : 'ID MB удалён'); reload(); })
+                      .catch((err) => setMbError(errorText(err))).finally(() => setBusy(false));
+                  }}>
+                    <input className="control mono" aria-label="ID MB" placeholder="Например, 123456789" maxLength={32} autoFocus
+                      value={mbEdit} onChange={(e) => setMbEdit(e.target.value)} />
+                    {mbError && <div className="form-error" role="alert">{mbError}</div>}
+                    <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
+                      <button type="button" className="btn" onClick={() => setMbEdit(null)}>Отмена</button>
+                      <button type="submit" className="btn primary" disabled={busy}>Сохранить</button>
+                    </div>
+                    <p className="small muted" style={{ marginBottom: 0 }}>Пустое значение удалит ID. В журнал попадает только факт изменения.</p>
+                  </form>
+                )}
               </Card>
               <Card title="Доступ и безопасность">
                 <div className="kv-row"><span>Активных сессий</span><b>{active}</b></div>

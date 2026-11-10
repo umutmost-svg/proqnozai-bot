@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from collections.abc import Iterable
 from typing import Any
@@ -99,6 +100,13 @@ CREATE TRIGGER IF NOT EXISTS credit_ledger_no_update BEFORE UPDATE ON credit_led
 BEGIN SELECT RAISE(ABORT, 'the credit ledger is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS credit_ledger_no_delete BEFORE DELETE ON credit_ledger
 BEGIN SELECT RAISE(ABORT, 'the credit ledger is append-only'); END;
+-- The user's account id at the partner bookmaker (MB), entered by an admin; one id belongs to one user.
+CREATE TABLE IF NOT EXISTS crm_external_ids (
+    user_id    INTEGER PRIMARY KEY,
+    mb_id      TEXT NOT NULL UNIQUE,
+    updated_at INTEGER NOT NULL,
+    admin_id   INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS crm_blocks (
     user_id    INTEGER PRIMARY KEY,
     reason     TEXT NOT NULL,
@@ -110,6 +118,7 @@ CREATE TABLE IF NOT EXISTS crm_blocks (
 LEDGER_REASON = ("COALESCE(NULLIF(l.reason, ''), (SELECT r.reason FROM admin_event_reasons r "
                  "WHERE r.event_id = l.event_id), '')")
 MAX_TAG = 32
+_MB_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 MAX_TEXT = 4000
 MAX_GROUP = 5000
 
@@ -188,6 +197,18 @@ class CrmStore:
                 out.setdefault(uid, []).append(tag)
         return out
 
+    def mb_ids(self, user_ids: Iterable[int] | None = None) -> dict[int, str]:
+        with self.accounts._connect() as conn:
+            rows = conn.execute("SELECT user_id, mb_id FROM crm_external_ids").fetchall()
+        wanted = set(user_ids) if user_ids is not None else None
+        return {uid: mb for uid, mb in rows if wanted is None or uid in wanted}
+
+    def user_by_mb(self, mb_id: str) -> int | None:
+        with self.accounts._connect() as conn:
+            row = conn.execute("SELECT user_id FROM crm_external_ids WHERE mb_id = ? COLLATE NOCASE",
+                               (mb_id.strip(),)).fetchone()
+        return int(row[0]) if row else None
+
     def tag_events(self, user_id: int) -> list[dict]:
         with self.accounts._connect() as conn:
             return [{"tag": r[0], "action": r[1], "at": r[2], "by": r[3]} for r in conn.execute(
@@ -237,6 +258,7 @@ class CrmStore:
                         "reason": r[5], "at": r[6], "by": r[7]} for r in ledger],
             "credits": {**account, "enabled": False},
             "blocked": {"reason": block[0], "at": block[1]} if block else None,
+            "mbId": self.mb_ids([user_id]).get(user_id),
         }
 
     def segments(self) -> list[dict]:
@@ -304,6 +326,31 @@ class CrmStore:
                 self.accounts._event(conn, now, actor.id, "user.tag_remove", "user", str(user_id), None,
                                      {"tagEventId": ev}, None, None, "done")
         return {"removed": bool(removed)}
+
+    def set_mb_id(self, actor: Admin, user_id: int, value: object, now: int) -> dict:
+        """Sets (or clears, with an empty value) the user's MB account id. The journal records only that it
+        changed, never the id itself (it identifies a person at a third party)."""
+        if not isinstance(value, str):
+            raise ActionError("invalid_mb_id")
+        mb_id = value.strip()
+        if mb_id and not _MB_ID.match(mb_id):
+            raise ActionError("invalid_mb_id")
+        with self.accounts._write() as conn:
+            self.accounts._require_actor(conn, actor.id, "manage_users")
+            had = conn.execute("SELECT 1 FROM crm_external_ids WHERE user_id = ?", (user_id,)).fetchone() is not None
+            if mb_id:
+                owner = conn.execute("SELECT user_id FROM crm_external_ids WHERE mb_id = ? COLLATE NOCASE",
+                                     (mb_id,)).fetchone()
+                if owner is not None and owner[0] != user_id:
+                    raise ActionError("mb_id_taken", 409)
+                conn.execute("INSERT INTO crm_external_ids (user_id, mb_id, updated_at, admin_id) VALUES (?, ?, ?, ?) "
+                             "ON CONFLICT(user_id) DO UPDATE SET mb_id = excluded.mb_id, updated_at = excluded.updated_at, "
+                             "admin_id = excluded.admin_id", (user_id, mb_id, now, actor.id))
+            else:
+                conn.execute("DELETE FROM crm_external_ids WHERE user_id = ?", (user_id,))
+            self.accounts._event(conn, now, actor.id, "user.mb_id", "user", str(user_id),
+                                 {"set": had}, {"set": bool(mb_id)}, None, None, "done")
+        return {"mbId": mb_id or None}
 
     def add_note(self, actor: Admin, user_id: int, body: str, now: int) -> dict:
         body = _text(body, "note", 2000)

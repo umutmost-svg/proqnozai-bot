@@ -312,3 +312,20 @@ def test_replay_still_works_after_the_reason_text_is_erased(env):
     assert replay.status_code == 200 and replay.json()["replayed"] is True
     other = post(client, "/api/admin/credits/change", csrf, {**body, "reason": "другая", "code": ""})
     assert other.status_code == 409
+
+
+def test_mb_id_set_search_unique_and_kept_out_of_the_journal(env):
+    _, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    assert post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "  123456789 "}).json() == {"mbId": "123456789"}
+    assert client.get(f"/api/admin/users/{U1}").json()["mbId"] == "123456789"
+    found = client.get("/api/admin/users?q=123456789").json()
+    assert [u["id"] for u in found["items"]] == [U1] and found["items"][0]["mbId"] == "123456789"
+    assert post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "123456789"}).status_code == 409
+    assert post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "bad id!"}).json()["error"] == "invalid_mb_id"
+    assert "123456789" not in " ".join(str(e) for e in accounts.events())
+    assert post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": ""}).json() == {"mbId": None}
+    assert client.get(f"/api/admin/users/{U1}").json()["mbId"] is None
+    analyst = TestClient(client.app, base_url=ORIGIN)
+    login(analyst, clock, secrets_, "analyst@x.test")
+    assert post(analyst, f"/api/admin/users/{U1}/mb-id", analyst.get("/api/admin/auth/me").json()["csrf"], {"mbId": "1"}).status_code == 403

@@ -54,7 +54,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         tags = crm.tags_by_user(ids)
         credits = crm.credits_of(ids, ctx.now())
         blocked = crm.blocked()
+        mb = crm.mb_ids(ids)
         for r in rows:
+            r["mbId"] = mb.get(r["id"])
             r["tags"] = tags.get(r["id"], [])
             r["credits"] = credits.get(r["id"], {"balance": 0, "unlimitedUntil": None})
             r["blocked"] = r["id"] in blocked
@@ -97,7 +99,12 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         ctx.admin_of(request, "read_personal")
         q = request.query_params
         size, offset = ctx.page(request)
-        rows = audience(rules_from_query(request), q.get("q", "")[:64])
+        query = q.get("q", "")[:64]
+        rules = rules_from_query(request)
+        rows = audience(rules, query)
+        by_mb = crm.user_by_mb(query) if query.strip() else None
+        if by_mb is not None and all(r["id"] != by_mb for r in rows):
+            rows += [r for r in audience(rules) if r["id"] == by_mb]  # the search also finds an MB id
         key = _USER_SORT.get(q.get("sort", "created"), "createdAt")
         rows.sort(key=lambda r: (r[key] is None, r[key] or 0) if key != "username"
                   else (r[key] is None, (r[key] or "").casefold()), reverse=q.get("order", "desc") != "asc")
@@ -137,6 +144,10 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
             timeline.append({"at": te["at"], "kind": "admin", "by": te["by"], "detail": None,
                              "title": f"{'Добавлен' if te['action'] == 'add' else 'Снят'} тег {te['tag']}"})
         for e in events:
+            if e["action"] == "user.mb_id":
+                timeline.append({"at": e["at"], "kind": "admin", "by": e["adminEmail"], "detail": None,
+                                 "title": "Указан ID MB" if (e["after"] or {}).get("set") else "ID MB удалён"})
+                continue
             if e["action"] in ("user.block", "user.sessions_revoke"):
                 if e["action"] == "user.sessions_revoke" and e["result"] != "completed":
                     continue
@@ -177,6 +188,12 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     async def remove_tag(user_id: int, request: Request) -> dict:
         admin = ctx.admin_of(request, "manage_users")
         return crm.remove_tag(admin, user_id, str((await ctx.body(request)).get("tag") or ""), ctx.now())
+
+    @app.post("/api/admin/users/{user_id}/mb-id")
+    async def set_mb_id(user_id: int, request: Request) -> dict:
+        admin = ctx.admin_of(request, "manage_users")
+        exists(user_id)
+        return crm.set_mb_id(admin, user_id, (await ctx.body(request)).get("mbId"), ctx.now())
 
     @app.post("/api/admin/users/{user_id}/notes")
     async def add_note(user_id: int, request: Request) -> dict:
