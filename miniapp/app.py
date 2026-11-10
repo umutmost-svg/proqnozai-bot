@@ -159,6 +159,9 @@ def _error_site(exc: BaseException) -> str:
     return f"{tb.tb_frame.f_code.co_filename.rsplit('/', 1)[-1]}:{tb.tb_lineno}"
 
 
+SVG_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
+
+
 def create_app(
     settings: Settings,
     *,
@@ -222,7 +225,9 @@ def create_app(
             response.headers["Cache-Control"] = _CREST_CACHE
         else:
             response.headers.update(_NO_STORE)
-        response.headers[csp_header] = csp_value
+        # A crest SVG opened directly is a document: nothing in it may run or load (style attributes only).
+        svg = response.headers.get("content-type", "").startswith("image/svg+xml")
+        response.headers[csp_header] = SVG_CSP if svg else csp_value
         if production:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         response.headers[REQUEST_ID_HEADER] = request_id

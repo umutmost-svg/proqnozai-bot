@@ -583,7 +583,9 @@ class FootballDataAdapter:
             if not isinstance(code, str):
                 raise UpstreamError("bad_response")  # a truncated entry could hide a served competition
             if code in self._allowed:
-                source = crest_source(item.get("emblem"))
+                # Many competitions have no emblem of their own: their country's flag stands in (same host).
+                area = item.get("area")
+                source = crest_source(item.get("emblem")) or crest_source(area.get("flag") if isinstance(area, dict) else None)
                 if source is not None:
                     found[code] = source
         # Applied only after the whole list validated. The list is the authority: a served

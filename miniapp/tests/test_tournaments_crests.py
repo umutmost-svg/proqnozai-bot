@@ -96,7 +96,6 @@ def test_normalized_teams_carry_the_short_name_and_keep_the_full_one() -> None:
     "https://evil.com/crests.football-data.org/57.png",
     "https://crests.football-data.org:8443/57.png",
     "https://user@crests.football-data.org/57.png",
-    "https://crests.football-data.org/57.svg",         # SVG could carry script on our origin
     "https://crests.football-data.org/57.png?x=1",
     "https://crests.football-data.org/57.png#a",
     "https://crests.football-data.org/a/../57.png",
@@ -937,3 +936,68 @@ def test_cup_without_a_table_is_a_cached_empty_table_and_huge_days_are_rejected(
         raise AssertionError("a possibly truncated whole day must not pass")
     except UpstreamError as exc:
         assert exc.code == "bad_response"
+
+
+FLAG = (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5 3"><desc>Flag</desc>'
+        b'<rect width="5" height="3" fill="#000"/><rect width="5" height="2" y="1" fill="#D00"/></svg>')
+
+
+def test_svg_crests_of_national_teams_are_accepted_when_plain():
+    from miniapp.sports.crests import crest_source, is_crest, is_safe_svg, media_type
+
+    assert crest_source("https://crests.football-data.org/759.svg") == "https://crests.football-data.org/759.svg"
+    assert is_safe_svg(FLAG) and is_crest(FLAG) and media_type(FLAG) == "image/svg+xml"
+    gradient = (b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">'
+                b'<defs><linearGradient id="g"><stop offset="0" stop-color="#fff"/></linearGradient></defs>'
+                b'<rect width="1" height="1" fill="url(#g)" style="stroke:#000"/><use xlink:href="#g"/>'
+                b'<metadata><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/></metadata></svg>')
+    assert is_safe_svg(gradient)
+
+
+@pytest.mark.parametrize("body", [
+    b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><foreignObject/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="https://e.vil/x.svg#a"/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><image href="https://e.vil/x.png"/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(https://e.vil/x)"/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><style>@import url(https://e.vil/x.css);</style></svg>',
+    b'<!DOCTYPE svg [<!ENTITY x "y">]><svg xmlns="http://www.w3.org/2000/svg">&x;</svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><rect/></a></svg>',
+    b'<html><body/></html>',
+    b'not xml at all',
+])
+def test_unsafe_or_foreign_svg_is_refused(body):
+    from miniapp.sports.crests import is_crest, is_safe_svg
+
+    assert not is_safe_svg(body) and not is_crest(body)
+
+
+def test_svg_crest_is_served_as_svg_with_a_no_script_policy(api, clock: FakeClock) -> None:
+    from miniapp.app import SVG_CSP
+
+    client, t, images = api
+    images.body = FLAG
+    signed_in(client, clock)
+    t.script = [t.ok(season_payload(with_crests(match(1), home="https://crests.football-data.org/57.svg")))]
+    client.get("/api/sports/football/tournaments/fd:PL/calendar")
+    r = client.get("/api/crests/team/57")
+    assert r.status_code == 200 and r.content == FLAG
+    assert r.headers["content-type"].startswith("image/svg+xml")
+    assert r.headers["content-security-policy"] == SVG_CSP and r.headers["x-content-type-options"] == "nosniff"
+    assert "script" not in SVG_CSP
+
+
+def test_competition_without_an_emblem_shows_its_country_flag():
+    from miniapp.sports.football_data import FootballDataAdapter, all_codes
+
+    class Client:
+        async def get_json(self, path, params=None):
+            return {"competitions": [
+                {"code": "TSL", "emblem": None, "area": {"flag": "https://crests.football-data.org/803.svg"}},
+                {"code": "PL", "emblem": "https://crests.football-data.org/PL.png", "area": {"flag": None}},
+                {"code": "CSL", "emblem": None, "area": {"flag": None}},
+            ]}, None
+
+    found, _ = asyncio.run(FootballDataAdapter(Client(), all_codes(), lambda: 1.8e9).competition_emblems())
+    assert found["TSL"].endswith("/803.svg") and found["PL"].endswith("/PL.png") and "CSL" not in found

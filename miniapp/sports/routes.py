@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from .client import UpstreamError
-from .crests import KINDS
+from .crests import KINDS, media_type
 from .models import SPORTS
 from .search import MAX_QUERY, MIN_QUERY, normalize
 from .service import RequestError, SportsService, parse_instant
@@ -229,8 +229,9 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
         body = await service.crests.image(kind, ident)
         if body is None:
             return _error(404, "not_found")
-        # The bytes were checked to be a PNG (never SVG); caching and nosniff come from the app middleware.
-        return Response(body, media_type="image/png")
+        # The bytes were checked: a PNG, or an SVG of plain vector graphics (crests.is_safe_svg). An SVG gets a
+        # no-script CSP from the app middleware; caching and nosniff come from there too.
+        return Response(body, media_type=media_type(body))
 
     @app.api_route("/api/crests/{rest:path}", methods=["GET", "HEAD"])
     async def crest_other(rest: str) -> Response:

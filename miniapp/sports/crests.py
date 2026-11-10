@@ -22,13 +22,14 @@ import urllib.request
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+from xml.etree import ElementTree
 
 from .client import _OPENER, _read_with_deadline
 
 logger = logging.getLogger("miniapp.sports")
 
 ALLOWED_HOST = "crests.football-data.org"
-_PATH = re.compile(r"^/[A-Za-z0-9_-]{1,40}\.png$")
+_PATH = re.compile(r"^/[A-Za-z0-9_-]{1,40}\.(png|svg)$")
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 MAX_IMAGE_BYTES = 300 * 1024
 FETCH_TIMEOUT_S = 5.0
@@ -65,20 +66,80 @@ def is_png(body: bytes) -> bool:
     return body.startswith(PNG_MAGIC) and len(body) <= MAX_IMAGE_BYTES
 
 
+# SVG crests (national teams on football-data.org are SVG only). Shown only through <img> (no script runs
+# there) and served with a no-script CSP; still, only plain vector graphics pass: no DOCTYPE/entities, no
+# script, no event handlers, no foreignObject/image, no external references.
+SVG_NS = "http://www.w3.org/2000/svg"
+_SVG_ELEMENTS = frozenset({
+    "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "defs", "linearGradient",
+    "radialGradient", "stop", "clipPath", "mask", "use", "title", "desc", "symbol", "pattern", "style", "text",
+    "tspan", "metadata",
+})
+_URL_REF = re.compile(r"url\(\s*['\"]?([^)'\"]*)", re.IGNORECASE)
+
+
+def _safe_value(value: str) -> bool:
+    low = value.lower()
+    if "javascript:" in low or "@import" in low or "expression(" in low:
+        return False
+    return all(ref.strip().startswith("#") for ref in _URL_REF.findall(value))
+
+
+def is_safe_svg(body: bytes) -> bool:
+    if len(body) > MAX_IMAGE_BYTES:
+        return False
+    low = body.lower()
+    if b"<!doctype" in low or b"<!entity" in low or b"<?xml-stylesheet" in low:
+        return False
+    try:
+        root = ElementTree.fromstring(body)
+    except (ElementTree.ParseError, ValueError):
+        return False
+    if root.tag != f"{{{SVG_NS}}}svg":
+        return False
+
+    def walk(node: ElementTree.Element, in_metadata: bool) -> bool:
+        ns, _, local = node.tag[1:].partition("}") if node.tag.startswith("{") else ("", "", node.tag)
+        if not in_metadata and (ns != SVG_NS or local not in _SVG_ELEMENTS):
+            return False  # editor metadata (RDF, Inkscape) is tolerated only inside <metadata>
+        for name, value in node.attrib.items():
+            attr = name.rpartition("}")[2].lower()
+            if attr.startswith("on") or not _safe_value(value):
+                return False
+            if attr == "href" and not value.strip().startswith("#"):
+                return False
+        if local == "style" and not _safe_value(node.text or ""):
+            return False
+        return all(walk(child, in_metadata or local == "metadata") for child in node)
+
+    return walk(root, False)
+
+
+def is_crest(body: bytes) -> bool:
+    return is_png(body) or (not body.startswith(PNG_MAGIC) and is_safe_svg(body))
+
+
+def media_type(body: bytes) -> str:
+    return "image/png" if body.startswith(PNG_MAGIC) else "image/svg+xml"
+
+
 def _blocking_fetch(url: str, timeout_s: float) -> bytes | None:
     deadline = time.monotonic() + timeout_s
     # No credentials of any kind; redirects are refused by the shared opener.
-    request = urllib.request.Request(url, headers={"Accept": "image/png", "User-Agent": "ProqnozAI-MiniApp"})
+    svg = url.endswith(".svg")
+    expected = "image/svg+xml" if svg else "image/png"
+    request = urllib.request.Request(url, headers={"Accept": expected, "User-Agent": "ProqnozAI-MiniApp"})
     try:
         with _OPENER.open(request, timeout=timeout_s) as response:
             if response.status != 200:
                 return None
-            if (response.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "image/png":
+            if (response.headers.get("Content-Type") or "").split(";")[0].strip().lower() != expected:
                 return None
             body = _read_with_deadline(response, deadline, MAX_IMAGE_BYTES + 1)
     except (urllib.error.URLError, OSError, TimeoutError, ValueError):
         return None
-    return body if is_png(body) else None
+    ok = (not body.startswith(PNG_MAGIC) and is_safe_svg(body)) if svg else is_png(body)
+    return body if ok else None
 
 
 async def urllib_crest_fetch(url: str, timeout_s: float) -> bytes | None:
@@ -216,7 +277,7 @@ class CrestStore:
                 body = await self._fetch(url, FETCH_TIMEOUT_S)
             finally:
                 self._gate.release()
-            body = body if body is not None and is_png(body) else None
+            body = body if body is not None and is_crest(body) else None
             if self._urls.get(key) != url:
                 body = None  # the provider moved this crest meanwhile: neither its picture nor its failure counts
             elif body is None:
