@@ -74,7 +74,15 @@ _SVG_ELEMENTS = frozenset({
     "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "defs", "linearGradient",
     "radialGradient", "stop", "clipPath", "mask", "use", "title", "desc", "symbol", "pattern", "style", "text",
     "tspan", "metadata",
+    # Filter primitives draw only from the shape they filter (feImage, which loads a picture, is not here).
+    "filter", "feColorMatrix", "feGaussianBlur", "feOffset", "feFlood", "feBlend", "feComposite", "feMerge",
+    "feMergeNode", "feMorphology", "feComponentTransfer", "feFuncR", "feFuncG", "feFuncB", "feFuncA",
+    "image",  # only with an embedded PNG/JPEG (data: URI), see _EMBEDDED_RASTER
 })
+# Editor data (Inkscape/Sodipodi) may also sit outside <metadata> (e.g. sodipodi:namedview): a browser
+# ignores these elements; inside them only more editor data may follow.
+_EDITOR_NS = frozenset({"http://www.inkscape.org/namespaces/inkscape", "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"})
+_EMBEDDED_RASTER = re.compile(r"^data:image/(png|jpeg);base64,[A-Za-z0-9+/=\s]+$")
 _METADATA_NS = frozenset({
     "http://www.w3.org/1999/02/22-rdf-syntax-ns#", "http://purl.org/dc/elements/1.1/", "http://purl.org/dc/terms/",
     "http://creativecommons.org/ns#", "http://web.resource.org/cc/", "http://www.inkscape.org/namespaces/inkscape",
@@ -117,7 +125,8 @@ def is_safe_svg(body: bytes) -> bool:
         if depth > MAX_SVG_DEPTH:
             return False  # a crest is never this deep; refuse instead of exhausting the recursion
         ns, _, local = node.tag[1:].partition("}") if node.tag.startswith("{") else ("", "", node.tag)
-        if in_metadata:
+        editor = not in_metadata and ns in _EDITOR_NS
+        if in_metadata or editor:
             if ns not in _METADATA_NS:
                 return False  # inside <metadata> only editor data (RDF, Dublin Core, Inkscape) — never SVG/HTML
         elif ns != SVG_NS or local not in _SVG_ELEMENTS:
@@ -126,11 +135,15 @@ def is_safe_svg(body: bytes) -> bool:
             attr = name.rpartition("}")[2].lower()
             if attr.startswith("on") or attr == "base" or not _safe_value(value):
                 return False  # xml:base would resolve even "#x" references against an external document
-            if attr == "href" and not value.strip().startswith("#"):
+            if attr == "href" and not value.strip().startswith("#") and not (
+                    local == "image" and ns == SVG_NS and _EMBEDDED_RASTER.match(value.strip())):
                 return False
+        if local == "image" and ns == SVG_NS and not any(
+                n.rpartition("}")[2].lower() == "href" for n in node.attrib):
+            return False  # an <image> always names its embedded picture
         if local == "style" and not _safe_value(node.text or ""):
             return False
-        return all(walk(child, in_metadata or local == "metadata", depth + 1) for child in node)
+        return all(walk(child, in_metadata or editor or local == "metadata", depth + 1) for child in node)
 
     return walk(root, False)
 
@@ -181,7 +194,7 @@ class CrestStore:
                  failure_ttl_s: float = 3600.0) -> None:
         self._fetch = fetch
         self._clock = clock
-        self._urls: OrderedDict[str, str] = OrderedDict()
+        self._urls: OrderedDict[str, tuple[str, ...]] = OrderedDict()  # key -> sources, tried in order
         self._images: OrderedDict[str, bytes] = OrderedDict()
         self._image_bytes = 0
         self._failed: dict[str, float] = {}
@@ -200,13 +213,16 @@ class CrestStore:
     def key(kind: str, ident: str) -> str:
         return f"{kind}:{ident}"
 
-    def learn(self, kind: str, ident: str, url: object) -> bool:
+    def learn(self, kind: str, ident: str, url: object, *, fallback: object = None) -> bool:
+        """`fallback` (e.g. the country's flag) is fetched only when the first picture is unusable."""
         source = crest_source(url)
         if source is None:
             return False
+        extra = crest_source(fallback)
+        sources = (source,) if extra is None or extra == source else (source, extra)
         key = self.key(kind, ident)
-        if self._urls.get(key) != source:
-            self._urls[key] = source
+        if self._urls.get(key) != sources:
+            self._urls[key] = sources
             self._drop_image(key)
             self._failed.pop(key, None)
         self._urls.move_to_end(key)
@@ -294,10 +310,14 @@ class CrestStore:
                 future.set_result(None)
                 return None  # busy, not remembered as a failure
             try:
-                body = await self._fetch(url, FETCH_TIMEOUT_S)
+                body = None
+                for source in url:
+                    body = await self._fetch(source, FETCH_TIMEOUT_S)
+                    body = body if body is not None and is_crest(body) else None
+                    if body is not None:
+                        break
             finally:
                 self._gate.release()
-            body = body if body is not None and is_crest(body) else None
             if self._urls.get(key) != url:
                 body = None  # the provider moved this crest meanwhile: neither its picture nor its failure counts
             elif body is None:
