@@ -50,3 +50,9 @@ miniapp/.venv/
 **/*.bak
 **/*.backup
 **/backups/
+
+# Admin panel frontend (local pilot)
+admin-frontend/node_modules/
+admin-frontend/dist/
+admin-frontend/test-results/
+admin-frontend/playwright-report/
