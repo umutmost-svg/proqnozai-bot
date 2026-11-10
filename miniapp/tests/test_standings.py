@@ -220,3 +220,151 @@ def test_an_unavailable_previous_season_is_not_asked_again_for_hours(clock: Fake
     t.script = [t.ok(season_payload(match(2, "FINISHED", full=(1, 0)))), HttpResponse(404, {}, b"")]
     run(service.model_history("fd:PL"))
     assert any("season=2025" in url for url, _ in t.calls[2:])
+
+
+# --- AI evidence latency: the previous season loads alongside a cold calendar, and is warmed ---------
+
+class RoutedTransport:
+    """Answers by URL (not by call order), each after an optional gate: shows real overlap."""
+
+    def __init__(self, routes: dict) -> None:
+        import asyncio
+        self.routes = routes
+        self.calls: list[str] = []
+        self.started: dict[str, asyncio.Event] = {}
+        self.gates: dict[str, asyncio.Event] = {}
+
+    async def __call__(self, url: str, headers, timeout_s: float) -> HttpResponse:
+        import asyncio
+        self.calls.append(url)
+        key = next(k for k in self.routes if url.endswith(k))
+        self.started.setdefault(key, asyncio.Event()).set()
+        if key in self.gates:
+            await self.gates[key].wait()
+        answer = self.routes[key]
+        return answer if isinstance(answer, HttpResponse) else HttpResponse(200, {}, __import__("json").dumps(answer).encode())
+
+
+def _hinted(service, start: str = "2026-08-14") -> None:
+    service.football._learn_season({"competition": {"code": "PL"}, "season": {"startDate": start}})
+
+
+def test_a_cold_calendar_and_the_previous_season_load_together_with_a_season_hint(clock: FakeClock) -> None:
+    import asyncio
+
+    current = season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))
+    old = season_payload(match(1, "FINISHED", utc="2026-01-10T15:00:00Z", full=(3, 1)), season=PAST)
+    t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": old})
+
+    async def scenario():
+        service = make_service(t, clock)
+        _hinted(service)
+        t.gates["/competitions/PL/matches"] = asyncio.Event()
+        task = asyncio.ensure_future(service.model_history("fd:PL"))
+        # The previous season is asked while the calendar is still loading.
+        await asyncio.wait_for(t.started.setdefault("/competitions/PL/matches?season=2025", asyncio.Event()).wait(), 1)
+        t.gates["/competitions/PL/matches"].set()
+        return await task
+
+    history = run(scenario())
+    assert [e.id for e in history.events] == ["fd:1", "fd:2"] and history.previous_season
+    assert len(t.calls) == 2
+
+
+def test_a_wrong_season_hint_never_feeds_the_model_the_wrong_season(clock: FakeClock) -> None:
+    current = season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))
+    old = season_payload(match(1, "FINISHED", utc="2026-01-10T15:00:00Z", full=(3, 1)), season=PAST)
+    wrong = season_payload(match(9, "FINISHED", utc="2025-01-10T15:00:00Z", full=(0, 0)),
+                           season={"id": 7, "startDate": "2024-08-15", "endDate": "2025-05-24", "currentMatchday": 38})
+    t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": old,
+                         "/competitions/PL/matches?season=2024": wrong})
+    service = make_service(t, clock)
+    _hinted(service, "2025-08-15")  # stale hint: points at 2024
+    history = run(service.model_history("fd:PL"))
+    assert [e.id for e in history.events] == ["fd:1", "fd:2"] and history.previous_season  # 2025, the calendar's
+    assert any(u.endswith("season=2025") for u in t.calls)
+
+
+def test_a_warm_calendar_makes_no_speculative_season_request(clock: FakeClock) -> None:
+    t = FakeTransport()
+    service = make_service(t, clock)
+    current = match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0))
+    t.script = [t.ok(season_payload(current)), HttpResponse(404, {}, b"")]
+    run(service.model_history("fd:PL"))
+    _hinted(service, "2027-08-14")  # a newer hint, but the calendar is cached: nothing speculative
+    run(service.model_history("fd:PL"))
+    assert len(t.calls) == 2
+
+
+def test_a_cancelled_analysis_leaves_the_season_loads_running_for_the_next_one(clock: FakeClock) -> None:
+    import asyncio
+
+    current = season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))
+    old = season_payload(match(1, "FINISHED", utc="2026-01-10T15:00:00Z", full=(3, 1)), season=PAST)
+    t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": old})
+
+    async def scenario():
+        service = make_service(t, clock)
+        _hinted(service)
+        gate = t.gates["/competitions/PL/matches"] = asyncio.Event()
+        with pytest.raises(TimeoutError):  # the evidence deadline ends this waiter only
+            await asyncio.wait_for(service.model_history("fd:PL"), 0.05)
+        gate.set()
+        history = await service.model_history("fd:PL")
+        return history, len(t.calls)
+
+    history, calls = run(scenario())
+    assert history.previous_season and calls == 2  # finished by the shielded loads, nothing asked twice
+
+
+def test_the_search_warm_up_also_warms_the_models_previous_season(clock: FakeClock) -> None:
+    current = season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))
+    old = season_payload(match(1, "FINISHED", utc="2026-01-10T15:00:00Z", full=(3, 1)), season=PAST)
+    t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": old})
+    service = make_service(t, clock, per_minute=100, per_day=10000)
+    service.search_index.warm_past_seasons = True
+    run(service._search_warm_load("fd:PL"))
+    assert [u.rsplit("/v4", 1)[1] for u in t.calls] == ["/competitions/PL/matches", "/competitions/PL/matches?season=2025"]
+    history = run(service.model_history("fd:PL"))  # the AI's evidence: no request at all now
+    assert history.previous_season and len(t.calls) == 2
+
+
+def test_the_warm_up_leaves_seasons_alone_without_the_budget_and_never_marks_them_missing(clock: FakeClock) -> None:
+    current = season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))
+    t = RoutedTransport({"/competitions/PL/matches": current})
+    service = make_service(t, clock, per_minute=100, per_day=10000)
+    service.search_index.warm_past_seasons = False  # small plan: calendars only
+    run(service._search_warm_load("fd:PL"))
+    assert len(t.calls) == 1 and not service._past_retry_at
+
+
+def test_a_low_priority_refusal_of_a_season_is_not_remembered_as_missing(clock: FakeClock) -> None:
+    from miniapp.sports.client import LOW_PRIORITY_DAY_SHARE
+
+    current = season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))
+    old = season_payload(match(1, "FINISHED", utc="2026-01-10T15:00:00Z", full=(3, 1)), season=PAST)
+    t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": old})
+    service = make_service(t, clock, per_minute=100, per_day=10)
+    run(service.calendar("football", "fd:PL"))
+    token = LOW_PRIORITY_DAY_SHARE.set(0.05)  # the background share of the day is used up
+    try:
+        with pytest.raises(UpstreamError):
+            run(service._past_season("fd:PL", 2025))
+    finally:
+        LOW_PRIORITY_DAY_SHARE.reset(token)
+    assert not service._past_retry_at
+    assert run(service.model_history("fd:PL")).previous_season  # a user's request still loads it
+
+
+def test_calendar_warm_up_runs_only_where_enabled(clock: FakeClock) -> None:
+    import asyncio
+
+    t = RoutedTransport({"/competitions/PL/matches": season_payload(match(2, "FINISHED", full=(1, 0)))})
+
+    async def scenario(enabled: bool):
+        service = make_service(t, clock)
+        service._warm_calendars = enabled
+        return service.ensure_calendars_warm()
+
+    assert run(scenario(False)) is None
+    assert asyncio.run(scenario(True)) is not None

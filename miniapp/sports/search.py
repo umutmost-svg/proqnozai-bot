@@ -38,13 +38,19 @@ WARM_DAY_SHARE = 0.25
 MIN_WARM_SPACING_S = 2.0
 
 
-def search_pacing(competitions: int, per_minute: int, per_day: int) -> tuple[float, float]:
-    """(spacing between warm-up loads, refresh age) for this many competitions and request budget.
-    Ten competitions on the free tier keep the original 15 s / 30 min; more competitions on a paid plan
-    load faster and refresh less often, staying inside WARM_*_SHARE of the budget."""
-    spacing = min(WARM_SPACING_S, max(MIN_WARM_SPACING_S, 60.0 / max(1.0, per_minute * WARM_MINUTE_SHARE)))
-    refresh = max(REFRESH_AFTER_S, competitions * 86400.0 / max(1.0, per_day * WARM_DAY_SHARE))
-    return spacing, refresh
+def search_pacing(competitions: int, per_minute: int, per_day: int) -> tuple[float, float, bool]:
+    """(spacing between warm-up loads, refresh age, whether previous seasons are warmed too) for this many
+    competitions and request budget. Ten competitions on the free tier keep the original 15 s / 30 min;
+    more competitions on a paid plan load faster and refresh less often, staying inside WARM_*_SHARE of
+    the budget. A previous season (the goal model's history) costs one request a day per competition; it
+    is warmed only when that leaves the calendars at least as much of the day's share."""
+    day_share = per_day * WARM_DAY_SHARE
+    past = day_share >= 2 * competitions
+    per_load = 2 if past else 1  # requests one warm-up step may make (calendar + previous season)
+    spacing = min(WARM_SPACING_S, max(MIN_WARM_SPACING_S, 60.0 * per_load / max(1.0, per_minute * WARM_MINUTE_SHARE)))
+    calendars = day_share - competitions if past else day_share
+    refresh = max(REFRESH_AFTER_S, competitions * 86400.0 / max(1.0, calendars))
+    return spacing, refresh, past
 FIRST_WAIT_S = 3.0  # a search on a cold index waits this long for the first calendars
 # A calendar older than this is neither searched nor counted as covered (same bound as the
 # shared sports cache serves stale data): refresh failures can never pass old fixtures off
@@ -106,13 +112,15 @@ class SearchIndex:
 
     def __init__(self, load_calendar: Callable, tournament_ids: Callable[[], list[str]],
                  clock: Callable[[], float], sleep: Callable = asyncio.sleep, *,
-                 spacing_s: float = WARM_SPACING_S, refresh_after_s: float = REFRESH_AFTER_S) -> None:
+                 spacing_s: float = WARM_SPACING_S, refresh_after_s: float = REFRESH_AFTER_S,
+                 warm_past_seasons: bool = False) -> None:
         self._load = load_calendar  # async (tournament_id) -> CalendarResult | None (uses the shared cache)
         self._ids = tournament_ids
         self._clock = clock
         self._sleep = sleep
         self.spacing_s = spacing_s
         self.refresh_after_s = refresh_after_s
+        self.warm_past_seasons = warm_past_seasons
         self._seasons: dict[str, tuple[float, list[FootballEvent]]] = {}
         self._warm: asyncio.Task | None = None
 

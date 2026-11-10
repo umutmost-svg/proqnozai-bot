@@ -485,6 +485,17 @@ class FootballDataAdapter:
         # Competition emblem URLs as the provider gives them (validated), learned from payloads.
         self.emblems: dict[str, str] = {}
         self._withdrawn: set[str] = set()  # codes the competition list gave no emblem for
+        # Current-season start per competition as match payloads state it: only a hint that lets the
+        # model's previous season load alongside a cold calendar; the calendar's own season decides.
+        self.season_hints: dict[str, str] = {}
+
+    def _learn_season(self, node: object) -> None:
+        competition = node.get("competition") if isinstance(node, dict) else None
+        season = node.get("season") if isinstance(node, dict) else None
+        code = competition.get("code") if isinstance(competition, dict) else None
+        start = _day(season.get("startDate")) if isinstance(season, dict) else None
+        if isinstance(code, str) and code in self._allowed and start is not None:
+            self.season_hints[code] = start
 
     def _learn_emblem(self, node: object) -> None:
         competition = node.get("competition") if isinstance(node, dict) else None
@@ -527,6 +538,7 @@ class FootballDataAdapter:
         parsed = malformed = 0
         for raw in matches:
             self._learn_emblem(raw)
+            self._learn_season(raw)
             event = _safe_normalize(raw, fetched, self._allowed)
             if event is None:
                 if _undetermined(raw, self._allowed):
@@ -662,6 +674,7 @@ class FootballDataAdapter:
         if data.get("id") != match_id:
             raise UpstreamError("bad_response")
         self._learn_emblem(data)
+        self._learn_season(data)
         event = _safe_normalize(data, self._now_iso(), self._allowed)
         if event is None:
             if _out_of_scope(data, self._allowed):

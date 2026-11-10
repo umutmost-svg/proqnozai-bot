@@ -522,7 +522,7 @@ def create_app(
         clear_session_cookie(response)
         return response
 
-    sports = sports or build_service(settings, clock=clock, warm_standings=True)
+    sports = sports or build_service(settings, clock=clock, warm_standings=True, warm_calendars=True)
     # Forecast history in its own file next to the database (rollback-safe, see forecast/history.py).
     history = ForecastHistory(history_path(settings.db_path), clock)
     history.init_schema()

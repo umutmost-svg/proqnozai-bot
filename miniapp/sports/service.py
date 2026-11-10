@@ -115,7 +115,7 @@ class SportsService:
     def __init__(self, football: FootballDataAdapter | None, *, cache: SportsCache | None = None,
                  clock: Callable[[], float] = time.time, unknown_lookups_per_hour: int = 20,
                  football_live_plan: bool = False, crests: CrestStore | None = None,
-                 warm_emblems: bool = True, warm_standings: bool = False,
+                 warm_emblems: bool = True, warm_standings: bool = False, warm_calendars: bool = False,
                  sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
         self.football = football
         self.crests = crests or CrestStore(clock=clock)
@@ -130,11 +130,13 @@ class SportsService:
         spacing, refresh = WARM_SPACING_S, REFRESH_AFTER_S
         if football is not None:
             usage = football.client.usage()
-            spacing, refresh = search_pacing(len(football.codes), int(usage["perMinuteLimit"]),
-                                             int(usage["dailyLimit"]))
+            spacing, refresh, past = search_pacing(len(football.codes), int(usage["perMinuteLimit"]),
+                                                   int(usage["dailyLimit"]))
+        else:
+            past = False
         self.search_index = SearchIndex(self._search_warm_load,
                                         lambda: [t.id for t in self.tournaments("football")], clock,
-                                        spacing_s=spacing, refresh_after_s=refresh)
+                                        spacing_s=spacing, refresh_after_s=refresh, warm_past_seasons=past)
         self._unknown_lookups: deque[float] = deque()
         # Called with every season calendar that loads (e.g. forecast settlement); never fails a request.
         self.calendar_listeners: list[Callable[[str, list[SportEvent]], None]] = []
@@ -144,6 +146,7 @@ class SportsService:
         self._top_tables: OrderedDict[tuple[str, str], top_matches.Table] = OrderedDict()
         self._unknown_per_hour = unknown_lookups_per_hour
         self._warm_standings = warm_standings
+        self._warm_calendars = warm_calendars
         self._background_loads = 0  # settlement calendar loads in flight (see background_busy)
         self._standings_task: asyncio.Task[None] | None = None
         # ONE background request at a time (standings / search warm-up / settlement): the client has two
@@ -446,37 +449,58 @@ class SportsService:
 
     async def model_history(self, tournament_id: str) -> ModelHistory | None:
         """Current-season calendar plus the previous season (one request a day, shared)."""
-        current = await self.calendar("football", tournament_id)
-        if current is None:
-            return None
+        code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+        # A cold calendar would put the two season loads one after the other: the season start that
+        # match payloads stated lets the previous season load alongside. The calendar's own season
+        # decides below; a wrong hint only leaves an unused (cached) season behind.
+        speculative: asyncio.Task | None = None
+        hint = self.football.season_hints.get(code) if self.football is not None else None
+        if hint is not None and self._costs_request(f"football:calendar:{code}"):
+            speculative = asyncio.ensure_future(self._past_season(tournament_id, int(hint[:4]) - 1))
+        try:
+            current = await self.calendar("football", tournament_id)
+            if current is None:
+                return None
+            start = current.season.start
+            events: list[SportEvent] = []
+            previous = False
+            missing: str | None = None
+            if start is not None:
+                year = int(start[:4]) - 1
+                if speculative is not None and int(hint[:4]) - 1 == year:  # type: ignore[index]
+                    past, missing = await speculative
+                else:
+                    past, missing = await self._past_season(tournament_id, year)
+                if past is not None:
+                    events.extend(past)
+                    previous = True
+            events.extend(current.events)
+            return ModelHistory(events, start, previous, missing)
+        finally:
+            if speculative is not None and not speculative.done():
+                speculative.cancel()  # only this waiter: the shielded cache load runs on and is kept
+
+    async def _past_season(self, tournament_id: str, year: int) -> tuple[list[SportEvent] | None, str | None]:
+        """The goal model's previous season: (events, None), or (None, why it is missing)."""
         assert self.football is not None
         adapter = self.football
         code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
-        start = current.season.start
-        events: list[SportEvent] = []
-        previous = False
-        missing: str | None = None
-        if start is not None:
-            year = int(start[:4]) - 1
-            if self._clock() < self._past_retry_at.get((code, year), 0.0):
-                missing = self._past_failure.get((code, year), "transient")
-            else:
-                try:
-                    past = await self.cache.get(f"football:season:{code}:{year}",
-                                                lambda: adapter.past_season(code, year))
-                except UpstreamError as exc:
-                    # Optional depth: without it the model shows probabilities but recommends
-                    # nothing (partial_history). Not asked again for PAST_SEASON_RETRY_S, so a
-                    # season the provider cannot supply never costs a request per analysis.
-                    self._past_retry_at[(code, year)] = self._clock() + PAST_SEASON_RETRY_S
-                    missing = "absent" if exc.code == "not_found" else "transient"
-                    self._past_failure[(code, year)] = missing
-                    logger.info("sports.past_season_unavailable tournament=%s code=%s", tournament_id, exc.code)
-                else:
-                    events.extend(past.value[0])
-                    previous = True
-        events.extend(current.events)
-        return ModelHistory(events, start, previous, missing)
+        if self._clock() < self._past_retry_at.get((code, year), 0.0):
+            return None, self._past_failure.get((code, year), "transient")
+        try:
+            past = await self.cache.get(f"football:season:{code}:{year}", lambda: adapter.past_season(code, year))
+        except UpstreamError as exc:
+            if exc.low_priority_only:
+                raise  # only the background budget said no: a user's request may still load it
+            # Optional depth: without it the model shows probabilities but recommends
+            # nothing (partial_history). Not asked again for PAST_SEASON_RETRY_S, so a
+            # season the provider cannot supply never costs a request per analysis.
+            self._past_retry_at[(code, year)] = self._clock() + PAST_SEASON_RETRY_S
+            missing = "absent" if exc.code == "not_found" else "transient"
+            self._past_failure[(code, year)] = missing
+            logger.info("sports.past_season_unavailable tournament=%s code=%s", tournament_id, exc.code)
+            return None, missing
+        return past.value[0], None
 
     # --- verified context for the AI analysis (shared cache, no per-user requests) ---
 
@@ -497,6 +521,13 @@ class SportsService:
         return table.rows_by_team() if len(table.blocks) == 1 else {}
 
     # --- standings warm-up ---------------------------------------------------
+
+    def ensure_calendars_warm(self) -> asyncio.Task | None:
+        """While the app is in use: the season calendars and the goal model's previous seasons (the
+        search warm-up), so an AI analysis rarely has to load a whole season inside its deadline."""
+        if not self._warm_calendars or self.football is None:
+            return None
+        return self.search_index.ensure_warm()
 
     def ensure_standings_warm(self) -> asyncio.Task[None] | None:
         """Starts a background pass over the tables that are missing or due (never waits for it)."""
@@ -559,10 +590,25 @@ class SportsService:
             reserve = LOW_PRIORITY_RESERVE.set(STANDINGS_WARM_RESERVE)
             share = LOW_PRIORITY_DAY_SHARE.set(STANDINGS_WARM_DAY_SHARE)
             try:
-                return await self.calendar("football", tournament_id)
+                result = await self.calendar("football", tournament_id)
+                await self._warm_past_season(tournament_id, result)
+                return result
             finally:
                 LOW_PRIORITY_DAY_SHARE.reset(share)
                 LOW_PRIORITY_RESERVE.reset(reserve)
+
+    async def _warm_past_season(self, tournament_id: str, current: CalendarResult | None) -> None:
+        """The goal model's previous season, warmed right after its calendar (same slot and low priority):
+        an AI analysis of a warmed competition then needs no season load of its own."""
+        if current is None or current.season.start is None or not self.search_index.warm_past_seasons:
+            return
+        code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+        year = int(current.season.start[:4]) - 1
+        if self._clock() < self._past_retry_at.get((code, year), 0.0):
+            return
+        if not self._costs_request(f"football:season:{code}:{year}") or not self._warm_budget_left():
+            return
+        await self._past_season(tournament_id, year)
 
     def background_busy(self) -> bool:
         """A background load (standings warm-up, search warm-up, settlement) is running: the
@@ -651,7 +697,8 @@ def _with_cache_state(event: SportEvent, stale: bool) -> SportEvent:
 
 
 def build_service(settings, *, clock: Callable[[], float] = time.time, transport=None,
-                  crest_fetch=None, warm_emblems: bool = True, warm_standings: bool = False) -> SportsService:
+                  crest_fetch=None, warm_emblems: bool = True, warm_standings: bool = False,
+                  warm_calendars: bool = False) -> SportsService:
     """Service from Mini App settings. No key → football is reported "not_connected"."""
     from .client import ClientLimits, ProviderClient, urllib_transport
 
@@ -669,4 +716,4 @@ def build_service(settings, *, clock: Callable[[], float] = time.time, transport
     crests = CrestStore(crest_fetch, clock=clock) if crest_fetch is not None else CrestStore(clock=clock)
     return SportsService(football, clock=clock, unknown_lookups_per_hour=settings.sports_unknown_lookups_per_hour,
                          football_live_plan=settings.football_data_live_plan, crests=crests,
-                         warm_emblems=warm_emblems, warm_standings=warm_standings)
+                         warm_emblems=warm_emblems, warm_standings=warm_standings, warm_calendars=warm_calendars)
