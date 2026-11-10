@@ -1,8 +1,9 @@
 import { BrowserRouter, Link, Route, Routes } from 'react-router-dom';
 import { LoginFlow } from './pages/Auth';
 import { Forecasts } from './pages/Forecasts';
-import { Overview } from './pages/Overview';
-import { Credits, SettingsAdmins, SettingsFeatures, SettingsJournal } from './pages/Settings';
+import { Analytics } from './pages/Analytics';
+import { BroadcastEditor, Broadcasts, Credits, Dialogs, Segments } from './pages/Crm';
+import { SettingsAdmins, SettingsFeatures, SettingsJournal } from './pages/Settings';
 import { AiCosts, SportsApi, System } from './pages/Telemetry';
 import { UserCardRoute } from './pages/UserCard';
 import { Users } from './pages/Users';
@@ -18,7 +19,11 @@ function Gate() {
   return (
     <Routes>
       <Route element={<Layout />}>
-        <Route index element={<Overview />} />
+        <Route index element={<Analytics />} />
+        <Route path="dialogs" element={<Dialogs />} />
+        <Route path="broadcasts" element={<Broadcasts />} />
+        <Route path="broadcasts/:id" element={<BroadcastEditor />} />
+        <Route path="segments" element={<Segments />} />
         <Route path="users" element={<Users />} />
         <Route path="users/:id" element={<UserCardRoute />} />
         <Route path="forecasts" element={<Forecasts />} />

@@ -308,30 +308,3 @@ export function SettingsJournal() {
     </>
   );
 }
-
-export function Credits() {
-  return (
-    <>
-      <PageHead crumb="Кредиты" title="Кредиты" subtitle="Функция пока выключена" />
-      <div className="filters"><span className="spacer" /><span className="chip">Неактивно</span></div>
-      <div style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '60px 63px 90px', maxWidth: 1016, marginLeft: 52 }}>
-        <h2 style={{ fontSize: 27, fontWeight: 600, margin: '20px 0 30px' }}>Кредиты пока отключены</h2>
-        <p style={{ fontSize: 15, color: 'var(--text)', lineHeight: 1.3, maxWidth: 840, margin: 0 }}>
-          Основа для учёта балансов и операций запланирована, но списаний в Mini App нет. Прогнозы бесплатны и без ограничений.
-          Включение кредитов не входит в текущий релиз.
-        </p>
-        <div style={{ borderTop: '1px solid var(--line)', marginTop: 62, paddingTop: 36, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)' }}>
-          {[['Баланс', 'Недоступен'], ['Начисления', 'Не ведутся'], ['Списания', 'Выключены']].map(([k, v]) => (
-            <div key={k}><div className="small muted">{k}</div><div style={{ fontSize: 19, fontWeight: 500, marginTop: 20 }}>{v}</div></div>
-          ))}
-        </div>
-        <div className="row" style={{ marginTop: 44 }}>
-          <button type="button" className="btn" disabled>Начислить</button>
-          <button type="button" className="btn" disabled>Списать</button>
-          <button type="button" className="btn" disabled>Безлимит</button>
-          <span className="small muted">Кнопки неактивны до отдельного разрешения (D8)</span>
-        </div>
-      </div>
-    </>
-  );
-}

@@ -287,7 +287,13 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         ctx.admin_of(request, "read_personal")
         if not ctx.demo_allowed(request):
             return {"source": "not_collected"}
-        return {"source": "demo", "threads": demo.dialogs(ctx.today())}
+        threads = demo.dialogs(ctx.today())
+        for th in threads:  # demo texts, but names from the (demo) users they link to
+            profile = store.user_profile(th["userId"], ctx.now())
+            if profile:
+                th["name"] = " ".join(p for p in (profile["firstName"], profile["lastName"]) if p) or th["name"]
+                th["username"] = profile["username"] or ""
+        return {"source": "demo", "threads": threads}
 
     # ---- analytics ---------------------------------------------------------------------------
 

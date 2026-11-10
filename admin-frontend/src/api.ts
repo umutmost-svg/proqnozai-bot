@@ -75,6 +75,17 @@ const MESSAGES: Record<string, string> = {
   csrf: 'Сессия устарела. Обновите страницу.',
   unauthenticated: 'Сессия истекла. Войдите заново.',
   not_found: 'Не найдено.',
+  insufficient_balance: 'Недостаточно кредитов для списания.',
+  invalid_rules: 'Проверьте условия сегмента.',
+  name_taken: 'Сегмент с таким названием уже есть.',
+  invalid_buttons: 'Кнопка: текст до 40 символов и ссылка https:// или Mini App.',
+  not_a_draft: 'Изменять можно только черновик.',
+  invalid_time: 'Время отправки: от текущего момента до 90 дней вперёд.',
+  idempotency_key_reused: 'Повтор с другими данными. Откройте диалог заново.',
+  invalid_amount: 'Сумма от 1 до 100 000.',
+  invalid_message: 'Введите текст сообщения.',
+  invalid_note: 'Введите текст заметки.',
+  invalid_tag: 'Тег — от 1 до 32 символов.',
   internal: 'Внутренняя ошибка сервера.',
 };
 
@@ -153,3 +164,85 @@ export interface AdminAccount {
   lastLoginAt: number | null; createdAt: number;
 }
 export interface SettingValue { value: boolean | number; version: number | null; updatedAt: number | null; type: string; min?: number; max?: number }
+
+// ---- CRM v2 ----
+
+export type Rules = Partial<{
+  registered_within_days: number; active_within_days: number; inactive_for_days: number; lang_in: string[];
+  tag_has: string; tag_not: string; has_active_session: boolean; blocked: boolean;
+}>;
+export interface CrmUserRow extends UserRow {
+  tags: string[]; credits: { balance: number; unlimitedUntil: number | null }; blocked: boolean;
+}
+export interface Segment { id: number; name: string; rules: Rules; updatedAt: number; size?: number }
+export interface TagCount { tag: string; users: number }
+export interface CrmUsersPage extends Page<CrmUserRow> {
+  counts: { total: number; new: number; withActiveSession: number; chips: Record<string, number> };
+  tags: TagCount[]; segments: Segment[];
+}
+export interface TimelineItem {
+  at: number; kind: string; title: string; detail: string | null; by?: string | null; status?: string; demo?: boolean;
+}
+export interface LedgerRow {
+  id: number; userId?: number; kind: 'grant' | 'debit' | 'unlimited' | 'unlimited_off'; delta: number; balanceAfter: number;
+  unlimitedUntil: number | null; reason: string; at: number; by: string | null; batch?: string | null;
+}
+export interface CrmProfile extends UserProfile {
+  tags: string[];
+  notes: { id: number; body: string; at: number; by: string | null }[];
+  messages: { id: number; body: string; status: string; at: number; by: string | null }[];
+  ledger: LedgerRow[];
+  credits: { balance: number; unlimitedUntil: number | null; enabled: false; unlimited: boolean };
+  blocked: { reason: string; at: number } | null;
+  timeline: TimelineItem[];
+}
+export interface Broadcast {
+  id: number; name: string; rules: Rules; body: string; buttons: { text: string; url: string }[];
+  status: 'draft' | 'scheduled' | 'cancelled' | 'sent'; scheduledAt: number | null; recipients: number | null;
+  createdAt: number; updatedAt: number; by: string | null; audience?: number;
+}
+export interface CreditsPage {
+  enabled: false;
+  totals: { inCirculation: number; accounts: number; unlimited: number; granted: number; debited: number };
+  ledger: LedgerRow[];
+  rules: { aiPrice: number; quickPrice: number; freePerDay: number; signupBonus: number; inviteBonus: number };
+}
+export interface DemoAudience {
+  source: 'demo';
+  summary: { countries: number; peak: string; avgSessionS: number; mobileShare: number };
+  geo: { code: string; name: string; count: number }[];
+  platforms: { name: string; count: number }[];
+  activityHeat: number[][];
+  cohorts: { week: string; size: number; retention: number[] }[];
+  sources: { name: string; count: number }[];
+  features: { name: string; share: number }[];
+  activeByDay: { day: string; dau: number }[];
+  funnel: [string, number][];
+}
+export interface Analytics {
+  period: number;
+  real: {
+    totalUsers: number; newUsers: number; newByDay: { day: string; new: number }[]; registrationHeat: number[][];
+    languages: { lang: string; count: number }[]; leagues: { name: string; count: number }[]; tags: TagCount[];
+  };
+  demo: DemoAudience | null;
+}
+export interface DialogThread {
+  userId: number; name: string; username: string; unread: boolean; tag: [string, string] | null; system: string | null;
+  messages: { from: 'user' | 'admin'; text: string; at: number; by?: string }[];
+}
+
+export const RULE_LABELS: Record<string, string> = {
+  registered_within_days: 'Регистрация не старше, дн', active_within_days: 'Входил за последние, дн',
+  inactive_for_days: 'Не входил дольше, дн', lang_in: 'Язык', tag_has: 'Есть тег', tag_not: 'Нет тега',
+  has_active_session: 'Есть активная сессия', blocked: 'Заблокирован',
+};
+
+export function describeRules(rules: Rules): string[] {
+  return Object.entries(rules).map(([k, v]) => {
+    const label = RULE_LABELS[k] ?? k;
+    if (Array.isArray(v)) return `${label}: ${v.join(', ')}`;
+    if (typeof v === 'boolean') return `${label}: ${v ? 'да' : 'нет'}`;
+    return `${label}: ${String(v)}`;
+  });
+}

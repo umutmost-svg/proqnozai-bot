@@ -1,35 +1,98 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { ApiError, errorText, newIdempotencyKey } from './api';
 import { PERIOD_LABELS, useAuth, useMe, usePrefs, type Period } from './state';
 
 const NAV = [
-  ['/', 'Обзор'], ['/users', 'Пользователи'], ['/forecasts', 'Прогнозы'], ['/ai', 'AI и расходы'],
-  ['/sports-api', 'Спортивные API'], ['/system', 'Система и логи'], ['/settings', 'Настройки'], ['/credits', 'Кредиты'],
+  ['/', 'Аналитика'], ['/users', 'Пользователи'], ['/dialogs', 'Диалоги'], ['/broadcasts', 'Рассылки'],
+  ['/segments', 'Сегменты'], ['/credits', 'Кредиты'],
 ] as const;
+const NAV_DATA = [['/forecasts', 'Прогнозы'], ['/ai', 'AI и расходы'], ['/sports-api', 'Спортивные API']] as const;
+const NAV_ADMIN = [['/system', 'Система'], ['/settings', 'Настройки']] as const;
 
 const ROLE_LABEL: Record<string, string> = { owner: 'Владелец', admin: 'Администратор', analyst: 'Аналитик' };
+
+export function initials(name: string | null | undefined, fallback = '?'): string {
+  const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
+  const letters = parts.slice(0, 2).map((p) => p[0]!.toUpperCase()).join('');
+  return letters || fallback;
+}
+
+export function Avatar({ name, large }: { name: string | null | undefined; large?: boolean }) {
+  return <span className={`avatar${large ? ' lg' : ''}`} aria-hidden="true">{initials(name)}</span>;
+}
+
+export type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger' | 'violet';
+export function Tag({ children, tone = 'neutral', onRemove }: { children: ReactNode; tone?: Tone; onRemove?: () => void }) {
+  return (
+    <span className={`tag ${tone === 'neutral' ? '' : tone}`}>
+      {children}
+      {onRemove && <button type="button" aria-label="Снять тег" onClick={onRemove}>✕</button>}
+    </span>
+  );
+}
+
+const TAG_TONES: Record<string, Tone> = { VIP: 'violet', 'Жалоба': 'danger', 'Уходит': 'warning', 'Новый': 'accent', 'Тестер': 'neutral' };
+export function tagTone(tag: string): Tone {
+  if (TAG_TONES[tag]) return TAG_TONES[tag]!;
+  if (tag.startsWith('Партнёр')) return 'accent';
+  return 'neutral';
+}
+
+export function Card({ title, sub, action, children, className }: {
+  title?: ReactNode; sub?: ReactNode; action?: ReactNode; children: ReactNode; className?: string;
+}) {
+  return (
+    <section className={`card ${className ?? ''}`}>
+      {(title || action) && (
+        <div className="card-head">
+          <div>{title && <h2 className="card-title">{title}</h2>}{sub && <div className="card-sub">{sub}</div>}</div>
+          {action}
+        </div>
+      )}
+      {children}
+    </section>
+  );
+}
+
+export function BarList({ rows, tone }: { rows: { label: ReactNode; value: number; extra?: ReactNode }[]; tone?: string }) {
+  const total = rows.reduce((s, r) => s + r.value, 0) || 1;
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  return (
+    <div className="bar-list">
+      {rows.map((r, i) => (
+        <div className="bar-row" key={i}>
+          <div className="bar-head"><span>{r.label} {r.extra}</span><span className="v">{r.value.toLocaleString('ru-RU')} · {Math.round((r.value / total) * 100)}%</span></div>
+          <div className="bar-track"><div className={`bar-fill ${tone ?? ''}`} style={{ width: `${(r.value / max) * 100}%` }} /></div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function Layout() {
   const me = useMe();
   const { logout } = useAuth();
+  const link = ([to, label]: readonly [string, string]) => <NavLink key={to} to={to} end={to === '/'}>{label}</NavLink>;
   return (
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-name">SporBot</div>
-          <div className="brand-sub">ADMIN</div>
+          <span className="brand-logo">S</span>
+          <div><div className="brand-name">SporBot</div><div className="brand-sub">CRM · админ</div></div>
         </div>
-        <div className="nav-caption">РАЗДЕЛЫ</div>
-        <nav className="nav" aria-label="Разделы">
-          {NAV.map(([to, label]) => (
-            <NavLink key={to} to={to} end={to === '/'}>{label}</NavLink>
-          ))}
-        </nav>
+        <nav className="nav" aria-label="Разделы" style={{ marginTop: 24 }}>{NAV.map(link)}</nav>
+        <div className="nav-caption">ДАННЫЕ</div>
+        <nav className="nav" aria-label="Данные">{NAV_DATA.map(link)}</nav>
+        <div className="nav-grow" />
+        <nav className="nav" aria-label="Администрирование">{NAV_ADMIN.map(link)}</nav>
         <div className="account">
-          <div className="account-email" title={me.admin.email}>{me.admin.email}</div>
-          <div className="account-role">{ROLE_LABEL[me.admin.role]}</div>
-          <button type="button" className="btn link small" onClick={() => void logout()}>Выйти</button>
+          <Avatar name={me.admin.email} />
+          <div>
+            <div className="account-email" title={me.admin.email}>{me.admin.email}</div>
+            <div className="account-role">{ROLE_LABEL[me.admin.role]}</div>
+            <button type="button" className="btn link" onClick={() => void logout()}>Выйти</button>
+          </div>
         </div>
       </aside>
       <main className="main">
@@ -39,38 +102,49 @@ export function Layout() {
   );
 }
 
-export function Topbar({ crumb }: { crumb: string }) {
+export function Topbar({ crumb }: { crumb?: string }) {
   const me = useMe();
   const { demo, setDemo } = usePrefs();
+  const navigate = useNavigate();
+  const [q, setQ] = useState('');
   return (
     <>
       <div className="topbar">
-        <div className="crumbs"><Link to="/">SporBot</Link>&nbsp;&nbsp;/&nbsp;&nbsp;{crumb}</div>
+        <form className="topbar-search" role="search" onSubmit={(e) => { e.preventDefault(); navigate(`/users?q=${encodeURIComponent(q.trim())}`); }}>
+          <span aria-hidden="true" className="muted">⌕</span>
+          <input aria-label="Глобальный поиск" placeholder="Поиск: пользователь, @username, Telegram ID…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </form>
         <div className="topbar-right">
-          {me.pilot.dataset === 'demo' && <span className="chip demo" title="Пользователи и прогнозы — демонстрационный набор, созданный локально">ДЕМО-НАБОР</span>}
-          <label className="chip" style={{ gap: 8, cursor: 'pointer' }}>
+          {me.pilot.dataset === 'demo' && <span className="tag violet" title="Пользователи и прогнозы — демонстрационный набор, созданный локально">Демо-набор</span>}
+          <label className="tag" style={{ gap: 6, cursor: 'pointer', height: 30 }}>
             <input type="checkbox" checked={demo} onChange={(e) => setDemo(e.target.checked)} />
             Демо-телеметрия
           </label>
-          <span className="chip">ЛОКАЛЬНЫЙ ПИЛОТ</span>
+          <span className="tag">Локальный пилот</span>
         </div>
       </div>
+      {crumb && <div className="crumbs" style={{ marginTop: 18 }}>{crumb}</div>}
       {demo && (
         <div className="banner" role="status">
-          <strong>Демо-телеметрия включена.</strong> Активность, AI-вызовы, расходы, API и события — вымышленные данные для
-          оценки интерфейса. Реальный сбор начнётся после D1.
+          <strong>Демо-телеметрия включена.</strong> Гео, платформы, время активности, AI-вызовы, диалоги и события —
+          вымышленные данные для оценки интерфейса. Реальный сбор начнётся после D1.
         </div>
       )}
     </>
   );
 }
 
-export function PageHead({ crumb, title, subtitle }: { crumb: string; title: string; subtitle: string }) {
+export function PageHead({ crumb, title, subtitle, actions }: { crumb?: string; title: string; subtitle: string; actions?: ReactNode }) {
   return (
     <>
-      <Topbar crumb={crumb} />
-      <h1 className="page-title">{title}</h1>
-      <p className="page-sub">{subtitle}</p>
+      <Topbar crumb={crumb && crumb !== title ? crumb : undefined} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16 }}>
+        <div>
+          <h1 className="page-title">{title}</h1>
+          <p className="page-sub">{subtitle}</p>
+        </div>
+        {actions && <div className="row" style={{ marginBottom: 22 }}>{actions}</div>}
+      </div>
     </>
   );
 }

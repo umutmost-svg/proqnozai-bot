@@ -1,29 +1,31 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import type { Page, UserRow } from '../api';
+import { api, type CrmUsersPage } from '../api';
 import { num, userName, utc, utcDay } from '../format';
-import { useLoad } from '../state';
-import { Empty, ErrorBox, Loading, Metric, Metrics, Note, PageHead, Pager, SectionHead, SortHeader, useSort } from '../ui';
+import { can, useLoad, useMe } from '../state';
+import { Avatar, Empty, ErrorBox, Loading, PageHead, Pager, SortHeader, Tag, tagTone, Toast, useSort } from '../ui';
+import { CreditsDialog, TagDialog } from './dialogs';
 
-const SEGMENTS: Record<string, string> = {
-  all: 'Все пользователи', new: 'Новые за 7 дней', active: 'Входили за 7 дней', inactive: 'Не входили 14+ дней',
-};
+const CHIPS: [string, string][] = [['', 'Все'], ['new', 'Новые 7д'], ['active', 'Активные 7д'], ['inactive', 'Уходящие 14д+']];
 const LANGS = ['ru', 'az', 'en', 'tr', 'uz', 'pt-BR', 'es'];
-
-type UsersPage = Page<UserRow> & { counts: { total: number; new: number; loggedIn: number; withActiveSession: number } };
 
 export function Users() {
   const navigate = useNavigate();
+  const me = useMe();
   const [params, setParams] = useSearchParams();
   const [query, setQuery] = useState(params.get('q') ?? '');
-  const segment = params.get('segment') ?? 'all';
+  const chip = params.get('chip') ?? '';
+  const tag = params.get('tag') ?? '';
+  const segment = params.get('segment') ?? '';
   const lang = params.get('lang') ?? '';
   const page = Number(params.get('page') ?? '1') || 1;
   const { sort, onSort } = useSort(params.get('sort') ?? 'created', params.get('order') !== 'asc');
-  const [selected, setSelected] = useState<UserRow | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [dialog, setDialog] = useState<'tag' | 'credits' | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const manage = can(me.admin.role, 'manage_users');
 
-  // Patch the CURRENT address: a delayed call (search debounce) must not restore a stale copy of the
-  // filters (react-router's functional form still hands over the render-time params).
+  // Patch the CURRENT address (a delayed search sync must not restore stale filters).
   const update = (patch: Record<string, string>) => {
     const next = new URLSearchParams(window.location.search);
     for (const [k, v] of Object.entries(patch)) { if (v) next.set(k, v); else next.delete(k); }
@@ -37,103 +39,128 @@ export function Users() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
   useEffect(() => {
-    if (params.get('sort') !== sort.field || (params.get('order') ?? 'desc') !== (sort.desc ? 'desc' : 'asc')) {
+    const cur = new URLSearchParams(window.location.search);
+    if (cur.get('sort') !== sort.field || (cur.get('order') ?? 'desc') !== (sort.desc ? 'desc' : 'asc')) {
       update({ sort: sort.field, order: sort.desc ? 'desc' : 'asc', page: '' });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sort]);
 
-  const qs = new URLSearchParams({ q: params.get('q') ?? '', segment, lang, page: String(page), size: '15',
+  const qs = new URLSearchParams({ q: params.get('q') ?? '', chip, tag, segment, lang, page: String(page), size: '15',
     sort: sort.field, order: sort.desc ? 'desc' : 'asc' });
-  const { data, error, loading, reload } = useLoad<UsersPage>(`/api/admin/users?${qs}`);
-  // The selection belongs to the list it was made in: a new filter or page clears it.
+  const { data, error, loading, reload } = useLoad<CrmUsersPage>(`/api/admin/users?${qs}`);
   const listKey = qs.toString();
   const [selectedIn, setSelectedIn] = useState(listKey);
-  if (selectedIn !== listKey) { setSelectedIn(listKey); setSelected(null); }
-  const filtered = Boolean(params.get('q') || segment !== 'all' || lang);
+  if (selectedIn !== listKey) { setSelectedIn(listKey); setSelected(new Set()); }
+  const filtered = Boolean(params.get('q') || chip || tag || segment || lang);
+  const toggle = (id: number) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const allOnPage = data ? data.items.length > 0 && data.items.every((u) => selected.has(u.id)) : false;
+  const audienceRules = () => {
+    const rules: Record<string, unknown> = {};
+    if (chip === 'new') rules.registered_within_days = 7;
+    if (chip === 'active') rules.active_within_days = 7;
+    if (chip === 'inactive') rules.inactive_for_days = 14;
+    if (tag) rules.tag_has = tag;
+    if (lang) rules.lang_in = [lang];
+    const seg = data?.segments.find((s) => String(s.id) === segment);
+    return seg ? { ...seg.rules, ...rules } : rules;
+  };
 
   return (
     <>
-      <PageHead crumb="Пользователи" title="Пользователи" subtitle="Поиск, карточки и управление сессиями" />
-      <div className="filters">
+      <PageHead title="Пользователи" subtitle={`${num(data?.counts.total)} человек · карточки, теги, сегменты и массовые действия`}
+        actions={<>
+          <button type="button" className="btn" onClick={() => navigate(`/segments?draft=${encodeURIComponent(JSON.stringify(audienceRules()))}`)} disabled={!filtered || !manage}>Сохранить как сегмент</button>
+          <button type="button" className="btn primary" onClick={() => navigate(`/broadcasts/new?rules=${encodeURIComponent(JSON.stringify(audienceRules()))}`)} disabled={!manage}>Рассылка по фильтру</button>
+        </>} />
+      <div className="chips" role="group" aria-label="Быстрые сегменты">
+        {CHIPS.map(([key, label]) => (
+          <button key={key} type="button" className="chip-btn" aria-pressed={chip === key && !segment}
+            onClick={() => update({ chip: key, segment: '', page: '' })}>
+            {label}<span className="n">{key ? num(data?.counts.chips[key]) : num(data?.counts.total)}</span>
+          </button>
+        ))}
+        {data?.segments.slice(0, 4).map((s) => (
+          <button key={s.id} type="button" className="chip-btn" aria-pressed={segment === String(s.id)}
+            onClick={() => update({ segment: segment === String(s.id) ? '' : String(s.id), chip: '', page: '' })}>{s.name}</button>
+        ))}
+        <Link to="/segments" className="small">+ сегмент</Link>
+      </div>
+      <div className="filters" style={{ marginBottom: 14 }}>
         <input className="control" type="search" placeholder="Поиск по TG ID, username или имени" aria-label="Поиск"
           value={query} onChange={(e) => setQuery(e.target.value)} />
-        <select className="control" aria-label="Сегмент" value={segment} onChange={(e) => update({ segment: e.target.value === 'all' ? '' : e.target.value, page: '' })}>
-          {Object.entries(SEGMENTS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
         <select className="control" aria-label="Язык" value={lang} onChange={(e) => update({ lang: e.target.value, page: '' })}>
           <option value="">Язык: все</option>
           {LANGS.map((l) => <option key={l} value={l}>Язык: {l}</option>)}
         </select>
+        <select className="control" aria-label="Тег" value={tag} onChange={(e) => update({ tag: e.target.value, page: '' })}>
+          <option value="">Теги: любые</option>
+          {data?.tags.map((t) => <option key={t.tag} value={t.tag}>{t.tag} ({t.users})</option>)}
+        </select>
         {filtered && <button type="button" className="btn link" onClick={() => { setQuery(''); setParams({}, { replace: true }); }}>Сбросить фильтры</button>}
       </div>
-      {data && (
-        <Metrics>
-          <Metric label="Всего пользователей" value={num(data.counts.total)} caption="источник: users" />
-          <Metric label="Новые за 7 дней" value={num(data.counts.new)} caption="по дате регистрации" />
-          <Metric label="Активны за 7 дней" value="—" caption="после D1 (телеметрия)" />
-          <Metric label="С активной сессией" value={num(data.counts.withActiveSession)} caption="источник: sessions" />
-        </Metrics>
+      {selected.size > 0 && (
+        <div className="bulk" role="region" aria-label="Массовые действия">
+          <span className="count">Выбрано: {selected.size}</span>
+          <button type="button" className="btn" disabled={!manage} onClick={() => setDialog('tag')}>Добавить тег</button>
+          <button type="button" className="btn" disabled={!manage} onClick={() => setDialog('credits')}>Кредиты</button>
+          <button type="button" className="btn link" onClick={() => setSelected(new Set())}>Снять выбор</button>
+        </div>
       )}
-      <div className="cols">
-        <section className="section">
-          <SectionHead title="Пользователи" action={data && <span className="small muted">Найдено: {num(data.total)}</span>} />
-          {error ? <ErrorBox error={error} onRetry={reload} /> : loading && !data ? <Loading rows={8} /> : data && data.items.length === 0 ? (
-            filtered ? <Empty title="Никого не нашли">Измените запрос или сбросьте фильтры.</Empty>
-              : <Empty title="Список пользователей появится здесь">Пользователи появятся после первого входа в Mini App.</Empty>
-          ) : data && (
-            <>
-              <table className="table" aria-busy={loading} style={{ opacity: loading ? 0.45 : 1, pointerEvents: loading ? 'none' : undefined }} inert={loading}>
-                <thead>
-                  <tr>
-                    <SortHeader label="Telegram ID" field="id" sort={sort} onSort={onSort} />
-                    <SortHeader label="Username" field="username" sort={sort} onSort={onSort} />
-                    <SortHeader label="Регистрация" field="created" sort={sort} onSort={onSort} />
-                    <SortHeader label="Последний вход" field="login" sort={sort} onSort={onSort} />
-                    <SortHeader label="Сессии" field="sessions" sort={sort} onSort={onSort} className="num" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.items.map((u) => (
-                    <tr key={u.id} className="clickable" aria-selected={selected?.id === u.id}
-                      style={selected?.id === u.id ? { background: '#f6f8fb' } : undefined}
-                      onClick={() => setSelected(u)} onDoubleClick={() => navigate(`/users/${u.id}`)}>
-                      <td className="strong mono">
-                        <Link to={`/users/${u.id}`} onClick={(e) => e.stopPropagation()} aria-label={`Открыть карточку ${u.id}`}>{u.id}</Link>
-                      </td>
-                      <td>{u.username ? `@${u.username}` : '—'}<span className="sub">{userName(u)} · {u.lang}</span></td>
-                      <td>{utcDay(u.createdAt)}</td>
-                      <td>{utc(u.lastLoginAt)}</td>
-                      <td className="num">{u.activeSessions}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {!loading && <Pager page={data.page} size={data.size} total={data.total} onPage={(p) => update({ page: String(p) })} />}
-            </>
-          )}
-        </section>
-        <aside>
-          <SectionHead title="Карточка пользователя" />
-          {selected ? (
-            <>
-              <ul className="kv">
-                <li><span className="k">Telegram ID</span><span className="v mono">{selected.id}</span></li>
-                <li><span className="k">Имя</span><span className="v" style={{ fontSize: 14 }}>{userName(selected)}</span></li>
-                <li><span className="k">Регистрация</span><span className="v" style={{ fontSize: 14 }}>{utcDay(selected.createdAt)}</span></li>
-                <li><span className="k">Активные сессии</span><span className="v">{selected.activeSessions}</span></li>
-              </ul>
-              <button type="button" className="btn" style={{ marginTop: 24 }} onClick={() => navigate(`/users/${selected.id}`)}>Посмотреть карточку</button>
-            </>
-          ) : (
-            <p className="muted" style={{ fontSize: 14, lineHeight: 1.4 }}>
-              Выберите запись в таблице, чтобы открыть профиль, активные сессии и историю действий. Двойной щелчок открывает карточку сразу.
-            </p>
-          )}
-          <Note title="Определение «последний вход»">Время создания последней сессии. Это не активность: просмотры и запросы
-            начнут учитываться после D1.</Note>
-        </aside>
-      </div>
+      {error ? <ErrorBox error={error} onRetry={reload} /> : loading && !data ? <Loading rows={8} /> : data && data.items.length === 0 ? (
+        filtered ? <Empty title="Никого не нашли">Измените запрос или сбросьте фильтры.</Empty>
+          : <Empty title="Список пользователей появится здесь">Пользователи появятся после первого входа в Mini App.</Empty>
+      ) : data && (
+        <div className="table-card">
+          <table className="table" aria-busy={loading} style={{ opacity: loading ? 0.45 : 1, pointerEvents: loading ? 'none' : undefined }} inert={loading}>
+            <thead>
+              <tr>
+                <th style={{ width: 36 }}><input type="checkbox" aria-label="Выбрать всех на странице" checked={allOnPage}
+                  onChange={() => setSelected((s) => { const n = new Set(s); for (const u of data.items) { if (allOnPage) n.delete(u.id); else n.add(u.id); } return n; })} /></th>
+                <SortHeader label="Пользователь" field="username" sort={sort} onSort={onSort} />
+                <SortHeader label="Telegram ID" field="id" sort={sort} onSort={onSort} />
+                <th>Язык</th>
+                <SortHeader label="Регистрация" field="created" sort={sort} onSort={onSort} />
+                <SortHeader label="Последний вход" field="login" sort={sort} onSort={onSort} />
+                <SortHeader label="Сессии" field="sessions" sort={sort} onSort={onSort} className="num" />
+                <th>Кредиты</th>
+                <th>Теги</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.items.map((u) => (
+                <tr key={u.id} className={`clickable${selected.has(u.id) ? ' selected' : ''}`} onClick={() => navigate(`/users/${u.id}`)}>
+                  <td onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label={`Выбрать ${u.id}`} checked={selected.has(u.id)} onChange={() => toggle(u.id)} /></td>
+                  <td>
+                    <div className="who"><Avatar name={userName(u)} />
+                      <div><Link to={`/users/${u.id}`} className="name" onClick={(e) => e.stopPropagation()}>{userName(u)}</Link>
+                        <div className="handle">{u.username ? `@${u.username}` : '—'}{u.blocked && <> · <span style={{ color: 'var(--bad)' }}>заблокирован</span></>}</div></div>
+                    </div>
+                  </td>
+                  <td className="mono">{u.id}</td>
+                  <td>{u.lang}</td>
+                  <td>{utcDay(u.createdAt)}</td>
+                  <td>{utc(u.lastLoginAt)}</td>
+                  <td className="num">{u.activeSessions}</td>
+                  <td style={{ color: 'var(--demo)', fontWeight: 600 }}>{u.credits.unlimitedUntil ? '∞' : num(u.credits.balance)}</td>
+                  <td><div className="tags">{u.tags.map((t) => <Tag key={t} tone={tagTone(t)}>{t}</Tag>)}</div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!loading && <Pager page={data.page} size={data.size} total={data.total} onPage={(p) => update({ page: String(p) })} />}
+        </div>
+      )}
+      {dialog === 'tag' && (
+        <TagDialog count={selected.size} onClose={() => setDialog(null)} onSave={async (t) => {
+          const r = await api<{ tagged: number }>('/api/admin/users/bulk/tags', { method: 'POST', body: { userIds: [...selected], tag: t } });
+          setDialog(null); setToast(`Тег «${t}» добавлен: ${r.tagged}`); reload();
+        }} />
+      )}
+      {dialog === 'credits' && (
+        <CreditsDialog userIds={[...selected]} onClose={() => setDialog(null)} onDone={(text) => { setDialog(null); setToast(text); reload(); }} />
+      )}
+      {toast && <Toast text={toast} onDone={() => setToast(null)} />}
     </>
   );
 }
