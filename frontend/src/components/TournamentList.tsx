@@ -9,13 +9,23 @@ import { Logo } from './Logo';
 import s from './TournamentList.module.css';
 import ui from './ui.module.css';
 
-/** Tournaments of the chosen sport; each opens its calendar. */
-export function TournamentList({ sport }: { sport: Sport }) {
-  const t = useT();
+/** The sport's catalogue, loaded on its own so the calendars stay reachable even when the day's matches fail to
+ *  load; one load shared by the screen (the filter strip uses it too). */
+export function useTournamentCatalogue(sport: Sport, enabled = true) {
   const { data } = useServices();
-  // Loaded on its own, so the calendars stay reachable even when the day's matches fail to load.
-  const loaded = useAsync(() => data.loadTournaments(sport), `tournaments:${sport}`);
+  // A sport that is not available yet asks nothing at all (its screen says "coming soon").
+  const loaded = useAsync(
+    () => (enabled ? data.loadTournaments(sport) : Promise.resolve([])),
+    `tournaments:${sport}:${enabled}`,
+  );
   const tournaments = loaded.status === 'success' ? loaded.data : data.listTournaments(sport);
+  return { loaded, tournaments };
+}
+
+/** Tournaments of the chosen sport; each opens its calendar. */
+export function TournamentList({ catalogue }: { catalogue: ReturnType<typeof useTournamentCatalogue> }) {
+  const t = useT();
+  const { loaded, tournaments } = catalogue;
   if (loaded.status === 'error' && tournaments.length === 0) {
     // Nothing to fall back on: say so and offer a retry, never a silently missing section.
     return (
@@ -32,14 +42,15 @@ export function TournamentList({ sport }: { sport: Sport }) {
   return <Catalogue tournaments={tournaments} />;
 }
 
-/** Few competitions: one plain list. Many: a search field, the main ones first, the rest grouped by country. */
+/** Few competitions: one plain list. Many: the main ones, and a search that finds every other one (grouped by
+ *  country) — the whole catalogue is never listed at once. */
 function Catalogue({ tournaments }: { tournaments: Tournament[] }) {
   const t = useT();
   const [query, setQuery] = useState('');
   const large = tournaments.length > 12 && tournaments.some((x) => x.featured);
   const shown = tournaments.filter((x) => matchesQuery(x, query, x.area ? areaName(t, x.area) : ''));
   const featured = large && !query ? shown.filter((x) => x.featured) : [];
-  const rest = large && !query ? shown.filter((x) => !x.featured) : shown;
+  const rest = large && !query ? [] : shown;
   const groups = new Map<string, Tournament[]>();
   if (large) {
     for (const x of rest) {

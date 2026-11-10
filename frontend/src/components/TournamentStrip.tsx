@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import searchIcon from '../assets/figma/icon-search.svg';
 import { ALL_TOURNAMENTS } from '../data/filter';
 import { areaName } from '../data/present';
@@ -35,15 +35,19 @@ export function TournamentStrip({
         .sort((a, b) => Number(!!b.featured) - Number(!!a.featured) || area(a).localeCompare(area(b)) || a.name.localeCompare(b.name))
         .slice(0, MAX_FOUND)
     : [];
+  const toggle = useRef<HTMLButtonElement>(null);
+  // Closing removes the focused field or answer: focus goes back to the button that opened the search.
   const close = () => {
     setSearching(false);
     setQuery('');
+    toggle.current?.focus();
   };
   return (
     <>
       <div className={s.tournaments} role="group" aria-label={t('tournament.label')} data-testid="tournament-strip">
         {searchable && (
           <button
+            ref={toggle}
             type="button"
             className={searching ? s.pillActive : s.pill}
             aria-label={t('tournaments.search')}
@@ -86,7 +90,7 @@ export function TournamentStrip({
         </button>
       </div>
       {searchable && searching && (
-        <div className={s.tournamentSearch} data-testid="tournament-search">
+        <div className={s.tournamentSearch} data-testid="tournament-search" onKeyDown={(e) => e.key === 'Escape' && close()}>
           <label className={s.search}>
             <span className="visually-hidden">{t('tournaments.search')}</span>
             <input
@@ -99,7 +103,6 @@ export function TournamentStrip({
               placeholder={t('tournaments.search')}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Escape' && close()}
             />
           </label>
           {query.trim() && found.length === 0 && <p className={s.tournamentNone}>{t('tournaments.notFound')}</p>}

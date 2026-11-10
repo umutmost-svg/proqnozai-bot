@@ -354,10 +354,41 @@ describe('tournament search in the filter', () => {
     await user.click(within(panel).getByRole('button', { name: /Regionalliga Bayern/ }));
 
     expect(screen.queryByTestId('tournament-search')).toBeNull();
+    expect(within(screen.getByTestId('tournament-strip')).getByTestId('tournament-search-toggle')).toHaveFocus();
     expect(within(screen.getByTestId('tournament-strip')).getByRole('button', { name: /Regionalliga Bayern/ })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
+  });
+
+  it('finds by country too, and Escape closes the search with focus back on its button', async () => {
+    const user = userEvent.setup();
+    renderApp('#/matches', { data: manyBackend() });
+    const strip = await screen.findByTestId('tournament-strip');
+    await waitFor(() => expect(within(strip).getByTestId('tournament-search-toggle')).toBeInTheDocument());
+    await user.click(within(strip).getByTestId('tournament-search-toggle'));
+    const panel = screen.getByTestId('tournament-search');
+    await user.type(within(panel).getByRole('searchbox'), 'Герман'); // the translated country, not a name
+    const answers = within(panel).getAllByRole('button');
+    expect(answers).toHaveLength(8); // thirteen German competitions: the first eight
+    expect(answers.every((b) => b.textContent?.startsWith('Германия · '))).toBe(true);
+    within(panel).getAllByRole('button')[0]?.focus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('tournament-search')).toBeNull();
+    expect(within(strip).getByTestId('tournament-search-toggle')).toHaveFocus();
+  });
+
+  it('home lists only the main tournaments; every other one is found by the search', async () => {
+    const user = userEvent.setup();
+    renderApp('#/', { data: manyBackend() });
+    const list = await screen.findByTestId('tournament-list');
+    await waitFor(() => expect(within(list).getByRole('link', { name: /Premier League/ })).toBeInTheDocument());
+    expect(within(list).queryByRole('link', { name: /Regionalliga/ })).toBeNull();
+    expect(within(list).queryAllByTestId('tournament-group')).toHaveLength(0);
+    await user.type(within(list).getByRole('searchbox'), 'Bayern');
+    expect(within(list).getByRole('link', { name: /Regionalliga Bayern/ })).toBeInTheDocument();
+    // the strip on home uses the same loaded catalogue: its search is there too
+    expect(within(screen.getByTestId('tournament-strip')).getByTestId('tournament-search-toggle')).toBeInTheDocument();
   });
 
   it('shows at most eight answers and says when nothing matches', async () => {
