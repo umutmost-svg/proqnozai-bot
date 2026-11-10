@@ -912,3 +912,28 @@ def test_minor_competition_bonuses_are_capped_with_a_table():
     minor = score(event, "ZZZ", table)
     major = score(SimpleNamespace(**{**event.__dict__, "stage": None}), "PL", None)
     assert minor.score <= WEIGHTS.other_competition + WEIGHTS.other_stage_cap < major.score
+
+
+def test_cup_without_a_table_is_a_cached_empty_table_and_huge_days_are_rejected():
+    import asyncio
+    from datetime import date
+
+    from miniapp.sports.client import UpstreamError
+    from miniapp.sports.football_data import NO_TABLE_TTL_S, WHOLE_DAY_MAX, FootballDataAdapter, all_codes
+
+    class NotFound:
+        async def get_json(self, path, params=None):
+            raise UpstreamError("not_found", status=404)
+
+    standings, ttl = asyncio.run(FootballDataAdapter(NotFound(), all_codes(), lambda: 1.8e9).standings("FAC"))
+    assert standings.blocks == () and ttl == NO_TABLE_TTL_S
+
+    class Huge:
+        async def get_json(self, path, params=None):
+            return {"matches": [{}] * WHOLE_DAY_MAX, "resultSet": {"count": WHOLE_DAY_MAX}}, None
+
+    try:
+        asyncio.run(FootballDataAdapter(Huge(), all_codes(), lambda: 1.8e9).day(date(2026, 11, 8)))
+        raise AssertionError("a possibly truncated whole day must not pass")
+    except UpstreamError as exc:
+        assert exc.code == "bad_response"

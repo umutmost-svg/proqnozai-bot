@@ -204,7 +204,16 @@ class SportsService:
 
     async def _load_emblems(self, adapter: FootballDataAdapter) -> None:
         try:
-            await self.cache.get("football:competitions", adapter.competition_emblems)
+            # Optional data: the shared background slot and low priority (users keep the other slot and
+            # the minute's reserve).
+            async with self._background_slot:
+                reserve = LOW_PRIORITY_RESERVE.set(STANDINGS_WARM_RESERVE)
+                share = LOW_PRIORITY_DAY_SHARE.set(STANDINGS_WARM_DAY_SHARE)
+                try:
+                    await self.cache.get("football:competitions", adapter.competition_emblems)
+                finally:
+                    LOW_PRIORITY_DAY_SHARE.reset(share)
+                    LOW_PRIORITY_RESERVE.reset(reserve)
             # Codes the list gave no emblem for are not asked again before the next day.
             self._emblems_retry_at = self._clock() + football_data.EMBLEMS_TTL_S
         except Exception as exc:  # optional data: any failure only gates the next attempt

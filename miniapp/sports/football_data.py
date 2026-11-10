@@ -254,6 +254,7 @@ FEATURED: tuple[str, ...] = ("CL", "EL", "UCL", "PL", "PD", "SA", "BL1", "FL1", 
 # every other table is loaded when a user opens it.
 STANDINGS_WARM: tuple[str, ...] = FEATURED + ("ELC", "BSA", "WC", "EC")
 MAX_COMPETITIONS_FILTER = 90  # the provider's limit for the `competitions` query parameter
+WHOLE_DAY_MAX = 500  # an unfiltered day this large could be a truncated page: rejected, never cached as whole
 
 
 def all_codes() -> tuple[str, ...]:
@@ -516,8 +517,10 @@ class FootballDataAdapter:
         count = result_set.get("count") if isinstance(result_set, dict) else None
         if count is not None and count != len(matches):
             raise UpstreamError("bad_response")  # a truncated page must never pass for the whole day
-        if whole_day and (isinstance(count, bool) or not isinstance(count, int)):
-            raise UpstreamError("bad_response")  # unfiltered: completeness must be provable, not assumed
+        if whole_day and (isinstance(count, bool) or not isinstance(count, int) or count >= WHOLE_DAY_MAX):
+            # Unfiltered: completeness must be provable. The provider ignores `limit` here and returned a busy
+            # Saturday whole (211 matches); an answer at WHOLE_DAY_MAX or above may be cut, so it never passes.
+            raise UpstreamError("bad_response")
         fetched = self._now_iso()
         seen: set[str] = set()
         events: list[FootballEvent] = []
@@ -552,7 +555,14 @@ class FootballDataAdapter:
         """The competition's current tables: one request, shared by the table screen and the AI."""
         if code not in self._allowed:
             raise UpstreamError("not_found")
-        data, _ = await self.client.get_json(f"/competitions/{code}/standings")
+        try:
+            data, _ = await self.client.get_json(f"/competitions/{code}/standings")
+        except UpstreamError as exc:
+            if exc.code != "not_found":
+                raise
+            # A served competition without a table (a cup: the provider answers 404) is a valid "no table",
+            # remembered for hours like an empty one — never an error screen or a request per opening.
+            return Standings(Season(None, None, None), ()), NO_TABLE_TTL_S
         top = data.get("competition") if isinstance(data, dict) else None
         # The answer must name the competition asked for (as a calendar must): a missing or
         # different identity could put another table under this tournament.
@@ -664,6 +674,7 @@ class FootballDataAdapter:
 # screen of its own: refreshed every 30 minutes (≤ 48 requests a day per competition).
 FORM_TTL_S = 6 * 3600.0
 STANDINGS_TTL_S = 30 * 60.0
+NO_TABLE_TTL_S = 6 * 3600.0
 FORM_MATCHES = 10
 
 
