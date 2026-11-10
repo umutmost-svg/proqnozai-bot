@@ -833,7 +833,7 @@ def test_all_competitions_mode_and_featured_order():
 def test_search_pacing_adapts_to_competitions_and_budget():
     from miniapp.sports.search import REFRESH_AFTER_S, WARM_SPACING_S, search_pacing
 
-    assert search_pacing(10, 8, 3000) == (WARM_SPACING_S, REFRESH_AFTER_S, True)  # free tier: unchanged pace
+    assert search_pacing(10, 8, 3000) == (WARM_SPACING_S, REFRESH_AFTER_S, False)  # free tier: unchanged, calendars only
     spacing, refresh, past = search_pacing(117, 100, 10000)
     assert past and spacing < WARM_SPACING_S and refresh > REFRESH_AFTER_S
     # calendars plus one previous season a day each stay within a quarter of the daily budget

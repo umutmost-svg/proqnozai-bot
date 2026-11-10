@@ -457,6 +457,8 @@ class SportsService:
         hint = self.football.season_hints.get(code) if self.football is not None else None
         if hint is not None and self._costs_request(f"football:calendar:{code}"):
             speculative = asyncio.ensure_future(self._past_season(tournament_id, int(hint[:4]) - 1))
+            # A discarded guess (wrong season, failed calendar) never leaves its exception unretrieved.
+            speculative.add_done_callback(lambda task: task.cancelled() or task.exception())
         try:
             current = await self.calendar("football", tournament_id)
             if current is None:
@@ -480,8 +482,10 @@ class SportsService:
             if speculative is not None and not speculative.done():
                 speculative.cancel()  # only this waiter: the shielded cache load runs on and is kept
 
-    async def _past_season(self, tournament_id: str, year: int) -> tuple[list[SportEvent] | None, str | None]:
-        """The goal model's previous season: (events, None), or (None, why it is missing)."""
+    async def _past_season(self, tournament_id: str, year: int, *, background: bool = False,
+                           ) -> tuple[list[SportEvent] | None, str | None]:
+        """The goal model's previous season: (events, None), or (None, why it is missing). A background
+        (warm-up) failure that may pass is not remembered: it must never hold back a user's own load."""
         assert self.football is not None
         adapter = self.football
         code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
@@ -490,8 +494,8 @@ class SportsService:
         try:
             past = await self.cache.get(f"football:season:{code}:{year}", lambda: adapter.past_season(code, year))
         except UpstreamError as exc:
-            if exc.low_priority_only:
-                raise  # only the background budget said no: a user's request may still load it
+            if exc.low_priority_only or (background and exc.code != "not_found"):
+                raise  # the background budget said no, or the source may recover: a user's request still tries
             # Optional depth: without it the model shows probabilities but recommends
             # nothing (partial_history). Not asked again for PAST_SEASON_RETRY_S, so a
             # season the provider cannot supply never costs a request per analysis.
@@ -608,7 +612,7 @@ class SportsService:
             return
         if not self._costs_request(f"football:season:{code}:{year}") or not self._warm_budget_left():
             return
-        await self._past_season(tournament_id, year)
+        await self._past_season(tournament_id, year, background=True)
 
     def background_busy(self) -> bool:
         """A background load (standings warm-up, search warm-up, settlement) is running: the

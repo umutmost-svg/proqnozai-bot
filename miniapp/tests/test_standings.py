@@ -242,6 +242,8 @@ class RoutedTransport:
         if key in self.gates:
             await self.gates[key].wait()
         answer = self.routes[key]
+        if isinstance(answer, Exception):
+            raise answer
         return answer if isinstance(answer, HttpResponse) else HttpResponse(200, {}, __import__("json").dumps(answer).encode())
 
 
@@ -368,3 +370,47 @@ def test_calendar_warm_up_runs_only_where_enabled(clock: FakeClock) -> None:
 
     assert run(scenario(False)) is None
     assert asyncio.run(scenario(True)) is not None
+
+
+def test_a_transient_warm_up_failure_never_pauses_a_users_season_load(clock: FakeClock) -> None:
+    current = season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))
+    old = season_payload(match(1, "FINISHED", utc="2026-01-10T15:00:00Z", full=(3, 1)), season=PAST)
+    t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": HttpResponse(500, {}, b"")})
+    service = make_service(t, clock, per_minute=100, per_day=10000)
+    service.search_index.warm_past_seasons = True
+    with pytest.raises(UpstreamError):
+        run(service._search_warm_load("fd:PL"))  # the warm-up skips this competition, remembers nothing
+    assert not service._past_retry_at
+    t.routes["/competitions/PL/matches?season=2025"] = old
+    clock.advance(31)  # past the cache's failure backoff: the source has recovered
+    assert run(service.model_history("fd:PL")).previous_season
+
+
+def test_a_season_the_source_does_not_have_is_remembered_by_the_warm_up_too(clock: FakeClock) -> None:
+    current = season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))
+    t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2025": HttpResponse(404, {}, b"")})
+    service = make_service(t, clock, per_minute=100, per_day=10000)
+    service.search_index.warm_past_seasons = True
+    run(service._search_warm_load("fd:PL"))
+    assert run(service.model_history("fd:PL")).previous_missing == "absent" and len(t.calls) == 2
+
+
+def test_a_discarded_speculative_season_leaves_no_unretrieved_exception(clock: FakeClock) -> None:
+    import asyncio
+    import gc
+
+    current = season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))
+    t = RoutedTransport({"/competitions/PL/matches": current, "/competitions/PL/matches?season=2024": RuntimeError("boom"),
+                         "/competitions/PL/matches?season=2025": HttpResponse(404, {}, b"")})
+    unretrieved = []
+
+    async def scenario():
+        asyncio.get_running_loop().set_exception_handler(lambda _loop, ctx: unretrieved.append(ctx))
+        service = make_service(t, clock)
+        _hinted(service, "2025-08-15")  # a wrong guess whose load fails unexpectedly
+        await service.model_history("fd:PL")
+        await asyncio.sleep(0.05)
+        gc.collect()
+
+    run(scenario())
+    assert not unretrieved

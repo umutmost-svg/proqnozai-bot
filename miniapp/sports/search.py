@@ -45,7 +45,9 @@ def search_pacing(competitions: int, per_minute: int, per_day: int) -> tuple[flo
     the budget. A previous season (the goal model's history) costs one request a day per competition; it
     is warmed only when that leaves the calendars at least as much of the day's share."""
     day_share = per_day * WARM_DAY_SHARE
-    past = day_share >= 2 * competitions
+    # Two requests a step must fit the minute's share even at the slowest pace (the free tier does not:
+    # there the warm-up keeps to calendars and the original pace).
+    past = day_share >= 2 * competitions and per_minute * WARM_MINUTE_SHARE * WARM_SPACING_S / 60.0 >= 2
     per_load = 2 if past else 1  # requests one warm-up step may make (calendar + previous season)
     spacing = min(WARM_SPACING_S, max(MIN_WARM_SPACING_S, 60.0 * per_load / max(1.0, per_minute * WARM_MINUTE_SHARE)))
     calendars = day_share - competitions if past else day_share
