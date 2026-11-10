@@ -77,7 +77,10 @@ def test_broadcast_draft_then_scheduled_with_step_up(env):
     ok = post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": at})
     assert ok.status_code == 200 and ok.json()["after"]["recipients"] == draft["audience"]
     assert post(client, "/api/admin/broadcasts", csrf, {"id": bid, "name": "x", "body": "y"}).json()["error"] == "not_a_draft"
-    assert post(client, f"/api/admin/broadcasts/{bid}/cancel", csrf, {}).json()["status"] == "cancelled"
+    assert post(client, f"/api/admin/broadcasts/{bid}/cancel", csrf, {}).json()["error"] == "reason_required"
+    clock.t += 30
+    cancel = post(client, f"/api/admin/broadcasts/{bid}/cancel", csrf, {**dangerous(secrets_, clock), "idempotencyKey": "cancel-key-1"})
+    assert cancel.json()["after"] == {"status": "cancelled"}
 
 
 def test_credits_grant_debit_unlimited_and_ledger_is_append_only(env):
@@ -287,3 +290,25 @@ def test_recovered_revocation_count_is_unknown(env, monkeypatch):
     create_admin_app(config, clock=clock)
     done = [e for e in accounts.events(target=("user", str(U1))) if e["result"] == "completed"]
     assert done and done[0]["after"] == {"revoked": None}
+
+
+def test_broadcast_audience_excludes_blocked_users(env):
+    _, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    everyone = post(client, "/api/admin/audience/preview", csrf, {"rules": {}, "forBroadcast": True}).json()["size"]
+    post(client, f"/api/admin/users/{U1}/block", csrf, {**dangerous(secrets_, clock), "blocked": True})
+    assert post(client, "/api/admin/audience/preview", csrf, {"rules": {}, "forBroadcast": True}).json()["size"] == everyone - 1
+    assert post(client, "/api/admin/audience/preview", csrf, {"rules": {}}).json()["size"] == everyone  # segments count all
+
+
+def test_replay_still_works_after_the_reason_text_is_erased(env):
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    body = {"reason": "личная причина", "idempotencyKey": "erase-key-1", "kind": "grant", "amount": 2, "userIds": [U1]}
+    assert post(client, "/api/admin/credits/change", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)}).status_code == 200
+    with sqlite3.connect(config.admin_db) as conn:
+        conn.execute("DELETE FROM admin_event_reasons")
+    replay = post(client, "/api/admin/credits/change", csrf, {**body, "code": ""})
+    assert replay.status_code == 200 and replay.json()["replayed"] is True
+    other = post(client, "/api/admin/credits/change", csrf, {**body, "reason": "другая", "code": ""})
+    assert other.status_code == 409

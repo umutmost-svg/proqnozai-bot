@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS admin_events (
     reason          TEXT,
     idempotency_key TEXT UNIQUE,
     request_id      TEXT,
+    reason_digest   TEXT,
     kind            TEXT NOT NULL CHECK (kind IN ('done', 'requested', 'completed', 'denied', 'failed'))
 );
 CREATE INDEX IF NOT EXISTS admin_events_at ON admin_events(at);
@@ -133,6 +134,12 @@ class AdminSession:
     admin: Admin
     token_hash: str
     expires_at: int
+
+
+def reason_digest(reason: str | None) -> str | None:
+    """Binds idempotent replays to the reason without keeping its text in the immutable journal (the text is
+    erasable in admin_event_reasons; a replay keeps working after an erasure)."""
+    return None if not reason else hashlib.sha256(("reason:" + reason).encode()).hexdigest()
 
 
 def _digest(value: str) -> str:
@@ -199,6 +206,10 @@ class AdminStore:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
+            try:  # pilot databases created before the column existed
+                conn.execute("ALTER TABLE admin_events ADD COLUMN reason_digest TEXT")
+            except sqlite3.OperationalError:
+                pass
             conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('csrf_key', ?)", (secrets.token_hex(32),))
         if fresh:
             os.chmod(self.path, 0o600)
@@ -365,11 +376,11 @@ class AdminStore:
                idempotency_key: str | None, kind: str, request_id: str | None = None) -> int:
         cur = conn.execute(
             "INSERT INTO admin_events (at, admin_id, action, target_type, target_id, before_json, after_json, "
-            "reason, idempotency_key, request_id, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "reason, idempotency_key, request_id, reason_digest, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (now, admin_id, action, target_type, target_id,
              json.dumps(before, sort_keys=True) if before is not None else None,
              json.dumps(after, sort_keys=True) if after is not None else None,
-             None, idempotency_key, request_id, kind))
+             None, idempotency_key, request_id, reason_digest(reason), kind))
         if reason:
             conn.execute("INSERT INTO admin_event_reasons (event_id, reason) VALUES (?, ?)", (cur.lastrowid, reason))
         return int(cur.lastrowid)
@@ -405,14 +416,14 @@ class AdminStore:
                   after: dict | None = None, reason: str | None = None) -> dict | None:
         """The earlier result of the same request, or None. A key is bound to its admin, action, target and
         (when given) result: reusing it for anything else is a conflict, never a silent success."""
-        row = conn.execute("SELECT id, admin_id, action, target_id, after_json, " + REASON + " FROM admin_events "
+        row = conn.execute("SELECT id, admin_id, action, target_id, after_json, reason_digest FROM admin_events "
                            "WHERE idempotency_key = ?", (key,)).fetchone()
         if row is None:
             return None
         event_id, prior_admin, prior_action, prior_target, prior_after, prior_reason = row
         stored = json.loads(prior_after) if prior_after else None
         if (prior_admin, prior_action, prior_target) != (admin_id, action, target_id) or (
-                after is not None and stored != after) or (reason is not None and prior_reason != reason):
+                after is not None and stored != after) or (reason is not None and prior_reason != reason_digest(reason)):
             raise ActionError("idempotency_key_reused", 409)
         return {"eventId": event_id, "after": stored, "replayed": True}
 
@@ -533,11 +544,11 @@ class AdminStore:
         `completed`; a request left unfinished (crash between the steps) is handed back to be completed.
         """
         with self._write() as conn:
-            row = conn.execute("SELECT kind, request_id, target_id, admin_id, " + REASON + " FROM admin_events "
+            row = conn.execute("SELECT kind, request_id, target_id, admin_id, reason_digest FROM admin_events "
                                "WHERE idempotency_key = ?", (key,)).fetchone()
             if row is not None:
                 kind, prior_request, target, prior_admin, prior_reason = row
-                if (kind, target, prior_admin, prior_reason) != ("requested", str(user_id), actor.id, reason):
+                if (kind, target, prior_admin, prior_reason) != ("requested", str(user_id), actor.id, reason_digest(reason)):
                     raise ActionError("idempotency_key_reused", 409)
                 done = conn.execute("SELECT id, after_json FROM admin_events WHERE kind = 'completed' "
                                     "AND request_id = ?", (prior_request,)).fetchone()

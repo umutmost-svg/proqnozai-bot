@@ -17,7 +17,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Any
 
-from miniapp.admin_web.accounts import REASON, ActionError, Admin, AdminStore
+from miniapp.admin_web.accounts import ActionError, Admin, AdminStore, reason_digest
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS crm_tags (
@@ -403,15 +403,19 @@ class CrmStore:
                                          {"status": "draft"}, after, reason, key, "done")
         return {"eventId": event, "after": after, "replayed": False}
 
-    def cancel_broadcast(self, actor: Admin, broadcast_id: int, now: int) -> dict:
+    def cancel_broadcast(self, actor: Admin, broadcast_id: int, reason: str, key: str, code: str, now: int) -> dict:
+        """Irreversible: step-up + reason + idempotency like scheduling."""
         with self.accounts._write() as conn:
-            self.accounts._require_actor(conn, actor.id, "manage_users")
+            if (prior := self.accounts._replayed(conn, key, actor.id, "broadcast.cancel", str(broadcast_id),
+                                                 {"status": "cancelled"}, reason)) is not None:
+                return prior
+            self.accounts.step_up(conn, actor.id, code, now, "manage_users")
             if not conn.execute("UPDATE crm_broadcasts SET status = 'cancelled', updated_at = ? WHERE id = ? "
                                 "AND status IN ('draft', 'scheduled')", (now, broadcast_id)).rowcount:
                 raise ActionError("not_cancellable", 409)
-            self.accounts._event(conn, now, actor.id, "broadcast.cancel", "broadcast", str(broadcast_id), None,
-                                 {"status": "cancelled"}, None, None, "done")
-        return {"status": "cancelled"}
+            event = self.accounts._event(conn, now, actor.id, "broadcast.cancel", "broadcast", str(broadcast_id),
+                                         None, {"status": "cancelled"}, reason, key, "done")
+        return {"eventId": event, "after": {"status": "cancelled"}, "replayed": False}
 
     def credit(self, actor: Admin, user_ids: list[int], kind: str, amount: int, days: int, reason: str, key: str,
                code: str, now: int) -> dict:
@@ -473,12 +477,12 @@ class CrmStore:
         (same two-step flow as a session revocation, finished at startup if a crash hit in between).
         Returns {"requestId", "resumed"} when sessions must be revoked now, else the recorded result."""
         with self.accounts._write() as conn:
-            row = conn.execute("SELECT id, kind, request_id, target_id, admin_id, " + REASON + ", after_json FROM admin_events "
+            row = conn.execute("SELECT id, kind, request_id, target_id, admin_id, reason_digest, after_json FROM admin_events "
                                "WHERE idempotency_key = ?", (key,)).fetchone()
             if row is not None:
                 event_id, kind, prior_request, target, prior_admin, prior_reason, after_json = row
                 after = json.loads(after_json) if after_json else None
-                if (target, prior_admin, prior_reason, (after or {}).get("blocked")) != (str(user_id), actor.id, reason,
+                if (target, prior_admin, prior_reason, (after or {}).get("blocked")) != (str(user_id), actor.id, reason_digest(reason),
                                                                                         blocked):
                     raise ActionError("idempotency_key_reused", 409)
                 if kind != "requested":

@@ -24,6 +24,7 @@ export function Broadcasts() {
   const [filter, setFilter] = useState<'all' | Broadcast['status']>('all');
   const { data, error, loading, reload } = useLoad<{ items: Broadcast[] }>('/api/admin/broadcasts');
   const [toast, setToast] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<Broadcast | null>(null);
   const items = (data?.items ?? []).filter((b) => filter === 'all' || b.status === filter);
   const count = (s: Broadcast['status']) => data?.items.filter((b) => b.status === s).length ?? 0;
   const manage = can(me.admin.role, 'manage_users');
@@ -64,9 +65,7 @@ export function Broadcasts() {
                   <td><Tag tone={STATUS[b.status][1]}>{STATUS[b.status][0]}</Tag></td>
                   <td onClick={(e) => e.stopPropagation()}>
                     {(b.status === 'draft' || b.status === 'scheduled') && manage && (
-                      <button type="button" className="btn link" onClick={async () => {
-                        try { await api(`/api/admin/broadcasts/${b.id}/cancel`, { method: 'POST', body: {} }); setToast('Рассылка отменена'); reload(); } catch (err) { setToast(errorText(err)); }
-                      }}>Отменить</button>
+                      <button type="button" className="btn link" onClick={() => setCancelling(b)}>Отменить</button>
                     )}
                   </td>
                 </tr>
@@ -74,6 +73,14 @@ export function Broadcasts() {
             </tbody>
           </table>
         </div>
+      )}
+      {cancelling && (
+        <DangerDialog title="Отменить рассылку?" confirmLabel="Отменить рассылку" onClose={() => setCancelling(null)}
+          lead={<>«{cancelling.name}» будет отменена без возможности восстановления. Действие запишется в журнал.</>}
+          onConfirm={async (input) => {
+            await api(`/api/admin/broadcasts/${cancelling.id}/cancel`, { method: 'POST', body: input });
+            setCancelling(null); setToast('Рассылка отменена'); reload();
+          }} />
       )}
       {toast && <Toast text={toast} onDone={() => setToast(null)} />}
     </>
@@ -107,17 +114,17 @@ function RulesEditor({ rules, onChange, tags }: { rules: Rules; onChange: (r: Ru
   );
 }
 
-function useAudience(rules: Rules) {
+function useAudience(rules: Rules, forBroadcast = false) {
   const [size, setSize] = useState<number | null>(null);
   const key = JSON.stringify(rules);
   useEffect(() => {
     let alive = true;
     const t = setTimeout(() => {
-      api<{ size: number }>('/api/admin/audience/preview', { method: 'POST', body: { rules: JSON.parse(key) } })
+      api<{ size: number }>('/api/admin/audience/preview', { method: 'POST', body: { rules: JSON.parse(key), forBroadcast } })
         .then((r) => { if (alive) setSize(r.size); }).catch(() => { if (alive) setSize(null); });
     }, 250);
     return () => { alive = false; clearTimeout(t); };
-  }, [key]);
+  }, [key, forBroadcast]);
   return size;
 }
 
@@ -150,7 +157,7 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(autoConfirm && item?.status === 'draft');
   const [toast, setToast] = useState<string | null>(null);
-  const size = useAudience(rules);
+  const size = useAudience(rules, true);
   const preview = useMemo(() => body.replaceAll('{имя}', 'Айгерим'), [body]);
   const save = async (): Promise<number | null> => {
     setBusy(true); setError(null);

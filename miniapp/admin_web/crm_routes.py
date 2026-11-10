@@ -45,6 +45,10 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         blocked = crm.blocked()
         return [u for u in users if matches(u, rules, set(tags.get(u["id"], [])), u["id"] in blocked, t)]
 
+    def broadcast_audience(rules: dict) -> list[dict]:
+        """Recipients of a broadcast: blocked users are always excluded (unless a rule asks for them explicitly)."""
+        return audience(rules if "blocked" in rules else {**rules, "blocked": False})
+
     def decorate(rows: list[dict]) -> list[dict]:
         ids = [r["id"] for r in rows]
         tags = crm.tags_by_user(ids)
@@ -235,8 +239,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     @app.post("/api/admin/audience/preview")
     async def audience_preview(request: Request) -> dict:
         ctx.admin_of(request, "read_personal")
-        rules = validate_rules((await ctx.body(request)).get("rules") or {})
-        rows = audience(rules)
+        data = await ctx.body(request)
+        rules = validate_rules(data.get("rules") or {})
+        rows = broadcast_audience(rules) if data.get("forBroadcast") is True else audience(rules)
         return {"size": len(rows), "sample": [{"id": r["id"], "username": r["username"],
                                                "firstName": r["firstName"]} for r in rows[:5]],
                 "langs": dict(Counter(r["lang"] for r in rows))}
@@ -249,7 +254,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         items = crm.broadcasts()
         for b in items:
             if b["status"] == "draft":
-                b["audience"] = len(audience(b["rules"]))
+                b["audience"] = len(broadcast_audience(b["rules"]))
         return {"items": items, "sending": "pilot_not_sent", "segments": crm.segments()}
 
     @app.post("/api/admin/broadcasts")
@@ -272,14 +277,15 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         item = next((b for b in crm.broadcasts() if b["id"] == broadcast_id), None)
         if item is None:
             raise ActionError("not_found", 404)
-        recipients = len(audience(item["rules"]))
+        recipients = len(broadcast_audience(item["rules"]))
         return ctx.step_up_guard(admin, lambda: crm.schedule_broadcast(admin, broadcast_id, at, recipients, reason,
                                                                        key, code, ctx.now()))
 
     @app.post("/api/admin/broadcasts/{broadcast_id}/cancel")
     async def cancel(broadcast_id: int, request: Request) -> dict:
         admin = ctx.admin_of(request, "manage_users")
-        return crm.cancel_broadcast(admin, broadcast_id, ctx.now())
+        reason, code, key = ctx.dangerous(await ctx.body(request))
+        return ctx.step_up_guard(admin, lambda: crm.cancel_broadcast(admin, broadcast_id, reason, key, code, ctx.now()))
 
     # ---- credits -----------------------------------------------------------------------------
 

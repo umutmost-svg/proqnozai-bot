@@ -171,6 +171,7 @@ await shot('06-broadcast');
 await page.goto(BASE + '/broadcasts');
 check('broadcast listed', await vis(page.getByRole('link', { name: 'e2e: тестовая кампания' })));
 await page.getByRole('row', { name: /e2e: тестовая кампания/ }).getByRole('button', { name: 'Отменить' }).click();
+await confirm2fa('owner@sporbot.local', 'Отменить рассылку');
 check('broadcast cancelled', await vis(page.getByText('Рассылка отменена')));
 
 // 8. credits page, dialogs demo, settings + journal
