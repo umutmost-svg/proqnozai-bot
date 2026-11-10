@@ -73,7 +73,7 @@ export function Forecasts() {
             !list.data.available ? <Empty title="История прогнозов пока пуста">Файл истории появится после первого AI-разбора в Mini App.</Empty>
               : list.data.items.length === 0 ? <Empty title="Ничего не найдено">Измените фильтры.</Empty> : (
                 <>
-                  <table className="table" aria-busy={list.loading} style={{ opacity: list.loading ? 0.45 : 1 }}>
+                  <table className="table" aria-busy={list.loading} style={{ opacity: list.loading ? 0.45 : 1, pointerEvents: list.loading ? 'none' : undefined }} inert={list.loading}>
                     <thead>
                       <tr>
                         <th>Матч</th>

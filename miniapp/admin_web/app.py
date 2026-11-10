@@ -470,13 +470,15 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         admin_of(request)
         q = request.query_params
         since = now() - period(request) * 86400
+        personal = can(request.state.admin.role, "read_personal")
         try:
-            admin_id = int(q["admin"]) if q.get("admin") else None
+            # Analysts may not filter by actor: probing ids would reveal who did what.
+            admin_id = int(q["admin"]) if q.get("admin") and personal else None
         except ValueError:
             raise ActionError("bad_filter") from None
         items = accounts.events(since=since, admin_id=admin_id, action=q.get("action") or None,
                                 kind=q.get("result") or None, limit=500)
-        if not can(request.state.admin.role, "read_personal"):
+        if not personal:
             for item in items:  # analysts: no end-user identifiers (§4.8); free-text reasons may name anyone
                 item["reason"] = None
                 item["adminId"] = item["adminEmail"] = None

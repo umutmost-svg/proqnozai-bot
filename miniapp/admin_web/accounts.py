@@ -316,10 +316,16 @@ class AdminStore:
             conn.execute("UPDATE admin_sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
                          (now, _digest(token)))
 
-    def step_up(self, conn: sqlite3.Connection, admin_id: int, code: str, now: int) -> None:
-        """Repeated TOTP for a dangerous action, inside the action's transaction (a code works once)."""
-        secret, last_step, locked_until = conn.execute(
-            "SELECT totp_secret, last_totp_step, locked_until FROM admin_users WHERE id = ?", (admin_id,)).fetchone()
+    def step_up(self, conn: sqlite3.Connection, admin_id: int, code: str, now: int, permission: str) -> None:
+        """Repeated TOTP for a dangerous action, inside the action's transaction (a code works once).
+
+        The actor's state and role are re-read HERE, in the write transaction: a request that passed the
+        route check and was then disabled or demoted (e.g. while its body was arriving) cannot finish."""
+        secret, last_step, locked_until, state, role = conn.execute(
+            "SELECT totp_secret, last_totp_step, locked_until, state, role FROM admin_users WHERE id = ?",
+            (admin_id,)).fetchone()
+        if state != "active" or not can(role, permission):
+            raise ActionError("forbidden", 403)
         if locked_until > now:
             raise ActionError("locked", 423)
         step = totp.matching_step(secret, code, now) if secret else None
@@ -412,7 +418,7 @@ class AdminStore:
                     conn, key, actor.id, "admin.invite", prior_row[0],
                     {"email": email, "role": role, "state": "invited"}, reason)) is not None:
                 return prior
-            self.step_up(conn, actor.id, code, now)
+            self.step_up(conn, actor.id, code, now, "manage_admins")
             if conn.execute("SELECT 1 FROM admin_users WHERE email = ?", (email,)).fetchone():
                 raise ActionError("email_taken", 409)
             cur = conn.execute("INSERT INTO admin_users (email, role, state, created_at) VALUES (?, ?, 'invited', ?)",
@@ -433,7 +439,7 @@ class AdminStore:
                 if (prior["after"] or {}).get("requested") != {"role": role, "state": state}:
                     raise ActionError("idempotency_key_reused", 409)
                 return prior
-            self.step_up(conn, actor.id, code, now)
+            self.step_up(conn, actor.id, code, now, "manage_admins")
             row = conn.execute("SELECT role, state, password_hash IS NOT NULL FROM admin_users WHERE id = ?",
                                (target_id,)).fetchone()
             if row is None:
@@ -484,7 +490,7 @@ class AdminStore:
             if (prior := self._replayed(conn, idem, actor.id, "settings.update", key,
                                         {"key": key, "value": value}, reason)) is not None:
                 return prior
-            self.step_up(conn, actor.id, code, now)
+            self.step_up(conn, actor.id, code, now, "manage_settings")
             row = conn.execute("SELECT value_json, version FROM runtime_settings WHERE key = ?", (key,)).fetchone()
             before_value = json.loads(row[0]) if row else spec["default"]
             version = max(now * 1000, (row[1] + 1) if row else 0)
@@ -519,7 +525,7 @@ class AdminStore:
                 if done is not None:
                     return {"eventId": done[0], "after": json.loads(done[1]), "replayed": True}
                 return {"requestId": prior_request, "resumed": True}
-            self.step_up(conn, actor.id, code, now)
+            self.step_up(conn, actor.id, code, now, "manage_users")
             self._event(conn, now, actor.id, "user.sessions_revoke", "user", str(user_id), None, None, reason, key,
                         "requested", request_id)
         return {"requestId": request_id, "resumed": False}

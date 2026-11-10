@@ -489,3 +489,22 @@ def test_admin_update_replay_must_match_the_whole_input(env):
     partial = post(client, f"/api/admin/admins/{target}", csrf,
                    {**body, "state": None, "code": code(secrets_["owner@x.test"], clock)})
     assert partial.status_code == 409
+
+
+def test_actor_is_rechecked_inside_the_write_transaction(env):
+    # The route saw an active admin; by the time the body arrived the actor was disabled.
+    _, clock, _, accounts, secrets_ = env
+    from miniapp.admin_web.accounts import Admin
+    row = next(a for a in accounts.admins() if a["email"] == "admin@x.test")
+    stale = Admin(row["id"], row["email"], "admin", "active")
+    with sqlite3.connect(accounts.path) as conn:
+        conn.execute("UPDATE admin_users SET state = 'disabled' WHERE id = ?", (row["id"],))
+    with pytest.raises(ActionError, match="forbidden"):
+        accounts.set_setting(stale, "ai.enabled", False, "late", "late-key-1", code(secrets_["admin@x.test"], clock),
+                             int(clock()))
+    assert accounts.settings()["ai.enabled"]["value"] is True
+    with sqlite3.connect(accounts.path) as conn:
+        conn.execute("UPDATE admin_users SET state = 'active', role = 'analyst' WHERE id = ?", (row["id"],))
+    with pytest.raises(ActionError, match="forbidden"):
+        accounts.revoke_requested(stale, DEMO_ID_BASE + 1000, "late", "late-key-2",
+                                  code(secrets_["admin@x.test"], clock), int(clock()), "rid-late")

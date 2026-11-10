@@ -75,7 +75,7 @@ export function Users() {
               : <Empty title="Список пользователей появится здесь">Пользователи появятся после первого входа в Mini App.</Empty>
           ) : data && (
             <>
-              <table className="table" aria-busy={loading} style={{ opacity: loading ? 0.45 : 1 }}>
+              <table className="table" aria-busy={loading} style={{ opacity: loading ? 0.45 : 1, pointerEvents: loading ? 'none' : undefined }} inert={loading}>
                 <thead>
                   <tr>
                     <SortHeader label="Telegram ID" field="id" sort={sort} onSort={onSort} />

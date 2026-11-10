@@ -47,6 +47,7 @@ export function AiCosts() {
   const p95 = latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))] : null;
   const models = calls ? [...new Set(calls.map((c) => c.model))] : [];
   const size = 15;
+  const shownPage = Math.min(page, Math.max(1, Math.ceil(filtered.length / size)));
 
   return (
     <>
@@ -86,7 +87,7 @@ export function AiCosts() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.slice((page - 1) * size, page * size).map((c) => (
+                    {filtered.slice((shownPage - 1) * size, shownPage * size).map((c) => (
                       <tr key={c.id}>
                         <td>{utc(c.at)}</td><td>{c.operation}</td><td className="mono">{c.model}</td>
                         <td className="num">{c.inputTokens === null ? '—' : `${num(c.inputTokens)} / ${num(c.outputTokens)}`}</td>
@@ -97,7 +98,7 @@ export function AiCosts() {
                     ))}
                   </tbody>
                 </table>
-                <Pager page={page} size={size} total={filtered.length} onPage={setPage} />
+                <Pager page={shownPage} size={size} total={filtered.length} onPage={setPage} />
               </>
             )}
           </section>
