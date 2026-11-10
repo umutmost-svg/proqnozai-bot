@@ -385,6 +385,8 @@ describe('tournament search in the filter', () => {
     await waitFor(() => expect(within(list).getByRole('link', { name: /Premier League/ })).toBeInTheDocument());
     expect(within(list).queryByRole('link', { name: /Regionalliga/ })).toBeNull();
     expect(within(list).queryAllByTestId('tournament-group')).toHaveLength(0);
+    await user.type(within(list).getByRole('searchbox'), '   '); // blanks are no query: still the main ones only
+    expect(within(list).queryByRole('link', { name: /Regionalliga/ })).toBeNull();
     await user.type(within(list).getByRole('searchbox'), 'Bayern');
     expect(within(list).getByRole('link', { name: /Regionalliga Bayern/ })).toBeInTheDocument();
     // the strip on home uses the same loaded catalogue: its search is there too
@@ -412,4 +414,26 @@ describe('tournament search in the filter', () => {
     await waitFor(() => expect(within(strip).getByRole('button', { name: /Serie A/ })).toBeInTheDocument());
     expect(within(strip).queryByTestId('tournament-search-toggle')).toBeNull();
   });
+});
+
+it('the search button stays after choosing the only other tournament', async () => {
+  const user = userEvent.setup();
+  const FEATURED = Array.from({ length: 12 }, (_, i) => ({
+    id: `fd:F${i}`, sport: 'football', name: `Main ${i}`, area: 'England', provider: 'football-data.org', emblem: null, featured: true,
+  }));
+  const ONE = { id: 'fd:RBY', sport: 'football', name: 'Regionalliga Bayern', area: 'Germany', provider: 'football-data.org', emblem: null };
+  const list = [...FEATURED, ONE];
+  const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+    const url = String(input);
+    if (url === '/api/sports/football/tournaments') return ok({ sport: 'football', coverage: COVERAGE, tournaments: list });
+    if (url.startsWith('/api/sports/football/events')) return ok({ coverage: COVERAGE, tournaments: list, events: [] });
+    return ok({ coverage: { status: 'not_connected', provider: null, attribution: null }, tournaments: [], events: [] });
+  });
+  renderApp('#/matches', { data: new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl }) });
+  const strip = await screen.findByTestId('tournament-strip');
+  await waitFor(() => expect(within(strip).getByTestId('tournament-search-toggle')).toBeInTheDocument());
+  await user.click(within(strip).getByTestId('tournament-search-toggle'));
+  await user.type(within(screen.getByTestId('tournament-search')).getByRole('searchbox'), 'Bayern');
+  await user.click(within(screen.getByTestId('tournament-search')).getByRole('button', { name: /Regionalliga Bayern/ }));
+  expect(within(screen.getByTestId('tournament-strip')).getByTestId('tournament-search-toggle')).toHaveFocus();
 });

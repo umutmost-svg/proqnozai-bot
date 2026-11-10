@@ -49,8 +49,9 @@ function Catalogue({ tournaments }: { tournaments: Tournament[] }) {
   const [query, setQuery] = useState('');
   const large = tournaments.length > 12 && tournaments.some((x) => x.featured);
   const shown = tournaments.filter((x) => matchesQuery(x, query, x.area ? areaName(t, x.area) : ''));
-  const featured = large && !query ? shown.filter((x) => x.featured) : [];
-  const rest = large && !query ? [] : shown;
+  const asked = query.trim() !== '';
+  const featured = large && !asked ? shown.filter((x) => x.featured) : [];
+  const rest = large && !asked ? [] : shown;
   const groups = new Map<string, Tournament[]>();
   if (large) {
     for (const x of rest) {

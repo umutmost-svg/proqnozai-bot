@@ -25,7 +25,8 @@ export function TournamentStrip({
   const haptic = useHaptic();
   const shown = quickPicks(tournaments, [value]);
   // The rest of the catalogue is found by name or country here, never listed whole in the strip.
-  const searchable = shown.length < tournaments.length;
+  // Decided on the catalogue alone (not on the current choice), so the button stays after a selection.
+  const searchable = quickPicks(tournaments).length < tournaments.length;
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState('');
   const area = (x: Tournament) => (x.area ? areaName(t, x.area) : '');
