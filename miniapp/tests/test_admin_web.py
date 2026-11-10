@@ -564,3 +564,11 @@ def test_upcoming_forecasts_are_filtered_in_sql(tmp_path):
     later = rows[len(rows) // 2]["kickoffAt"]
     _, upcoming = history.list_forecasts(status="pending", kickoff_from=later, sort="kickoff", descending=False, limit=3)
     assert upcoming and all(r["kickoffAt"] >= later for r in upcoming)
+
+
+def test_non_ascii_digits_are_a_wrong_code_not_a_crash(env):
+    _, _, client, _, _ = env
+    h = {"Origin": ORIGIN}
+    client.post("/api/admin/auth/login", json={"email": "owner@x.test", "password": "pw-owner"}, headers=h)
+    r = client.post("/api/admin/auth/totp", json={"code": "١٢٣٤٥٦"}, headers=h)  # Arabic-Indic digits
+    assert r.status_code == 401 and r.json()["error"] == "invalid_code"

@@ -30,7 +30,7 @@ def code_at(secret: str, step: int) -> str:
 
 def matching_step(secret: str, code: str, now: float, window: int = 1) -> int | None:
     """The time step the code belongs to (±window steps for clock drift), else None."""
-    if len(code) != DIGITS or not code.isdigit():
+    if len(code) != DIGITS or not (code.isascii() and code.isdigit()):
         return None
     current = int(now // STEP_S)
     for step in range(current - window, current + window + 1):

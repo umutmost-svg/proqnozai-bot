@@ -21,7 +21,7 @@ function UserCard({ id }: { id: string }) {
   const [confirm, setConfirm] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const canRevoke = can(me.admin.role, 'manage_users');
-  const active = data?.sessions.filter((s) => s.state === 'active').length ?? 0;
+  const active = data?.activeSessions ?? 0; // from the server count, not the 50 listed sessions
 
   return (
     <>
