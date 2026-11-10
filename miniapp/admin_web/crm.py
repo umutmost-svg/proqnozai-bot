@@ -103,7 +103,7 @@ BEGIN SELECT RAISE(ABORT, 'the credit ledger is append-only'); END;
 -- The user's account id at the partner bookmaker (MB), entered by an admin; one id belongs to one user.
 CREATE TABLE IF NOT EXISTS crm_external_ids (
     user_id    INTEGER PRIMARY KEY,
-    mb_id      TEXT NOT NULL UNIQUE,
+    mb_id      TEXT NOT NULL UNIQUE COLLATE NOCASE,
     updated_at INTEGER NOT NULL,
     admin_id   INTEGER NOT NULL
 );
@@ -203,11 +203,14 @@ class CrmStore:
         wanted = set(user_ids) if user_ids is not None else None
         return {uid: mb for uid, mb in rows if wanted is None or uid in wanted}
 
-    def user_by_mb(self, mb_id: str) -> int | None:
+    def users_by_mb(self, fragment: str) -> set[int]:
+        """Users whose MB id contains the fragment (case-insensitive), like the other search fields."""
+        fragment = fragment.strip()
+        if not fragment or not _MB_ID.match(fragment):
+            return set()
         with self.accounts._connect() as conn:
-            row = conn.execute("SELECT user_id FROM crm_external_ids WHERE mb_id = ? COLLATE NOCASE",
-                               (mb_id.strip(),)).fetchone()
-        return int(row[0]) if row else None
+            return {int(r[0]) for r in conn.execute(
+                "SELECT user_id FROM crm_external_ids WHERE instr(lower(mb_id), lower(?)) > 0", (fragment,))}
 
     def tag_events(self, user_id: int) -> list[dict]:
         with self.accounts._connect() as conn:

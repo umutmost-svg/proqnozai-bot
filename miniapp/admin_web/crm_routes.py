@@ -102,9 +102,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         query = q.get("q", "")[:64]
         rules = rules_from_query(request)
         rows = audience(rules, query)
-        by_mb = crm.user_by_mb(query) if query.strip() else None
-        if by_mb is not None and all(r["id"] != by_mb for r in rows):
-            rows += [r for r in audience(rules) if r["id"] == by_mb]  # the search also finds an MB id
+        by_mb = crm.users_by_mb(query) - {r["id"] for r in rows}
+        if by_mb:  # the search also finds an MB id
+            rows += [r for r in audience(rules) if r["id"] in by_mb]
         key = _USER_SORT.get(q.get("sort", "created"), "createdAt")
         rows.sort(key=lambda r: (r[key] is None, r[key] or 0) if key != "username"
                   else (r[key] is None, (r[key] or "").casefold()), reverse=q.get("order", "desc") != "asc")

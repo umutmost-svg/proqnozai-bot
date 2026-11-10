@@ -321,7 +321,15 @@ def test_mb_id_set_search_unique_and_kept_out_of_the_journal(env):
     assert client.get(f"/api/admin/users/{U1}").json()["mbId"] == "123456789"
     found = client.get("/api/admin/users?q=123456789").json()
     assert [u["id"] for u in found["items"]] == [U1] and found["items"][0]["mbId"] == "123456789"
+    assert [u["id"] for u in client.get("/api/admin/users?q=34567").json()["items"]] == [U1]  # partial, like other fields
     assert post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "123456789"}).status_code == 409
+    assert post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "AbC"}).json() == {"mbId": "AbC"}
+    assert post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "abc"}).status_code == 409  # case-insensitive
+    assert [u["id"] for u in client.get("/api/admin/users?q=aBc").json()["items"]] == [U2]
+    analyst_view = TestClient(client.app, base_url=ORIGIN)
+    login(analyst_view, clock, secrets_, "analyst@x.test")
+    assert analyst_view.get(f"/api/admin/users/{U2}").status_code == 403
+    assert "AbC" not in analyst_view.get("/api/admin/events").text
     assert post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "bad id!"}).json()["error"] == "invalid_mb_id"
     assert "123456789" not in " ".join(str(e) for e in accounts.events())
     assert post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": ""}).json() == {"mbId": None}
