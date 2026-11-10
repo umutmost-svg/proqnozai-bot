@@ -119,13 +119,14 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
                 "detail": l["reason"], "by": l["by"]})
         for n in info["notes"]:
             timeline.append({"at": n["at"], "kind": "note", "title": "Заметка", "detail": n["body"], "by": n["by"]})
+        for te in crm.tag_events(user_id):
+            timeline.append({"at": te["at"], "kind": "admin", "by": te["by"], "detail": None,
+                             "title": f"{'Добавлен' if te['action'] == 'add' else 'Снят'} тег {te['tag']}"})
         for e in events:
-            if e["action"] in ("user.tag_add", "user.tag_remove", "user.block", "user.sessions_revoke"):
+            if e["action"] in ("user.block", "user.sessions_revoke"):
                 if e["action"] == "user.sessions_revoke" and e["result"] != "completed":
                     continue
-                title = {"user.tag_add": f"Добавлен тег {(e['after'] or {}).get('tag')}",
-                         "user.tag_remove": f"Снят тег {(e['before'] or {}).get('tag')}",
-                         "user.block": "Доступ заблокирован" if (e["after"] or {}).get("blocked") else "Блокировка снята",
+                title = {"user.block": "Доступ заблокирован" if (e["after"] or {}).get("blocked") else "Блокировка снята",
                          "user.sessions_revoke": f"Отозваны сессии: {(e['after'] or {}).get('revoked', 0)}"}[e["action"]]
                 timeline.append({"at": e["at"], "kind": "admin", "title": title, "detail": e["reason"],
                                  "by": e["adminEmail"]})
@@ -178,8 +179,10 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         if not isinstance(flag, bool):
             raise ActionError("invalid_value")
         result = ctx.step_up_guard(admin, lambda: crm.set_block(admin, user_id, flag, reason, key, code, ctx.now()))
-        if flag and not result.get("replayed"):
-            t = ctx.now()  # a block also signs the user out everywhere (the Mini App does not enforce blocks yet)
+        if flag and crm.blocked().get(user_id) is not None:
+            # A block also signs the user out everywhere. Run on every (re)try, replays included: if a crash
+            # hit between the block and this write, the retry completes it (revocation is idempotent).
+            t = ctx.now()
             result["revokedSessions"] = store.revoke_user_sessions(user_id, t, BurnWindow.for_policy(t, 300, 30))
         return result
 
@@ -221,7 +224,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
 
     @app.get("/api/admin/broadcasts")
     async def broadcasts(request: Request) -> dict:
-        ctx.admin_of(request)
+        ctx.admin_of(request, "read_personal")  # texts and audience rules are free text: not for analysts
         items = crm.broadcasts()
         for b in items:
             if b["status"] == "draft":
@@ -322,11 +325,14 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
             _, rows = h.list_forecasts(limit=MAX_SCAN)
             counts = Counter(ctx.tournament_name(r["tournamentId"]) for r in rows)
             leagues = [{"name": n, "count": c} for n, c in counts.most_common(8)]
+        personal = ctx.can_personal(request)
         out: dict[str, Any] = {
             "period": days,
+            # "measured" = computed from the Mini App files the panel reads; in the pilot that is the demo set.
+            "dataset": ctx.dataset(),
             "real": {"totalUsers": len(everyone), "newUsers": len(new), "newByDay": series,
                      "registrationHeat": heat, "languages": [{"lang": k, "count": v} for k, v in langs.most_common()],
-                     "leagues": leagues, "tags": crm.all_tags()},
+                     "leagues": leagues, "tags": crm.all_tags() if personal else []},
         }
         out["demo"] = demo.audience(days, ctx.today()) if ctx.demo_allowed(request) else None
         return out

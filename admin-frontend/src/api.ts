@@ -221,6 +221,7 @@ export interface DemoAudience {
 }
 export interface Analytics {
   period: number;
+  dataset: string;
   real: {
     totalUsers: number; newUsers: number; newByDay: { day: string; new: number }[]; registrationHeat: number[][];
     languages: { lang: string; count: number }[]; leagues: { name: string; count: number }[]; tags: TagCount[];

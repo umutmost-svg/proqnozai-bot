@@ -203,8 +203,7 @@ check('analyst: no users', await vis(page.getByText('Недостаточно п
 await page.goto(BASE + '/credits');
 check('analyst: no credits', await vis(page.getByText('Недостаточно прав')));
 await page.goto(BASE + '/broadcasts');
-await page.getByRole('heading', { name: 'Рассылки', level: 1 }).waitFor();
-check('analyst: broadcasts read-only', await page.getByRole('button', { name: 'Новая рассылка' }).isDisabled());
+check('analyst: no broadcasts', await vis(page.getByText('Недостаточно прав')));
 
 // 10. error state
 await page.route('**/api/admin/analytics**', (r) => r.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"internal","requestId":"abc123"}' }));

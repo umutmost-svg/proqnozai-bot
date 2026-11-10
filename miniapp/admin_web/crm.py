@@ -11,6 +11,7 @@ Local pilot limitations (docs/miniapp/admin-pilot.md):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Iterable
@@ -26,6 +27,16 @@ CREATE TABLE IF NOT EXISTS crm_tags (
     admin_id   INTEGER NOT NULL,
     PRIMARY KEY (user_id, tag)
 );
+-- Tag history with the labels (editable data); the immutable journal only references these rows by id.
+CREATE TABLE IF NOT EXISTS crm_tag_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    tag        TEXT NOT NULL,
+    action     TEXT NOT NULL CHECK (action IN ('add', 'remove')),
+    created_at INTEGER NOT NULL,
+    admin_id   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS crm_tag_events_user ON crm_tag_events(user_id);
 CREATE TABLE IF NOT EXISTS crm_notes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER NOT NULL,
@@ -174,6 +185,12 @@ class CrmStore:
                 out.setdefault(uid, []).append(tag)
         return out
 
+    def tag_events(self, user_id: int) -> list[dict]:
+        with self.accounts._connect() as conn:
+            return [{"tag": r[0], "action": r[1], "at": r[2], "by": r[3]} for r in conn.execute(
+                "SELECT e.tag, e.action, e.created_at, u.email FROM crm_tag_events e LEFT JOIN admin_users u "
+                "ON u.id = e.admin_id WHERE e.user_id = ? ORDER BY e.id DESC LIMIT 100", (user_id,))]
+
     def all_tags(self) -> list[dict]:
         with self.accounts._connect() as conn:
             return [{"tag": t, "users": n} for t, n in conn.execute(
@@ -267,8 +284,11 @@ class CrmStore:
             created = conn.execute("INSERT OR IGNORE INTO crm_tags (user_id, tag, created_at, admin_id) "
                                    "VALUES (?, ?, ?, ?)", (user_id, tag, now, actor.id)).rowcount
             if created:
-                self.accounts._event(conn, now, actor.id, "user.tag_add", "user", str(user_id), None, {"tag": tag},
-                                     None, None, "done")
+                ev = conn.execute("INSERT INTO crm_tag_events (user_id, tag, action, created_at, admin_id) "
+                                  "VALUES (?, ?, 'add', ?, ?)", (user_id, tag, now, actor.id)).lastrowid
+                # Free-text labels never enter the immutable journal: it references the tag event row.
+                self.accounts._event(conn, now, actor.id, "user.tag_add", "user", str(user_id), None,
+                                     {"tagEventId": ev}, None, None, "done")
         return {"tag": tag, "created": bool(created)}
 
     def remove_tag(self, actor: Admin, user_id: int, tag: str, now: int) -> dict:
@@ -276,8 +296,10 @@ class CrmStore:
             self.accounts._require_actor(conn, actor.id, "manage_users")
             removed = conn.execute("DELETE FROM crm_tags WHERE user_id = ? AND tag = ?", (user_id, tag)).rowcount
             if removed:
-                self.accounts._event(conn, now, actor.id, "user.tag_remove", "user", str(user_id), {"tag": tag}, None,
-                                     None, None, "done")
+                ev = conn.execute("INSERT INTO crm_tag_events (user_id, tag, action, created_at, admin_id) "
+                                  "VALUES (?, ?, 'remove', ?, ?)", (user_id, tag, now, actor.id)).lastrowid
+                self.accounts._event(conn, now, actor.id, "user.tag_remove", "user", str(user_id), None,
+                                     {"tagEventId": ev}, None, None, "done")
         return {"removed": bool(removed)}
 
     def add_note(self, actor: Admin, user_id: int, body: str, now: int) -> dict:
@@ -318,7 +340,7 @@ class CrmStore:
             except sqlite3.IntegrityError:
                 raise ActionError("name_taken", 409) from None
             self.accounts._event(conn, now, actor.id, "segment.save", "segment", str(segment_id), None,
-                                 {"name": name, "rules": rules}, None, None, "done")
+                                 {"fields": sorted(rules)}, None, None, "done")
         return {"id": segment_id}
 
     def save_broadcast(self, actor: Admin, data: dict, now: int, broadcast_id: int | None = None) -> dict:
@@ -349,7 +371,7 @@ class CrmStore:
                              "updated_at = ?, admin_id = ? WHERE id = ?",
                              (name, json.dumps(rules), body, json.dumps(buttons), now, actor.id, broadcast_id))
             self.accounts._event(conn, now, actor.id, "broadcast.save", "broadcast", str(broadcast_id), None,
-                                 {"name": name, "status": "draft"}, None, None, "done")
+                                 {"status": "draft"}, None, None, "done")
         return {"id": broadcast_id}
 
     # ---- dangerous writes: step-up + reason + idempotency ------------------------------------
@@ -359,8 +381,11 @@ class CrmStore:
         if not now - 60 <= at <= now + 90 * 86400:
             raise ActionError("invalid_time")
         with self.accounts._write() as conn:
+            # A retry returns the recorded result even if the audience size changed since (only the time binds).
             if (prior := self.accounts._replayed(conn, key, actor.id, "broadcast.schedule", str(broadcast_id),
-                                                 {"scheduledAt": at, "recipients": recipients}, reason)) is not None:
+                                                 None, reason)) is not None:
+                if (prior["after"] or {}).get("scheduledAt") != at:
+                    raise ActionError("idempotency_key_reused", 409)
                 return prior
             self.accounts.step_up(conn, actor.id, code, now, "manage_users")
             status = conn.execute("SELECT status FROM crm_broadcasts WHERE id = ?", (broadcast_id,)).fetchone()
@@ -398,7 +423,9 @@ class CrmStore:
         users = sorted(set(user_ids))
         target = str(users[0]) if len(users) == 1 else f"group:{len(users)}"
         request = {"kind": kind, "amount": amount if kind != "unlimited" else 0,
-                   "days": days if kind == "unlimited" else 0, "users": len(users)}
+                   "days": days if kind == "unlimited" else 0, "users": len(users),
+                   # the whole recipient list binds the idempotency key (not only its size and first id)
+                   "usersDigest": hashlib.sha256(",".join(map(str, users)).encode()).hexdigest()}
         with self.accounts._write() as conn:
             if (prior := self.accounts._replayed(conn, key, actor.id, "credits.change", target, None, reason)) is not None:
                 if (prior["after"] or {}).get("request") != request:

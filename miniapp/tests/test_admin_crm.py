@@ -118,8 +118,9 @@ def test_analyst_cannot_touch_crm(env):
     assert client.get("/api/admin/credits").status_code == 403
     assert client.get("/api/admin/segments").status_code == 403
     assert post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "x"}).status_code == 403
-    assert client.get("/api/admin/broadcasts").status_code == 200  # aggregate list, no personal data
-    assert client.get("/api/admin/analytics?days=30").status_code == 200
+    assert client.get("/api/admin/broadcasts").status_code == 403  # texts and rules are free text
+    analytics = client.get("/api/admin/analytics?days=30").json()
+    assert analytics["real"]["tags"] == []  # tag labels are free text too
 
 
 def test_analytics_real_parts_and_demo_only_on_request(env):
@@ -132,3 +133,66 @@ def test_analytics_real_parts_and_demo_only_on_request(env):
     assert client.get("/api/admin/analytics?days=30&demo=1").json()["demo"]["source"] == "demo"
     assert client.get("/api/admin/dialogs").json() == {"source": "not_collected"}
     assert client.get("/api/admin/dialogs?demo=1").json()["source"] == "demo"
+
+
+def test_group_credit_key_is_bound_to_the_whole_user_list(env):
+    _, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    U3 = DEMO_ID_BASE + 1074
+    body = {"reason": "бонус", "idempotencyKey": "group-key-1", "kind": "grant", "amount": 5}
+    ok = post(client, "/api/admin/credits/change", csrf, {**body, "userIds": [U1, U2], "code": code(secrets_["admin@x.test"], clock)})
+    assert ok.status_code == 200
+    clock.t += 30
+    other = post(client, "/api/admin/credits/change", csrf, {**body, "userIds": [U1, U3], "code": code(secrets_["admin@x.test"], clock)})
+    assert other.status_code == 409
+
+
+def test_block_retry_after_a_crash_still_signs_the_user_out(env, monkeypatch):
+    config, clock, client, _, secrets_ = env
+    store = Store(config.miniapp_db)
+    store.create_session("tok-crash", U1, "init-crash", int(clock()), 86400)
+    csrf = login(client, clock, secrets_, "admin@x.test")
+
+    def crash(*_a, **_k):
+        raise RuntimeError("crash after the block was committed")
+
+    monkeypatch.setattr(Store, "revoke_user_sessions", crash)
+    body = {"reason": "спам", "idempotencyKey": "block-crash-1", "blocked": True}
+    assert post(client, f"/api/admin/users/{U1}/block", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)}).status_code == 500
+    monkeypatch.undo()
+    assert store.get_session("tok-crash").revoked_at is None
+    clock.t += 30
+    retry = post(client, f"/api/admin/users/{U1}/block", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)})
+    assert retry.json()["replayed"] is True and retry.json()["revokedSessions"] == 1
+    assert store.get_session("tok-crash").revoked_at is not None
+
+
+def test_journal_holds_no_crm_free_text(env):
+    _, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "ivan@example.com"})
+    post(client, "/api/admin/segments", csrf, {"name": "Сегмент Ивана", "rules": {"tag_has": "ivan@example.com"}})
+    post(client, "/api/admin/broadcasts", csrf, {"name": "Секретная акция", "body": "текст"})
+    dump = " ".join(str(e) for e in accounts.events())
+    assert "ivan@example.com" not in dump and "Ивана" not in dump and "Секретная" not in dump
+    card = client.get(f"/api/admin/users/{U1}").json()
+    assert any("ivan@example.com" in t["title"] for t in card["timeline"])  # visible in the CRM, not the journal
+
+
+def test_schedule_retry_survives_an_audience_change(env):
+    _, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "x", "body": "y", "rules": {"tag_has": "VIP"}}).json()["id"]
+    at = int(clock()) + 7200
+    body = {"reason": "план", "idempotencyKey": "sched-retry-1", "at": at}
+    assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)}).status_code == 200
+    post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "VIP"})  # the audience grows
+    clock.t += 30
+    retry = post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)})
+    assert retry.status_code == 200 and retry.json()["replayed"] is True and retry.json()["after"]["recipients"] == 0
+
+
+def test_analytics_names_its_dataset(env):
+    _, clock, client, _, secrets_ = env
+    login(client, clock, secrets_, "owner@x.test")
+    assert client.get("/api/admin/analytics?days=7").json()["dataset"] == "demo"

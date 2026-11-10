@@ -44,6 +44,8 @@ export function Analytics() {
   const bc = useLoad<{ items: Broadcast[] }>('/api/admin/broadcasts');
   const d = a.data?.demo ?? null;
   const real = a.data?.real;
+  // Measured from the Mini App files the panel reads — in the pilot that is the generated demo set.
+  const src = a.data?.dataset === 'demo' ? 'демо-набор пилота' : 'реальные данные';
 
   return (
     <>
@@ -60,13 +62,13 @@ export function Analytics() {
           {tab === 'Обзор' && (
             <>
               <Metrics>
-                <Metric label="Пользователи всего" value={<Link className="metric-link" to="/users">{num(real.totalUsers)}</Link>} caption={`+${num(real.newUsers)} за период · реальные данные`} />
+                <Metric label="Пользователи всего" value={<Link className="metric-link" to="/users">{num(real.totalUsers)}</Link>} caption={`+${num(real.newUsers)} за период · ${src}`} />
                 <Metric demo={Boolean(d)} label="Активные (DAU)" value={d ? num(d.activeByDay.at(-1)?.dau) : '—'} caption={d ? 'демо-телеметрия' : 'после D1'} />
                 <Metric label="Прогнозы модели" value={<Link className="metric-link" to="/forecasts">{num(ov.data?.forecasts.total)}</Link>} caption={`сверено: ${num(ov.data?.forecasts.settled)}`} />
                 <Metric demo={Boolean(d)} label="Средняя сессия" value={d ? `${Math.floor(d.summary.avgSessionS / 60)} мин ${d.summary.avgSessionS % 60} с` : '—'} caption={d ? 'демо-телеметрия' : 'после D1'} />
               </Metrics>
               <div className="grid g2">
-                <Card title="Новые пользователи по дням" sub="Регистрации в Mini App · реальные данные" action={<Tag tone="accent">{num(real.newUsers)} за период</Tag>}>
+                <Card title="Новые пользователи по дням" sub={`Регистрации в Mini App · ${src}`} action={<Tag tone="accent">{num(real.newUsers)} за период</Tag>}>
                   <Bars title="Новые" values={real.newByDay.map((x) => x.new)} labels={[real.newByDay[0]?.day ?? '', real.newByDay.at(-1)?.day ?? '']} format={(v) => `${v} новых`} />
                 </Card>
                 <Card title="Воронка активации" action={d ? <Tag tone="violet">ДЕМО</Tag> : undefined}>
@@ -90,7 +92,7 @@ export function Analytics() {
                   ) : <p className="muted small">Рассылок пока нет.</p>}
                 </Card>
                 <Card title="Теги аудитории" sub="Сколько пользователей с каждым тегом">
-                  {real.tags.length === 0 ? <p className="muted small">Тегов пока нет.</p> : (
+                  {real.tags.length === 0 ? <p className="muted small">Тегов нет или нет доступа к ним.</p> : (
                     <div className="bar-list">{real.tags.slice(0, 6).map((t) => (
                       <div key={t.tag} className="row" style={{ justifyContent: 'space-between' }}>
                         <Link to={`/users?tag=${encodeURIComponent(t.tag)}`}><Tag tone={tagTone(t.tag)}>{t.tag}</Tag></Link><b>{num(t.users)}</b>
@@ -117,7 +119,7 @@ export function Analytics() {
                     <BarList rows={d.geo.map((g) => ({ label: g.name, value: g.count, extra: g.code !== '—' ? <Tag>{g.code}</Tag> : undefined }))} />
                   </Card>
                 ) : <DemoOnly what="География" />}
-                <Card title="Языки интерфейса" sub="Реальные данные · выбор пользователя или язык Telegram">
+                <Card title="Языки интерфейса" sub={`${src} · выбор пользователя или язык Telegram`}>
                   <BarList tone="violet" rows={real.languages.map((l) => ({ label: LANG_NAMES[l.lang] ?? l.lang, value: l.count }))} />
                 </Card>
                 {d ? (
@@ -136,7 +138,7 @@ export function Analytics() {
                   <div className="banner info" style={{ marginTop: 14 }}>Лучшее время для рассылки: <strong>{bestSlot(d.activityHeat)}</strong></div>
                 </Card>
               ) : <DemoOnly what="Активность по часам" />}
-              <Card title="Когда регистрируются" sub="Реальные данные · регистрации за период по дням недели и часам, Баку (UTC+4)">
+              <Card title="Когда регистрируются" sub={`${src} · регистрации за период по дням недели и часам, Баку (UTC+4)`}>
                 <Heatmap data={real.registrationHeat} label="Тепловая карта регистраций" />
                 <p className="small muted" style={{ marginTop: 10 }}>Пик регистраций: {bestSlot(real.registrationHeat)}</p>
               </Card>
@@ -144,7 +146,7 @@ export function Analytics() {
           )}
           {tab === 'Контент и лиги' && (
             <div className="grid half">
-              <Card title="Популярные лиги" sub="Реальные данные · прогнозы модели по турнирам">
+              <Card title="Популярные лиги" sub={`${src} · прогнозы модели по турнирам`}>
                 {real.leagues.length ? <BarList rows={real.leagues.map((l) => ({ label: l.name, value: l.count }))} /> : <p className="muted small">Прогнозов пока нет.</p>}
               </Card>
               {d ? (
@@ -175,7 +177,7 @@ export function Analytics() {
               <BarList tone="warning" rows={d.sources.map((s) => ({ label: s.name, value: s.count }))} />
             </Card>
           ) : <DemoOnly what="Источники пользователей" />)}
-          <div className="banner info" style={{ marginTop: 16 }}>Реальные сейчас: пользователи, регистрации, языки, лиги, теги. Остальное — после D1; демо-значения помечены.</div>
+          <div className="banner info" style={{ marginTop: 16 }}>Из файлов Mini App ({src}): пользователи, регистрации, языки, лиги, теги. Остальное — после D1; демо-телеметрия помечена «ДЕМО».</div>
         </>
       )}
     </>
