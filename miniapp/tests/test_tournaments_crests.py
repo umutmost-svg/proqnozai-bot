@@ -978,6 +978,12 @@ def test_svg_crests_of_national_teams_are_accepted_when_plain():
     b'<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/svg+xml;base64,PHN2Zy8+"/></svg>',
     b'<svg xmlns="http://www.w3.org/2000/svg"><image href="data:text/html;base64,PHNjcmlwdD4="/></svg>',
     b'<svg xmlns="http://www.w3.org/2000/svg"><image/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/png;base64,AAAA"/></svg>',  # not a PNG
+    b'<svg xmlns="http://www.w3.org/2000/svg"><image href="#x"/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:o="urn:other"><image o:href="#x"/></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><filter><feGaussianBlur stdDeviation="9999"/></filter></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><filter><feMorphology radius="9999"/></filter></svg>',
+    b'<svg xmlns="http://www.w3.org/2000/svg"><filter>' + b'<feOffset/>' * 33 + b'</filter></svg>',
     b'<svg xmlns="http://www.w3.org/2000/svg"><filter><feImage href="https://e.vil/x.png"/></filter></svg>',
     b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd">'
     b'<s:namedview><script>alert(1)</script></s:namedview></svg>',
@@ -1048,6 +1054,8 @@ def test_deeply_nested_svg_is_refused_not_crashing():
 
 
 def test_real_crests_with_editor_data_filters_or_an_embedded_picture_are_accepted():
+    import base64
+
     from miniapp.sports.crests import is_safe_svg
 
     # Inkscape's view settings outside <metadata> (Liga Profesional, Women's World Cup crests)
@@ -1057,7 +1065,8 @@ def test_real_crests_with_editor_data_filters_or_an_embedded_picture_are_accepte
     # a colour filter and an embedded PNG (Copa Libertadores, also the South American area flag)
     raster = (b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><defs>'
               b'<filter id="f"><feColorMatrix type="matrix" values="1 0 0 0 0"/></filter></defs>'
-              b'<image width="1" height="1" filter="url(#f)" xlink:href="data:image/png;base64,iVBORw0KGgo=\n AAAA"/></svg>')
+              b'<image width="1" height="1" filter="url(#f)" xlink:href="data:image/png;base64,'
+              + base64.encodebytes(PNG) + b'"/></svg>')
     assert is_safe_svg(editor) and is_safe_svg(raster)
 
 
@@ -1097,3 +1106,34 @@ def test_the_competition_list_keeps_the_flag_as_the_emblems_fallback(clock: Fake
     asyncio.run(adapter.competition_emblems())
     assert adapter.emblems == {"PL": "https://crests.football-data.org/PL.png", "PD": "https://crests.football-data.org/760.svg"}
     assert adapter.emblem_fallbacks == {"PL": "https://crests.football-data.org/770.svg"}
+
+
+def test_a_passing_emblem_failure_never_leaves_the_flag_for_good():
+    import asyncio
+
+    from miniapp.sports.crests import CrestStore
+
+    clock = FakeClock()
+    emblem = PNG + b"emblem"
+
+    class Images:
+        def __init__(self):
+            self.emblem_ok = False
+            self.calls = []
+
+        async def __call__(self, url, timeout_s):
+            self.calls.append(url)
+            if url.endswith("PL.png"):
+                return emblem if self.emblem_ok else None
+            return PNG  # the flag
+
+    images = Images()
+    store = CrestStore(images, clock=clock, failure_ttl_s=3600)
+    store.learn("competition", "PL", "https://crests.football-data.org/PL.png", fallback="https://crests.football-data.org/770.svg")
+    assert asyncio.run(store.image("competition", "PL")) == PNG  # the emblem is down: the flag
+    clock.advance(60)
+    assert asyncio.run(store.image("competition", "PL")) == PNG and len(images.calls) == 2  # served from memory
+    images.emblem_ok = True
+    clock.advance(3600)
+    assert asyncio.run(store.image("competition", "PL")) == emblem  # asked again after the failure TTL
+    assert asyncio.run(store.image("competition", "PL")) == emblem and len(images.calls) == 3

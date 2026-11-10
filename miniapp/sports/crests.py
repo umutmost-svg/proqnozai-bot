@@ -13,6 +13,8 @@ learned URL there is no crest, and the app shows the initial badge.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import logging
 import re
 import time
@@ -74,15 +76,31 @@ _SVG_ELEMENTS = frozenset({
     "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "defs", "linearGradient",
     "radialGradient", "stop", "clipPath", "mask", "use", "title", "desc", "symbol", "pattern", "style", "text",
     "tspan", "metadata",
-    # Filter primitives draw only from the shape they filter (feImage, which loads a picture, is not here).
-    "filter", "feColorMatrix", "feGaussianBlur", "feOffset", "feFlood", "feBlend", "feComposite", "feMerge",
-    "feMergeNode", "feMorphology", "feComponentTransfer", "feFuncR", "feFuncG", "feFuncB", "feFuncA",
+    # Cheap per-pixel filter primitives only: no feImage (loads a picture), no blur/morphology (their cost
+    # grows with a radius the file chooses); their number is capped (MAX_SVG_FILTER_STEPS).
+    "filter", "feColorMatrix", "feOffset", "feFlood", "feBlend", "feComposite", "feMerge", "feMergeNode",
+    "feComponentTransfer", "feFuncR", "feFuncG", "feFuncB", "feFuncA",
     "image",  # only with an embedded PNG/JPEG (data: URI), see _EMBEDDED_RASTER
 })
 # Editor data (Inkscape/Sodipodi) may also sit outside <metadata> (e.g. sodipodi:namedview): a browser
 # ignores these elements; inside them only more editor data may follow.
 _EDITOR_NS = frozenset({"http://www.inkscape.org/namespaces/inkscape", "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"})
-_EMBEDDED_RASTER = re.compile(r"^data:image/(png|jpeg);base64,[A-Za-z0-9+/=\s]+$")
+_EMBEDDED_RASTER = re.compile(r"^data:image/(png|jpeg);base64,([A-Za-z0-9+/=\s]+)$")
+XLINK_NS = "http://www.w3.org/1999/xlink"
+MAX_SVG_FILTER_STEPS = 32
+
+
+def _embedded_raster(value: str) -> bool:
+    """A data: URI holding a real PNG/JPEG (checked after decoding), never another document."""
+    found = _EMBEDDED_RASTER.match(value.strip())
+    if found is None:
+        return False
+    try:
+        data = base64.b64decode("".join(found.group(2).split()), validate=True)
+    except (ValueError, binascii.Error):
+        return False
+    magic = PNG_MAGIC if found.group(1) == "png" else b"\xff\xd8\xff"
+    return data.startswith(magic) and len(data) > len(magic)
 _METADATA_NS = frozenset({
     "http://www.w3.org/1999/02/22-rdf-syntax-ns#", "http://purl.org/dc/elements/1.1/", "http://purl.org/dc/terms/",
     "http://creativecommons.org/ns#", "http://web.resource.org/cc/", "http://www.inkscape.org/namespaces/inkscape",
@@ -121,7 +139,10 @@ def is_safe_svg(body: bytes) -> bool:
     if root.tag != f"{{{SVG_NS}}}svg":
         return False
 
+    filter_steps = 0
+
     def walk(node: ElementTree.Element, in_metadata: bool, depth: int = 0) -> bool:
+        nonlocal filter_steps
         if depth > MAX_SVG_DEPTH:
             return False  # a crest is never this deep; refuse instead of exhausting the recursion
         ns, _, local = node.tag[1:].partition("}") if node.tag.startswith("{") else ("", "", node.tag)
@@ -131,15 +152,25 @@ def is_safe_svg(body: bytes) -> bool:
                 return False  # inside <metadata> only editor data (RDF, Dublin Core, Inkscape) — never SVG/HTML
         elif ns != SVG_NS or local not in _SVG_ELEMENTS:
             return False
+        image = local == "image" and ns == SVG_NS
+        if ns == SVG_NS and local.startswith("fe"):
+            filter_steps += 1
+            if filter_steps > MAX_SVG_FILTER_STEPS:
+                return False
+        hrefs = 0
         for name, value in node.attrib.items():
             attr = name.rpartition("}")[2].lower()
             if attr.startswith("on") or attr == "base" or not _safe_value(value):
                 return False  # xml:base would resolve even "#x" references against an external document
-            if attr == "href" and not value.strip().startswith("#") and not (
-                    local == "image" and ns == SVG_NS and _EMBEDDED_RASTER.match(value.strip())):
-                return False
-        if local == "image" and ns == SVG_NS and not any(
-                n.rpartition("}")[2].lower() == "href" for n in node.attrib):
+            if attr == "href":
+                if image:
+                    # Exactly the picture a browser reads: href / xlink:href holding a real PNG or JPEG.
+                    if name not in ("href", f"{{{XLINK_NS}}}href") or not _embedded_raster(value):
+                        return False
+                    hrefs += 1
+                elif not value.strip().startswith("#"):
+                    return False
+        if image and hrefs == 0:
             return False  # an <image> always names its embedded picture
         if local == "style" and not _safe_value(node.text or ""):
             return False
@@ -198,6 +229,9 @@ class CrestStore:
         self._images: OrderedDict[str, bytes] = OrderedDict()
         self._image_bytes = 0
         self._failed: dict[str, float] = {}
+        # Pictures served from a fallback source, and when: the first source is tried again after the
+        # failure TTL, so a passing failure of the emblem never leaves the flag in its place for good.
+        self._fell_back: dict[str, float] = {}
         self._inflight: dict[str, asyncio.Future[bytes | None]] = {}
         self._recent: deque[float] = deque()
         self._served: deque[float] = deque()
@@ -247,6 +281,7 @@ class CrestStore:
         return f"/api/crests/{kind}/{ident}" if self.key(kind, ident) in self._urls else None
 
     def _drop_image(self, key: str) -> None:
+        self._fell_back.pop(key, None)
         body = self._images.pop(key, None)
         if body is not None:
             self._image_bytes -= len(body)
@@ -258,6 +293,7 @@ class CrestStore:
         while self._images and (len(self._images) > self._max_images or self._image_bytes > self._max_bytes):
             old, dropped = self._images.popitem(last=False)
             self._image_bytes -= len(dropped)
+            self._fell_back.pop(old, None)
 
     def admit(self) -> bool:
         """Global cap on crest responses per second (the route is public and outside the
@@ -288,6 +324,9 @@ class CrestStore:
         if url is None:
             return None
         cached = self._images.get(key)
+        fell_back = self._fell_back.get(key)
+        if cached is not None and fell_back is not None and self._clock() - fell_back >= self._failure_ttl:
+            cached = None  # time to ask the emblem itself again; the flag is kept until a new answer
         if cached is not None:
             self._images.move_to_end(key)
             return cached
@@ -310,8 +349,8 @@ class CrestStore:
                 future.set_result(None)
                 return None  # busy, not remembered as a failure
             try:
-                body = None
-                for source in url:
+                body, used = None, 0
+                for used, source in enumerate(url):
                     body = await self._fetch(source, FETCH_TIMEOUT_S)
                     body = body if body is not None and is_crest(body) else None
                     if body is not None:
@@ -321,10 +360,19 @@ class CrestStore:
             if self._urls.get(key) != url:
                 body = None  # the provider moved this crest meanwhile: neither its picture nor its failure counts
             elif body is None:
-                self._failed[key] = self._clock()
-                logger.info("crest.unavailable kind=%s", kind)
+                kept = self._images.get(key)
+                if kept is not None:  # a retry of the emblem found nothing at all: the earlier flag stays
+                    self._fell_back[key] = self._clock()
+                    body = kept
+                else:
+                    self._failed[key] = self._clock()
+                    logger.info("crest.unavailable kind=%s", kind)
             else:
                 self._store(key, body)
+                if used:
+                    self._fell_back[key] = self._clock()
+                else:
+                    self._fell_back.pop(key, None)
             future.set_result(body)
             return body
         except BaseException as exc:
