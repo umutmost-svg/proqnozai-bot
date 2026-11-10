@@ -389,3 +389,28 @@ def test_pilot_refuses_foreign_or_shared_directories(tmp_path, monkeypatch):
     seeded.chmod(0o755)
     with pytest.raises(ConfigError, match="private"):
         create_admin_app(AdminWebConfig(data_dir=seeded, port=PORT, static_dir=None))
+
+
+def test_idempotency_key_is_bound_to_action_and_value(env):
+    _, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "owner@x.test")
+    secret = secrets_["owner@x.test"]
+    body = {"value": False, "reason": "budget", "idempotencyKey": "idem-bound-1"}
+    assert post(client, "/api/admin/settings/ai.enabled", csrf, {**body, "code": code(secret, clock)}).status_code == 200
+    clock.t += 30
+    other_key = post(client, "/api/admin/settings/quick.enabled", csrf, {**body, "code": code(secret, clock)})
+    assert other_key.status_code == 409 and other_key.json()["error"] == "idempotency_key_reused"
+    other_value = post(client, "/api/admin/settings/ai.enabled", csrf, {**body, "value": True, "code": code(secret, clock)})
+    assert other_value.status_code == 409
+    assert accounts.settings()["quick.enabled"]["value"] is True
+
+
+def test_analyst_never_sees_free_text_reasons(env):
+    _, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "owner@x.test")
+    post(client, "/api/admin/settings/ai.enabled", csrf, {"value": False, "reason": "asked by @someone",
+                                                         "idempotencyKey": "idem-reason", "code": code(secrets_["owner@x.test"], clock)})
+    analyst = TestClient(client.app, base_url=ORIGIN)
+    login(analyst, clock, secrets_, "analyst@x.test")
+    assert all(e["reason"] is None for e in analyst.get("/api/admin/events?days=7").json()["items"])
+    assert any(e["reason"] for e in client.get("/api/admin/events?days=7").json()["items"])

@@ -60,7 +60,7 @@ export function useMe(): Me {
 
 export type Period = 1 | 7 | 30 | 90;
 export const PERIOD_LABELS: Record<Period, string> = {
-  1: 'Сегодня', 7: 'Последние 7 дней', 30: 'Последние 30 дней', 90: 'Последние 90 дней',
+  1: 'Последние 24 часа', 7: 'Последние 7 дней', 30: 'Последние 30 дней', 90: 'Последние 90 дней',
 };
 
 function read(key: string): string | null {

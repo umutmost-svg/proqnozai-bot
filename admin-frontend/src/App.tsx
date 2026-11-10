@@ -4,7 +4,7 @@ import { Forecasts } from './pages/Forecasts';
 import { Overview } from './pages/Overview';
 import { Credits, SettingsAdmins, SettingsFeatures, SettingsJournal } from './pages/Settings';
 import { AiCosts, SportsApi, System } from './pages/Telemetry';
-import { UserCard } from './pages/UserCard';
+import { UserCardRoute } from './pages/UserCard';
 import { Users } from './pages/Users';
 import { AuthProvider, PrefsProvider, useAuth } from './state';
 import { Empty, Layout, Loading, PageHead } from './ui';
@@ -20,7 +20,7 @@ function Gate() {
       <Route element={<Layout />}>
         <Route index element={<Overview />} />
         <Route path="users" element={<Users />} />
-        <Route path="users/:id" element={<UserCard />} />
+        <Route path="users/:id" element={<UserCardRoute />} />
         <Route path="forecasts" element={<Forecasts />} />
         <Route path="ai" element={<AiCosts />} />
         <Route path="sports-api" element={<SportsApi />} />

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { Page, UserRow } from '../api';
 import { num, userName, utc, utcDay } from '../format';
 import { useLoad } from '../state';
@@ -90,7 +90,9 @@ export function Users() {
                     <tr key={u.id} className="clickable" aria-selected={selected?.id === u.id}
                       style={selected?.id === u.id ? { background: '#f6f8fb' } : undefined}
                       onClick={() => setSelected(u)} onDoubleClick={() => navigate(`/users/${u.id}`)}>
-                      <td className="strong mono">{u.id}</td>
+                      <td className="strong mono">
+                        <Link to={`/users/${u.id}`} onClick={(e) => e.stopPropagation()} aria-label={`Открыть карточку ${u.id}`}>{u.id}</Link>
+                      </td>
                       <td>{u.username ? `@${u.username}` : '—'}<span className="sub">{userName(u)} · {u.lang}</span></td>
                       <td>{utcDay(u.createdAt)}</td>
                       <td>{utc(u.lastLoginAt)}</td>

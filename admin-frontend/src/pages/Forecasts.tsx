@@ -86,7 +86,11 @@ export function Forecasts() {
                     <tbody>
                       {list.data.items.map((f) => (
                         <tr key={f.key} className="clickable" onClick={() => update({ open: f.key })}>
-                          <td className="strong">{f.match ?? f.eventId}<span className="sub">{f.tournament}</span></td>
+                          <td className="strong">
+                            <button type="button" className="btn link" style={{ color: 'var(--ink)', fontWeight: 500 }}
+                              onClick={(e) => { e.stopPropagation(); update({ open: f.key }); }}>{f.match ?? f.eventId}</button>
+                            <span className="sub">{f.tournament}</span>
+                          </td>
                           <td>{utc(f.kickoffAt)}</td>
                           <td>{PICKS[f.pick] ?? f.pick}{f.pickProbability !== null && <span className="sub">{pct(f.pickProbability, 0)}</span>}</td>
                           <td className="mono">{f.score ? `${f.score[0]}:${f.score[1]}` : '—'}</td>

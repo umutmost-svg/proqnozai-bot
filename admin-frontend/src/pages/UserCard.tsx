@@ -5,13 +5,20 @@ import { usd, userName, utc, utcDay } from '../format';
 import { can, useLoad, useMe, usePrefs } from '../state';
 import { DangerDialog, Empty, ErrorBox, Loading, Note, PageHead, SectionHead, Status, Toast } from '../ui';
 
-export function UserCard() {
+/** Keyed by the id: moving to another user remounts the card, so no data or open dialog carries over. */
+export function UserCardRoute() {
   const { id } = useParams();
+  return <UserCard key={id} id={id ?? ''} />;
+}
+
+function UserCard({ id }: { id: string }) {
   const navigate = useNavigate();
   const me = useMe();
   const { demo } = usePrefs();
-  const { data, error, loading, reload } = useLoad<UserProfile>(`/api/admin/users/${encodeURIComponent(id ?? '')}${demo ? '?demo=1' : ''}`);
-  const [confirm, setConfirm] = useState(false);
+  const loaded = useLoad<UserProfile>(`/api/admin/users/${encodeURIComponent(id)}${demo ? '?demo=1' : ''}`);
+  const { error, loading, reload } = loaded;
+  const data = loaded.data && String(loaded.data.id) === id ? loaded.data : null;
+  const [confirm, setConfirm] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const canRevoke = can(me.admin.role, 'manage_users');
   const active = data?.sessions.filter((s) => s.state === 'active').length ?? 0;
@@ -41,7 +48,7 @@ export function UserCard() {
                 <p style={{ fontSize: 14, color: 'var(--text)', margin: '18px 0' }}>
                   Отзыв сессий — опасное действие: потребуются повторная 2FA и причина.
                 </p>
-                <button type="button" className="btn" disabled={!canRevoke || active === 0} onClick={() => setConfirm(true)}
+                <button type="button" className="btn" disabled={!canRevoke || active === 0} onClick={() => setConfirm(data.id)}
                   title={!canRevoke ? 'Недоступно для роли аналитика' : active === 0 ? 'Нет активных сессий' : undefined}>
                   Отозвать сессии
                 </button>
@@ -96,16 +103,16 @@ export function UserCard() {
           </div>
         </>
       )}
-      {confirm && data && (
+      {confirm !== null && (
         <DangerDialog
           title="Отозвать все сессии?"
-          lead="Пользователь выйдет из Mini App на всех устройствах. Это действие будет записано в журнал."
+          lead={<>Пользователь <span className="mono">{confirm}</span> выйдет из Mini App на всех устройствах. Это действие будет записано в журнал.</>}
           confirmLabel="Отозвать сессии"
-          onClose={() => setConfirm(false)}
+          onClose={() => setConfirm(null)}
           onConfirm={async (input) => {
             const result = await api<{ after: { revoked: number } | null; replayed: boolean }>(
-              `/api/admin/users/${data.id}/sessions/revoke`, { method: 'POST', body: input });
-            setConfirm(false);
+              `/api/admin/users/${confirm}/sessions/revoke`, { method: 'POST', body: input });
+            setConfirm(null);
             setToast(result.replayed ? 'Действие уже было выполнено ранее' : `Отозвано сессий: ${result.after?.revoked ?? 0}`);
             reload();
           }}
