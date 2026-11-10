@@ -59,8 +59,10 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
     async def signed_in(request: Request) -> bool:
         if await current_session(request) is None:
             return False
-        # The app is in use: keep the tables warm (a background pass, only when one is due).
+        # The app is in use: keep the tables and the season calendars (with the goal model's previous
+        # season) warm — background passes, only when one is due — so an AI analysis rarely starts cold.
         service.ensure_standings_warm()
+        service.ensure_calendars_warm()
         return True
 
     @app.get("/api/sports/coverage")

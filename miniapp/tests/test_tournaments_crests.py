@@ -833,11 +833,14 @@ def test_all_competitions_mode_and_featured_order():
 def test_search_pacing_adapts_to_competitions_and_budget():
     from miniapp.sports.search import REFRESH_AFTER_S, WARM_SPACING_S, search_pacing
 
-    assert search_pacing(10, 8, 3000) == (WARM_SPACING_S, REFRESH_AFTER_S)  # free tier: unchanged
-    spacing, refresh = search_pacing(117, 100, 10000)
-    assert spacing < WARM_SPACING_S and refresh > REFRESH_AFTER_S
-    # the warm-up stays within a quarter of the daily budget
-    assert 117 * 86400 / refresh <= 10000 * 0.25 + 1
+    assert search_pacing(10, 8, 3000) == (WARM_SPACING_S, REFRESH_AFTER_S, False)  # free tier: unchanged, calendars only
+    spacing, refresh, past = search_pacing(117, 100, 10000)
+    assert past and spacing < WARM_SPACING_S and refresh > REFRESH_AFTER_S
+    # calendars plus one previous season a day each stay within a quarter of the daily budget
+    assert 117 * 86400 / refresh + 117 <= 10000 * 0.25 + 1
+    # two requests a step (calendar + season) stay within a quarter of the minute
+    assert 2 * 60 / spacing <= 100 * 0.25 + 1e-9
+    assert search_pacing(117, 100, 300)[2] is False  # a day budget too small: calendars only
 
 
 def test_large_catalogue_day_listing_asks_the_whole_day_and_checks_completeness():

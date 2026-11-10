@@ -58,6 +58,10 @@ class SportsCache:
         self._max_stale_s = max_stale_s
         self._clock = clock
 
+    @property
+    def failure_backoff_s(self) -> float:
+        return self._failure_backoff_s
+
     def peek(self, key: str) -> Cached | None:
         return self._entries.get(key)
 
