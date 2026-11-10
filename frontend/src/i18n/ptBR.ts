@@ -47,6 +47,7 @@ export const ptBR: Dictionary = {
 
   'tournament.label': 'Campeonato',
   'tournament.all': 'Todos os campeonatos',
+  'tournament.more': 'Outros campeonatos…',
   'tournaments.title': 'Campeonatos',
   'tournaments.open': '{name}: abrir o calendário',
   'tournaments.errorText': 'Não foi possível carregar a lista de campeonatos.',

@@ -505,7 +505,8 @@ class FootballDataAdapter:
         joined = ",".join(self.codes)
         # The provider rejects a `competitions` filter longer than 90 characters. A large catalogue (e.g. all
         # competitions) asks for the whole day instead — one request — and keeps only served competitions below.
-        if len(joined) <= MAX_COMPETITIONS_FILTER:
+        whole_day = len(joined) > MAX_COMPETITIONS_FILTER
+        if not whole_day:
             params["competitions"] = joined
         data, _ = await self.client.get_json("/matches", params)
         matches = data.get("matches")
@@ -515,6 +516,8 @@ class FootballDataAdapter:
         count = result_set.get("count") if isinstance(result_set, dict) else None
         if count is not None and count != len(matches):
             raise UpstreamError("bad_response")  # a truncated page must never pass for the whole day
+        if whole_day and (isinstance(count, bool) or not isinstance(count, int)):
+            raise UpstreamError("bad_response")  # unfiltered: completeness must be provable, not assumed
         fetched = self._now_iso()
         seen: set[str] = set()
         events: list[FootballEvent] = []

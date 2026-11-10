@@ -109,17 +109,18 @@ def _closeness(position: int, teams: int) -> float:
 def score(event: FootballEvent, code: str, table: Table | None, w: TopWeights = WEIGHTS,
           now: float | None = None) -> Ranked:
     total = w.competition.get(code, w.other_competition)
-    stage = w.stage.get(event.stage or "", 0.0)
-    # A knockout stage lifts a match within its own level: a minor cup's final must not outrank the main leagues.
-    total += stage if code in w.competition else min(stage, w.other_stage_cap)
+    bonus = w.stage.get(event.stage or "", 0.0)
     leaders = False
     if table is not None and table.teams >= w.min_table_teams:
         home, away = table.positions.get(event.home.id), table.positions.get(event.away.id)
         if home is not None and away is not None:
-            total += w.table * (_closeness(home, table.teams) + _closeness(away, table.teams)) / 2
+            bonus += w.table * (_closeness(home, table.teams) + _closeness(away, table.teams)) / 2
             leaders = home <= w.leaders_top and away <= w.leaders_top
             if leaders:
-                total += w.leaders
+                bonus += w.leaders
+    # Stage and table lift a match within its own level: for a competition without its own weight they add
+    # at most other_stage_cap, so a minor final or a lower-tier top-of-table game cannot outrank the main leagues.
+    total += bonus if code in w.competition else min(bonus, w.other_stage_cap)
     if event.status == "live":
         total += w.live
     elif event.status == "upcoming":

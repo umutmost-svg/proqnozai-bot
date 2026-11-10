@@ -35,7 +35,7 @@ from miniapp.ai.analysis import ModelForecaster
 from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast
 from miniapp.forecast.markets import FAMILY
 from miniapp.forecast.quick import STATUS_UNAVAILABLE, Criteria, Leg, Option, QuickResult, choose
-from miniapp.forecast.selection import NO_BET_EARLY
+from miniapp.forecast.selection import LIMITED_COMPETITIONS, NO_BET_EARLY, NO_BET_UNVALIDATED
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.odds.store import OddsStore
 from miniapp.odds.value import MarketQuote, compare
@@ -223,7 +223,14 @@ class QuickService:
         histories: dict[str, ModelHistory | None] = {}
         unavailable: list[str] = []
         counts = Counter(e.tournament_id for e in todays)
+        # Competitions the frozen rules were never validated on can never yield a pick: they are
+        # classified here, before any history request, so they cannot use up the minute's budget
+        # that validated competitions need.
+        unvalidated = {t for t in counts
+                       if t.split(":", 1)[-1] not in FROZEN.validated and t.split(":", 1)[-1] not in LIMITED_COMPETITIONS}
         for tournament in sorted(counts, key=lambda t: (-counts[t], t)):
+            if tournament in unvalidated:
+                continue
             if not affordable(self.sports.history_cost(tournament)):
                 unavailable.append(tournament)
                 continue
@@ -262,6 +269,9 @@ class QuickService:
             options.append(Option(event.id, event.starts_at, (event.home.id, event.away.id), outcome))
             if outcome.selection.no_bet_reason is not None:
                 reasons[outcome.selection.no_bet_reason] += 1
+        skipped = sum(1 for e in todays if e.tournament_id in unvalidated and parse_instant(e.starts_at).timestamp() > now)
+        if skipped:
+            reasons[NO_BET_UNVALIDATED] += skipped
         later_events = [e for e in events.values() if parse_instant(e.starts_at).date() > today]
         later = len(later_events)
         # "The next match" only when every day of the period was checked: an unchecked earlier day

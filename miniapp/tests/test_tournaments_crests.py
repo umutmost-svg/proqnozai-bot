@@ -881,3 +881,34 @@ def test_minor_cup_final_cannot_outrank_the_main_leagues():
     from miniapp.sports.top import WEIGHTS
 
     assert WEIGHTS.other_competition + min(WEIGHTS.stage["FINAL"], WEIGHTS.other_stage_cap) < WEIGHTS.competition["PL"]
+
+
+def test_whole_day_listing_requires_a_count():
+    import asyncio
+    from datetime import date
+
+    from miniapp.sports.client import UpstreamError
+    from miniapp.sports.football_data import FootballDataAdapter, all_codes
+
+    class Client:
+        async def get_json(self, path, params=None):
+            return {"matches": []}, None  # no resultSet: completeness cannot be proven
+
+    try:
+        asyncio.run(FootballDataAdapter(Client(), all_codes(), lambda: 1.8e9).day(date(2026, 11, 8)))
+        raise AssertionError("an unprovable whole day must not pass")
+    except UpstreamError as exc:
+        assert exc.code == "bad_response"
+
+
+def test_minor_competition_bonuses_are_capped_with_a_table():
+    from types import SimpleNamespace
+
+    from miniapp.sports.top import WEIGHTS, Table, score
+
+    event = SimpleNamespace(stage="FINAL", status="finished", starts_at="2026-11-08T15:00:00Z",
+                            home=SimpleNamespace(id="a"), away=SimpleNamespace(id="b"))
+    table = Table(teams=20, positions={"a": 1, "b": 2})
+    minor = score(event, "ZZZ", table)
+    major = score(SimpleNamespace(**{**event.__dict__, "stage": None}), "PL", None)
+    assert minor.score <= WEIGHTS.other_competition + WEIGHTS.other_stage_cap < major.score

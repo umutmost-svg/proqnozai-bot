@@ -386,3 +386,17 @@ def test_no_next_match_claim_while_some_days_are_unchecked() -> None:
     assert len(sports.ranges) == 2 and body["uncheckedDays"] == 6 and body["nextMatchAt"] is None
     svc, _ = service(events, {})
     assert pick(svc, "2027-01-22T08:00:00Z")["nextMatchAt"] == "2027-01-16T15:00:00Z"
+
+
+def test_unvalidated_competitions_cost_no_history_requests() -> None:
+    from miniapp.forecast.selection import NO_BET_UNVALIDATED
+    from miniapp.sports.football_data import normalize_match as nm
+    from miniapp.tests.test_sports import match as raw_match
+
+    pl = ev(1, code="PL", utc=f"{DAY}T18:00:00Z")
+    tsl = nm(raw_match(2, "TIMED", code="TSL", utc=f"{DAY}T19:00:00Z"), FETCHED, frozenset({"PL", "TSL"}))
+    assert tsl is not None
+    svc, sports = service([pl, tsl], {"fd:1": forecast(None)})
+    body = pick(svc, f"{DAY}T23:59:00Z")
+    assert sports.history_calls == ["fd:PL"]  # the Süper Lig match was classified without a request
+    assert body["reasons"].get(NO_BET_UNVALIDATED) == 1

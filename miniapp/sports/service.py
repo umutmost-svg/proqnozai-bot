@@ -146,6 +146,9 @@ class SportsService:
         self._warm_standings = warm_standings
         self._background_loads = 0  # settlement calendar loads in flight (see background_busy)
         self._standings_task: asyncio.Task[None] | None = None
+        # ONE background request at a time (standings / search warm-up / settlement): the client has two
+        # request slots, and the other one always stays free for users.
+        self._background_slot = asyncio.Lock()
         self._standings_warm_retry_at: dict[str, float] = {}
         self._sleep = sleep
 
@@ -531,7 +534,8 @@ class SportsService:
         self._background_loads += 1
         try:
             # A load started here copies this context (its retries keep the same limits).
-            return await self.calendar("football", tournament_id)
+            async with self._background_slot:
+                return await self.calendar("football", tournament_id)
         finally:
             self._background_loads -= 1
             LOW_PRIORITY_DAY_SHARE.reset(share)
@@ -542,13 +546,14 @@ class SportsService:
         background work (users' requests keep the minute's reserve); refused when the budget is spent."""
         if self.football is None or not self._warm_budget_left():
             raise UpstreamError("rate_limited", low_priority_only=True)
-        reserve = LOW_PRIORITY_RESERVE.set(STANDINGS_WARM_RESERVE)
-        share = LOW_PRIORITY_DAY_SHARE.set(STANDINGS_WARM_DAY_SHARE)
-        try:
-            return await self.calendar("football", tournament_id)
-        finally:
-            LOW_PRIORITY_DAY_SHARE.reset(share)
-            LOW_PRIORITY_RESERVE.reset(reserve)
+        async with self._background_slot:
+            reserve = LOW_PRIORITY_RESERVE.set(STANDINGS_WARM_RESERVE)
+            share = LOW_PRIORITY_DAY_SHARE.set(STANDINGS_WARM_DAY_SHARE)
+            try:
+                return await self.calendar("football", tournament_id)
+            finally:
+                LOW_PRIORITY_DAY_SHARE.reset(share)
+                LOW_PRIORITY_RESERVE.reset(reserve)
 
     def background_busy(self) -> bool:
         """A background load (standings warm-up, search warm-up, settlement) is running: the
@@ -579,17 +584,18 @@ class SportsService:
                     return
                 key = f"football:standings:{code}"
                 before = self.cache.peek(key)
-                # The load task copies this context: every attempt it makes (retries included)
-                # keeps the minute's reserve free and stops at the warm-up's share of the day.
-                reserve = LOW_PRIORITY_RESERVE.set(STANDINGS_WARM_RESERVE)
-                share = LOW_PRIORITY_DAY_SHARE.set(STANDINGS_WARM_DAY_SHARE)
                 try:
-                    future = self.cache.start(key, lambda c=code: adapter.standings(c))
-                finally:
-                    LOW_PRIORITY_DAY_SHARE.reset(share)
-                    LOW_PRIORITY_RESERVE.reset(reserve)
-                try:
-                    cached = await asyncio.shield(future)
+                    async with self._background_slot:  # one background request at a time
+                        # The load task copies this context: every attempt it makes (retries included)
+                        # keeps the minute's reserve free and stops at the warm-up's share of the day.
+                        reserve = LOW_PRIORITY_RESERVE.set(STANDINGS_WARM_RESERVE)
+                        share = LOW_PRIORITY_DAY_SHARE.set(STANDINGS_WARM_DAY_SHARE)
+                        try:
+                            future = self.cache.start(key, lambda c=code: adapter.standings(c))
+                        finally:
+                            LOW_PRIORITY_DAY_SHARE.reset(share)
+                            LOW_PRIORITY_RESERVE.reset(reserve)
+                        cached = await asyncio.shield(future)
                 except UpstreamError as exc:
                     pause = STANDINGS_WARM_NOT_FOUND_S if exc.code == "not_found" else STANDINGS_WARM_RETRY_S
                     self._standings_warm_retry_at[code] = self._clock() + pause

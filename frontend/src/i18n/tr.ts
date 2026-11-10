@@ -47,6 +47,7 @@ export const tr: Dictionary = {
 
   'tournament.label': 'Turnuva',
   'tournament.all': 'Tüm turnuvalar',
+  'tournament.more': 'Diğer turnuvalar…',
   'tournaments.title': 'Turnuvalar',
   'tournaments.open': '{name}: fikstürü aç',
   'tournaments.errorText': 'Turnuva listesi yüklenemedi.',
