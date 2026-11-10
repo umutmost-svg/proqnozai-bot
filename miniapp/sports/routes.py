@@ -21,6 +21,9 @@ from .models import SPORTS
 from .search import MAX_QUERY, MIN_QUERY, normalize
 from .service import RequestError, SportsService, parse_instant
 
+# A stand-in flag: cached only until the emblem itself is asked again (the crest store's failure TTL).
+FALLBACK_CREST_CACHE = "public, max-age=3600"
+
 logger = logging.getLogger("miniapp.sports")
 
 SessionCheck = Callable[[Request], Awaitable[Any]]
@@ -231,7 +234,9 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             return _error(404, "not_found")
         # The bytes were checked: a PNG, or an SVG of plain vector graphics (crests.is_safe_svg). An SVG gets a
         # no-script CSP from the app middleware; caching and nosniff come from there too.
-        return Response(body, media_type=media_type(body))
+        # A stand-in flag is cached only until the emblem itself is asked again (crests failure TTL).
+        headers = {"Cache-Control": FALLBACK_CREST_CACHE} if service.crests.is_fallback(kind, ident) else None
+        return Response(body, media_type=media_type(body), headers=headers)
 
     @app.api_route("/api/crests/{rest:path}", methods=["GET", "HEAD"])
     async def crest_other(rest: str) -> Response:

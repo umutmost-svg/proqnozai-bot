@@ -272,6 +272,10 @@ class CrestStore:
         self._drop_image(key)
         self._failed.pop(key, None)
 
+    def is_fallback(self, kind: str, ident: str) -> bool:
+        """The picture in memory is a stand-in (the country's flag), to be checked again soon."""
+        return self.key(kind, ident) in self._fell_back
+
     def admit_rejected(self) -> bool:
         """Cap on cheap 404s (unknown ids, cache-busting queries) so junk cannot spin the origin."""
         return self._window(self._rejected, self._rejected_per_second)
@@ -323,7 +327,7 @@ class CrestStore:
         url = self._urls.get(key)
         if url is None:
             return None
-        cached = self._images.get(key)
+        cached = stale = self._images.get(key)
         fell_back = self._fell_back.get(key)
         if cached is not None and fell_back is not None and self._clock() - fell_back >= self._failure_ttl:
             cached = None  # time to ask the emblem itself again; the flag is kept until a new answer
@@ -337,7 +341,7 @@ class CrestStore:
         if running is not None:
             return await asyncio.shield(running)
         if not self._spend():
-            return None  # over the per-minute cap: try again later, not remembered as a failure
+            return stale  # over the per-minute cap: try again later (the flag shown so far meanwhile)
         future: asyncio.Future[bytes | None] = asyncio.get_running_loop().create_future()
         self._inflight[key] = future
         try:
@@ -346,8 +350,8 @@ class CrestStore:
                 # requests indefinitely behind the slots.
                 await asyncio.wait_for(self._gate.acquire(), QUEUE_WAIT_S)
             except TimeoutError:
-                future.set_result(None)
-                return None  # busy, not remembered as a failure
+                future.set_result(stale)
+                return stale  # busy, not remembered as a failure
             try:
                 body, used = None, 0
                 for used, source in enumerate(url):

@@ -1162,3 +1162,41 @@ def test_a_failed_refresh_of_the_emblem_keeps_the_flag_already_shown():
     clock.advance(3600)
     assert asyncio.run(store.image("competition", "PL")) == PNG  # the refresh raised: the flag stays
     assert asyncio.run(store.image("competition", "PL")) == PNG and "competition:PL" not in store._failed
+
+
+def test_a_busy_refresh_still_shows_the_flag_and_a_stand_in_is_cached_briefly(api, clock: FakeClock) -> None:
+    import asyncio
+
+    from miniapp.sports.crests import CrestStore
+    from miniapp.sports.routes import FALLBACK_CREST_CACHE
+
+    calls = []
+
+    async def fetch(url, timeout_s):
+        calls.append(url)
+        return None if url.endswith("PL.png") else PNG
+
+    store = CrestStore(fetch, clock=clock, failure_ttl_s=3600, per_minute=2)
+    store.learn("competition", "PL", "https://crests.football-data.org/PL.png", fallback="https://crests.football-data.org/770.svg")
+    assert asyncio.run(store.image("competition", "PL")) == PNG and store.is_fallback("competition", "PL")
+    clock.advance(3600)
+    store._recent.extend([clock.now] * 2)  # the per-minute download budget is used up
+    assert asyncio.run(store.image("competition", "PL")) == PNG and len(calls) == 2  # the flag, no fetch
+
+
+def test_a_stand_in_flag_is_cached_only_until_the_emblem_is_asked_again(tmp_path, clock: FakeClock) -> None:
+    from miniapp.sports.routes import FALLBACK_CREST_CACHE
+
+    async def fetch(url, timeout_s):
+        return None if url.endswith("PL.png") else PNG
+
+    settings = base_settings(tmp_path, football_data_key=KEY, session_ttl_s=3600)
+    service = build_service(settings, clock=clock, transport=FakeTransport(), crest_fetch=fetch, warm_emblems=False)
+    client = TestClient(create_app(settings, clock=clock, sports=service), base_url="http://127.0.0.1:8000")
+    service.crests.learn("competition", "PL", "https://crests.football-data.org/PL.png",
+                         fallback="https://crests.football-data.org/770.svg")
+    service.crests.learn("competition", "PD", "https://crests.football-data.org/PD.svg")
+    flag = client.get("/api/crests/competition/PL")
+    assert flag.status_code == 200 and flag.headers["cache-control"] == FALLBACK_CREST_CACHE
+    own = client.get("/api/crests/competition/PD")
+    assert own.status_code == 200 and own.headers["cache-control"] == "public, max-age=86400"
