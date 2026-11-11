@@ -138,10 +138,11 @@ async def run(svc, ai, client) -> None:
         if calls + 1 > MAX_CALLS or spent + WORST_CALL_USD > CAP_USD:
             print(f"STOP: limits (calls {calls}/{MAX_CALLS}, spent ${spent:.2f}/${CAP_USD})"); break
         tries = [x for x in ledger if x["event"] == r["event"]]
-        if any(x.get("status") in ("ok", "skipped_started") for x in tries) or len(tries) >= 2:
+        tries = [x for x in tries if x.get("status") != "skipped_started"]  # a moved kickoff gets its chance again
+        if any(x.get("status") == "ok" for x in tries) or len(tries) >= 2:
             continue  # done, or already retried once: a failed analysis is repeated at most once (next `run`)
         if parse_instant(r["kickoff"]).timestamp() - LEAD_MIN * 60 <= time.time():  # the documented 60-min cutoff
-            ledger.append({**r, "status": "skipped_started"}); continue
+            ledger.append({**r, "status": "skipped_started"}); save("ledger.json", ledger); continue
         usage.clear()
         t0 = time.monotonic()
         entry = {**r, "requestedAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "status": "in_flight"}
