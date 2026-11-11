@@ -7,8 +7,8 @@
 
 | | |
 |---|---|
-| Код релиза | `b6cf031` (проверен на стенде 2026-11-11) **+ вход без токена бота (Ed25519)** из `feat/initdata-ed25519` |
-| `<TESTED_CODE_SHA>` | коммит, прошедший проверку на стенде (раздел «Ed25519 на стенде»); записывается здесь после неё |
+| Код релиза | `b6cf031` (стенд 2026-11-11) + вход без токена (Ed25519) + превью «Быстрого прогноза» + закрытый список пользователей (`MINIAPP_ALLOWED_USER_IDS`). Кандидат: HEAD `release/miniapp-prod` после этой правки |
+| `<TESTED_CODE_SHA>` | коммит, прошедший проверку на стенде (раздел «Ed25519 на стенде») с этим кодом; записывается здесь после неё |
 | Ветка выкладки | `release/miniapp-prod` = `<TESTED_CODE_SHA>` + коммиты только с документацией/скриптами вне образа (в т.ч. запись SHA). Код приложения выкладываемого коммита идентичен `<TESTED_CODE_SHA>` |
 | Проверка перед push | `git diff --stat <TESTED_CODE_SHA> release/miniapp-prod -- miniapp frontend deploy/miniapp/Dockerfile deploy/miniapp/entrypoint.sh` пуст **и** `git show release/miniapp-prod:miniapp/settings.py \| grep -q MINIAPP_INITDATA_MODE`; SHA выкладки (`git rev-parse release/miniapp-prod`) фиксируется в отчёте о выкладке |
 | Что не выпускаем | `main` (бот), админку (`feat/admin-pilot`), экспорт коэффициентов бота в Mini App |
@@ -129,6 +129,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 | `MINIAPP_TELEGRAM_ENV` | `production` | |
 | `MINIAPP_CSRF_SECRET` | случайная строка ≥ 32 символов | да |
 | `MINIAPP_BOT_TOKEN` | **не задавать** в режиме `ed25519` (запуск остановится с ошибкой) | |
+| `MINIAPP_ALLOWED_USER_IDS` | **закрытый запуск:** Telegram id владельца (через запятую — несколько). Вход и любая сессия — только для них, остальным 403 `not_allowed`, их данные не сохраняются. Открытие всем — убрать переменную (Redeploy) | |
 | `MINIAPP_DB_PATH` | `/data/miniapp.db` | |
 | `MINIAPP_TRUSTED_ORIGINS` | `https://<MINIAPP_DOMAIN>` | |
 | `MINIAPP_EDGE_SECRET` | случайная строка ≥ 32 символов, та же в Transform Rule | да |
@@ -203,6 +204,9 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 
 ## 6. Runbook выкладки
 
+`sporbot-miniapp` ниже — имя приложения/сервиса в Dokploy. Dokploy может дать сервису другое имя (суффикс):
+перед командами взять фактическое из `docker service ls` и подставить в `SVC=<имя>`; `docker ps -f name=$SVC`.
+
 **Все шаги выполняются без перерыва в работе бота**: бот не пересобирается и не перезапускается; шаги 9–10
 меняют только кнопку меню бота в Telegram. Условие остановки на любом шаге — отклонение от ожидаемого;
 до шага 10 пользователи Mini App не видят.
@@ -219,16 +223,16 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    Replicas 1, stop-first, volume, domain, env). *Стоп:* свободно < 5 ГБ на диске (сборка ~1,5 ГБ с кешем).
 6. **[сервер] Deploy**, затем проверить, что Dokploy применил настройки:
    ```sh
-   docker service inspect sporbot-miniapp --format '{{.Spec.Mode.Replicated.Replicas}} {{.Spec.UpdateConfig.Order}} {{.Spec.UpdateConfig.FailureAction}} {{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Source}}->{{.Target}} {{end}}'
+   docker service inspect $SVC --format '{{.Spec.Mode.Replicated.Replicas}} {{.Spec.UpdateConfig.Order}} {{.Spec.UpdateConfig.FailureAction}} {{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Source}}->{{.Target}} {{end}}'
    # ожидается: 1 stop-first rollback sporbot-miniapp-data->/data
-   docker ps -f name=sporbot-miniapp --format '{{.Status}}'      # Up … (healthy)
-   docker port $(docker ps -q -f name=sporbot-miniapp)           # пусто: порт не опубликован на хосте
+   docker ps -f name=$SVC --format '{{.Status}}'      # Up … (healthy)
+   docker port $(docker ps -q -f name=$SVC)           # пусто: порт не опубликован на хосте
    ```
    *Стоп/откат:* перезапуски задачи, unhealthy или настройки не совпали → Stop приложения, разбор
-   `docker service logs sporbot-miniapp`.
+   `docker service logs $SVC`.
 7. **[сервер] Проверки без Telegram:**
    ```sh
-   D=<MINIAPP_DOMAIN>; IP=<DROPLET_IP>; C=$(docker ps -q -f name=sporbot-miniapp)
+   D=<MINIAPP_DOMAIN>; IP=<DROPLET_IP>; C=$(docker ps -q -f name=$SVC)
    curl -s https://$D/api/health                                                    # {"status":"ok"}
    curl -s -o /dev/null -w '%{http_code}\n' https://$D/                             # 200 через Cloudflare
    curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Edge-Auth: forged' https://$D/   # 200: Cloudflare перезаписал заголовок
@@ -239,10 +243,14 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    В режиме `ed25519` smoke не может войти сам (подписать вход может только Telegram): положительная
    проверка входа — шаг 9. В режиме `hmac` нужен `-e SMOKE_USER_ID=<id владельца>`: smoke входит под
    аккаунтом владельца и завершает только свою сессию. *Стоп:* любой FAIL.
-8. **[сервер] Ежедневные бэкапы** (cron root на хосте, 03:17):
-   `C=$(docker ps -q -f name=sporbot-miniapp) && docker exec -i -u miniapp $C python - < /opt/sporbot/backup.py`
-   плюс копия последней папки с сервера (`docker cp $C:/data/backups/<stamp> …` → внешний диск/S3) и удаление
-   копий старше 7 дней. Один раз — пробное восстановление из внешней копии по разделу 7 на тестовом томе.
+8. **[сервер] Ежедневные бэкапы** (cron root на хосте, 03:17) с проверкой и внешней копией:
+   ```sh
+   17 3 * * * C=$(docker ps -q -f name=$SVC) && docker exec -i -u miniapp $C python - < /opt/sporbot/backup.py > /var/log/sporbot-backup.log 2>&1 \
+     || <команда уведомления владельцу, напр. curl в его канал мониторинга>
+   ```
+   `backup.py` завершается с ошибкой, если копия не прошла `integrity_check`. Затем копия последней папки за
+   пределы сервера (`docker cp $C:/data/backups/<stamp> …` → внешний диск/S3/Dokploy Destination) и удаление копий
+   старше 7 дней. Один раз — пробное восстановление из внешней копии по разделу 7 на тестовом томе.
 9. **[владелец] Проверка в Telegram до открытия всем.** Mini App принимает только запуски из
    production-бота (подпись Telegram для его `MINIAPP_BOT_ID`), поэтому тестовый бот не подойдёт: кнопка
    только для владельца ставится production-ботом (токен нужен лишь этой команде на машине владельца, не
@@ -255,7 +263,8 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
      --data-urlencode 'menu_button={"type":"web_app","text":"SporBot","web_app":{"url":"https://<MINIAPP_DOMAIN>"}}'
    rm -f "$CFG"
    ```
-   Проверка (тот же приём с `-K`, методы `getChatMenuButton`): с `chat_id=<id владельца>` — `web_app` с URL Mini
+   **До установки** сохранить текущее значение: `getChatMenuButton` с `chat_id=<id владельца>` и без `chat_id`
+   (ответы `"ok":true` — записать `result`). Проверка после (тот же приём с `-K`): с `chat_id=<id владельца>` — `web_app` с URL Mini
    App; без `chat_id` (кнопка по умолчанию для всех) — прежнее значение. Кнопка ставится только для чата,
    который уже открыт с ботом (иначе `Bad Request: user not found` — проверено на тестовом боте). Откат:
    `setChatMenuButton` с `chat_id=<id владельца>` и `menu_button={"type":"default"}`.
@@ -264,19 +273,21 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    **Обязательная положительная проверка входа:** в логах Mini App на каждый клиент `auth.session ...
    created=True` и ни одного `auth.rejected reason=bad_signature|missing_signature|bad_signature_format`
    (перед входом `T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)` — после smoke, чей намеренный отказ не считается; затем
-   `docker service logs sporbot-miniapp --since "$T0" | grep -E 'auth\.(session|rejected)'`). *Стоп:* любой
+   `docker service logs $SVC --since "$T0" | grep -E 'auth\.(session|rejected)'`). *Стоп:* любой
    такой отказ — неверный `MINIAPP_BOT_ID`/`MINIAPP_TELEGRAM_ENV` или клиент без подписи → выключить кнопку
    владельца, разобрать; запасной вариант — `hmac` с токеном.
-10. **[владелец] Открыть пользователям:** BotFather → production-бот → Menu Button / Main Mini App =
-    `https://<MINIAPP_DOMAIN>`. Бот не перезапускается.
-11. **Наблюдение 24 ч** (раздел 8).
+10. **Закрытый запуск на этом заканчивается.** Кнопка по умолчанию (для всех) и BotFather не меняются;
+    `MINIAPP_ALLOWED_USER_IDS` остаётся. Наблюдение 24 ч (раздел 8).
+
+**Открытие всем — отдельный этап, отдельное разрешение (не 13.11):** после проверки AI 20–22.11 и наблюдения:
+убрать `MINIAPP_ALLOWED_USER_IDS` (Redeploy), затем BotFather → Menu Button / Main Mini App = `https://<MINIAPP_DOMAIN>`.
 
 ## 7. Откат
 
 | Ситуация | Действие | Бот |
 |---|---|---|
-| До шага 10 | Dokploy → Stop/Delete `sporbot-miniapp` | не затронут |
-| После шага 10, сбой Mini App | BotFather: убрать/вернуть прежнюю Menu Button → Stop приложения | не затронут |
+| Закрытый запуск (до или после шага 9) | вернуть кнопку владельца: `setChatMenuButton` с `chat_id=<id владельца>` и сохранённым до шага 9 значением (или `{"type":"default"}`), проверить `"ok":true`; затем Dokploy → Stop `sporbot-miniapp` | не затронут |
+| После открытия всем, сбой Mini App | BotFather: вернуть прежнюю Menu Button → Stop приложения | не затронут |
 | Массовые проблемы входа | `MINIAPP_LOGINS_ENABLED=false` (Redeploy) и/или `docker exec -u miniapp <ctr> python -m miniapp.admin revoke-all --yes` | не затронут |
 | Повреждение данных | процедура «Восстановление» ниже | не затронут |
 | Следующие релизы | Deploy предыдущего коммита ветки (Dokploy) — схема только расширяется, старый код работает с новой БД | не затронут |
@@ -284,10 +295,10 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 ### Восстановление из бэкапа (обе БД, проверено локально на копии в новом томе)
 ```sh
 S=<stamp>                                   # папка в /data/backups/ (или внешняя копия, скопированная в том)
-docker service scale sporbot-miniapp=0
+docker service scale $SVC=0
 # `scale` может вернуться раньше остановки: ждать, пока контейнера не станет (иначе стоп, том не трогать)
-for i in $(seq 1 60); do [ -z "$(docker ps -q -f name=sporbot-miniapp)" ] && break; sleep 2; done
-[ -z "$(docker ps -q -f name=sporbot-miniapp)" ] || { echo "STOP: writer still running"; exit 1; }
+for i in $(seq 1 60); do [ -z "$(docker ps -q -f name=$SVC)" ] && break; sleep 2; done
+[ -z "$(docker ps -q -f name=$SVC)" ] || { echo "STOP: writer still running"; exit 1; }
 docker run --rm -v sporbot-miniapp-data:/data --entrypoint sh <образ sporbot-miniapp> -c "
   set -e; cd /data; mkdir -p broken-$S && mv miniapp.db* miniapp.forecasts.db* broken-$S/ 2>/dev/null || true
   cp backups/$S/miniapp.db backups/$S/miniapp.forecasts.db /data/   # без -wal/-shm: копии самодостаточны
@@ -296,9 +307,9 @@ docker run --rm -v sporbot-miniapp-data:/data --entrypoint sh <образ sporbo
 docker run --rm -v sporbot-miniapp-data:/data -e MINIAPP_ENV=development -e MINIAPP_DB_PATH=/data/miniapp.db \
   -e MINIAPP_BOT_TOKEN=000000:offline-maintenance-not-a-token -e MINIAPP_TRUSTED_ORIGINS=http://localhost \
   <образ sporbot-miniapp> admin revoke-all --yes
-docker service scale sporbot-miniapp=1
-for i in $(seq 1 90); do [ -n "$(docker ps -q -f name=sporbot-miniapp -f health=healthy)" ] && break; sleep 2; done
-C=$(docker ps -q -f name=sporbot-miniapp -f health=healthy); [ -n "$C" ] || { echo "STOP: not healthy, see docker service logs"; exit 1; }
+docker service scale $SVC=1
+for i in $(seq 1 90); do [ -n "$(docker ps -q -f name=$SVC -f health=healthy)" ] && break; sleep 2; done
+C=$(docker ps -q -f name=$SVC -f health=healthy); [ -n "$C" ] || { echo "STOP: not healthy, see docker service logs"; exit 1; }
 docker exec -i -u miniapp $C python - verify /data < /opt/sporbot/backup.py
 docker exec -i -u miniapp -e SMOKE_USER_ID=<id владельца> -e SMOKE_USER_EXISTS_OK=1 $C python - < /opt/sporbot/smoke.py
 ```
@@ -308,9 +319,11 @@ docker exec -i -u miniapp -e SMOKE_USER_ID=<id владельца> -e SMOKE_USER
 ## 8. Мониторинг
 
 - Uptime-монитор раз в минуту на `https://<MINIAPP_DOMAIN>/api/health` + алерт владельцу.
-- Логи Mini App (`docker service logs sporbot-miniapp`): `event=unhandled_error`, `event=health_db_error`,
-  `event=edge_bypass_blocked`, `sports_upstream_error ... status=429`, всплески `auth.rate_limited`,
-  `ai.` ошибки (`timeout`, `upstream_error`).
+- Логи Mini App (`docker service logs $SVC`): `event=unhandled_error`, `event=health_db_error`,
+  `event=edge_bypass_blocked`, `event=sports_upstream_error ... status=429`, всплески `auth.rate_limited`,
+  `auth.rejected reason=not_allowed` (кто-то, кроме допущенных, открыл Mini App), `ai.unavailable path=… reason=…`
+  (`timeout`, `upstream_error`, `rate_limited`, `budget_exhausted`), `event=ai_upstream_error`.
+- Бэкапы: `/var/log/sporbot-backup.log` и уведомление cron при сбое (шаг 8).
 - Логи бота: `football API 429` (общий ключ) — любое появление.
 - Квоты: `GET /api/sports/coverage` (под сессией) → `quota.usedLastMinute/usedToday`; расход Anthropic —
   `ai_usage` в БД / консоль Anthropic; потолок `MINIAPP_AI_DAILY_BUDGET`.

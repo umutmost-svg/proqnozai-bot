@@ -120,6 +120,7 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 | `MINIAPP_BOT_ID` | — (обязательна в `ed25519`) | публичный числовой id бота (префикс токена); в `hmac` включает замер `auth.ed25519_shadow` и должен совпадать с токеном |
 | `MINIAPP_TELEGRAM_ENV` | `production` | `test` — тестовая среда Telegram (другой публичный ключ) |
 | `MINIAPP_CSRF_SECRET` | — (обязательна в `ed25519`) | материал ключа CSRF, ≥ 32 печатных ASCII; без него — из токена бота |
+| `MINIAPP_ALLOWED_USER_IDS` | — (все) | закрытый запуск: id через запятую; вход и сессии только для них (403 `not_allowed`), данные остальных не сохраняются; удаление id из списка сразу закрывает его сессии |
 | `MINIAPP_DB_PATH` | — (обязательна) | файл SQLite Mini App; `bot.db*` запрещён (см. «База данных») |
 | `MINIAPP_TRUSTED_ORIGINS` | — (обязательна) | точные `scheme://host[:port]` через запятую; `*`, `null` и пути запрещены |
 | `MINIAPP_ENV` | `production` | `development` разрешён только с loopback-origin по http |

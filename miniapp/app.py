@@ -306,6 +306,8 @@ def create_app(
         found = await unrevoked_session(request)
         if found is None or found[1].expires_at <= now():
             return None
+        if settings.allowed_user_ids is not None and found[1].user_id not in settings.allowed_user_ids:
+            return None  # closed launch: a session of someone taken off the list stops working at once
         return found
 
     def session_payload(user: User, token: str, session: Session) -> dict[str, Any]:
@@ -369,6 +371,10 @@ def create_app(
         if any([await run_in_threadpool(store.is_init_data_consumed, i, ts) for i in burned]):
             logger.info("auth.rejected reason=reused_after_logout")
             raise ApiError(401, "init_data_reused")
+        if settings.allowed_user_ids is not None and verified.user.id not in settings.allowed_user_ids:
+            # Closed launch: nothing about this user is stored (no user row, no session).
+            logger.info("auth.rejected reason=not_allowed")
+            raise ApiError(403, "not_allowed")
         retry_after = limiter.hit(f"user:{verified.user.id}")
         if retry_after is not None:
             logger.warning("auth.rate_limited user=%s", verified.user.id)
@@ -565,6 +571,7 @@ def create_app(
         except (AiError, UpstreamError) as exc:
             if exc.code == "not_created":
                 return JSONResponse({"error": "ai_not_created"}, status_code=404)
+            logger.info("ai.unavailable path=read reason=%s", exc.code)  # code only: monitoring of timeouts etc.
             if exc.code in AI_ERROR_CODES:
                 return JSONResponse({"error": "ai_unavailable", "reason": exc.code}, status_code=503)
             return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503)
@@ -589,6 +596,7 @@ def create_app(
         try:
             result = await ai.analyse(event_id, session.user_id)
         except (AiError, UpstreamError) as exc:
+            logger.info("ai.unavailable path=create reason=%s", exc.code)  # code only: monitoring of timeouts etc.
             if exc.code in AI_ERROR_CODES:
                 status = 429 if exc.code == "limit_reached" else 503
                 return JSONResponse({"error": "ai_unavailable", "reason": exc.code}, status_code=status)

@@ -60,6 +60,15 @@ def is_bot_database_path(path: Path) -> bool:
     return any(name.casefold().startswith("bot.db") for name in names)
 
 
+def _user_ids(raw: str | None) -> frozenset[int] | None:
+    if raw is None:
+        return None
+    try:
+        return frozenset(int(x) for x in raw.split(",") if x.strip())
+    except ValueError:
+        raise SettingsError("MINIAPP_ALLOWED_USER_IDS must be comma-separated Telegram user ids") from None
+
+
 def _competitions(raw: str) -> tuple[str, ...]:
     """Comma-separated competition codes, or "all": every competition the provider serves on our plan."""
     if raw.strip().lower() == "all":
@@ -141,12 +150,19 @@ class Settings:
     telegram_env: TelegramEnv = "production"
     # Key material for CSRF tokens; required in ed25519 mode (there is no bot token to derive it from).
     csrf_secret: str | None = field(default=None, repr=False)
+    # Closed launch: when set, only these Telegram user ids may sign in or use a session (others: 403).
+    allowed_user_ids: frozenset[int] | None = None
 
     @property
     def csrf_key_material(self) -> str:
         return self.csrf_secret or self.bot_token
 
     def __post_init__(self) -> None:
+        if self.allowed_user_ids is not None and (
+            not self.allowed_user_ids or len(self.allowed_user_ids) > 1000
+            or any(not 0 < i < 2**53 for i in self.allowed_user_ids)
+        ):
+            raise SettingsError("allowed_user_ids must be 1..1000 positive Telegram user ids")
         if self.initdata_mode not in ("hmac", "ed25519"):
             raise SettingsError("initdata_mode must be hmac or ed25519")
         if self.telegram_env not in TELEGRAM_ENVS:
@@ -325,4 +341,5 @@ class Settings:
             bot_id=integer("MINIAPP_BOT_ID", 0) or None,
             telegram_env=(optional("MINIAPP_TELEGRAM_ENV") or "production").lower(),  # type: ignore[arg-type]
             csrf_secret=optional("MINIAPP_CSRF_SECRET"),
+            allowed_user_ids=_user_ids(optional("MINIAPP_ALLOWED_USER_IDS")),
         )
