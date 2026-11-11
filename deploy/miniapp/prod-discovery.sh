@@ -33,7 +33,8 @@ fi
 # newlines, so a path can neither split a field nor forge a line). A bind source is shown only when it equals
 # or lies under a known system root ("/" boundary); anything else is <host path>.
 mounts() { awk -F'\t' 'NF == 4 { src = $4; gsub(/^"|"$/, "", src)
-    if ($1 == "bind" && src !~ /^\/(etc\/dokploy|var\/lib\/docker|etc\/letsencrypt)(\/|$)/ && src !~ /^\/(var\/)?run\/docker\.sock$/) src = "<host path>"
+    # ".." or "." components and escapes are never shown: such a path could point anywhere.
+    if ($1 == "bind" && (src ~ /(^|\/)\.\.?(\/|$)/ || src ~ /\\/ || (src !~ /^\/(etc\/dokploy|var\/lib\/docker|etc\/letsencrypt)(\/|$)/ && src !~ /^\/(var\/)?run\/docker\.sock$/))) src = "<host path>"
     printf "  %s:%s->%s%s\n", $1, src, $2, ($3 == "true" ? "(ro)" : "") ; next }
   NF > 0 { print "  <unreadable mount record>" }'; }
 # Runs a read-only command and says so when it fails, instead of an empty, misleading section.
