@@ -8,9 +8,10 @@
 # configured separately for root):
 #   OFFSITE_KIND  rclone | ssh | disk
 #   OFFSITE       rclone: "remote:bucket/path"   ssh: "user@host:/path"   disk: "/mnt/backup-disk/sporbot"
-#                 (disk: the directory must contain the marker file .sporbot-offsite created once ON the
-#                 external disk — if the disk is not mounted, the marker is missing and the job fails
-#                 instead of silently copying onto this server)
+#                 A DEDICATED destination for this job: it must contain the marker file .sporbot-offsite
+#                 (created once, by hand, in that exact place — on the external disk itself for "disk").
+#                 Without it the job fails: no copy onto this server when a disk is not mounted, and no
+#                 retention in a place that might hold someone else's backups.
 #   NOTIFY        a command alerting the owner; gets the reason as $1
 set -u
 
@@ -33,7 +34,7 @@ fail() { echo "$(date -u +%FT%TZ) FAIL: $1"; sh -c "$NOTIFY \"\$1\"" _ "backup f
 
 case "$OFFSITE_KIND" in rclone|ssh|disk) ;; *) fail "OFFSITE_KIND is not configured" ;; esac
 case "$KEEP_DAYS" in ''|*[!0-9]*) fail "KEEP_DAYS must be a whole number of days" ;; esac
-[ "$KEEP_DAYS" -ge 1 ] || fail "KEEP_DAYS must be at least 1"
+[ "${#KEEP_DAYS}" -le 3 ] && [ "$KEEP_DAYS" -ge 1 ] && [ "$KEEP_DAYS" -le 365 ] || fail "KEEP_DAYS must be 1..365"
 now=$(date -u +%s) || fail "date"
 CUTOFF=$(date -u -d "@$((now - KEEP_DAYS * 86400))" +%Y%m%dT%H%M%SZ 2>/dev/null \
   || date -u -r "$((now - KEEP_DAYS * 86400))" +%Y%m%dT%H%M%SZ 2>/dev/null) || fail "cutoff date"
@@ -52,6 +53,13 @@ chmod 700 "$DIR/backups" || fail "chmod host dir"
 docker cp "$C:/data/backups/$stamp" "$local_copy" || fail "docker cp"
 chmod -R go-rwx "$local_copy" || fail "chmod host copy"
 
+# The destination must be this job's own (marker), checked before anything is written there.
+case "$OFFSITE_KIND" in
+  rclone) rclone lsf "$OFFSITE/.sporbot-offsite" >/dev/null 2>&1 || fail "no .sporbot-offsite marker in $OFFSITE" ;;
+  ssh) ssh "${OFFSITE%%:*}" "test -f '${OFFSITE#*:}/.sporbot-offsite'" || fail "no .sporbot-offsite marker in $OFFSITE" ;;
+  disk) [ -f "$OFFSITE/.sporbot-offsite" ] || fail "external disk not mounted or not dedicated (no $OFFSITE/.sporbot-offsite)" ;;
+esac
+
 case "$OFFSITE_KIND" in
   rclone)
     rclone copy "$local_copy" "$OFFSITE/$stamp" || fail "rclone copy"
@@ -63,7 +71,6 @@ case "$OFFSITE_KIND" in
     names=$(ssh "$host" "ls -1 '$path'") || fail "ssh list"
     for n in $(printf '%s\n' "$names" | expired); do ssh "$host" "rm -rf '$path/$n'" || fail "ssh retention"; done ;;
   disk)
-    [ -f "$OFFSITE/.sporbot-offsite" ] || fail "external disk not mounted (no $OFFSITE/.sporbot-offsite)"
     cp -a "$local_copy" "$OFFSITE/$stamp" || fail "copy to disk"
     names=$(ls -1 "$OFFSITE") || fail "disk list"
     for n in $(printf '%s\n' "$names" | expired); do rm -rf "${OFFSITE:?}/$n" || fail "disk retention"; done ;;

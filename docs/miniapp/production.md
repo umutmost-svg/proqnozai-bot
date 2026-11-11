@@ -246,10 +246,11 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    проверка входа — шаг 9. В режиме `hmac` нужен `-e SMOKE_USER_ID=<id владельца>`: smoke входит под
    аккаунтом владельца и завершает только свою сессию. *Стоп:* любой FAIL.
 8. **[сервер] Ежедневные бэкапы:** скопировать `deploy/miniapp/backup-job.sh` в `/opt/sporbot/` (0700, root),
-   один раз задать в нём `SVC`, `OFFSITE_KIND` (`rclone` / `ssh` / `disk`), `OFFSITE` (для `disk` — каталог на
-   внешнем диске с файлом-меткой `.sporbot-offsite`, созданным на самом диске) и `NOTIFY` (команда уведомления владельцу); cron root: `17 3 * * * /opt/sporbot/backup-job.sh >> /var/log/sporbot-backup.log 2>&1`.
+   один раз задать в нём `SVC`, `OFFSITE_KIND` (`rclone` / `ssh` / `disk`), `OFFSITE` — **выделенный только под эту
+   задачу** приёмник, в котором вручную создан файл-метка `.sporbot-offsite` (для `disk` — на самом внешнем диске;
+   без метки задание не пишет и не чистит), и `NOTIFY` (команда уведомления владельцу); cron root: `17 3 * * * /opt/sporbot/backup-job.sh >> /var/log/sporbot-backup.log 2>&1`.
    Задание: копия обеих БД с `integrity_check` → внешняя копия → хранение 7 дней (удаляются только каталоги, имя которых
-   в точности `YYYYMMDDTHHMMSSZ` или `YYYYMMDDTHHMMSSZ-n`, по времени UTC из самого имени; приёмник лучше отдельный); любой сбой — код ≠ 0 и
+   в точности `YYYYMMDDTHHMMSSZ` или `YYYYMMDDTHHMMSSZ-n`, по времени UTC из самого имени, и только в приёмнике с меткой); любой сбой — код ≠ 0 и
    `NOTIFY`. Первый запуск — вручную, проверить `OK:` в логе и наличие копии во внешнем приёмнике. **Проверка
    уведомления:** `OFFSITE_KIND=test /opt/sporbot/backup-job.sh` — задание обязано упасть и владелец обязан получить
    уведомление «backup failed: OFFSITE_KIND is not configured»; без этого задание не считается настроенным. Один раз —
@@ -304,7 +305,11 @@ docker service scale $SVC=0
 for i in $(seq 1 60); do [ -z "$(docker ps -q -f name=$SVC)" ] && break; sleep 2; done
 [ -z "$(docker ps -q -f name=$SVC)" ] || { echo "STOP: writer still running"; exit 1; }
 docker run --rm -v sporbot-miniapp-data:/data --entrypoint sh <образ sporbot-miniapp> -c "
-  set -e; cd /data; mkdir -p broken-$S && mv miniapp.db* miniapp.forecasts.db* broken-$S/ 2>/dev/null || true
+  set -e; cd /data; mkdir broken-$S
+  for f in miniapp.db miniapp.db-wal miniapp.db-shm miniapp.forecasts.db miniapp.forecasts.db-wal miniapp.forecasts.db-shm; do
+    if [ -e \"\$f\" ]; then mv \"\$f\" broken-$S/; fi   # каждый файл: сбой mv останавливает восстановление
+  done
+  if ls miniapp*.db* >/dev/null 2>&1; then echo 'STOP: old database files remain'; exit 1; fi
   cp backups/$S/miniapp.db backups/$S/miniapp.forecasts.db /data/   # без -wal/-shm: копии самодостаточны
   chown miniapp:miniapp /data/miniapp.db /data/miniapp.forecasts.db; chmod 600 /data/miniapp*.db"
 # Сессии из копии отзываются ДО запуска сервиса — ни одна не успевает ожить (офлайн, без секретов):
@@ -315,7 +320,7 @@ docker service scale $SVC=1
 for i in $(seq 1 90); do [ -n "$(docker ps -q -f name=$SVC -f health=healthy)" ] && break; sleep 2; done
 C=$(docker ps -q -f name=$SVC -f health=healthy); [ -n "$C" ] || { echo "STOP: not healthy, see docker service logs"; exit 1; }
 docker exec -i -u miniapp $C python - verify /data < /opt/sporbot/backup.py
-docker exec -i -u miniapp -e SMOKE_USER_ID=<id владельца> -e SMOKE_USER_EXISTS_OK=1 $C python - < /opt/sporbot/smoke.py
+docker exec -i -u miniapp -e SMOKE_EXPECT_ALLOWLIST=1 $C python - < /opt/sporbot/smoke.py
 ```
 Повреждённые файлы остаются в `/data/broken-<stamp>/` до разбора. Пока сервис в 0 реплик, Mini App
 недоступна (бот работает).
