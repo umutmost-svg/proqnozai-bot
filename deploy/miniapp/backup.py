@@ -38,8 +38,17 @@ def verify(directory: Path) -> bool:
 if len(sys.argv) > 2 and sys.argv[1] == "verify":
     sys.exit(0 if verify(Path(sys.argv[2])) else 1)
 
-target = db.parent / "backups" / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-target.mkdir(parents=True, exist_ok=False)
+base = db.parent / "backups" / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+(db.parent / "backups").mkdir(parents=True, exist_ok=True)
+for n in range(100):  # two runs in one second: a suffix, never an overwrite
+    target = base if n == 0 else base.with_name(f"{base.name}-{n}")
+    try:
+        target.mkdir(exist_ok=False)
+        break
+    except FileExistsError:
+        continue
+else:
+    sys.exit("no free backup directory name")
 for f in files:
     if not f.exists():
         print(f"{f.name}: not created yet (skipped)"); continue
