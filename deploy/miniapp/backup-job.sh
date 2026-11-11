@@ -21,6 +21,9 @@ NOTIFY="${NOTIFY:-<command that alerts the owner>}"
 KEEP_DAYS="${KEEP_DAYS:-7}"
 DIR="${SPORBOT_DIR:-/opt/sporbot}"
 
+# Only this job's copies are ever deleted: top-level directories named like a backup stamp, older than KEEP_DAYS.
+STAMPS='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z*'
+AGE="+$((KEEP_DAYS * 1440))"   # minutes: exactly KEEP_DAYS days (find -mtime +N would mean N+1 days)
 fail() { echo "$(date -u +%FT%TZ) FAIL: $1"; sh -c "$NOTIFY \"\$1\"" _ "backup failed: $1" || true; exit 1; }
 
 case "$OFFSITE_KIND" in rclone|ssh|disk) ;; *) fail "OFFSITE_KIND is not configured" ;; esac
@@ -41,20 +44,20 @@ chmod -R go-rwx "$local_copy" || fail "chmod host copy"
 case "$OFFSITE_KIND" in
   rclone)
     rclone copy "$local_copy" "$OFFSITE/$stamp" || fail "rclone copy"
-    rclone delete "$OFFSITE" --min-age "${KEEP_DAYS}d" || fail "rclone retention"
+    rclone delete "$OFFSITE" --min-age "${KEEP_DAYS}d" --include "/${STAMPS}/**" || fail "rclone retention"
     rclone rmdirs "$OFFSITE" --leave-root || fail "rclone rmdirs" ;;
   ssh)
     host=${OFFSITE%%:*}; path=${OFFSITE#*:}
     rsync -a "$local_copy/" "$OFFSITE/$stamp/" || fail "rsync"
-    ssh "$host" "find '$path' -mindepth 1 -maxdepth 1 -type d -mtime +$KEEP_DAYS -exec rm -rf {} +" || fail "ssh retention" ;;
+    ssh "$host" "find '$path' -mindepth 1 -maxdepth 1 -type d -name '$STAMPS' -mmin $AGE -exec rm -rf {} +" || fail "ssh retention" ;;
   disk)
     [ -f "$OFFSITE/.sporbot-offsite" ] || fail "external disk not mounted (no $OFFSITE/.sporbot-offsite)"
     cp -a "$local_copy" "$OFFSITE/$stamp" || fail "copy to disk"
-    find "$OFFSITE" -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP_DAYS" -exec rm -rf {} + || fail "disk retention" ;;
+    find "$OFFSITE" -mindepth 1 -maxdepth 1 -type d -name "$STAMPS" -mmin "$AGE" -exec rm -rf {} + || fail "disk retention" ;;
 esac
 
 # Retention here and inside the volume (the app user owns those copies).
-find "$DIR/backups" -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP_DAYS" -exec rm -rf {} + || fail "host retention"
-docker exec -u miniapp "$C" find /data/backups -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP_DAYS" -exec rm -rf {} + \
+find "$DIR/backups" -mindepth 1 -maxdepth 1 -type d -name "$STAMPS" -mmin "$AGE" -exec rm -rf {} + || fail "host retention"
+docker exec -u miniapp "$C" find /data/backups -mindepth 1 -maxdepth 1 -type d -name "$STAMPS" -mmin "$AGE" -exec rm -rf {} + \
   || fail "volume retention"
 echo "$(date -u +%FT%TZ) OK: $stamp copied ($OFFSITE_KIND)"
