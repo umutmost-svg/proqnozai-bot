@@ -177,7 +177,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    curl -s https://$D/api/health                                                    # {"status":"ok"}
    curl -s -o /dev/null -w '%{http_code}\n' https://$D/                             # 200 через Cloudflare
    curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Edge-Auth: forged' https://$D/   # 200: Cloudflare перезаписал заголовок
-   curl -s -o /dev/null -w '%{http_code}\n' --resolve $D:443:$IP https://$D/        # 403: обход Cloudflare закрыт
+   curl -sk -o /dev/null -w '%{http_code}\n' --resolve $D:443:$IP https://$D/       # 403: обход Cloudflare закрыт (-k: у Origin Certificate нет публичной цепочки; проверяется заголовок, не TLS)
    docker exec -i -u miniapp -e SMOKE_USER_ID=<Telegram id владельца> $C python - < /opt/sporbot/smoke.py   # RESULT PASS
    docker exec -i -u miniapp $C python - < /opt/sporbot/backup.py                   # первый бэкап, integrity=ok
    ```
@@ -189,7 +189,13 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    копий старше 7 дней. Один раз — пробное восстановление из внешней копии по разделу 7 на тестовом томе.
 9. **[владелец] Проверка в Telegram до открытия всем.** Подпись initData проверяется токеном
    production-бота, поэтому тестовый бот не подойдёт: кнопка только для владельца
-   `curl -s "https://api.telegram.org/bot<токен production-бота>/setChatMenuButton" -d chat_id=<id владельца> --data-urlencode 'menu_button={"type":"web_app","text":"SporBot","web_app":{"url":"https://<MINIAPP_DOMAIN>"}}'`
+   ```sh
+   read -rs BOT_TOKEN                        # ввод без эха: токен не попадает в историю и аргументы процессов
+   printf 'url = "https://api.telegram.org/bot%s/setChatMenuButton"\n' "$BOT_TOKEN" > /dev/shm/tg.cfg; unset BOT_TOKEN
+   curl -s -K /dev/shm/tg.cfg -d chat_id=<id владельца> \
+     --data-urlencode 'menu_button={"type":"web_app","text":"SporBot","web_app":{"url":"https://<MINIAPP_DOMAIN>"}}'
+   rm -f /dev/shm/tg.cfg                     # (на macOS вместо /dev/shm — mktemp, затем rm)
+   ```
    (бот не перезапускается). iOS/Android/Desktop/Web: вход, главная, поиск турнира, календарь, матч,
    AI-разбор (1 платный), эмблемы; в Telegram Web — закрыть и открыть Mini App снова, сессия сохраняется.
 10. **[владелец] Открыть пользователям:** BotFather → production-бот → Menu Button / Main Mini App =
