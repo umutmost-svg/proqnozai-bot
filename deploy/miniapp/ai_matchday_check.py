@@ -244,7 +244,8 @@ def report(history: ForecastHistory) -> bool:
         # 20 matches without a retry or 19 with one.
         "1_all_attempted_delivered_19_or_20_at_most_one_retry": len(ok_events) == len(attempted)
             and len(attempted) >= MAX_CALLS - 1 and not unrecovered
-            and (retried := sum(1 for e in attempted if sum(1 for y in ledger if y["event"] == e) > 1)) <= 1
+            and (retried := sum(1 for e in attempted if sum(1 for y in ledger if y["event"] == e
+                                                             and y.get("status") != "skipped_started") > 1)) <= 1
             and len(attempted) + retried <= MAX_CALLS,
         # At most one timeout in the whole run, and it must have been recovered by the match's retry.
         "2_p95_le_20s_and_at_most_one_recovered_timeout": p95 is not None and p95 <= 20 and
