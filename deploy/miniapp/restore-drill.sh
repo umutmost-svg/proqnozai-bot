@@ -24,11 +24,11 @@ cleanup() {
     ids=$(docker ps -aq -f "label=sporbot.drill=$TOKEN") || { echo "CLEANUP FAILED: listing containers"; rc=1; ids=""; }
     for id in $ids; do docker rm -f "$id" >/dev/null 2>&1 || { echo "CLEANUP FAILED: container $id"; rc=1; }; done
   fi
-  # The volume only if it carries this run's token (it may have been created before the ownership check failed).
+  # Volumes by this run's token label only; a failed listing is an unknown state and fails the drill.
   if [ -n "$VOL" ]; then
-    lbl=$(docker volume inspect -f '{{index .Labels "sporbot.drill"}}' "$T" 2>/dev/null) || lbl=""
-    if [ "$lbl" = "$TOKEN" ]; then docker volume rm "$T" >/dev/null 2>&1 || { echo "CLEANUP FAILED: volume $T"; rc=1; }
-    elif docker volume inspect "$T" >/dev/null 2>&1; then echo "CLEANUP: volume $T is not this run's — left alone"; rc=1; fi
+    if vols=$(docker volume ls -q -f "label=sporbot.drill=$TOKEN"); then
+      for v in $vols; do docker volume rm "$v" >/dev/null 2>&1 || { echo "CLEANUP FAILED: volume $v"; rc=1; }; done
+    else echo "CLEANUP FAILED: listing volumes"; rc=1; fi
   fi
   [ -n "$W" ] && { rm -rf "$W" || { echo "CLEANUP FAILED: $W"; rc=1; }; }
   [ "$rc" -eq 0 ] && [ -n "${OK:-}" ] && echo "DRILL OK: $S restored into a test volume, integrity ok, container healthy, cleaned up"
