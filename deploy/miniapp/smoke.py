@@ -135,6 +135,13 @@ def in_process_checks() -> None:
     asyncio.run(run())
 
 
+# Closed launch: SMOKE_EXPECT_ALLOWLIST=1 proves the allowlist is really active (a blank or missing variable
+# would let every valid Telegram launch in).
+if os.environ.get("SMOKE_EXPECT_ALLOWLIST") == "1":
+    from miniapp.settings import Settings as _S
+    _allowed = _S.from_env(os.environ).allowed_user_ids
+    check(_allowed is not None and len(_allowed) >= 1, f"allowlist active ({0 if _allowed is None else len(_allowed)} id(s))")
+
 if MODE == "ed25519":
     st, js, _, _, _ = call("POST", "/api/auth/session", {"init_data": "query_id=x&auth_date=1&user=%7B%7D&signature=AAAA"})
     check(st == 401, f"unsigned initData refused in ed25519 mode ({st})")

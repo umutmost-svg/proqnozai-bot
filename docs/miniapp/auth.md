@@ -120,7 +120,7 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 | `MINIAPP_BOT_ID` | — (обязательна в `ed25519`) | публичный числовой id бота (префикс токена); в `hmac` включает замер `auth.ed25519_shadow` и должен совпадать с токеном |
 | `MINIAPP_TELEGRAM_ENV` | `production` | `test` — тестовая среда Telegram (другой публичный ключ) |
 | `MINIAPP_CSRF_SECRET` | — (обязательна в `ed25519`) | материал ключа CSRF, ≥ 32 печатных ASCII; без него — из токена бота |
-| `MINIAPP_ALLOWED_USER_IDS` | — (все) | закрытый запуск: id через запятую; вход и сессии только для них (403 `not_allowed`), данные остальных не сохраняются; удаление id из списка сразу закрывает его сессии |
+| `MINIAPP_ALLOWED_USER_IDS` | — (все) | закрытый запуск: id через запятую; вход только для них (иначе 403 `not_allowed`, данные не сохраняются); сессия id, убранного из списка, сразу перестаёт действовать (запросы — 401 `unauthenticated`) |
 | `MINIAPP_DB_PATH` | — (обязательна) | файл SQLite Mini App; `bot.db*` запрещён (см. «База данных») |
 | `MINIAPP_TRUSTED_ORIGINS` | — (обязательна) | точные `scheme://host[:port]` через запятую; `*`, `null` и пути запрещены |
 | `MINIAPP_ENV` | `production` | `development` разрешён только с loopback-origin по http |
@@ -186,7 +186,7 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 |---|---|---|
 | `GET /api/health` | — (освобождён от edge-секрета) | 200 `{"status":"ok"}` · 503 `{"status":"unavailable"}`, если БД не читается |
 | `POST /api/auth/session` при `MINIAPP_LOGINS_ENABLED=false` | Origin | 503 `{"error":"logins_disabled"}` |
-| `POST /api/auth/session` | Origin, `Content-Type: application/json`, ≤ 8 КиБ, тело ровно `{"init_data": "<string>"}`, лимит по проверенному `user.id` | 200 `{user, session:{expires_at, csrf_token}, created}` + cookie · 400 · 401 `init_data_invalid`/`init_data_expired`/`init_data_reused` · 403 `origin_not_allowed` · 413 · 415 · 429 + `Retry-After` |
+| `POST /api/auth/session` | Origin, `Content-Type: application/json`, ≤ 8 КиБ, тело ровно `{"init_data": "<string>"}`, лимит по проверенному `user.id` | 200 `{user, session:{expires_at, csrf_token}, created}` + cookie · 400 · 401 `init_data_invalid`/`init_data_expired`/`init_data_reused` · 403 `origin_not_allowed` / `not_allowed` (закрытый запуск: id не в `MINIAPP_ALLOWED_USER_IDS`) · 413 · 415 · 429 + `Retry-After` |
 | `GET /api/me` | cookie | 200 `{user, session}` · 401 `unauthenticated`/`session_expired` (cookie очищается) |
 | `POST /api/me/language` | Origin, cookie, `X-CSRF-Token`, тело `{"lang":"az"\|"ru"\|"en"}` | 200 · 401 · 403 `csrf_failed` · 400 |
 | `POST /api/auth/logout` | Origin, `X-CSRF-Token` при неотозванной сессии в cookie; тело необязательно: `{"init_data": "<текущий запуск>"}` (тогда `application/json`, ≤ 8 КиБ) | 200 `{"ok":true}` + очистка cookie · 400 · 403 `csrf_failed` · 415 |

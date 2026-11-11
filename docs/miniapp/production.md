@@ -216,7 +216,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 2. **[исполнитель, по разрешению] Push ветки:** проверка из раздела 0 (код = `<TESTED_CODE_SHA>`, Ed25519 в ветке выкладки),
    затем `git push origin release/miniapp-prod`. Перед этим в Dokploy
    убедиться, что у `bot` и `dashboard` branch = `main` (тогда их Autodeploy не сработает).
-3. **[владелец/сервер] Скрипты на сервер:** `scp deploy/miniapp/{smoke.py,backup.py} <server>:/opt/sporbot/`
+3. **[владелец/сервер] Скрипты на сервер:** `scp deploy/miniapp/{smoke.py,backup.py,backup-job.sh} <server>:/opt/sporbot/`
    (права 0644, владелец root); сверить `sha256sum` с локальными.
 4. **[владелец] Cloudflare** по разделу 2. *Стоп:* домен не резолвится через Cloudflare.
 5. **[сервер] Dokploy → Create Application** `sporbot-miniapp` по таблице раздела 2 (Autodeploy OFF,
@@ -237,20 +237,18 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    curl -s -o /dev/null -w '%{http_code}\n' https://$D/                             # 200 через Cloudflare
    curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Edge-Auth: forged' https://$D/   # 200: Cloudflare перезаписал заголовок
    curl -sk -o /dev/null -w '%{http_code}\n' --resolve $D:443:$IP https://$D/       # 403: обход Cloudflare закрыт (-k: у Origin Certificate нет публичной цепочки; проверяется заголовок, не TLS)
-   docker exec -i -u miniapp $C python - < /opt/sporbot/smoke.py   # RESULT PASS (ed25519: неподписанный вход отклонён, токена нет, данные идут)
+   docker exec -i -u miniapp -e SMOKE_EXPECT_ALLOWLIST=1 $C python - < /opt/sporbot/smoke.py   # RESULT PASS: неподписанный вход отклонён, токена нет, список допуска включён, данные идут
    docker exec -i -u miniapp $C python - < /opt/sporbot/backup.py                   # первый бэкап, integrity=ok
    ```
    В режиме `ed25519` smoke не может войти сам (подписать вход может только Telegram): положительная
    проверка входа — шаг 9. В режиме `hmac` нужен `-e SMOKE_USER_ID=<id владельца>`: smoke входит под
    аккаунтом владельца и завершает только свою сессию. *Стоп:* любой FAIL.
-8. **[сервер] Ежедневные бэкапы** (cron root на хосте, 03:17) с проверкой и внешней копией:
-   ```sh
-   17 3 * * * C=$(docker ps -q -f name=$SVC) && docker exec -i -u miniapp $C python - < /opt/sporbot/backup.py > /var/log/sporbot-backup.log 2>&1 \
-     || <команда уведомления владельцу, напр. curl в его канал мониторинга>
-   ```
-   `backup.py` завершается с ошибкой, если копия не прошла `integrity_check`. Затем копия последней папки за
-   пределы сервера (`docker cp $C:/data/backups/<stamp> …` → внешний диск/S3/Dokploy Destination) и удаление копий
-   старше 7 дней. Один раз — пробное восстановление из внешней копии по разделу 7 на тестовом томе.
+8. **[сервер] Ежедневные бэкапы:** скопировать `deploy/miniapp/backup-job.sh` в `/opt/sporbot/` (0700, root),
+   один раз задать в нём `SVC`, `OFFSITE` (внешний приёмник: заранее настроенный rclone remote или rsync по SSH) и
+   `NOTIFY` (команда уведомления владельцу); cron root: `17 3 * * * /opt/sporbot/backup-job.sh >> /var/log/sporbot-backup.log 2>&1`.
+   Задание: копия обеих БД с `integrity_check` → внешняя копия → хранение 7 дней; любой сбой — код ≠ 0 и
+   `NOTIFY`. Первый запуск — вручную, проверить `OK:` в логе и наличие копии во внешнем приёмнике. Один раз —
+   пробное восстановление из внешней копии по разделу 7 на тестовом томе.
 9. **[владелец] Проверка в Telegram до открытия всем.** Mini App принимает только запуски из
    production-бота (подпись Telegram для его `MINIAPP_BOT_ID`), поэтому тестовый бот не подойдёт: кнопка
    только для владельца ставится production-ботом (токен нужен лишь этой команде на машине владельца, не
@@ -267,7 +265,8 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    (ответы `"ok":true` — записать `result`). Проверка после (тот же приём с `-K`): с `chat_id=<id владельца>` — `web_app` с URL Mini
    App; без `chat_id` (кнопка по умолчанию для всех) — прежнее значение. Кнопка ставится только для чата,
    который уже открыт с ботом (иначе `Bad Request: user not found` — проверено на тестовом боте). Откат:
-   `setChatMenuButton` с `chat_id=<id владельца>` и `menu_button={"type":"default"}`.
+   `setChatMenuButton` с `chat_id=<id владельца>` и **сохранённым до шага значением** (`{"type":"default"}` —
+   только если сохранено именно оно).
    (бот не перезапускается). iOS/Android/Desktop/Web: вход, главная, поиск турнира, календарь, матч,
    AI-разбор (1 платный), эмблемы; в Telegram Web — закрыть и открыть Mini App снова, сессия сохраняется.
    **Обязательная положительная проверка входа:** в логах Mini App на каждый клиент `auth.session ...
