@@ -115,7 +115,7 @@ def main() -> int:
         os.umask(old)
         print(f"blocked ids written to {a.blocked_out} ({len(blocked)})")
     if not a.apply:
-        print("DRY RUN: nothing written (add --apply)")
+        print("DRY RUN: no database changes" + (f" (only {a.blocked_out} was written)" if a.blocked_out else "") + " — add --apply")
         conn.close()
         return 0
     conn.execute("BEGIN IMMEDIATE")

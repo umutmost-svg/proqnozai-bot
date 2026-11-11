@@ -150,9 +150,9 @@ async def _read_json_object(request: Request, max_bytes: int, allowed: set[str])
 
 
 def _is_busy(exc: sqlite3.OperationalError) -> bool:
-    """SQLite's lock timeouts ("database is locked" / "database table is locked" / busy)."""
-    text = str(exc).lower()
-    return "locked" in text or "busy" in text
+    """SQLITE_BUSY by result code: another connection held the write lock past busy_timeout (overload).
+    SQLITE_LOCKED (a conflict inside one connection) and everything else remain internal errors."""
+    return getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_BUSY
 
 
 def _error_site(exc: BaseException) -> str:

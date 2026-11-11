@@ -419,7 +419,12 @@ class AiService:
                 # still counts. A failing count refuses before anything is paid.
                 if not await self._count_attempt(key, event.starts_at):
                     raise AiError("upstream_error")
-                used_up = await asyncio.to_thread(self._ledger.reserve_ai_call, self._today(), limits)
+                try:
+                    used_up = await asyncio.to_thread(self._ledger.reserve_ai_call, self._today(), limits)
+                except Exception as exc:  # noqa: BLE001 — e.g. a locked database: nothing was paid
+                    logger.warning("ai.reserve_failed type=%s", type(exc).__name__)
+                    await self._uncount_attempt(key)  # no call followed: the attempt is given back
+                    raise AiError("upstream_error") from None
                 if used_up is not None:
                     await self._uncount_attempt(key)  # no call followed
                     raise AiError("limit_reached" if used_up == user else "budget_exhausted")

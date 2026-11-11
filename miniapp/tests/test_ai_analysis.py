@@ -433,6 +433,29 @@ def test_daily_limits_survive_a_restart(tmp_path, clock: FakeClock) -> None:
     assert getattr(exc2.value, "code", None) == "budget_exhausted"
 
 
+def test_a_failing_ledger_gives_the_attempt_back(clock: FakeClock) -> None:
+    import sqlite3
+
+    class LockedOnce(MemoryLedger):
+        fails = 3
+
+        def reserve_ai_call(self, day: str, limits: dict[str, int]) -> str | None:
+            if self.fails:
+                self.fails -= 1
+                raise sqlite3.OperationalError("database is locked")
+            return super().reserve_ai_call(day, limits)
+
+    model = FakeModel()
+    ai, _ = make_ai(clock, model, ledger=LockedOnce())
+    for _ in range(3):  # more failures than MAX_PAID_ATTEMPTS: none of them may use up an attempt
+        with pytest.raises(AiError) as exc:
+            run(ai.analyse("fd:7", user_id=1))
+        assert exc.value.code == "upstream_error"
+    assert model.calls == []
+    run(ai.analyse("fd:7", user_id=1))  # the ledger works again: the analysis is still possible
+    assert len(model.calls) == 1
+
+
 def test_quota_ledger_counts_per_day_and_drops_old_days(tmp_path) -> None:
     store = Store(tmp_path / "miniapp.db")
     store.init_schema()

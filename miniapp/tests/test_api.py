@@ -583,13 +583,31 @@ def test_unhandled_error_is_contained(client: TestClient, clock: FakeClock, capl
         assert leaked not in caplog.text and leaked not in r.text
 
 
+def busy_error() -> sqlite3.OperationalError:
+    """A real SQLITE_BUSY from SQLite itself (result code set), not a hand-made message."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        holder = sqlite3.connect(f"{d}/x.db", isolation_level=None)
+        holder.execute("CREATE TABLE t (x)")
+        holder.execute("BEGIN EXCLUSIVE")
+        other = sqlite3.connect(f"{d}/x.db", timeout=0)
+        try:
+            other.execute("INSERT INTO t VALUES (1)")
+        except sqlite3.OperationalError as exc:
+            return exc
+        finally:
+            other.close()
+            holder.close()
+    raise AssertionError("no SQLITE_BUSY")
+
+
 def test_a_locked_database_is_a_retryable_503_not_a_500(client: TestClient, clock: FakeClock,
                                                          caplog: pytest.LogCaptureFixture,
                                                          monkeypatch: pytest.MonkeyPatch) -> None:
     logged_in(client, clock)
 
     def locked(_: int) -> None:
-        raise sqlite3.OperationalError("database is locked")
+        raise busy_error()
 
     monkeypatch.setattr(client.app.state.store, "get_user", locked)
     caplog.set_level(logging.DEBUG)
@@ -604,7 +622,7 @@ def test_other_sqlite_errors_stay_internal_errors(client: TestClient, clock: Fak
     logged_in(client, clock)
 
     def broken(_: int) -> None:
-        raise sqlite3.OperationalError("no such table: users")
+        raise sqlite3.OperationalError("no such table: users (the word busy or locked in a message is not a code)")
 
     monkeypatch.setattr(client.app.state.store, "get_user", broken)
     r = client.get("/api/me")
