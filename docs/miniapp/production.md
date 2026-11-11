@@ -39,21 +39,66 @@ Menu Button / Main Mini App с URL Mini App. Это меняет только н
 
 ## 1. Инфраструктура: что известно и что надо подтвердить
 
-### Состояние на 2026-11-11
+### Состояние по обследованию сервера (2026-11-11, `prod-discovery.sh` c0d7dc0, SHA-256 сверен, код выхода 0)
 
 | Параметр | Значение | Статус |
 |---|---|---|
-| Хостинг production | DigitalOcean Droplet + Dokploy (слова владельца, 2026-11-07/08) | предположение |
-| Приложения Dokploy | `bot`, `dashboard` из GitHub `umutmost-svg/proqnozai-bot`, ветка `main`, Autodeploy On Push, Preview OFF (слова владельца) | предположение |
-| `main` | `8ad4eec`; предок релиза (`git merge-base`) | **подтверждено** |
-| Railway | оба проекта удалены (слова владельца) | предположение |
-| Число экземпляров бота / второй polling | — | **NOT VERIFIED** (discovery: `getUpdates_conflicts`, число bot-контейнеров) |
-| Ресурсы сервера, диски, volumes | — | **NOT VERIFIED** (discovery: host, volumes) |
-| Резервные копии `bot.db` | — | **NOT VERIFIED** (discovery: backups) |
-| Домены, HTTPS, Traefik, Cloudflare | — | **NOT VERIFIED** (discovery: traefik hosts; Cloudflare — у владельца) |
-| SSH-доступ исполнителя к серверу | нет: в `~/.ssh/config` только GitHub; `known_hosts` содержит чужой проект (`167.172.97.220`, не трогать) и неопознанный `164.90.180.208` | **подтверждено** |
-| Нагрузка на общий ключ football-data | в минуту замера стенд — 0 запросов, у ключа свободно 103 из 120 → ~16/мин тратит другой клиент (вероятно, production-бот) | **подтверждено** (заголовок провайдера, 2026-11-11 ~14:10 UTC) |
-| GitHub: Actions / deployments на `release/miniapp-prod` | 0 / 0 после push | **подтверждено** |
+| ОС / оркестрация | Ubuntu 24.04, Docker Swarm, Dokploy v0.29.12 | **подтверждено** |
+| Production-бот | 1 реплика, работает, ~99 МБ; режим обновления Swarm **`start-first`** | **подтверждено** |
+| HTTP worker (`dashboard`/stats) | 1 реплика, ~29 МБ | **подтверждено** |
+| Прочее | Dokploy ~826 МБ, PostgreSQL (Dokploy) ~39 МБ, Traefik ~32 МБ | **подтверждено** |
+| Память хоста | 1 967 МБ всего, **486 МБ доступно, swap 0** | **подтверждено** |
+| Диск | 47 ГБ свободно | **подтверждено** |
+| БД бота | Docker volume `proqnozai-db` | **подтверждено** |
+| football-data 429 / getUpdates-конфликты в логах бота | 0 / 0 в проверенном окне | **подтверждено** (в пределах лимита чтения скрипта) |
+| Внешние резервные копии `proqnozai-db` | в cron не найдены | **NOT VERIFIED**: Dokploy Volume Backups / снимки DigitalOcean — проверить в UI |
+| Панель Dokploy | порт 3000 опубликован на всех интерфейсах | **подтверждено**; доступность из интернета **NOT VERIFIED** |
+| `main` / Railway / автодеплой `bot` из `main` | `8ad4eec`; со слов владельца | предположение |
+
+### Память Mini App (замер production-образа 724cea5, Linux-контейнер, все 117 турниров)
+| Состояние | Память | Как получено |
+|---|---|---|
+| Холодный старт | 41 МБ | сразу после запуска |
+| Полный прогрев (календари + прошлые сезоны 117 турниров, ~20 мин при 60 запросах/мин) | 142 МБ, плато | 34 мин замера каждые 10 с |
+| Пик под нагрузкой (7 дней матчей, 40 календарей и таблиц, эмблемы, «Быстрый прогноз» одиночный и купон, AI-чтение 24 матчей) | **152 МБ** | там же |
+| CPU | кратко до 1 ядра (модель в «Быстром прогнозе»), в покое ~1–10 % | там же |
+| Запас на рост кешей (лимит кеша 2 000 записей, картинки эмблем ≤ 32 МБ) | +~100 МБ | по лимитам кода |
+
+План: резерв памяти контейнера 256 МБ, лимит 512 МБ (Dokploy → Advanced → Resources). Сборка образа
+(`npm ci` + `vite build` + `pip`) требует заметно больше и **на production-сервере недопустима**.
+
+### Размещение (решение)
+**Рекомендуется: отдельный сервер для Mini App (и будущей админки), подключённый к текущему Dokploy как
+Remote Server.** На production-сервере 486 МБ свободной памяти без swap; сборка образа (npm ci + vite) и
+работа Mini App там же ставят под угрозу бота и сам Dokploy (OOM), а Dokploy прямо предупреждает, что сборка на
+сервере может «заморозить» сервер. Отдельный сервер не требует ни одного изменения и перезапуска на
+production-сервере: сборка и работа Mini App идут на новом сервере, текущий Dokploy им только управляет.
+
+| Вариант | Риск для бота | Перерыв бота | Срок | Стоимость |
+|---|---|---|---|---|
+| **A. Отдельный сервер (Remote Server в Dokploy), 2 ГБ** | нет (другая машина) | нет | +0,5–1 день | ~$12/мес |
+| B. Увеличить RAM текущего сервера до 4 ГБ | средний (общая память, сборка там же) | **да**: ресайз DigitalOcean = выключение дроплета на несколько минут | +0,5 дня | +~$12/мес |
+| C. Текущий сервер как есть | **высокий**: OOM при сборке или пике | нет до первого OOM | 0 | 0 |
+
+Для B/C сборка на сервере недопустима: только готовый образ из registry (CI), а это ещё и решение по GHCR.
+
+### Защита
+- **Dokploy :3000** (P1, до запуска): закрыть порт 3000 в **DigitalOcean Cloud Firewall** (Docker обходит UFW),
+  открыть только 22 (лучше — с IP владельца), 80, 443; панель — через домен Traefik с HTTPS или SSH-туннель.
+  Это не перезапускает ни бота, ни Docker. В Dokploy лежат все секреты (включая токен бота): панель по HTTP в
+  открытом интернете — главный риск, общий для бота и Mini App.
+- **Mini App:** origin только через Cloudflare (proxied DNS, Set `X-Edge-Auth`, rate limit); прямой запрос на IP с
+  Host Mini App — 403 от приложения; закрытый список `MINIAPP_ALLOWED_USER_IDS`; токена бота в контейнере нет.
+- **Отдельный сервер:** Cloud Firewall — 22 только с IP Dokploy-сервера/владельца, 80/443 — открыты (лучше только
+  диапазоны Cloudflare), ничего больше.
+
+### Риск `start-first` у бота (существующий, не из-за Mini App)
+При выкладке бота Swarm сначала запускает новую задачу, потом гасит старую: несколько секунд работают **два**
+процесса бота. Для long polling Telegram отдаёт `getUpdates` только одному (второй получает 409 Conflict), но
+фоновые задачи (рассылки, пуши, опрос) в это окно могут сработать дважды, а два процесса пишут в одну SQLite в
+`proqnozai-db`. В проверенном окне конфликтов не было (выкладок, видимо, не было). Рекомендация (отдельное
+решение владельца, не блокер Mini App): `stop-first` для сервиса бота в Dokploy (Advanced → Swarm settings →
+Update config), вступит в силу при следующей выкладке бота; цена — пауза бота на время рестарта (секунды).
 
 ### Где взять недостающее
 - Dokploy UI (владелец): Applications → `bot`, `dashboard`: Source/Branch, Autodeploy, Preview, Domains, Volumes,
@@ -92,6 +137,7 @@ Traefik, расписания бэкапов и счётчики 429 football-da
 
 | Настройка | Значение | Почему |
 |---|---|---|
+| Server | **отдельный Remote Server** (см. «Размещение»); сборка и работа — на нём | память production-сервера не затрагивается |
 | Source | GitHub `umutmost-svg/proqnozai-bot`, branch `release/miniapp-prod` | не `main`: бот не трогается |
 | **Autodeploy** | **OFF** | выкладка только кнопкой Deploy по runbook |
 | Build type | Dockerfile, path `deploy/miniapp/Dockerfile`, context `.` | образ проверен локально |
@@ -213,6 +259,15 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 меняют только кнопку меню бота в Telegram. Условие остановки на любом шаге — отклонение от ожидаемого;
 до шага 10 пользователи Mini App не видят.
 
+0. **[владелец] Подготовка инфраструктуры (без касания production-сервера и бота):**
+   - DigitalOcean Cloud Firewall для production-сервера: входящие 22 (по возможности с IP владельца), 80, 443;
+     **порт 3000 закрыть**; панель Dokploy — через её домен с HTTPS или `ssh -L 3000:127.0.0.1:3000`. Проверка снаружи:
+     `curl -m 5 http://<IP production>:3000` → нет ответа. Бот и Docker не перезапускаются.
+   - Новый дроплет Ubuntu 24.04, 2 ГБ (тот же регион), Cloud Firewall: 22 только с IP production-сервера и владельца,
+     80/443. Dokploy → Remote Servers → Add Server (SSH-ключ Dokploy) → Setup Server (ставит Docker и Traefik на
+     новом сервере). Проверка: сервер «Ready» в Dokploy; на production-сервере ничего не менялось.
+   - Резервные копии бота (вне Mini App): проверить в DigitalOcean (Backups/Snapshots дроплета) и в Dokploy
+     (Volume Backups для `proqnozai-db`); если нет — включить еженедельные снимки DigitalOcean (без перезапуска).
 1. **[владелец] Разрешения и данные:** домен `<MINIAPP_DOMAIN>`, ключи (football-data — отдельный или
    общий режим; Anthropic для Mini App), `discovery.txt`.
 2. **[исполнитель, по разрешению] Push ветки:** проверка из раздела 0 (код = `<TESTED_CODE_SHA>`, Ed25519 в ветке выкладки),
@@ -221,8 +276,9 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 3. **[владелец/сервер] Скрипты на сервер:** `scp deploy/miniapp/{smoke.py,backup.py,backup-job.sh} <server>:/opt/sporbot/`
    (владелец root; `smoke.py`, `backup.py` — 0644, `backup-job.sh` — 0700); сверить `sha256sum` с локальными.
 4. **[владелец] Cloudflare** по разделу 2. *Стоп:* домен не резолвится через Cloudflare.
-5. **[сервер] Dokploy → Create Application** `sporbot-miniapp` по таблице раздела 2 (Autodeploy OFF,
-   Replicas 1, stop-first, volume, domain, env). *Стоп:* свободно < 5 ГБ на диске (сборка ~1,5 ГБ с кешем).
+5. **[сервер] Dokploy → Create Application** `sporbot-miniapp` **на Remote Server** по таблице раздела 2 (Autodeploy OFF,
+   Replicas 1, stop-first, volume, domain, env). *Стоп:* приложение назначено на production-сервер; на новом сервере
+   свободно < 5 ГБ диска или < 1 ГБ RAM.
 6. **[сервер] Deploy**, затем проверить, что Dokploy применил настройки:
    ```sh
    docker service inspect $SVC --format '{{.Spec.Mode.Replicated.Replicas}} {{.Spec.UpdateConfig.Order}} {{.Spec.UpdateConfig.FailureAction}} {{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Source}}->{{.Target}} {{end}}'
