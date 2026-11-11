@@ -178,8 +178,12 @@ Traefik, расписания бэкапов и счётчики 429 football-da
   SSL/TLS **Full (strict)**; на новом сервере — Cloudflare Origin Certificate в Traefik этого сервера.
 - Transform Rule → Modify Request Header → **Set** (не Add) `X-Edge-Auth` = `<MINIAPP_EDGE_SECRET>` для
   хоста `<MINIAPP_DOMAIN>`: значение, присланное клиентом, всегда перезаписывается.
-- Rate limiting: `POST /api/auth/session` — 20/мин по IP; весь `/api/*` — 300/мин по IP (защита SQLite и
-  квоты от массовых GET под сессией).
+- Rate limiting (проверить тариф зоны: на Free доступно **одно** правило с периодом 10 с, на Pro — два):
+  - Pro и выше: `POST /api/auth/session` — 20/мин по IP; весь `/api/*` — 300/мин по IP (защита SQLite и квоты
+    от массовых GET под сессией);
+  - Free: одно правило на `/api/*` — 50 запросов за 10 с по IP; вход дополнительно ограничен самим приложением
+    (лимитер `auth.rate_limited`). Для закрытого запуска этого достаточно; перед открытием всем — пересмотреть.
+  - Проверка: правило в состоянии Enabled (Security → WAF → Rate limiting rules), выражение — хост `<MINIAPP_DOMAIN>`.
 - WAF: для хоста только методы `GET, HEAD, POST`.
 - Cache Rule: `/api/crests/*` — Eligible for cache, «Respect origin» (`public, max-age=86400`, флаг-заменитель —
   3600): поток картинок не доходит до приложения.
@@ -312,9 +316,18 @@ Telegram. Остаточный риск для бота — контроллер
 2. **[исполнитель, по разрешению] Push ветки:** проверка из раздела 0 (код = `<TESTED_CODE_SHA>`, Ed25519 в ветке выкладки),
    затем `git push origin release/miniapp-prod`. Перед этим в Dokploy
    убедиться, что у `bot` и `dashboard` branch = `main` (тогда их Autodeploy не сработает).
-3. **[владелец/сервер] Скрипты на сервер Mini App:** `scp deploy/miniapp/{smoke.py,backup.py,backup-job.sh} root@<MINIAPP_SERVER_IP>:/opt/sporbot/`
+3. **[владелец/сервер] Скрипты на сервер Mini App:** `scp deploy/miniapp/{smoke.py,backup.py,backup-job.sh,restore-drill.sh} root@<MINIAPP_SERVER_IP>:/opt/sporbot/`
    (владелец root; `smoke.py`, `backup.py` — 0644, `backup-job.sh` — 0700); сверить `sha256sum` с локальными.
-4. **[владелец] Cloudflare** по разделу 2. *Стоп:* домен не резолвится через Cloudflare.
+4. **[владелец] Cloudflare** по разделу 2 и **TLS origin**:
+   - Cloudflare → SSL/TLS → Origin Server → Create Certificate для `<MINIAPP_DOMAIN>` (RSA, 15 лет); сертификат и
+     ключ сохранить сразу (ключ показывается один раз; это секрет — только в Dokploy, не в репозиторий/чат).
+   - Dokploy → Certificates → Add Certificate: вставить сертификат и ключ, **Server = сервер Mini App**.
+   - В шаге 5 у домена приложения: HTTPS включён, Certificate Provider = **None** (не Let's Encrypt: 80 открыт
+     только Cloudflare, HTTP-01 не пройдёт); Traefik сервера Mini App отдаёт загруженный сертификат по имени хоста.
+     Сверить с документацией Dokploy Certificates (версия v0.29.x) — создать сертификат мало, он должен быть
+     привязан к нужному серверу.
+   - SSL/TLS режим зоны (или Configuration Rule для хоста) — **Full (strict)**.
+   *Стоп:* домен не резолвится через Cloudflare. Проверка TLS — шаг 7.
 5. **[сервер] Dokploy → Create Application** `sporbot-miniapp` **на Remote Server** по таблице раздела 2 (Autodeploy OFF,
    Replicas 1, stop-first, volume, domain, env). *Стоп:* приложение назначено на production-сервер; на новом сервере
    свободно < 5 ГБ диска или < 1 ГБ RAM.
@@ -331,17 +344,26 @@ Telegram. Остаточный риск для бота — контроллер
    ```
    *Стоп/откат:* перезапуски задачи, unhealthy или настройки не совпали → Stop приложения, разбор
    `docker service logs $SVC`. На production-сервере: `docker service ls` — `sporbot-miniapp` там **нет**, бот 1/1.
-   Сохранность тома: после повторного Deploy (без изменений) данные первого бэкапа/сессии на месте.
 7. **[сервер] Проверки без Telegram:**
    ```sh
    D=<MINIAPP_DOMAIN>; IP=<MINIAPP_SERVER_IP>; C=$(docker ps -q -f name=$SVC)
    curl -s https://$D/api/health                                                    # {"status":"ok"}
    curl -s -o /dev/null -w '%{http_code}\n' https://$D/                             # 200 через Cloudflare
    curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Edge-Auth: forged' https://$D/   # 200: Cloudflare перезаписал заголовок
-   curl -sk -o /dev/null -w '%{http_code}\n' --resolve $D:443:$IP https://$D/       # с машины ВНЕ Cloudflare: таймаут/000 (firewall пускает только Cloudflare); если 443 открыт всем — 403 (-k: у Origin Certificate нет публичной цепочки)
+   curl -sk -o /dev/null -w '%{http_code}\n' --resolve $D:443:127.0.0.1 https://$D/api/health   # 200: Traefik этого сервера отвечает по HTTPS
+   echo | openssl s_client -connect 127.0.0.1:443 -servername $D 2>/dev/null | openssl x509 -noout -issuer -enddate   # issuer: CloudFlare Origin, не «TRAEFIK DEFAULT CERT»
    docker exec -i -u miniapp -e SMOKE_EXPECT_ALLOWLIST=1 $C python - < /opt/sporbot/smoke.py   # RESULT PASS: неподписанный вход отклонён, токена нет, список допуска включён, данные идут
    docker exec -i -u miniapp $C python - < /opt/sporbot/backup.py                   # первый бэкап, integrity=ok
    ```
+   **[владелец] С машины вне Cloudflare и вне серверов** (ноутбук владельца, не с сервера Mini App — проверка
+   его собственного IP с него же ничего не говорит о firewall):
+   ```sh
+   curl -sk -m 8 -o /dev/null -w '%{http_code}\n' --resolve $D:443:<MINIAPP_SERVER_IP> https://$D/   # 000 (нет соединения)
+   curl -sk -m 8 -o /dev/null -w '%{http_code}\n' http://<MINIAPP_SERVER_IP>/                         # 000
+   curl -6 -sk -m 8 -o /dev/null -w '%{http_code}\n' --resolve "$D:443:[<MINIAPP_SERVER_IPV6>]" https://$D/   # 000, если у дроплета есть IPv6
+   ```
+   *Стоп:* любой ответ, **включая 403** — firewall пускает не только Cloudflare; запуск не продолжать до
+   исправления правил. Ошибка 526/525 через `https://$D` — неверный origin-сертификат (шаг 4).
    В режиме `ed25519` smoke не может войти сам (подписать вход может только Telegram): положительная
    проверка входа — шаг 9. В режиме `hmac` нужен `-e SMOKE_USER_ID=<id владельца>`: smoke входит под
    аккаунтом владельца и завершает только свою сессию. *Стоп:* любой FAIL.
@@ -353,9 +375,21 @@ Telegram. Остаточный риск для бота — контроллер
    в точности `YYYYMMDDTHHMMSSZ` или `YYYYMMDDTHHMMSSZ-n`, по времени UTC из самого имени, и только в приёмнике с меткой); любой сбой — код ≠ 0 и
    `NOTIFY`. Первый запуск — вручную, проверить `OK:` в логе и наличие копии во внешнем приёмнике. **Проверка
    уведомления:** `OFFSITE_KIND=test /opt/sporbot/backup-job.sh` — задание обязано упасть и владелец обязан получить
-   уведомление «backup failed: OFFSITE_KIND is not configured»; без этого задание не считается настроенным. Один раз —
-   пробное восстановление из внешней копии на новом сервере: в **отдельный тестовый том** (`backup.py verify` +
-   временный контейнер на этом томе, health 200), рабочий том не трогается.
+   уведомление «backup failed: OFFSITE_KIND is not configured»; без этого задание не считается настроенным.
+   **Пробное восстановление из внешней копии** (обязательно до шага 9; рабочий сервис и том не трогаются):
+   ```sh
+   S=<stamp из лога: «OK: <stamp> copied»>; IMG=$(docker service inspect $SVC --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')
+   mkdir -m 700 -p /root/drill-in
+   rclone copy "$OFFSITE/$S" /root/drill-in/$S        # ssh: rsync -a "$OFFSITE/$S/" /root/drill-in/$S/   disk: cp -a "$OFFSITE/$S" /root/drill-in/
+   sh /opt/sporbot/restore-drill.sh "$S" "$IMG" /root/drill-in /opt/sporbot/backup.py   # DRILL OK …
+   docker exec -i -u miniapp $(docker ps -q -f name=$SVC) python - verify /data/backups/$S < /opt/sporbot/backup.py
+   rm -rf /root/drill-in
+   ```
+   Скрипт: тестовый том `sporbot-restore-test` → обе БД → `integrity_check` и число строк по таблицам → временный
+   контейнер на этом томе без сети и без секретов → `healthy` → том и контейнер удаляются (и при сбое).
+   Числа строк из `DRILL OK`-прогона должны **совпасть** с выводом `verify` той же копии в рабочем томе
+   (последняя команда). *Стоп:* `STOP: …`, расхождение чисел или нездоровый контейнер.
+   (Проверено локально на образе `724cea5`: копия → тестовый том → `integrity=ok` → healthy → очистка.)
 9. **[владелец] Проверка в Telegram до открытия всем.** Mini App принимает только запуски из
    production-бота (подпись Telegram для его `MINIAPP_BOT_ID`), поэтому тестовый бот не подойдёт: кнопка
    только для владельца ставится production-ботом (токен нужен лишь этой команде на машине владельца, не
@@ -383,7 +417,8 @@ Telegram. Остаточный риск для бота — контроллер
    такой отказ — неверный `MINIAPP_BOT_ID`/`MINIAPP_TELEGRAM_ENV` или клиент без подписи → выключить кнопку
    владельца, разобрать; запасной вариант — `hmac` с токеном.
 10. **Закрытый запуск на этом заканчивается.** Кнопка по умолчанию (для всех) и BotFather не меняются;
-    `MINIAPP_ALLOWED_USER_IDS` остаётся. Наблюдение 24 ч (раздел 8).
+    `MINIAPP_ALLOWED_USER_IDS` остаётся. Сохранность тома: один Redeploy без изменений → в `verify /data` те же
+    `users`/`sessions`, что до него, владелец остаётся вошедшим. Наблюдение 24 ч (раздел 8).
 
 **Открытие всем — отдельный этап, отдельное разрешение (не 13.11):** после проверки AI 20–22.11 и наблюдения:
 убрать `MINIAPP_ALLOWED_USER_IDS` (Redeploy), затем BotFather → Menu Button / Main Mini App = `https://<MINIAPP_DOMAIN>`.
