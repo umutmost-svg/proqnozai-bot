@@ -200,6 +200,10 @@ async def main() -> int:
         allowed = EXPECTED.get(name, {200})
         if set(codes[name]) - allowed or (name not in ("quick",) and row["p95"] > a.p95_limit):
             ok = False  # any status the app should not give here (401/403/5xx …) fails the run
+    # A 503 is accepted only with the AI's own reasons; overload (busy, uvicorn's limit) always fails.
+    if any(k.startswith("ai_read 503") and "ai_unavailable/" not in k for k in reasons) or \
+            any(k.endswith(" busy/None") for k in reasons):
+        ok = False
     for k, v in reasons.most_common(15):
         print(f"  {v:>6}  {k}")
     summary["reasons"] = dict(reasons)
