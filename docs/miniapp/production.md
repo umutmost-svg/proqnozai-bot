@@ -244,8 +244,8 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    проверка входа — шаг 9. В режиме `hmac` нужен `-e SMOKE_USER_ID=<id владельца>`: smoke входит под
    аккаунтом владельца и завершает только свою сессию. *Стоп:* любой FAIL.
 8. **[сервер] Ежедневные бэкапы:** скопировать `deploy/miniapp/backup-job.sh` в `/opt/sporbot/` (0700, root),
-   один раз задать в нём `SVC`, `OFFSITE` (внешний приёмник: заранее настроенный rclone remote или rsync по SSH) и
-   `NOTIFY` (команда уведомления владельцу); cron root: `17 3 * * * /opt/sporbot/backup-job.sh >> /var/log/sporbot-backup.log 2>&1`.
+   один раз задать в нём `SVC`, `OFFSITE_KIND` (`rclone` / `ssh` / `disk`), `OFFSITE` (для `disk` — каталог на
+   внешнем диске с файлом-меткой `.sporbot-offsite`, созданным на самом диске) и `NOTIFY` (команда уведомления владельцу); cron root: `17 3 * * * /opt/sporbot/backup-job.sh >> /var/log/sporbot-backup.log 2>&1`.
    Задание: копия обеих БД с `integrity_check` → внешняя копия → хранение 7 дней; любой сбой — код ≠ 0 и
    `NOTIFY`. Первый запуск — вручную, проверить `OK:` в логе и наличие копии во внешнем приёмнике. Один раз —
    пробное восстановление из внешней копии по разделу 7 на тестовом томе.
@@ -285,7 +285,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 
 | Ситуация | Действие | Бот |
 |---|---|---|
-| Закрытый запуск (до или после шага 9) | вернуть кнопку владельца: `setChatMenuButton` с `chat_id=<id владельца>` и сохранённым до шага 9 значением (или `{"type":"default"}`), проверить `"ok":true`; затем Dokploy → Stop `sporbot-miniapp` | не затронут |
+| Закрытый запуск (до или после шага 9) | вернуть кнопку владельца: `setChatMenuButton` с `chat_id=<id владельца>` и значением, сохранённым до шага 9 (именно им; `{"type":"default"}` — только если сохранено оно), проверить `"ok":true`; затем Dokploy → Stop `sporbot-miniapp` | не затронут |
 | После открытия всем, сбой Mini App | BotFather: вернуть прежнюю Menu Button → Stop приложения | не затронут |
 | Массовые проблемы входа | `MINIAPP_LOGINS_ENABLED=false` (Redeploy) и/или `docker exec -u miniapp <ctr> python -m miniapp.admin revoke-all --yes` | не затронут |
 | Повреждение данных | процедура «Восстановление» ниже | не затронут |
