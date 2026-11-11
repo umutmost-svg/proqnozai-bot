@@ -84,10 +84,12 @@
 - Вернуть 2 ГБ: снова выключение → Resize до прежнего тарифа (возможно, потому что диск не увеличивали).
 - Данные бота (только если база повреждена; решение владельца — всё записанное после копии шага 1 пропадёт):
   1. расшифровать копию шага 1 на машине владельца, сверить SHA-256 с манифестом, `PRAGMA integrity_check` = ok;
-  2. перед любыми действиями подтвердить путь: `docker exec <бот> printenv BOT_DB_DIR` и
-     `docker inspect <бот> --format '{{range .Mounts}}{{.Name}} -> {{.Destination}}{{end}}'` — ожидается
-     `/app/data` и `proqnozai-db -> /app/data` (так на 2026-11-12); если иначе — использовать фактический путь;
-  3. `docker service scale <бот>=0` → дождаться, что `docker service ps <бот>` не показывает задач Running;
+  2. перед любыми действиями подтвердить путь — по **сервису** (работает и при остановленном контейнере):
+     `docker service inspect <сервис бота> --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' | grep '^BOT_DB_DIR='`
+     и `docker service inspect <сервис бота> --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Source}} -> {{.Target}}{{end}}'`
+     — ожидается `BOT_DB_DIR=/app/data` и `proqnozai-db -> /app/data` (так на 2026-11-12); если иначе —
+     использовать фактические значения (`<сервис бота>` — имя из `docker service ls`, `proqnozai-proqnozaibot-…`);
+  3. `docker service scale <сервис бота>=0` → дождаться, что `docker service ps <бот>` не показывает задач Running;
   4. загрузить копию на сервер (`scp`, 0600) и во временном контейнере на томе `proqnozai-db`
      (`docker run --rm -v proqnozai-db:/app/data -v /root/restore:/in:ro <образ бота> sh -c '…'`) переложить
      текущие `bot.db`, `bot.db-wal`, `bot.db-shm` в `/app/data/broken-<дата>/`, скопировать копию как `bot.db`;
