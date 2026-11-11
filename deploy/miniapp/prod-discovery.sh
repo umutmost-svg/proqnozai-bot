@@ -29,11 +29,13 @@ if command -v perl >/dev/null 2>&1; then
 else
   scrub() { sed -E 's/[A-Za-z0-9_+\/]{24,}={0,2}/<redacted>/g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<redacted-email>/g'; }
 fi
-# One mount per line, "type|source|target|ro": a bind source is shown only when it IS a known system root
-# or lies under one (whole-path match with a "/" boundary, spaces included); anything else is <host path>.
-mounts() { awk -F'|' 'NF >= 4 { src = $2
+# One mount per line: type<TAB>"target"<TAB>ro<TAB>"source", target and source Go-quoted (%q escapes tabs and
+# newlines, so a path can neither split a field nor forge a line). A bind source is shown only when it equals
+# or lies under a known system root ("/" boundary); anything else is <host path>.
+mounts() { awk -F'\t' 'NF == 4 { src = $4; gsub(/^"|"$/, "", src)
     if ($1 == "bind" && src !~ /^\/(etc\/dokploy|var\/lib\/docker|etc\/letsencrypt)(\/|$)/ && src !~ /^\/(var\/)?run\/docker\.sock$/) src = "<host path>"
-    printf "  %s:%s->%s%s\n", $1, src, $3, ($4 == "true" ? "(ro)" : "") }'; }
+    printf "  %s:%s->%s%s\n", $1, src, $2, ($3 == "true" ? "(ro)" : "") ; next }
+  NF > 0 { print "  <unreadable mount record>" }'; }
 # Runs a read-only command and says so when it fails, instead of an empty, misleading section.
 run() { out=$("$@" 2>&1); rc=$?; printf '%s\n' "$out" | scrub; [ $rc -eq 0 ] || echo "ERROR: '$1' failed (exit $rc)"; }
 dedupe() { awk '!seen[$0]++'; }
@@ -54,7 +56,7 @@ for svc in $(docker service ls --format '{{.Name}}' 2>/dev/null); do
   docker service inspect "$svc" --format \
     '{{.Spec.Name}} update={{with .Spec.UpdateConfig}}{{.Order}}/{{.FailureAction}}{{end}} rollback={{with .Spec.RollbackConfig}}{{.Order}}{{end}} restart={{with .Spec.TaskTemplate.RestartPolicy}}{{.Condition}}{{end}}' 2>&1 | scrub
   docker service inspect "$svc" --format \
-    '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Type}}|{{.Source}}|{{.Target}}|{{.ReadOnly}}{{"\n"}}{{end}}' 2>&1 | mounts | scrub
+    '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Type}}{{"\t"}}{{printf "%q" .Target}}{{"\t"}}{{.ReadOnly}}{{"\t"}}{{printf "%q" .Source}}{{"\n"}}{{end}}' 2>&1 | mounts | scrub
 done
 
 section "running containers (name, image, status, published ports)"
@@ -64,7 +66,7 @@ section "container mounts (no env)"
 for c in $(docker ps --format '{{.Names}}'); do
   echo "$c" | scrub
   docker inspect "$c" --format \
-    '{{range .Mounts}}{{.Type}}|{{if .Name}}{{.Name}}{{else}}{{.Source}}{{end}}|{{.Destination}}|{{if .RW}}false{{else}}true{{end}}{{"\n"}}{{end}}' 2>&1 | mounts | scrub
+    '{{range .Mounts}}{{.Type}}{{"\t"}}{{printf "%q" .Destination}}{{"\t"}}{{if .RW}}false{{else}}true{{end}}{{"\t"}}{{if .Name}}{{printf "%q" .Name}}{{else}}{{printf "%q" .Source}}{{end}}{{"\n"}}{{end}}' 2>&1 | mounts | scrub
 done
 
 section "docker volumes (names only; sizes deliberately not measured)"
