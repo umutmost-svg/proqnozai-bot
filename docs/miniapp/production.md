@@ -37,6 +37,32 @@ Menu Button / Main Mini App с URL Mini App. Это меняет только н
 
 ## 1. Инфраструктура: что известно и что надо подтвердить
 
+### Состояние на 2026-11-11
+
+| Параметр | Значение | Статус |
+|---|---|---|
+| Хостинг production | DigitalOcean Droplet + Dokploy (слова владельца, 2026-11-07/08) | предположение |
+| Приложения Dokploy | `bot`, `dashboard` из GitHub `umutmost-svg/proqnozai-bot`, ветка `main`, Autodeploy On Push, Preview OFF (слова владельца) | предположение |
+| `main` | `8ad4eec`; предок релиза (`git merge-base`) | **подтверждено** |
+| Railway | оба проекта удалены (слова владельца) | предположение |
+| Число экземпляров бота / второй polling | — | **NOT VERIFIED** (discovery: `getUpdates_conflicts`, число bot-контейнеров) |
+| Ресурсы сервера, диски, volumes | — | **NOT VERIFIED** (discovery: host, volumes) |
+| Резервные копии `bot.db` | — | **NOT VERIFIED** (discovery: backups) |
+| Домены, HTTPS, Traefik, Cloudflare | — | **NOT VERIFIED** (discovery: traefik hosts; Cloudflare — у владельца) |
+| SSH-доступ исполнителя к серверу | нет: в `~/.ssh/config` только GitHub; `known_hosts` содержит чужой проект (`167.172.97.220`, не трогать) и неопознанный `164.90.180.208` | **подтверждено** |
+| Нагрузка на общий ключ football-data | в минуту замера стенд — 0 запросов, у ключа свободно 103 из 120 → ~16/мин тратит другой клиент (вероятно, production-бот) | **подтверждено** (заголовок провайдера, 2026-11-11 ~14:10 UTC) |
+| GitHub: Actions / deployments на `release/miniapp-prod` | 0 / 0 после push | **подтверждено** |
+
+### Где взять недостающее
+- Dokploy UI (владелец): Applications → `bot`, `dashboard`: Source/Branch, Autodeploy, Preview, Domains, Volumes,
+  Environment (только имена переменных, не значения), Swarm settings; Settings → версия Dokploy, Backups/Destinations.
+- Cloudflare (владелец): зона домена, режим SSL/TLS, существующие DNS-записи, Transform Rules, Rate limiting.
+- BotFather (владелец): username и числовой id production-бота (`MINIAPP_BOT_ID` = часть токена до `:`), текущая
+  Menu Button.
+- football-data.org (владелец): аккаунт и тариф для отдельного ключа Mini App.
+- Anthropic Console (владелец): отдельный ключ Mini App и лимит расходов (Workspace spend limit).
+- Сервер: результат `prod-discovery.sh` (ниже).
+
 Известно со слов владельца (2026-11-07/08), **не проверено чтением сервера**: DigitalOcean Droplet +
 Dokploy; приложения `bot` и `dashboard` из GitHub `umutmost-svg/proqnozai-bot`, ветка `main`,
 Autodeploy On Push, Preview OFF; Railway удалён. У исполнителя нет доступа к серверу и Dokploy (нет
@@ -47,8 +73,8 @@ SSH-ключа сервера, токена Dokploy), поэтому факти�
 ```sh
 ssh root@<сервер>
 cd /root && curl -fsSL -o prod-discovery.sh \
-  https://raw.githubusercontent.com/umutmost-svg/proqnozai-bot/3e790aab6b62a3f5d97f2d2d4028b5036ecb2cf3/deploy/miniapp/prod-discovery.sh
-echo "7205796b0992a619ffdad8e05abfc3582e8753f522dbf1e9c5228fc39a685534  prod-discovery.sh" | sha256sum -c -   # OK, иначе не запускать
+  https://raw.githubusercontent.com/umutmost-svg/proqnozai-bot/c0d7dc0620f179412f98daded045f9984613199f/deploy/miniapp/prod-discovery.sh
+echo "9cb46184d1ff142c96b47fe79905831d6d75c1ebe68027533abe9ecf50c33f9d  prod-discovery.sh" | sha256sum -c -   # OK, иначе не запускать
 sh prod-discovery.sh > discovery.txt 2>&1
 less discovery.txt   # просмотреть перед отправкой: имена контейнеров, домены, счётчики — без секретов и персональных данных
 rm prod-discovery.sh
