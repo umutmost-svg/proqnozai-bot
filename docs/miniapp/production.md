@@ -209,7 +209,10 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 ### Восстановление из бэкапа (обе БД, проверено локально на копии в новом томе)
 ```sh
 S=<stamp>                                   # папка в /data/backups/ (или внешняя копия, скопированная в том)
-docker service scale sporbot-miniapp=0      # единственный писатель остановлен
+docker service scale sporbot-miniapp=0
+# `scale` может вернуться раньше остановки: ждать, пока контейнера не станет (иначе стоп, том не трогать)
+for i in $(seq 1 60); do [ -z "$(docker ps -q -f name=sporbot-miniapp)" ] && break; sleep 2; done
+[ -z "$(docker ps -q -f name=sporbot-miniapp)" ] || { echo "STOP: writer still running"; exit 1; }
 docker run --rm -v sporbot-miniapp-data:/data --entrypoint sh <образ sporbot-miniapp> -c "
   set -e; cd /data; mkdir -p broken-$S && mv miniapp.db* miniapp.forecasts.db* broken-$S/ 2>/dev/null || true
   cp backups/$S/miniapp.db backups/$S/miniapp.forecasts.db /data/   # без -wal/-shm: копии самодостаточны
@@ -219,7 +222,9 @@ docker run --rm -v sporbot-miniapp-data:/data -e MINIAPP_ENV=development -e MINI
   -e MINIAPP_BOT_TOKEN=000000:offline-maintenance-not-a-token -e MINIAPP_TRUSTED_ORIGINS=http://localhost \
   <образ sporbot-miniapp> admin revoke-all --yes
 docker service scale sporbot-miniapp=1
-C=$(docker ps -q -f name=sporbot-miniapp); docker exec -i -u miniapp $C python - verify /data < /opt/sporbot/backup.py
+for i in $(seq 1 90); do [ -n "$(docker ps -q -f name=sporbot-miniapp -f health=healthy)" ] && break; sleep 2; done
+C=$(docker ps -q -f name=sporbot-miniapp -f health=healthy); [ -n "$C" ] || { echo "STOP: not healthy, see docker service logs"; exit 1; }
+docker exec -i -u miniapp $C python - verify /data < /opt/sporbot/backup.py
 docker exec -i -u miniapp -e SMOKE_USER_ID=<id владельца> -e SMOKE_USER_EXISTS_OK=1 $C python - < /opt/sporbot/smoke.py
 ```
 Повреждённые файлы остаются в `/data/broken-<stamp>/` до разбора. Пока сервис в 0 реплик, Mini App

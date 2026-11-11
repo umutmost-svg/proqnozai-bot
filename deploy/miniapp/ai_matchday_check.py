@@ -193,9 +193,15 @@ def report(history: ForecastHistory) -> bool:
         c = sqlite3.connect(history.path)
         for ev, st, fh, fa in c.execute("SELECT event_id, settled_status, final_home, final_away FROM ai_forecasts"):
             rows[ev] = (st, fh, fa)
-    ok_rows = [x for x in ledger if x.get("status") == "ok"]
+    # Delivered = an analysis with probabilities (ready/partial); "insufficient" for a top league counts as a miss.
+    ok_rows = [x for x in ledger if x.get("status") == "ok" and (x.get("result") or {}).get("kind") in ("ready", "partial")]
     ok_events = {x["event"] for x in ok_rows}
+    attempted = sorted({x["event"] for x in ledger if x.get("status") in ("ok", "error", "in_flight")})
     errors = [x for x in ledger if x.get("status") == "error"]
+
+    def attempt_no(entry: dict) -> int:
+        same = [y for y in ledger if y["event"] == entry["event"]]
+        return next(i for i, y in enumerate(same, 1) if y is entry)  # identity: repeated rows can be equal
     unrecovered = sorted({x["event"] for x in errors} - ok_events)
     secs = sorted(x["seconds"] for x in ledger if "seconds" in x)
     p95 = secs[max(0, int(len(secs) * 0.95) - 1)] if secs else None
@@ -207,7 +213,7 @@ def report(history: ForecastHistory) -> bool:
         f = r.get("forecast") or {}
         p = r.get("probabilities") or {}
         integrity.append(all([
-            f.get("dataUntil", "") < r["generatedAt"] < x["kickoff"],
+            bool(f.get("dataUntil")) and bool(r.get("generatedAt")) and f["dataUntil"] < r["generatedAt"] < x["kickoff"],
             99 <= sum(p.values()) <= 101,
             (r.get("pick") or {}).get("market") == "NO_BET" or f.get("noBetReason") is None,
             f.get("noBetReason") != "early_forecast",  # match day: never "too early"
@@ -224,9 +230,12 @@ def report(history: ForecastHistory) -> bool:
         return st[0] in ("pending", "void")  # postponed / cancelled: never a win or a loss
     settled_ok = all(settled_right(x) for x in finished)
     criteria = {
-        "1_delivery_19_of_20_and_errors_recovered": len(ok_events) >= 19 and not unrecovered,
-        "2_p95_le_20s_and_every_timeout_recovered": p95 is not None and p95 <= 20 and all(
-            x["event"] in ok_events for x in errors if x.get("error") == "timeout"),
+        # 20 different matches attempted and all delivered; at most one of them needed its single retry.
+        "1_twenty_matches_delivered_at_most_one_retry": len(attempted) == MAX_CALLS and len(ok_events) == len(attempted)
+            and not unrecovered and len({x["event"] for x in errors}) <= 1,
+        # A retry runs on the warm path (data already loaded): a timeout there is a failure, as is p95 > 20 s.
+        "2_p95_le_20s_and_no_timeout_on_warm_path": p95 is not None and p95 <= 20 and not any(
+            x.get("error") == "timeout" and attempt_no(x) > 1 for x in errors),
         "3_calls_le_20_and_cost_le_10usd": calls <= MAX_CALLS and spent <= CAP_USD,
         "4_5_integrity_and_match_day_logic": all(integrity) and len(integrity) == len(ok_rows),
         "6_settlement_of_finished_matches": settled_ok,
