@@ -7,8 +7,9 @@
 
 | | |
 |---|---|
-| Код релиза | `b6cf031` (`rc/stand-2026-11-11`), проверен на стенде 2026-11-11 |
-| Ветка выкладки | `release/miniapp-prod` = `b6cf031` + этот документ и скрипты `deploy/miniapp/{prod-discovery.sh,smoke.py,backup.py,ai_matchday_check.py}`. Код приложения, Dockerfile и entrypoint идентичны `b6cf031` (`git diff b6cf031 release/miniapp-prod -- miniapp frontend deploy/miniapp/Dockerfile deploy/miniapp/entrypoint.sh` пуст) |
+| Код релиза | `b6cf031` (проверен на стенде 2026-11-11) **+ вход без токена бота (Ed25519)** из `feat/initdata-ed25519`. Точный SHA фиксируется здесь **после** проверки на стенде (раздел «Ed25519 на стенде»): `<RELEASE_SHA>` |
+| Ветка выкладки | `release/miniapp-prod`, перемотанная на `<RELEASE_SHA>`. Кроме кода — этот документ и `deploy/miniapp/{prod-discovery.sh,smoke.py,backup.py,ai_matchday_check.py}` (в образ не входят) |
+| Проверка перед push | `git rev-parse release/miniapp-prod` = `<RELEASE_SHA>`; `grep -q MINIAPP_INITDATA_MODE miniapp/settings.py` (иначе код без Ed25519 не запустится с конфигурацией раздела 2) |
 | Что не выпускаем | `main` (бот), админку (`feat/admin-pilot`), экспорт коэффициентов бота в Mini App |
 
 **Почему не через `main`.** Приложения Dokploy `bot` и `dashboard` собираются из `main` с
@@ -21,6 +22,16 @@ Mini App выпускается отдельным приложением Dokplo
 `main` нет `web_app`/`MenuButton`). Вход появится, когда владелец в BotFather задаст production-боту
 Menu Button / Main Mini App с URL Mini App. Это меняет только настройку бота в Telegram, без
 перезапуска и без изменения кода; откат — вернуть прежнюю кнопку.
+
+### Ed25519 на стенде (до фиксации `<RELEASE_SHA>`)
+1. Стенд: код `feat/initdata-ed25519` в режиме `hmac` с `MINIAPP_BOT_ID` тестового бота — вход как раньше,
+   плюс замер `auth.ed25519_shadow`.
+2. Владелец открывает Mini App тестового бота с iOS, Android, Telegram Desktop, macOS, Web K и Web A.
+   Условие: в логе на каждый вход `auth.ed25519_shadow result=ok`, ни одного `missing`/`bad`.
+3. Стенд переводится в `ed25519` (без токена, с `MINIAPP_CSRF_SECRET`) не раньше чем через 6 мин после
+   шага 1; повторный вход со всех клиентов — `auth.session created=True`, отказов нет.
+4. SHA, прошедший шаги 1–3, становится `<RELEASE_SHA>`; `release/miniapp-prod` перематывается на него.
+Если шаг 2 или 3 не проходит — production в режиме `hmac` с токеном (запасной вариант раздела 2).
 
 ## 1. Инфраструктура: что известно и что надо подтвердить
 
@@ -159,7 +170,8 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 
 1. **[владелец] Разрешения и данные:** домен `<MINIAPP_DOMAIN>`, ключи (football-data — отдельный или
    общий режим; Anthropic для Mini App), `discovery.txt`.
-2. **[исполнитель, по разрешению] Push ветки:** `git push origin release/miniapp-prod`. Перед этим в Dokploy
+2. **[исполнитель, по разрешению] Push ветки:** проверка из раздела 0 (SHA = `<RELEASE_SHA>`, код с Ed25519),
+   затем `git push origin release/miniapp-prod`. Перед этим в Dokploy
    убедиться, что у `bot` и `dashboard` branch = `main` (тогда их Autodeploy не сработает).
 3. **[владелец/сервер] Скрипты на сервер:** `scp deploy/miniapp/{smoke.py,backup.py} <server>:/opt/sporbot/`
    (права 0644, владелец root); сверить `sha256sum` с локальными.
