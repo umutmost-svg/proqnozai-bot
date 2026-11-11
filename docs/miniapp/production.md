@@ -191,10 +191,11 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    production-бота, поэтому тестовый бот не подойдёт: кнопка только для владельца
    ```sh
    read -rs BOT_TOKEN                        # ввод без эха: токен не попадает в историю и аргументы процессов
-   printf 'url = "https://api.telegram.org/bot%s/setChatMenuButton"\n' "$BOT_TOKEN" > /dev/shm/tg.cfg; unset BOT_TOKEN
-   curl -s -K /dev/shm/tg.cfg -d chat_id=<id владельца> \
+   CFG=$(umask 077; mktemp) && trap 'rm -f "$CFG"' EXIT   # уникальный файл 0600, удаляется при выходе
+   printf 'url = "https://api.telegram.org/bot%s/setChatMenuButton"\n' "$BOT_TOKEN" > "$CFG"; unset BOT_TOKEN
+   curl -s -K "$CFG" -d chat_id=<id владельца> \
      --data-urlencode 'menu_button={"type":"web_app","text":"SporBot","web_app":{"url":"https://<MINIAPP_DOMAIN>"}}'
-   rm -f /dev/shm/tg.cfg                     # (на macOS вместо /dev/shm — mktemp, затем rm)
+   rm -f "$CFG"
    ```
    (бот не перезапускается). iOS/Android/Desktop/Web: вход, главная, поиск турнира, календарь, матч,
    AI-разбор (1 платный), эмблемы; в Telegram Web — закрыть и открыть Mini App снова, сессия сохраняется.
