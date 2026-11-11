@@ -51,7 +51,7 @@ Menu Button / Main Mini App с URL Mini App. Это меняет только н
 | Диск | 47 ГБ свободно | **подтверждено** |
 | БД бота | Docker volume `proqnozai-db` | **подтверждено** |
 | football-data 429 / getUpdates-конфликты в логах бота | 0 / 0 в проверенном окне | **подтверждено** (в пределах лимита чтения скрипта) |
-| Внешние резервные копии `proqnozai-db` | в cron не найдены | **NOT VERIFIED**: Dokploy Volume Backups / снимки DigitalOcean — проверить в UI |
+| Внешние резервные копии `proqnozai-db` | в cron не найдены | **NOT VERIFIED**: Dokploy Volume Backups / снимки DigitalOcean — проверить в UI. Отсутствие cron не значит «копий нет», но и не доказывает, что они есть и восстанавливаются |
 | Панель Dokploy | порт 3000 опубликован на всех интерфейсах | **подтверждено**; доступность из интернета **NOT VERIFIED** |
 | `main` / Railway / автодеплой `bot` из `main` | `8ad4eec`; со слов владельца | предположение |
 
@@ -62,43 +62,66 @@ Menu Button / Main Mini App с URL Mini App. Это меняет только н
 | Полный прогрев (календари + прошлые сезоны 117 турниров, ~20 мин при 60 запросах/мин) | 142 МБ, плато | 34 мин замера каждые 10 с |
 | Пик под нагрузкой (7 дней матчей, 40 календарей и таблиц, эмблемы, «Быстрый прогноз» одиночный и купон, AI-чтение 24 матчей) | **152 МБ** | там же |
 | CPU | кратко до 1 ядра (модель в «Быстром прогнозе»), в покое ~1–10 % | там же |
-| Запас на рост кешей (лимит кеша 2 000 записей, картинки эмблем ≤ 32 МБ) | +~100 МБ | по лимитам кода |
+| Запас на рост кешей (лимит кеша 2 000 записей, картинки эмблем ≤ 32 МБ) | +~100 МБ | **оценка** по лимитам кода, не замер |
 
-План: резерв памяти контейнера 256 МБ, лимит 512 МБ (Dokploy → Advanced → Resources). Сборка образа
-(`npm ci` + `vite build` + `pip`) требует заметно больше и **на production-сервере недопустима**.
+План: резерв памяти контейнера 256 МБ (это гарантия планировщика, не защита), лимит 512 МБ (Dokploy → Advanced →
+Resources). Пик **сборки** образа (`npm ci` + `vite build` + `pip`) не измерен; он заметно выше работы, поэтому
+сборка **на production-сервере недопустима**. Первая сборка на новом сервере — под наблюдением (`free -m`,
+`docker stats`, `df -h` на обоих серверах); если 2 ГБ не хватает — 4 ГБ или сборка в CI с registry.
 
 ### Размещение (решение)
 **Рекомендуется: отдельный сервер для Mini App (и будущей админки), подключённый к текущему Dokploy как
 Remote Server.** На production-сервере 486 МБ свободной памяти без swap; сборка образа (npm ci + vite) и
 работа Mini App там же ставят под угрозу бота и сам Dokploy (OOM), а Dokploy прямо предупреждает, что сборка на
-сервере может «заморозить» сервер. Отдельный сервер не требует ни одного изменения и перезапуска на
-production-сервере: сборка и работа Mini App идут на новом сервере, текущий Dokploy им только управляет.
+сервере может «заморозить» сервер. С отдельным сервером сборка, Docker/Swarm, Traefik и том Mini App живут на
+новой машине (у Remote Server Dokploy свои Swarm и Traefik); на production-сервере бот и Docker не
+перезапускаются. **Риск для бота низкий, но не нулевой:** контроллер Dokploy (826 МБ) остаётся на
+production-сервере и тратит там память/CPU при настройке и выкладках, хранит SSH-ключ с root-доступом к новому
+серверу; ошибка в выборе сервера при создании приложения или в правилах firewall задела бы production. Поэтому:
+отдельный SSH-ключ только для Dokploy, сверка отпечатка хоста, наблюдение `free -m` на production-сервере во время
+Setup Server и первой выкладки, стоп-условие «приложение назначено на production-сервер».
 
 | Вариант | Риск для бота | Перерыв бота | Срок | Стоимость |
 |---|---|---|---|---|
-| **A. Отдельный сервер (Remote Server в Dokploy), 2 ГБ** | нет (другая машина) | нет | +0,5–1 день | ~$12/мес |
-| B. Увеличить RAM текущего сервера до 4 ГБ | средний (общая память, сборка там же) | **да**: ресайз DigitalOcean = выключение дроплета на несколько минут | +0,5 дня | +~$12/мес |
+| **A. Отдельный сервер (Remote Server в Dokploy), 2 ГБ** | низкий (другая машина; общий только контроллер Dokploy) | нет | +0,5–1 день | ~$12/мес |
+| B. Увеличить RAM текущего сервера до 4 ГБ + готовый образ из registry | средний: общая память и общий хост; при сборке там же — высокий | **да**: ресайз DigitalOcean = выключение дроплета на несколько минут | +0,5–1 день (ещё CI и решение по GHCR) | +~$12/мес |
 | C. Текущий сервер как есть | **высокий**: OOM при сборке или пике | нет до первого OOM | 0 | 0 |
 
 Для B/C сборка на сервере недопустима: только готовый образ из registry (CI), а это ещё и решение по GHCR.
+B с готовым образом по памяти приемлем, но требует выключения бота и оставляет общий хост — A изолирует лучше.
 
 ### Защита
-- **Dokploy :3000** (P1, до запуска): закрыть порт 3000 в **DigitalOcean Cloud Firewall** (Docker обходит UFW),
-  открыть только 22 (лучше — с IP владельца), 80, 443; панель — через домен Traefik с HTTPS или SSH-туннель.
-  Это не перезапускает ни бота, ни Docker. В Dokploy лежат все секреты (включая токен бота): панель по HTTP в
-  открытом интернете — главный риск, общий для бота и Mini App.
-- **Mini App:** origin только через Cloudflare (proxied DNS, Set `X-Edge-Auth`, rate limit); прямой запрос на IP с
-  Host Mini App — 403 от приложения; закрытый список `MINIAPP_ALLOWED_USER_IDS`; токена бота в контейнере нет.
-- **Отдельный сервер:** Cloud Firewall — 22 только с IP Dokploy-сервера/владельца, 80/443 — открыты (лучше только
-  диапазоны Cloudflare), ничего больше.
+- **Dokploy :3000 — блокер запуска** (P0, если порт доступен из интернета; сейчас доступность не проверена):
+  закрыть порт 3000 в **DigitalOcean Cloud Firewall** для **IPv4 и IPv6** (Docker обходит UFW), открыть только
+  22 (лучше — с IP владельца), 80, 443; панель — через домен Traefik с HTTPS или SSH-туннель. Проверить снаружи,
+  что :3000 не отвечает, **и** что доступ владельца к панели (домен или туннель) работает — до закрытия, чтобы не
+  потерять управление. Это не перезапускает ни бота, ни Docker. В Dokploy лежат все секреты (включая токен
+  бота), а после подключения Remote Server — ещё и root-SSH к новому серверу.
+- **Mini App:** origin через Cloudflare (proxied DNS, Set `X-Edge-Auth`, rate limit); без верного заголовка
+  приложение отвечает 403 (кроме намеренно публичного `GET /api/health`); закрытый список
+  `MINIAPP_ALLOWED_USER_IDS`; токена бота в контейнере нет. Открытые 80/443 позволяют слать запросы мимо
+  Cloudflare и его rate limit до отказа 403 — поэтому на новом сервере лучше пускать 80/443 только из диапазонов
+  Cloudflare.
+- **Отдельный сервер:** Cloud Firewall — 22 только с IP production-сервера (Dokploy) и владельца; 443 (и 80, если
+  нужен) — **только диапазоны Cloudflare IPv4/IPv6** (https://www.cloudflare.com/ips/); ничего больше. Тогда прямой
+  запрос на IP не доходит вовсе (таймаут вместо 403). TLS origin — Cloudflare Origin Certificate (Let's Encrypt
+  HTTP-01 через закрытый 80 не пройдёт).
 
 ### Риск `start-first` у бота (существующий, не из-за Mini App)
-При выкладке бота Swarm сначала запускает новую задачу, потом гасит старую: несколько секунд работают **два**
-процесса бота. Для long polling Telegram отдаёт `getUpdates` только одному (второй получает 409 Conflict), но
-фоновые задачи (рассылки, пуши, опрос) в это окно могут сработать дважды, а два процесса пишут в одну SQLite в
-`proqnozai-db`. В проверенном окне конфликтов не было (выкладок, видимо, не было). Рекомендация (отдельное
-решение владельца, не блокер Mini App): `stop-first` для сервиса бота в Dokploy (Advanced → Swarm settings →
-Update config), вступит в силу при следующей выкладке бота; цена — пауза бота на время рестарта (секунды).
+При выкладке бота Swarm сначала запускает новую задачу, потом гасит старую: какое-то время (не обязательно
+секунды — до прохождения health и остановки старой) работают **два** процесса бота. Последствия:
+- long polling: `getUpdates` получает только один, второй — 409 Conflict;
+- фоновые задачи (рассылки, пуши, опросы) стартуют в обоих независимо и могут сработать дважды;
+- `broadcast.scheduler` нового процесса через 15 с вызывает `db_release_stale_broadcasts()` и помечает
+  **идущую** у старого процесса рассылку как `failed` («прервано рестартом»), хотя старый ещё отправляет;
+- обе пишут в одну SQLite в `proqnozai-db`: WAL сериализует запись — скорее блокировки (`database is locked`) и
+  конфликтующие действия приложения, чем порча файла.
+
+0 конфликтов в проверенных логах почти ничего не доказывает про окно выкладки. Рекомендация: `stop-first` для
+сервиса бота (Dokploy → Advanced → Swarm settings → Update config) **до следующей выкладки бота** — отдельное
+решение владельца, не блокер Mini App и не повод выкладывать бота ради него (настройка применяется при следующем
+Deploy бота). Цена — перерыв бота на остановку + старт + health (замерить при первой выкладке); прерванную
+посреди отправки рассылку `stop-first` не спасает — выкладывать бота не во время рассылки.
 
 ### Где взять недостающее
 - Dokploy UI (владелец): Applications → `bot`, `dashboard`: Source/Branch, Autodeploy, Preview, Domains, Volumes,
@@ -147,11 +170,12 @@ Traefik, расписания бэкапов и счётчики 429 football-da
 | Health check | из образа (`HEALTHCHECK` → `GET /api/health`, проверяет чтение БД) | Swarm не считает задачу живой без БД |
 | Restart policy | on-failure | |
 | Volume | named volume `sporbot-miniapp-data` → `/data` | entrypoint не стартует без смонтированного тома |
-| Domain | `<MINIAPP_DOMAIN>` (поддомен домена владельца), container port `8000`, HTTPS (Let's Encrypt или Cloudflare Origin Certificate) | один origin: страница + `/api` |
+| Domain | `<MINIAPP_DOMAIN>` (поддомен домена владельца), container port `8000`, HTTPS — Cloudflare Origin Certificate (80 закрыт для всех, кроме Cloudflare) | один origin: страница + `/api` |
 | Ports | не публиковать на хост (только через Traefik) | нет обхода Cloudflare по IP:порт |
 
 ### Cloudflare (домен Mini App)
-- DNS `<MINIAPP_DOMAIN>` → IP Droplet, **Proxied**; SSL/TLS **Full (strict)**.
+- DNS `<MINIAPP_DOMAIN>` → **IP нового сервера Mini App** (`<MINIAPP_SERVER_IP>`, не production-сервера), **Proxied**;
+  SSL/TLS **Full (strict)**; на новом сервере — Cloudflare Origin Certificate в Traefik этого сервера.
 - Transform Rule → Modify Request Header → **Set** (не Add) `X-Edge-Auth` = `<MINIAPP_EDGE_SECRET>` для
   хоста `<MINIAPP_DOMAIN>`: значение, присланное клиентом, всегда перезаписывается.
 - Rate limiting: `POST /api/auth/session` — 20/мин по IP; весь `/api/*` — 300/мин по IP (защита SQLite и
@@ -255,53 +279,73 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 `sporbot-miniapp` ниже — имя приложения/сервиса в Dokploy. Dokploy может дать сервису другое имя (суффикс):
 перед командами взять фактическое из `docker service ls` и подставить в `SVC=<имя>`; `docker ps -f name=$SVC`.
 
-**Все шаги выполняются без перерыва в работе бота**: бот не пересобирается и не перезапускается; шаги 9–10
-меняют только кнопку меню бота в Telegram. Условие остановки на любом шаге — отклонение от ожидаемого;
-до шага 10 пользователи Mini App не видят.
+**Бот не пересобирается и не перезапускается ни на одном шаге**; шаги 9–10 меняют только кнопку меню бота в
+Telegram. Остаточный риск для бота — контроллер Dokploy и firewall на production-сервере (раздел 1,
+«Размещение»). Условие остановки на любом шаге — отклонение от ожидаемого; до шага 10 пользователи Mini App не видят.
+
+**Где выполнять:** все команды с пометкой **[сервер]** (`docker service …`, `docker ps`, smoke, backup, cron,
+восстановление) — **на новом сервере Mini App** (`ssh root@<MINIAPP_SERVER_IP>`): там его Swarm, контейнер и том.
+На production-сервере в этом runbook ничего не выполняется, кроме наблюдения `free -m`.
 
 0. **[владелец] Подготовка инфраструктуры (без касания production-сервера и бота):**
-   - DigitalOcean Cloud Firewall для production-сервера: входящие 22 (по возможности с IP владельца), 80, 443;
-     **порт 3000 закрыть**; панель Dokploy — через её домен с HTTPS или `ssh -L 3000:127.0.0.1:3000`. Проверка снаружи:
-     `curl -m 5 http://<IP production>:3000` → нет ответа. Бот и Docker не перезапускаются.
-   - Новый дроплет Ubuntu 24.04, 2 ГБ (тот же регион), Cloud Firewall: 22 только с IP production-сервера и владельца,
-     80/443. Dokploy → Remote Servers → Add Server (SSH-ключ Dokploy) → Setup Server (ставит Docker и Traefik на
-     новом сервере). Проверка: сервер «Ready» в Dokploy; на production-сервере ничего не менялось.
-   - Резервные копии бота (вне Mini App): проверить в DigitalOcean (Backups/Snapshots дроплета) и в Dokploy
-     (Volume Backups для `proqnozai-db`); если нет — включить еженедельные снимки DigitalOcean (без перезапуска).
+   - **Сначала** убедиться, что доступ к панели Dokploy работает через её HTTPS-домен или
+     `ssh -L 3000:127.0.0.1:3000 root@<IP production>`. Затем DigitalOcean Cloud Firewall для production-сервера:
+     входящие 22 (по возможности с IP владельца), 80, 443 — для IPv4 и IPv6; **порт 3000 закрыть**. Проверка с
+     другой сети: `curl -m 5 http://<IP production>:3000` и (если есть IPv6) `curl -6 -m 5 http://[<IPv6>]:3000` →
+     нет ответа; панель через домен/туннель открывается; бот отвечает в Telegram. Бот и Docker не перезапускаются.
+   - Новый дроплет Ubuntu 24.04, 2 ГБ (тот же регион). Cloud Firewall: 22 только с IP production-сервера и владельца;
+     443/80 только из диапазонов Cloudflare (раздел 1, «Защита»). Отдельный SSH-ключ, созданный в Dokploy только для
+     этого сервера; при первом подключении сверить отпечаток хоста. Dokploy → Remote Servers → Add Server →
+     Setup Server (ставит Docker, Swarm и Traefik на новом сервере); тип сервера — Deploy Server. Во время Setup на
+     production-сервере смотреть `free -m` (стоп, если доступно < 200 МБ). Проверка: сервер «Ready» в Dokploy;
+     на новом сервере `docker service ls` показывает его Traefik; на production-сервере сервисы те же, что до шага.
+   - **Резервная копия бота — блокер запуска** (вне Mini App, но запуск идёт рядом с живой БД): выяснить в
+     DigitalOcean (Backups/Snapshots) и в Dokploy (Volume Backups для `proqnozai-db`), что есть. Нужна
+     **согласованная копия SQLite вне сервера** с проверкой и пробным восстановлением **не поверх production**
+     (в отдельный том/на другой машине, `PRAGMA integrity_check`). Снимок дроплета или копия «живого» тома без
+     остановки контейнера может быть несогласованной для SQLite в WAL (Dokploy предупреждает об этом), а вариант
+     «с остановкой контейнера» прерывает бота — поэтому снимки DigitalOcean — второй слой, не единственное
+     доказательство. Способ без перерыва бота (онлайн-копия SQLite backup API изнутри контейнера бота, как
+     `backup.py` у Mini App) — отдельная задача и отдельное разрешение: это команда в production-контейнере.
 1. **[владелец] Разрешения и данные:** домен `<MINIAPP_DOMAIN>`, ключи (football-data — отдельный или
    общий режим; Anthropic для Mini App), `discovery.txt`.
 2. **[исполнитель, по разрешению] Push ветки:** проверка из раздела 0 (код = `<TESTED_CODE_SHA>`, Ed25519 в ветке выкладки),
    затем `git push origin release/miniapp-prod`. Перед этим в Dokploy
    убедиться, что у `bot` и `dashboard` branch = `main` (тогда их Autodeploy не сработает).
-3. **[владелец/сервер] Скрипты на сервер:** `scp deploy/miniapp/{smoke.py,backup.py,backup-job.sh} <server>:/opt/sporbot/`
+3. **[владелец/сервер] Скрипты на сервер Mini App:** `scp deploy/miniapp/{smoke.py,backup.py,backup-job.sh} root@<MINIAPP_SERVER_IP>:/opt/sporbot/`
    (владелец root; `smoke.py`, `backup.py` — 0644, `backup-job.sh` — 0700); сверить `sha256sum` с локальными.
 4. **[владелец] Cloudflare** по разделу 2. *Стоп:* домен не резолвится через Cloudflare.
 5. **[сервер] Dokploy → Create Application** `sporbot-miniapp` **на Remote Server** по таблице раздела 2 (Autodeploy OFF,
    Replicas 1, stop-first, volume, domain, env). *Стоп:* приложение назначено на production-сервер; на новом сервере
    свободно < 5 ГБ диска или < 1 ГБ RAM.
-6. **[сервер] Deploy**, затем проверить, что Dokploy применил настройки:
+6. **[сервер] Deploy** (первая сборка — под наблюдением: на новом сервере `free -m`/`df -h`, на production-сервере
+   `free -m`; стоп, если на новом сервере начался swap-шторм/OOM или на production доступно < 200 МБ), затем
+   проверить, что Dokploy применил настройки и всё оказалось на новом сервере:
    ```sh
+   hostname                                           # имя НОВОГО сервера, не production
+   docker volume ls -q | grep -x sporbot-miniapp-data # том создан здесь
    docker service inspect $SVC --format '{{.Spec.Mode.Replicated.Replicas}} {{.Spec.UpdateConfig.Order}} {{.Spec.UpdateConfig.FailureAction}} {{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Source}}->{{.Target}} {{end}}'
    # ожидается: 1 stop-first rollback sporbot-miniapp-data->/data
    docker ps -f name=$SVC --format '{{.Status}}'      # Up … (healthy)
    docker port $(docker ps -q -f name=$SVC)           # пусто: порт не опубликован на хосте
    ```
    *Стоп/откат:* перезапуски задачи, unhealthy или настройки не совпали → Stop приложения, разбор
-   `docker service logs $SVC`.
+   `docker service logs $SVC`. На production-сервере: `docker service ls` — `sporbot-miniapp` там **нет**, бот 1/1.
+   Сохранность тома: после повторного Deploy (без изменений) данные первого бэкапа/сессии на месте.
 7. **[сервер] Проверки без Telegram:**
    ```sh
-   D=<MINIAPP_DOMAIN>; IP=<DROPLET_IP>; C=$(docker ps -q -f name=$SVC)
+   D=<MINIAPP_DOMAIN>; IP=<MINIAPP_SERVER_IP>; C=$(docker ps -q -f name=$SVC)
    curl -s https://$D/api/health                                                    # {"status":"ok"}
    curl -s -o /dev/null -w '%{http_code}\n' https://$D/                             # 200 через Cloudflare
    curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Edge-Auth: forged' https://$D/   # 200: Cloudflare перезаписал заголовок
-   curl -sk -o /dev/null -w '%{http_code}\n' --resolve $D:443:$IP https://$D/       # 403: обход Cloudflare закрыт (-k: у Origin Certificate нет публичной цепочки; проверяется заголовок, не TLS)
+   curl -sk -o /dev/null -w '%{http_code}\n' --resolve $D:443:$IP https://$D/       # с машины ВНЕ Cloudflare: таймаут/000 (firewall пускает только Cloudflare); если 443 открыт всем — 403 (-k: у Origin Certificate нет публичной цепочки)
    docker exec -i -u miniapp -e SMOKE_EXPECT_ALLOWLIST=1 $C python - < /opt/sporbot/smoke.py   # RESULT PASS: неподписанный вход отклонён, токена нет, список допуска включён, данные идут
    docker exec -i -u miniapp $C python - < /opt/sporbot/backup.py                   # первый бэкап, integrity=ok
    ```
    В режиме `ed25519` smoke не может войти сам (подписать вход может только Telegram): положительная
    проверка входа — шаг 9. В режиме `hmac` нужен `-e SMOKE_USER_ID=<id владельца>`: smoke входит под
    аккаунтом владельца и завершает только свою сессию. *Стоп:* любой FAIL.
-8. **[сервер] Ежедневные бэкапы:** скопировать `deploy/miniapp/backup-job.sh` в `/opt/sporbot/` (0700, root),
+8. **[сервер Mini App] Ежедневные бэкапы:** `deploy/miniapp/backup-job.sh` в `/opt/sporbot/` нового сервера (0700, root),
    один раз задать в нём `SVC`, `OFFSITE_KIND` (`rclone` / `ssh` / `disk`), `OFFSITE` — **выделенный только под эту
    задачу** приёмник, в котором вручную создан файл-метка `.sporbot-offsite` (для `disk` — на самом внешнем диске;
    без метки задание не пишет и не чистит), и `NOTIFY` (команда уведомления владельцу); cron root: `17 3 * * * /opt/sporbot/backup-job.sh >> /var/log/sporbot-backup.log 2>&1`.
@@ -310,7 +354,8 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    `NOTIFY`. Первый запуск — вручную, проверить `OK:` в логе и наличие копии во внешнем приёмнике. **Проверка
    уведомления:** `OFFSITE_KIND=test /opt/sporbot/backup-job.sh` — задание обязано упасть и владелец обязан получить
    уведомление «backup failed: OFFSITE_KIND is not configured»; без этого задание не считается настроенным. Один раз —
-   пробное восстановление из внешней копии по разделу 7 на тестовом томе.
+   пробное восстановление из внешней копии на новом сервере: в **отдельный тестовый том** (`backup.py verify` +
+   временный контейнер на этом томе, health 200), рабочий том не трогается.
 9. **[владелец] Проверка в Telegram до открытия всем.** Mini App принимает только запуски из
    production-бота (подпись Telegram для его `MINIAPP_BOT_ID`), поэтому тестовый бот не подойдёт: кнопка
    только для владельца ставится production-ботом (токен нужен лишь этой команде на машине владельца, не
@@ -355,7 +400,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 
 ### Восстановление из бэкапа (обе БД, проверено локально на копии в новом томе)
 ```sh
-# Выполнять целиком как один скрипт (`sh restore.sh`), не по строкам: set -e и каждый «STOP» прерывают его.
+# На сервере Mini App (не production). Выполнять целиком как один скрипт (`sh restore.sh`), не по строкам: set -e и каждый «STOP» прерывают его.
 set -eu
 SVC=<фактическое имя сервиса из docker service ls>
 S=<stamp>                                   # папка в /data/backups/ (или внешняя копия, скопированная в том)
