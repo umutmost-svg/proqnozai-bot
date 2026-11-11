@@ -103,8 +103,9 @@
    (было 200); `…httpworker…sslip.io` → 401 как прежде. Маршрут больше никому не нужен: панель — через туннель
    на :3000. Откат: вернуть копию файла.
    **Устойчивость правки (исходный код Dokploy v0.29.12 + факт на сервере):** при каждом старте Dokploy вызывает
-   `createDefaultServerTraefikConfig()`, который пишет `dokploy.yml` **только если файла нет** — правка
-   переживает перезапуски, перезагрузки и обновления; на сервере файл не менялся с 2026-07-17, хотя Dokploy
+   `createDefaultServerTraefikConfig()`, который пишет `dokploy.yml` **только если файла нет** — в этой версии
+   правка переживает перезапуски и перезагрузки; что будет при **обновлении** Dokploy, по коду текущей версии
+   не гарантировать — после каждого обновления обязателен ручной прогон проверки; на сервере файл не менялся с 2026-07-17, хотя Dokploy
    перезапускался (последний раз — 2026-11-11 при ресайзе). Файл перезаписывают только: Settings → Web Server →
    **домен сервера** (`updateServerTraefik` ставит `Host(<домен>)` без `ClientIP` — и открыл бы панель на
    этом домене мимо Access) и редактор Traefik-конфига там же (`updateWebServerTraefikConfig`); удаление файла
@@ -115,12 +116,17 @@
    - **[владелец]** бесплатный аккаунт healthchecks.io → check `dokploy-bypass`, период 1 ч, grace 1 ч,
      уведомления на e-mail и/или Telegram владельца; URL пинга (`https://hc-ping.com/<uuid>`) — не секрет уровня
      ключа, но в репозиторий и чат не публикуется; на сервер — в `/root/.hc-dokploy-bypass` (0600).
-   - cron root раз в час (пинг только при 404; при любом другом ответе — явный сигнал `/fail`):
-     `17 * * * * u=$(cat /root/.hc-dokploy-bypass); c=$(curl -s -o /dev/null -w '\%{http_code}' -m 10 -H 'Host: dokploy.docker.localhost' http://164.90.180.208/); if [ "$c" = 404 ]; then curl -fsS -m 10 -o /dev/null "$u"; else logger -t dokploy-bypass "OPEN code=$c"; curl -fsS -m 10 -o /dev/null "$u/fail"; fi`
-     Нет пинга (сервер/cron/сеть) — healthchecks тоже уведомит по истечении grace.
+   - скрипт `deploy/ops/dokploy-bypass-check.sh` → `/root/dokploy-bypass-check.sh` (0700, root), cron root:
+     `17 * * * * sh /root/dokploy-bypass-check.sh`. Проверяет **оба** условия: (1) **каждое** правило роутеров в
+     `dokploy.yml` содержит `ClientIP(\`127.0.0.1/32\`)` — так ловится перезапись файла Dokploy (домен в Web Server
+     ставит `Host(<домен>)`, по которому старый Host вернул бы 404 и проверка «прошла» бы); (2) старый Host с
+     публичного адреса даёт 404. Всё в порядке — пинг healthchecks, иначе `/fail` и запись в syslog
+     (`dokploy-bypass`). Нет пинга (сервер, cron, сеть) — healthchecks уведомит по истечении grace.
+     Проверено локально: верный файл + 404 → 0; переписанный файл (без `ClientIP`) при 404 → `OPEN`; нет ответа → `OPEN`.
    - **Тест уведомления (обязательно):** `curl -fsS "$(cat /root/.hc-dokploy-bypass)/fail"` → владелец получил
      уведомление; затем `curl -fsS "$(cat /root/.hc-dokploy-bypass)"` → статус снова up.
-   - Плюс ручной прогон после любого изменения настроек или версии Dokploy; при `OPEN` — повторить шаг 2a.
+   - Плюс ручной прогон `sh /root/dokploy-bypass-check.sh` после любого изменения настроек или обновления Dokploy;
+     при `OPEN` — повторить шаг 2a.
    Тот же сервис подходит как канал `NOTIFY` для бэкапов (`production.md`, шаг 8).
 3. **[владелец] Public hostname** туннеля: `admin.proqnozai.com` → Service `HTTP` `127.0.0.1:3000`.
    Cloudflare создаёт CNAME на `<id>.cfargotunnel.com` и **отклонит** сохранение, пока есть другая запись
