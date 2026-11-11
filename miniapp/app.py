@@ -34,7 +34,7 @@ from miniapp.sports.client import UpstreamError
 from miniapp.sports.routes import register_sports_routes
 from miniapp.sports.service import SportsService, build_service
 from miniapp.store import SUPPORTED_LANGS, BurnWindow, InitDataConsumedError, Session, Store, User
-from miniapp.telegram_auth import InitDataError, validate_init_data
+from miniapp.telegram_auth import TELEGRAM_PUBLIC_KEYS, InitDataError, ed25519_shadow_status, validate_init_data
 
 logger = logging.getLogger("miniapp")
 
@@ -173,7 +173,19 @@ def create_app(
     store = store or Store(settings.db_path)
     store.init_schema()
     store.purge_expired(int(clock()))
-    csrf = CsrfTokens(settings.bot_token)
+    csrf = CsrfTokens(settings.csrf_key_material)
+
+    def verify_launch(init_data: str):
+        """initData by the deployment's algorithm: HMAC with the bot token, or Ed25519 without it."""
+        if settings.initdata_mode == "ed25519":
+            assert settings.bot_id is not None  # guaranteed by Settings
+            return validate_init_data(
+                init_data, now=clock(), max_age_s=settings.init_data_max_age_s,
+                future_skew_s=settings.init_data_future_skew_s, max_chars=settings.max_init_data_chars,
+                ed25519=(settings.bot_id, TELEGRAM_PUBLIC_KEYS[settings.telegram_env]))
+        return validate_init_data(
+            init_data, settings.bot_token, now=clock(), max_age_s=settings.init_data_max_age_s,
+            future_skew_s=settings.init_data_future_skew_s, max_chars=settings.max_init_data_chars)
     limiter = LoginRateLimiter(settings.login_rate_limit, settings.login_rate_window_s, clock)
 
     app = FastAPI(title="Spor AI Mini App API", docs_url=None, redoc_url=None, openapi_url=None)
@@ -337,17 +349,14 @@ def create_app(
         if not isinstance(init_data, str):
             raise ApiError(400, "bad_request")
         try:
-            verified = validate_init_data(
-                init_data,
-                settings.bot_token,
-                now=clock(),
-                max_age_s=settings.init_data_max_age_s,
-                future_skew_s=settings.init_data_future_skew_s,
-                max_chars=settings.max_init_data_chars,
-            )
+            verified = verify_launch(init_data)
         except InitDataError as exc:
             logger.info("auth.rejected reason=%s", exc.code)
             raise ApiError(401, "init_data_expired" if exc.expired else "init_data_invalid") from None
+        if settings.initdata_mode == "hmac" and settings.bot_id is not None:
+            # Readiness for the token-free Ed25519 mode, measured on real clients: a result code only.
+            logger.info("auth.ed25519_shadow result=%s", ed25519_shadow_status(
+                init_data, settings.bot_id, TELEGRAM_PUBLIC_KEYS[settings.telegram_env]))
 
         # Limited per VERIFIED Telegram user, after the signature check. The peer
         # address is not used: behind a reverse proxy it is the proxy's, shared by
@@ -356,7 +365,7 @@ def create_app(
         ts = now()
         # Burned data is rejected before the limit, so replaying it cannot spend the
         # user's budget. Not the final word: create_session re-checks atomically.
-        if await run_in_threadpool(store.is_init_data_consumed, verified.signature_hash, ts):
+        if await run_in_threadpool(store.is_init_data_consumed, verified.launch_id, ts):
             logger.info("auth.rejected reason=reused_after_logout")
             raise ApiError(401, "init_data_reused")
         retry_after = limiter.hit(f"user:{verified.user.id}")
@@ -380,7 +389,7 @@ def create_app(
             token = secrets.token_urlsafe(32)
             try:
                 session, evicted = await run_in_threadpool(
-                    store.create_session, token, user.telegram_user_id, verified.signature_hash, ts,
+                    store.create_session, token, user.telegram_user_id, verified.launch_id, ts,
                     settings.session_ttl_s, settings.max_sessions_per_user, burn_window(ts),
                 )
             except InitDataConsumedError:
@@ -435,14 +444,7 @@ def create_app(
         `user_id`: owner required by the session; None when there is no session.
         """
         try:
-            launch = validate_init_data(
-                raw,
-                settings.bot_token,
-                now=clock(),
-                max_age_s=settings.init_data_max_age_s,
-                future_skew_s=settings.init_data_future_skew_s,
-                max_chars=settings.max_init_data_chars,
-            )
+            launch = verify_launch(raw)
         except InitDataError as exc:
             # Invalid or expired data cannot be exchanged anyway: nothing to burn.
             logger.info("auth.logout launch_not_burned reason=%s", exc.code)
@@ -450,7 +452,7 @@ def create_app(
         if user_id is not None and launch.user.id != user_id:
             logger.info("auth.logout launch_not_burned reason=other_user")
             return None
-        return launch.signature_hash
+        return launch.launch_id
 
     async def read_launch(request: Request) -> str | None:
         """Optional logout body {"init_data": ...}: the launch the page runs in now."""

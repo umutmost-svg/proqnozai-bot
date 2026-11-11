@@ -25,8 +25,9 @@ class CsrfTokens:
     every session and is useless without the matching HttpOnly cookie.
     """
 
-    def __init__(self, bot_token: str) -> None:
-        self._key = hmac.new(b"SporAI-MiniApp-CSRF", bot_token.encode(), hashlib.sha256).digest()
+    def __init__(self, key_material: str) -> None:
+        # MINIAPP_CSRF_SECRET when set (always in Ed25519 mode), else the bot token as before.
+        self._key = hmac.new(b"SporAI-MiniApp-CSRF", key_material.encode(), hashlib.sha256).digest()
 
     def for_session(self, session_token: str) -> str:
         return hmac.new(self._key, session_token.encode(), hashlib.sha256).hexdigest()

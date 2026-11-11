@@ -43,7 +43,7 @@ def test_reference_vector_from_openssl(plus_for_space: bool) -> None:
     assert result.user.id == 123456789
     assert result.user.first_name == "Ülkər + Co"  # Unicode, literal plus and space survive decoding
     assert result.user.language_code == "az"
-    assert result.signature_hash == REFERENCE_HASH
+    assert result.launch_id == REFERENCE_HASH
 
 
 def test_test_signer_agrees_with_reference() -> None:
@@ -205,3 +205,115 @@ def test_error_message_does_not_leak_payload() -> None:
         check(init_data)
     assert str(exc.value) == "expired"
     assert "Secret" not in repr(exc.value)
+
+
+# --- Ed25519: no bot token in the validator ------------------------------------------------------------
+
+from miniapp.telegram_auth import ed25519_shadow_status  # noqa: E402
+from miniapp.tests.signing import (  # noqa: E402
+    TEST_BOT_ID,
+    TEST_ED25519_PUBLIC_HEX,
+    ed25519_signature,
+    make_init_data_ed25519,
+)
+from urllib.parse import parse_qsl, urlencode  # noqa: E402
+
+
+def ed(init_data: str, *, now: float = NOW, bot_id: int = TEST_BOT_ID, key: str = TEST_ED25519_PUBLIC_HEX):
+    return validate_init_data(init_data, now=now, max_age_s=300, future_skew_s=30, ed25519=(bot_id, key))
+
+
+def ed_rejected(init_data: str, code: str, **kw) -> None:
+    with pytest.raises(InitDataError) as e:
+        ed(init_data, **kw)
+    assert e.value.code == code
+
+
+def _fields(init_data: str) -> dict[str, str]:
+    return dict(parse_qsl(init_data, keep_blank_values=True))
+
+
+def test_ed25519_valid_without_any_bot_token() -> None:
+    result = ed(make_init_data_ed25519({"id": 42, "first_name": "Ann"}, auth_date=int(NOW)))
+    assert result.user.id == 42 and len(result.launch_id) == 64
+
+
+def test_ed25519_ignores_the_unsigned_hash_for_the_launch_id() -> None:
+    # `hash` is outside the Ed25519 signature: varying it must neither break nor change the launch id,
+    # otherwise a replay could dodge the logout burn by editing it.
+    base = make_init_data_ed25519(auth_date=int(NOW))
+    other = _fields(base) | {"hash": "0" * 64}
+    without = {k: v for k, v in _fields(base).items() if k != "hash"}
+    ids = {ed(urlencode(f)).launch_id for f in (_fields(base), other, without)}
+    assert len(ids) == 1
+
+
+@pytest.mark.parametrize("field,value", [("user", '{"id":43,"first_name":"Ann"}'), ("auth_date", str(int(NOW) - 1)),
+                                         ("query_id", "AAHother")])
+def test_ed25519_tampered_field_rejected(field: str, value: str) -> None:
+    f = _fields(make_init_data_ed25519(auth_date=int(NOW)))
+    f[field] = value
+    ed_rejected(urlencode(f), "bad_signature")
+
+
+def test_ed25519_other_bot_or_other_key_rejected() -> None:
+    data = make_init_data_ed25519(auth_date=int(NOW))
+    ed_rejected(data, "bad_signature", bot_id=TEST_BOT_ID + 1)
+    from miniapp.telegram_auth import TELEGRAM_PUBLIC_KEYS
+    ed_rejected(data, "bad_signature", key=TELEGRAM_PUBLIC_KEYS["production"])
+
+
+def test_ed25519_missing_signature_rejected() -> None:
+    f = {k: v for k, v in _fields(make_init_data_ed25519(auth_date=int(NOW))).items() if k != "signature"}
+    ed_rejected(urlencode(f), "missing_signature")
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda s: s[:-1],                      # too short
+    lambda s: s + "A",                     # too long
+    lambda s: s.replace(s[0], "+", 1),     # standard base64 alphabet, not base64url
+    lambda s: s + "=",                     # odd padding
+    lambda s: s[:-1] + ("B" if s[-1] != "B" else "C"),  # non-canonical trailing bits or another signature
+])
+def test_ed25519_signature_format(mutate) -> None:
+    f = _fields(make_init_data_ed25519(auth_date=int(NOW)))
+    f["signature"] = mutate(f["signature"])
+    with pytest.raises(InitDataError) as e:
+        ed(urlencode(f))
+    assert e.value.code in ("bad_signature_format", "bad_signature")
+
+
+def test_ed25519_padded_signature_accepted() -> None:
+    f = _fields(make_init_data_ed25519(auth_date=int(NOW)))
+    f["signature"] += "=="
+    assert ed(urlencode(f)).user.id == 123456789
+
+
+def test_ed25519_freshness_and_user_rules_still_apply() -> None:
+    ed_rejected(make_init_data_ed25519(auth_date=int(NOW) - 301), "expired")
+    ed_rejected(make_init_data_ed25519({"id": 1, "is_bot": True}, auth_date=int(NOW)), "bad_user")
+
+
+def test_exactly_one_algorithm_is_configured() -> None:
+    data = make_init_data_ed25519(auth_date=int(NOW))
+    with pytest.raises(ValueError):
+        validate_init_data(data, now=NOW, max_age_s=300, future_skew_s=30)
+    with pytest.raises(ValueError):
+        validate_init_data(data, TEST_BOT_TOKEN, now=NOW, max_age_s=300, future_skew_s=30,
+                           ed25519=(TEST_BOT_ID, TEST_ED25519_PUBLIC_HEX))
+
+
+def test_hmac_still_accepts_the_same_launch_and_shadow_reports_it() -> None:
+    data = make_init_data_ed25519(auth_date=int(NOW))
+    assert check(data).user.id == 123456789  # the hash covers the signature field too
+    assert ed25519_shadow_status(data, TEST_BOT_ID, TEST_ED25519_PUBLIC_HEX) == "ok"
+    assert ed25519_shadow_status(make_init_data(auth_date=int(NOW)), TEST_BOT_ID, TEST_ED25519_PUBLIC_HEX) == "missing"
+    assert ed25519_shadow_status(data, TEST_BOT_ID + 1, TEST_ED25519_PUBLIC_HEX) == "bad"
+    assert ed25519_shadow_status("%%%", TEST_BOT_ID, TEST_ED25519_PUBLIC_HEX) == "bad"
+
+
+def test_signer_matches_documented_check_string() -> None:
+    from miniapp.telegram_auth import ed25519_check_string
+    f = {"auth_date": "1", "query_id": "q", "user": "{}", "hash": "h", "signature": "s"}
+    assert ed25519_check_string(f, 12345678) == "12345678:WebAppData\nauth_date=1\nquery_id=q\nuser={}"
+    assert ed25519_signature(f)  # the test signer accepts the same fields

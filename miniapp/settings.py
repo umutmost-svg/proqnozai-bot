@@ -20,6 +20,9 @@ DEFAULT_COMPETITIONS = "PL,PD,SA,BL1,FL1,CL,ELC,DED,PPL,BSA"
 Environment = Literal["production", "development"]
 SameSite = Literal["lax", "strict", "none"]
 CspMode = Literal["enforce", "report-only"]
+InitDataMode = Literal["hmac", "ed25519"]
+TelegramEnv = Literal["production", "test"]
+TELEGRAM_ENVS = ("production", "test")
 
 _LOOPBACK_HOSTS = {"localhost"}
 
@@ -131,10 +134,40 @@ class Settings:
     # Model calls (cache hits are free): per user per UTC day, and for everyone.
     ai_per_user_daily: int = 10
     ai_daily_budget: int = 200
+    # initData check: "hmac" with the bot token, or "ed25519" with Telegram's public key and the bot's
+    # public id only — then the container holds no bot token at all (docs/miniapp/auth.md).
+    initdata_mode: InitDataMode = "hmac"
+    bot_id: int | None = None  # required for ed25519; in hmac mode it enables the readiness measurement
+    telegram_env: TelegramEnv = "production"
+    # Key material for CSRF tokens; required in ed25519 mode (there is no bot token to derive it from).
+    csrf_secret: str | None = field(default=None, repr=False)
+
+    @property
+    def csrf_key_material(self) -> str:
+        return self.csrf_secret or self.bot_token
 
     def __post_init__(self) -> None:
-        if not self.bot_token or ":" not in self.bot_token:
+        if self.initdata_mode not in ("hmac", "ed25519"):
+            raise SettingsError("initdata_mode must be hmac or ed25519")
+        if self.telegram_env not in TELEGRAM_ENVS:
+            raise SettingsError("telegram_env must be production or test")
+        if self.bot_id is not None and not 0 < self.bot_id < 2**53:
+            raise SettingsError("bot_id must be a positive integer")
+        if self.csrf_secret is not None and (
+            len(self.csrf_secret) < MIN_EDGE_SECRET_CHARS or not self.csrf_secret.isascii()
+            or not self.csrf_secret.isprintable() or " " in self.csrf_secret
+        ):
+            raise SettingsError(f"csrf_secret must be at least {MIN_EDGE_SECRET_CHARS} printable characters")
+        if self.initdata_mode == "ed25519":
+            if self.bot_token:
+                # The point of this mode is a container without the token: one set by mistake is an error.
+                raise SettingsError("ed25519 mode must run without the bot token (unset MINIAPP_BOT_TOKEN)")
+            if self.bot_id is None or self.csrf_secret is None:
+                raise SettingsError("ed25519 mode requires MINIAPP_BOT_ID and MINIAPP_CSRF_SECRET")
+        elif not self.bot_token or ":" not in self.bot_token:
             raise SettingsError("bot token is missing or malformed")
+        elif self.bot_id is not None and self.bot_token.split(":", 1)[0] != str(self.bot_id):
+            raise SettingsError("bot_id does not match the bot token")
         if is_bot_database_path(self.db_path):
             raise SettingsError("the Mini App must not use the bot database (bot.db)")
         if not self.trusted_origins:
@@ -250,6 +283,7 @@ class Settings:
             return (env.get(name) or "").strip() or None
 
         static_dir = optional("MINIAPP_STATIC_DIR")
+        initdata_mode = (optional("MINIAPP_INITDATA_MODE") or "hmac").lower()
         environment = env.get("MINIAPP_ENV", "production").strip() or "production"
         edge_secret = optional("MINIAPP_EDGE_SECRET")
         if environment == "production" and edge_secret is None:
@@ -260,7 +294,7 @@ class Settings:
             normalize_origin(o) for o in required("MINIAPP_TRUSTED_ORIGINS").split(",") if o.strip()
         )
         return cls(
-            bot_token=required("MINIAPP_BOT_TOKEN"),
+            bot_token=required("MINIAPP_BOT_TOKEN") if initdata_mode != "ed25519" else (env.get("MINIAPP_BOT_TOKEN") or "").strip(),
             db_path=Path(required("MINIAPP_DB_PATH")),
             trusted_origins=origins,
             environment=environment,  # type: ignore[arg-type]
@@ -287,4 +321,8 @@ class Settings:
             ai_model=optional("MINIAPP_AI_MODEL") or "claude-opus-5-5",
             ai_per_user_daily=integer("MINIAPP_AI_PER_USER_DAILY", 10),
             ai_daily_budget=integer("MINIAPP_AI_DAILY_BUDGET", 200),
+            initdata_mode=initdata_mode,  # type: ignore[arg-type]
+            bot_id=integer("MINIAPP_BOT_ID", 0) or None,
+            telegram_env=(optional("MINIAPP_TELEGRAM_ENV") or "production").lower(),  # type: ignore[arg-type]
+            csrf_secret=optional("MINIAPP_CSRF_SECRET"),
         )
