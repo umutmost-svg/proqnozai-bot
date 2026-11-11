@@ -219,7 +219,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    затем `git push origin release/miniapp-prod`. Перед этим в Dokploy
    убедиться, что у `bot` и `dashboard` branch = `main` (тогда их Autodeploy не сработает).
 3. **[владелец/сервер] Скрипты на сервер:** `scp deploy/miniapp/{smoke.py,backup.py,backup-job.sh} <server>:/opt/sporbot/`
-   (права 0644, владелец root); сверить `sha256sum` с локальными.
+   (владелец root; `smoke.py`, `backup.py` — 0644, `backup-job.sh` — 0700); сверить `sha256sum` с локальными.
 4. **[владелец] Cloudflare** по разделу 2. *Стоп:* домен не резолвится через Cloudflare.
 5. **[сервер] Dokploy → Create Application** `sporbot-miniapp` по таблице раздела 2 (Autodeploy OFF,
    Replicas 1, stop-first, volume, domain, env). *Стоп:* свободно < 5 ГБ на диске (сборка ~1,5 ГБ с кешем).
