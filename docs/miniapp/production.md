@@ -25,7 +25,7 @@ Menu Button / Main Mini App с URL Mini App. Это меняет только н
 перезапуска и без изменения кода; откат — вернуть прежнюю кнопку.
 
 ### Ed25519 на стенде (до фиксации `<TESTED_CODE_SHA>`)
-1. Стенд: **код кандидата** — дерево приложения HEAD `release/miniapp-prod` (сейчас `724cea5`; на стенде
+1. Стенд: **код кандидата** — дерево приложения HEAD `release/miniapp-prod` (код приложения = `724cea5`; на стенде
    `release-rc2`, проверка: `git diff --stat <код стенда> release/miniapp-prod -- miniapp frontend deploy/miniapp/Dockerfile
    deploy/miniapp/entrypoint.sh` пуст) в режиме `hmac` с `MINIAPP_BOT_ID` тестового бота — вход как раньше, плюс
    замер `auth.ed25519_shadow`. Если код кандидата изменится — стенд обновляется и шаги 2–3 повторяются.
@@ -131,7 +131,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 | `MINIAPP_TELEGRAM_ENV` | `production` | |
 | `MINIAPP_CSRF_SECRET` | случайная строка ≥ 32 символов | да |
 | `MINIAPP_BOT_TOKEN` | **не задавать** в режиме `ed25519` (запуск остановится с ошибкой) | |
-| `MINIAPP_ALLOWED_USER_IDS` | **закрытый запуск:** Telegram id владельца (через запятую — несколько). Вход и любая сессия — только для них, остальным 403 `not_allowed`, их данные не сохраняются. Открытие всем — убрать переменную (Redeploy) | |
+| `MINIAPP_ALLOWED_USER_IDS` | **закрытый запуск:** Telegram id владельца (через запятую — несколько). Вход — только для них (остальным 403 `not_allowed`, их данные не сохраняются); сессия id, убранного из списка, сразу перестаёт действовать (401). Открытие всем — убрать переменную (Redeploy) | |
 | `MINIAPP_DB_PATH` | `/data/miniapp.db` | |
 | `MINIAPP_TRUSTED_ORIGINS` | `https://<MINIAPP_DOMAIN>` | |
 | `MINIAPP_EDGE_SECRET` | случайная строка ≥ 32 символов, та же в Transform Rule | да |

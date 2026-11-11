@@ -24,9 +24,7 @@ DIR="${SPORBOT_DIR:-/opt/sporbot}"
 # Only this job's copies are ever deleted: directories named EXACTLY like a backup stamp
 # (YYYYMMDDTHHMMSSZ or YYYYMMDDTHHMMSSZ-n), older than KEEP_DAYS judged by the UTC time in the name itself
 # (the same rule for every destination, independent of file times).
-now=$(date -u +%s)
-CUTOFF=$(date -u -d "@$((now - KEEP_DAYS * 86400))" +%Y%m%dT%H%M%SZ 2>/dev/null \
-  || date -u -r "$((now - KEEP_DAYS * 86400))" +%Y%m%dT%H%M%SZ)
+CUTOFF=""
 expired() { while read -r n; do
     printf '%s\n' "$n" | grep -Eq '^[0-9]{8}T[0-9]{6}Z(-[0-9]+)?$' || continue
     [ "$(printf '%.16s' "$n")" \< "$CUTOFF" ] && printf '%s\n' "$n"
@@ -34,6 +32,12 @@ expired() { while read -r n; do
 fail() { echo "$(date -u +%FT%TZ) FAIL: $1"; sh -c "$NOTIFY \"\$1\"" _ "backup failed: $1" || true; exit 1; }
 
 case "$OFFSITE_KIND" in rclone|ssh|disk) ;; *) fail "OFFSITE_KIND is not configured" ;; esac
+case "$KEEP_DAYS" in ''|*[!0-9]*) fail "KEEP_DAYS must be a whole number of days" ;; esac
+[ "$KEEP_DAYS" -ge 1 ] || fail "KEEP_DAYS must be at least 1"
+now=$(date -u +%s) || fail "date"
+CUTOFF=$(date -u -d "@$((now - KEEP_DAYS * 86400))" +%Y%m%dT%H%M%SZ 2>/dev/null \
+  || date -u -r "$((now - KEEP_DAYS * 86400))" +%Y%m%dT%H%M%SZ 2>/dev/null) || fail "cutoff date"
+printf '%s\n' "$CUTOFF" | grep -Eq '^[0-9]{8}T[0-9]{6}Z$' || fail "cutoff date"
 case "$OFFSITE" in "<"*|"") fail "OFFSITE is not configured" ;; esac
 
 C=$(docker ps -q -f "name=$SVC" -f health=healthy | head -1) || fail "docker ps"
@@ -61,11 +65,13 @@ case "$OFFSITE_KIND" in
   disk)
     [ -f "$OFFSITE/.sporbot-offsite" ] || fail "external disk not mounted (no $OFFSITE/.sporbot-offsite)"
     cp -a "$local_copy" "$OFFSITE/$stamp" || fail "copy to disk"
-    for n in $(ls -1 "$OFFSITE" | expired); do rm -rf "${OFFSITE:?}/$n" || fail "disk retention"; done ;;
+    names=$(ls -1 "$OFFSITE") || fail "disk list"
+    for n in $(printf '%s\n' "$names" | expired); do rm -rf "${OFFSITE:?}/$n" || fail "disk retention"; done ;;
 esac
 
 # Retention here and inside the volume (the app user owns those copies).
-for n in $(ls -1 "$DIR/backups" | expired); do rm -rf "$DIR/backups/$n" || fail "host retention"; done
+names=$(ls -1 "$DIR/backups") || fail "host list"
+for n in $(printf '%s\n' "$names" | expired); do rm -rf "$DIR/backups/$n" || fail "host retention"; done
 names=$(docker exec -u miniapp "$C" ls -1 /data/backups) || fail "volume list"
 for n in $(printf '%s\n' "$names" | expired); do docker exec -u miniapp "$C" rm -rf "/data/backups/$n" || fail "volume retention"; done
 echo "$(date -u +%FT%TZ) OK: $stamp copied ($OFFSITE_KIND)"
