@@ -72,9 +72,12 @@ class TelegramUser:
 class VerifiedInitData:
     user: TelegramUser
     auth_date: int
-    # Unique per signed payload, used to detect reuse after logout: the received `hash` (HMAC
-    # mode, where it is the signature) or SHA-256 of the Ed25519-verified data-check-string.
+    # Unique per signed payload, used to detect reuse after logout. The SAME value in both modes:
+    # SHA-256 of the Ed25519 data-check-string (all verified fields except hash/signature, with the bot
+    # id), so a launch burned under one mode stays burned after switching to the other.
     launch_id: str
+    # HMAC mode only: the received `hash`, the id older releases burned launches under (cutover).
+    legacy_id: str | None = None
 
 
 def _decode(component: str) -> str:
@@ -113,6 +116,10 @@ def ed25519_check_string(fields: dict[str, str], bot_id: int) -> str:
     return f"{bot_id}:WebAppData\n{signed}"
 
 
+def launch_id(fields: dict[str, str], bot_id: int) -> str:
+    return hashlib.sha256(ed25519_check_string(fields, bot_id).encode()).hexdigest()
+
+
 def verify_ed25519(fields: dict[str, str], bot_id: int, public_key_hex: str) -> str:
     """Raises InitDataError unless `signature` is Telegram's Ed25519 signature of these fields for
     this bot; returns the launch id (SHA-256 of the verified data-check-string)."""
@@ -133,7 +140,7 @@ def verify_ed25519(fields: dict[str, str], bot_id: int, public_key_hex: str) -> 
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key_hex)).verify(signature, check_string)
     except InvalidSignature:
         raise InitDataError("bad_signature") from None
-    return hashlib.sha256(check_string).hexdigest()
+    return launch_id(fields, bot_id)
 
 
 def ed25519_shadow_status(init_data: str, bot_id: int, public_key_hex: str) -> str:
@@ -211,15 +218,17 @@ def validate_init_data(
         raise InitDataError("too_large")
 
     fields = parse_fields(init_data)
+    legacy = None
     if ed25519 is not None:
-        launch_id = verify_ed25519(fields, *ed25519)
+        launch = verify_ed25519(fields, *ed25519)
     else:
         received = fields.get("hash")
         if received is None or not _HASH_RE.match(received):
             raise InitDataError("bad_hash_format")
         if not hmac.compare_digest(compute_hash(fields, bot_token), received):  # type: ignore[arg-type]
             raise InitDataError("bad_signature")
-        launch_id = received
+        # Every field is covered by the HMAC here; the bot id is the token's numeric prefix.
+        launch, legacy = launch_id(fields, int(bot_token.split(":", 1)[0])), received  # type: ignore[union-attr]
 
     # Everything below is signed by Telegram; checks are about freshness and shape.
     raw_date = fields.get("auth_date")
@@ -233,4 +242,5 @@ def validate_init_data(
     if now - auth_date > max_age_s:
         raise InitDataError("expired")
 
-    return VerifiedInitData(user=_parse_user(fields.get("user")), auth_date=auth_date, launch_id=launch_id)
+    return VerifiedInitData(user=_parse_user(fields.get("user")), auth_date=auth_date, launch_id=launch,
+                            legacy_id=legacy)

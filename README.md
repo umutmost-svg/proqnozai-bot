@@ -109,7 +109,8 @@ Mini App (`miniapp/`, `frontend/`) читает только свои перем
 и никогда — `.env` бота. Полный список с значениями по умолчанию —
 `docs/miniapp/auth.md` («Настройки»), плейсхолдеры — `miniapp/.env.example`,
 переменные закрытого HTTPS-стенда — `docs/miniapp/stand.md`:
-`MINIAPP_BOT_TOKEN`, `MINIAPP_DB_PATH`, `MINIAPP_TRUSTED_ORIGINS`,
+`MINIAPP_INITDATA_MODE`, `MINIAPP_BOT_TOKEN`, `MINIAPP_BOT_ID`, `MINIAPP_TELEGRAM_ENV`,
+`MINIAPP_CSRF_SECRET`, `MINIAPP_DB_PATH`, `MINIAPP_TRUSTED_ORIGINS`,
 `MINIAPP_ENV`, `MINIAPP_EDGE_SECRET`, `MINIAPP_CSP_MODE`,
 `MINIAPP_LOGINS_ENABLED`, `MINIAPP_MAX_SESSIONS_PER_USER`,
 `MINIAPP_STATIC_DIR`, `MINIAPP_SESSION_TTL_S`, `MINIAPP_INIT_DATA_MAX_AGE_S`,

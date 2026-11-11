@@ -93,3 +93,19 @@ def test_hmac_mode_measures_ed25519_readiness_and_checks_the_bot_id(tmp_path, ca
         assert login(client, make_init_data_ed25519(auth_date=int(NOW))).status_code == 200
     assert "auth.ed25519_shadow result=ok" in caplog.text
     assert "signature=" not in caplog.text and "user=" not in caplog.text.split("auth.ed25519_shadow")[1][:40]
+
+
+@pytest.mark.parametrize("first", ["hmac", "ed25519"])
+def test_a_burned_launch_stays_burned_across_a_mode_switch(tmp_path, first) -> None:
+    clock = FakeClock()
+    hmac_settings = Settings(bot_token=TEST_BOT_TOKEN, db_path=tmp_path / "m.db", trusted_origins=frozenset({ORIGIN}),
+                             environment="development", session_ttl_s=3600, bot_id=TEST_BOT_ID, csrf_secret=CSRF_SECRET)
+    apps = {"hmac": hmac_settings, "ed25519": ed_settings(tmp_path)}
+    second = "ed25519" if first == "hmac" else "hmac"
+    launch = make_init_data_ed25519({"id": 5, "first_name": "Ann"}, auth_date=int(NOW))
+    a = TestClient(create_app(apps[first], clock=clock), base_url="http://127.0.0.1:8000")
+    r = login(a, launch)
+    a.post("/api/auth/logout", headers={"Origin": ORIGIN, "X-CSRF-Token": r.json()["session"]["csrf_token"]})
+    clock.advance(5)
+    b = TestClient(create_app(apps[second], clock=clock), base_url="http://127.0.0.1:8000")  # same database
+    assert login(b, launch).json() == {"error": "init_data_reused"}

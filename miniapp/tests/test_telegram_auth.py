@@ -43,7 +43,7 @@ def test_reference_vector_from_openssl(plus_for_space: bool) -> None:
     assert result.user.id == 123456789
     assert result.user.first_name == "Ülkər + Co"  # Unicode, literal plus and space survive decoding
     assert result.user.language_code == "az"
-    assert result.launch_id == REFERENCE_HASH
+    assert result.legacy_id == REFERENCE_HASH
 
 
 def test_test_signer_agrees_with_reference() -> None:
@@ -317,3 +317,10 @@ def test_signer_matches_documented_check_string() -> None:
     f = {"auth_date": "1", "query_id": "q", "user": "{}", "hash": "h", "signature": "s"}
     assert ed25519_check_string(f, 12345678) == "12345678:WebAppData\nauth_date=1\nquery_id=q\nuser={}"
     assert ed25519_signature(f)  # the test signer accepts the same fields
+
+
+def test_launch_id_is_the_same_in_both_modes() -> None:
+    data = make_init_data_ed25519(auth_date=int(NOW))
+    hmac_result, ed_result = check(data), ed(data)
+    assert hmac_result.launch_id == ed_result.launch_id and ed_result.legacy_id is None
+    assert hmac_result.legacy_id == _fields(data)["hash"]

@@ -365,7 +365,8 @@ def create_app(
         ts = now()
         # Burned data is rejected before the limit, so replaying it cannot spend the
         # user's budget. Not the final word: create_session re-checks atomically.
-        if await run_in_threadpool(store.is_init_data_consumed, verified.launch_id, ts):
+        burned = [i for i in (verified.launch_id, verified.legacy_id) if i is not None]
+        if any([await run_in_threadpool(store.is_init_data_consumed, i, ts) for i in burned]):
             logger.info("auth.rejected reason=reused_after_logout")
             raise ApiError(401, "init_data_reused")
         retry_after = limiter.hit(f"user:{verified.user.id}")
@@ -438,8 +439,9 @@ def create_app(
         await run_in_threadpool(store.set_language, session.user_id, body["lang"])
         return JSONResponse({"lang": body["lang"]})
 
-    def launch_hash_to_burn(raw: str, user_id: int | None) -> str | None:
-        """`hash` of the current launch's initData if it could still be exchanged.
+    def launch_ids_to_burn(raw: str, user_id: int | None) -> list[str]:
+        """Ids of the current launch if it could still be exchanged (the launch id, plus the legacy
+        `hash` id in HMAC mode so releases from before the common id keep it burned too).
 
         `user_id`: owner required by the session; None when there is no session.
         """
@@ -448,11 +450,11 @@ def create_app(
         except InitDataError as exc:
             # Invalid or expired data cannot be exchanged anyway: nothing to burn.
             logger.info("auth.logout launch_not_burned reason=%s", exc.code)
-            return None
+            return []
         if user_id is not None and launch.user.id != user_id:
             logger.info("auth.logout launch_not_burned reason=other_user")
-            return None
-        return launch.launch_id
+            return []
+        return [i for i in (launch.launch_id, launch.legacy_id) if i is not None]
 
     async def read_launch(request: Request) -> str | None:
         """Optional logout body {"init_data": ...}: the launch the page runs in now."""
@@ -483,8 +485,7 @@ def create_app(
             # with (reopened Mini App reusing the cookie); it must not sign the
             # user back in after a reload.
             launch = await read_launch(request)
-            launch_hash = launch_hash_to_burn(launch, session.user_id) if launch is not None else None
-            also_consume = [launch_hash] if launch_hash is not None else []
+            also_consume = launch_ids_to_burn(launch, session.user_id) if launch is not None else []
             await run_in_threadpool(store.revoke_session, token, ts, burn_until, also_consume)
             logger.info("auth.logout user=%s launch_burned=%s", session.user_id, bool(also_consume))
         else:
@@ -494,9 +495,10 @@ def create_app(
             # itself (whoever holds it could sign in with it), and only ends that
             # one launch. Origin is still required.
             launch = await read_launch(request)
-            launch_hash = launch_hash_to_burn(launch, None) if launch is not None else None
-            if launch_hash is not None:
-                await run_in_threadpool(store.consume_init_data, launch_hash, ts, burn_until)
+            ids = launch_ids_to_burn(launch, None) if launch is not None else []
+            if ids:
+                for launch_id in ids:
+                    await run_in_threadpool(store.consume_init_data, launch_id, ts, burn_until)
                 logger.info("auth.logout without_session launch_burned=True")
         response = JSONResponse({"ok": True})
         clear_session_cookie(response)
@@ -513,11 +515,11 @@ def create_app(
         if not csrf.verify(token, request.headers.get(CSRF_HEADER)):
             raise ApiError(403, "csrf_failed")
         launch = await read_launch(request)
-        launch_hash = launch_hash_to_burn(launch, session.user_id) if launch is not None else None
+        launch_ids = launch_ids_to_burn(launch, session.user_id) if launch is not None else []
         ts = now()
         revoked = await run_in_threadpool(
             store.revoke_user_sessions, session.user_id, ts, burn_window(ts),
-            [launch_hash] if launch_hash is not None else [],
+            launch_ids,
         )
         logger.info("auth.logout_all user=%s revoked=%s", session.user_id, revoked)
         response = JSONResponse({"ok": True, "revoked": revoked})

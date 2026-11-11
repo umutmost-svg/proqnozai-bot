@@ -74,7 +74,11 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 | Переменная | Значение | Новый секрет? |
 |---|---|---|
 | `MINIAPP_ENV` | `production` | |
-| `MINIAPP_BOT_TOKEN` | токен **production-бота** (тот, из которого открывается Mini App; нужен для проверки подписи initData) | значение уже есть у бота; в новое приложение — **[владелец]**. Токен оказывается во втором, публичном контейнере: при компрометации — ротация в BotFather (`/revoke`), затем новое значение в оба приложения Dokploy (бот перезапустится — это плановый короткий простой) |
+| `MINIAPP_INITDATA_MODE` | **`ed25519`** — проверка initData публичным ключом Telegram, токена бота в контейнере нет (условие: замер на стенде дал `ok` на всех клиентах; иначе `hmac` + `MINIAPP_BOT_TOKEN` production-бота) | |
+| `MINIAPP_BOT_ID` | публичный числовой id production-бота (часть токена до `:`; не секрет) | |
+| `MINIAPP_TELEGRAM_ENV` | `production` | |
+| `MINIAPP_CSRF_SECRET` | случайная строка ≥ 32 символов | да |
+| `MINIAPP_BOT_TOKEN` | **не задавать** в режиме `ed25519` (запуск остановится с ошибкой) | |
 | `MINIAPP_DB_PATH` | `/data/miniapp.db` | |
 | `MINIAPP_TRUSTED_ORIGINS` | `https://<MINIAPP_DOMAIN>` | |
 | `MINIAPP_EDGE_SECRET` | случайная строка ≥ 32 символов, та же в Transform Rule | да |
@@ -178,11 +182,12 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    curl -s -o /dev/null -w '%{http_code}\n' https://$D/                             # 200 через Cloudflare
    curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Edge-Auth: forged' https://$D/   # 200: Cloudflare перезаписал заголовок
    curl -sk -o /dev/null -w '%{http_code}\n' --resolve $D:443:$IP https://$D/       # 403: обход Cloudflare закрыт (-k: у Origin Certificate нет публичной цепочки; проверяется заголовок, не TLS)
-   docker exec -i -u miniapp -e SMOKE_USER_ID=<Telegram id владельца> $C python - < /opt/sporbot/smoke.py   # RESULT PASS
+   docker exec -i -u miniapp $C python - < /opt/sporbot/smoke.py   # RESULT PASS (ed25519: неподписанный вход отклонён, токена нет, данные идут)
    docker exec -i -u miniapp $C python - < /opt/sporbot/backup.py                   # первый бэкап, integrity=ok
    ```
-   Smoke входит под аккаунтом владельца (его строка `users` создаётся/обновляется) и завершает только свою
-   сессию. *Стоп:* любой FAIL.
+   В режиме `ed25519` smoke не может войти сам (подписать вход может только Telegram): положительная
+   проверка входа — шаг 9. В режиме `hmac` нужен `-e SMOKE_USER_ID=<id владельца>`: smoke входит под
+   аккаунтом владельца и завершает только свою сессию. *Стоп:* любой FAIL.
 8. **[сервер] Ежедневные бэкапы** (cron root на хосте, 03:17):
    `C=$(docker ps -q -f name=sporbot-miniapp) && docker exec -i -u miniapp $C python - < /opt/sporbot/backup.py`
    плюс копия последней папки с сервера (`docker cp $C:/data/backups/<stamp> …` → внешний диск/S3) и удаление
@@ -199,6 +204,11 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    ```
    (бот не перезапускается). iOS/Android/Desktop/Web: вход, главная, поиск турнира, календарь, матч,
    AI-разбор (1 платный), эмблемы; в Telegram Web — закрыть и открыть Mini App снова, сессия сохраняется.
+   **Обязательная положительная проверка входа:** в логах Mini App на каждый клиент `auth.session ...
+   created=True` и ни одного `auth.rejected reason=bad_signature|missing_signature|bad_signature_format`
+   (`docker service logs sporbot-miniapp --since 30m | grep -E 'auth\.(session|rejected)'`). *Стоп:* любой
+   такой отказ — неверный `MINIAPP_BOT_ID`/`MINIAPP_TELEGRAM_ENV` или клиент без подписи → выключить кнопку
+   владельца, разобрать; запасной вариант — `hmac` с токеном.
 10. **[владелец] Открыть пользователям:** BotFather → production-бот → Menu Button / Main Mini App =
     `https://<MINIAPP_DOMAIN>`. Бот не перезапускается.
 11. **Наблюдение 24 ч** (раздел 8).

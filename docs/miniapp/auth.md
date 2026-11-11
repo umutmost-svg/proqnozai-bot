@@ -4,12 +4,12 @@ Backend Mini App — отдельный Python-пакет `miniapp/` (FastAPI) �
 SQLite-базой, своим окружением (`miniapp/.venv`) и своими зависимостями
 (`miniapp/requirements*.txt`). Он не импортирует модули бота (`config`, `db`,
 `handlers`), не запускает бота и не читает `.env`. С ботом его связывает
-только токен бота, нужный для проверки `initData`.
+только токен бота, нужный для проверки `initData` (или — в режиме Ed25519 — только публичный id бота).
 
 ```
 miniapp/
   settings.py       # конфигурация из MINIAPP_* (явно, не при импорте)
-  telegram_auth.py  # проверка initData (HMAC-SHA256)
+  telegram_auth.py  # проверка initData (HMAC-SHA256 или Ed25519)
   store.py          # SQLite: users, sessions, consumed_init_data
   security.py       # Origin, CSRF, лимит входов
   app.py            # create_app(settings, clock=..., store=...)
@@ -54,10 +54,26 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
   берутся URL-декодированными и **как получены**: JSON `user` не
   пересериализуется (это проверяет тест `test_user_json_is_not_reserialized`).
 - `hash` сравнивается через `hmac.compare_digest`.
-- **`signature`.** Это поле — Ed25519-подпись для проверки третьими
-  сторонами, отдельный алгоритм с публичным ключом Telegram. Мы его не
-  проверяем и в HMAC-проверке не обрабатываем особо. Как и любое другое
-  полученное поле, оно входит в data-check-string; исключается только `hash`.
+- **`signature`.** В режиме HMAC это обычное полученное поле: оно входит в
+  data-check-string; исключается только `hash`.
+
+### Режим Ed25519 (`MINIAPP_INITDATA_MODE=ed25519`): без токена бота
+
+Источник: https://core.telegram.org/bots/webapps#validating-data-for-third-party-use
+
+- Проверяется `signature` (base64url, ровно 64 байта, одна каноническая запись) публичным ключом Telegram
+  (`MINIAPP_TELEGRAM_ENV`: production / test) над строкой
+  `"<MINIAPP_BOT_ID>:WebAppData\n"` + все поля, кроме `hash` и `signature`, как в HMAC.
+- В контейнере нет токена бота: `MINIAPP_BOT_TOKEN` в этом режиме запрещён (ошибка запуска), ключ CSRF
+  берётся из `MINIAPP_CSRF_SECRET`.
+- `hash` этой подписью не покрыт, поэтому ни на что не влияет. **Идентификатор запуска** (сжигание при
+  выходе) в обоих режимах один — SHA-256 подписанной строки; в HMAC-режиме дополнительно учитывается
+  прежний идентификатор (`hash`), чтобы запуски, сожжённые релизами до общего идентификатора, оставались
+  сожжёнными. Переключать режим — не раньше чем через `MINIAPP_INIT_DATA_MAX_AGE_S` + `_FUTURE_SKEW_S`
+  после выкладки релиза с общим идентификатором.
+- **Готовность клиентов.** В HMAC-режиме с заданным `MINIAPP_BOT_ID` каждый успешный вход дополнительно
+  проверяется по Ed25519, в лог пишется только `auth.ed25519_shadow result=ok|missing|bad` (ни данных, ни
+  подписи). Переход на Ed25519 — когда реальные клиенты (iOS, Android, Desktop, macOS, Web K/A) дают `ok`.
   Тесты: эталонный вектор с `signature` и вектор, где `signature` удалён после
   подписи — подпись тогда не сходится.
 
@@ -99,7 +115,11 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 
 | Переменная | По умолчанию | Смысл |
 |---|---|---|
-| `MINIAPP_BOT_TOKEN` | — (обязательна) | токен бота для HMAC |
+| `MINIAPP_INITDATA_MODE` | `hmac` | `hmac` (токен бота) или `ed25519` (публичный ключ Telegram, без токена) |
+| `MINIAPP_BOT_TOKEN` | — (обязательна в `hmac`, **запрещена** в `ed25519`) | токен бота для HMAC |
+| `MINIAPP_BOT_ID` | — (обязательна в `ed25519`) | публичный числовой id бота (префикс токена); в `hmac` включает замер `auth.ed25519_shadow` и должен совпадать с токеном |
+| `MINIAPP_TELEGRAM_ENV` | `production` | `test` — тестовая среда Telegram (другой публичный ключ) |
+| `MINIAPP_CSRF_SECRET` | — (обязательна в `ed25519`) | материал ключа CSRF, ≥ 32 печатных ASCII; без него — из токена бота |
 | `MINIAPP_DB_PATH` | — (обязательна) | файл SQLite Mini App; `bot.db*` запрещён (см. «База данных») |
 | `MINIAPP_TRUSTED_ORIGINS` | — (обязательна) | точные `scheme://host[:port]` через запятую; `*`, `null` и пути запрещены |
 | `MINIAPP_ENV` | `production` | `development` разрешён только с loopback-origin по http |
