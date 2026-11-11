@@ -94,3 +94,44 @@ def test_ai_unavailability_is_logged_with_its_code_only(tmp_path, caplog) -> Non
                       headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}).status_code == 503
     assert "ai.unavailable path=read reason=timeout" in caplog.text
     assert "ai.unavailable path=create reason=timeout" in caplog.text
+
+
+def blocked_client(tmp_path, blocked, clock) -> TestClient:
+    s = Settings(bot_token="", db_path=tmp_path / "m.db", trusted_origins=frozenset({ORIGIN}), environment="development",
+                 session_ttl_s=3600, initdata_mode="ed25519", bot_id=TEST_BOT_ID, csrf_secret="c" * 40,
+                 blocked_user_ids=blocked)
+    return TestClient(create_app(s, clock=clock), base_url="http://127.0.0.1:8000")
+
+
+def test_a_blocked_user_never_signs_in_and_nothing_is_stored(tmp_path, caplog) -> None:
+    c = blocked_client(tmp_path, frozenset({OTHER}), FakeClock())
+    with caplog.at_level("INFO", logger="miniapp"):
+        r = login(c, make_init_data_ed25519({"id": OTHER, "first_name": "X"}, auth_date=int(NOW)))
+    assert r.status_code == 403 and r.json() == {"error": "not_allowed"}
+    assert "auth.rejected reason=blocked" in caplog.text
+    assert login(c, make_init_data_ed25519({"id": OWNER, "first_name": "O"}, auth_date=int(NOW))).status_code == 200
+    ids = [row[0] for row in sqlite3.connect(tmp_path / "m.db").execute("SELECT telegram_user_id FROM users")]
+    assert ids == [OWNER]
+
+
+def test_blocking_ends_an_existing_session_at_once(tmp_path) -> None:
+    clock = FakeClock()
+    first = blocked_client(tmp_path, frozenset(), clock)
+    assert login(first, make_init_data_ed25519({"id": OTHER, "first_name": "X"}, auth_date=int(NOW))).status_code == 200
+    cookies = dict(first.cookies)
+    second = blocked_client(tmp_path, frozenset({OTHER}), clock)  # redeployed with the user blocked
+    for k, v in cookies.items():
+        second.cookies.set(k, v)
+    assert second.get("/api/me").status_code == 401
+
+
+@pytest.mark.parametrize("raw,ok", [("777", True), ("777,8", True), ("", True), ("x", False), ("0", False)])
+def test_blocked_ids_from_env(tmp_path, raw, ok) -> None:
+    env = {"MINIAPP_INITDATA_MODE": "ed25519", "MINIAPP_BOT_ID": str(TEST_BOT_ID), "MINIAPP_CSRF_SECRET": "c" * 40,
+           "MINIAPP_DB_PATH": str(tmp_path / "m.db"), "MINIAPP_TRUSTED_ORIGINS": ORIGIN, "MINIAPP_ENV": "development",
+           "MINIAPP_BLOCKED_USER_IDS": raw}
+    if not ok:
+        with pytest.raises(SettingsError):
+            Settings.from_env(env)
+        return
+    assert Settings.from_env(env).blocked_user_ids == frozenset(int(x) for x in raw.split(",") if x)

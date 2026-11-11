@@ -61,7 +61,11 @@ def users(path: Path) -> dict[int, tuple]:
 def test_dry_run_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     b, app = bot_db(tmp_path / "bot.db", ROWS), tmp_path / "miniapp.db"
     assert run(monkeypatch, str(b), str(app)) == 0
-    assert users(app) == {}
+    assert not app.exists()                                  # no file, no schema, no WAL: truly read-only
+    Store(app).init_schema()
+    mtime = app.stat().st_mtime_ns
+    assert run(monkeypatch, str(b), str(app)) == 0
+    assert users(app) == {} and app.stat().st_mtime_ns == mtime
     out = capsys.readouterr().out
     assert "eligible 4" in out and "blocked (not migrated) 1" in out and "bad id 1" in out and "DRY RUN" in out
 
@@ -118,3 +122,33 @@ def test_blocked_ids_file_and_refusals(tmp_path: Path, monkeypatch: pytest.Monke
     assert run(monkeypatch, str(b), str(b)) == 2                       # same file
     with pytest.raises(Exception):                                     # a bot.db is never a Mini App database
         run(monkeypatch, str(b), str(bot_db(tmp_path / "other-bot.db", ROWS)), "--apply")
+
+
+def test_bot_writes_after_the_copy_arrive_with_the_next_delta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    b, app = bot_db(tmp_path / "bot.db", ROWS[:1]), tmp_path / "miniapp.db"
+    assert run(monkeypatch, str(b), str(app), "--apply") == 0
+    c = sqlite3.connect(b)  # the bot keeps running: a new user and a language change after the copy
+    c.execute("INSERT INTO users (user_id, username, display_name, lang, is_registered, joined_at) "
+              "VALUES (106, 'late', 'Late', 'tr', 1, '2026-11-14 12:00:00')")
+    c.execute("UPDATE users SET lang='ru' WHERE user_id=101")
+    c.commit()
+    c.close()
+    assert run(monkeypatch, str(b), str(app), "--apply") == 0
+    got = users(app)
+    assert got[106][2:4] == ("tr", "user")          # new bot user arrives with the delta
+    assert got[101][2] == "az"                      # policy: an existing Mini App row is never changed
+
+
+def test_concurrent_mini_app_logins_do_not_fail_the_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    b, app = bot_db(tmp_path / "bot.db", ROWS), tmp_path / "miniapp.db"
+    store = Store(app)
+    store.init_schema()
+    real = mig.plan
+
+    def plan_then_login(*args):  # a brand-new Mini App user signs in while the migration runs
+        out = real(*args)
+        store.upsert_user(TelegramUser(id=999, first_name="New", last_name=None, username=None, language_code="en"), 1_800_000_000)
+        return out
+    monkeypatch.setattr(mig, "plan", plan_then_login)
+    assert run(monkeypatch, str(b), str(app), "--apply") == 0
+    assert set(users(app)) == {101, 102, 103, 105, 999}

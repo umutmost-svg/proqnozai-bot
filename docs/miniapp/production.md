@@ -211,6 +211,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 | `MINIAPP_CSRF_SECRET` | случайная строка ≥ 32 символов | да |
 | `MINIAPP_BOT_TOKEN` | **не задавать** в режиме `ed25519` (запуск остановится с ошибкой) | |
 | `MINIAPP_ALLOWED_USER_IDS` | **закрытый запуск:** Telegram id владельца (через запятую — несколько). Вход — только для них (остальным 403 `not_allowed`, их данные не сохраняются); сессия id, убранного из списка, сразу перестаёт действовать (401). Открытие всем — убрать переменную (Redeploy) | |
+| `MINIAPP_BLOCKED_USER_IDS` | id, заблокированные в боте (из `migrate_users.py --blocked-out`, `docs/miniapp/migration.md`); им вход 403, их сессии сразу перестают действовать. Пусто — никто | |
 | `MINIAPP_DB_PATH` | `/data/miniapp.db` | |
 | `MINIAPP_TRUSTED_ORIGINS` | `https://<MINIAPP_DOMAIN>` | |
 | `MINIAPP_EDGE_SECRET` | случайная строка ≥ 32 символов, та же в Transform Rule | да |

@@ -39,6 +39,8 @@ UID_BASE = 7_700_000_000  # synthetic ids, local throw-away database only
 lat: dict[str, list[float]] = collections.defaultdict(list)
 codes: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
 errors: collections.Counter = collections.Counter()
+reasons: collections.Counter = collections.Counter()
+first_login_failed = asyncio.Event()
 
 
 def init_data(token: str, uid: int) -> str:
@@ -70,6 +72,11 @@ class User:
             return None
         lat[name].append(time.monotonic() - t0)
         codes[name][r.status_code] += 1
+        if r.status_code >= 400:
+            try:
+                reasons[f"{name} {r.status_code} {r.json().get('error')}/{r.json().get('reason')}"] += 1
+            except ValueError:
+                reasons[f"{name} {r.status_code}"] += 1
         for line in r.headers.get_list("set-cookie"):
             k, _, rest = line.partition("=")
             self.cookies[k.strip()] = rest.split(";", 1)[0]
@@ -109,8 +116,9 @@ class User:
             elif action == "event" and self.events:
                 await self.call("event", "GET", "/api/sports/event/" + urllib.parse.quote(random.choice(self.events), safe=""))
             elif action == "quick":
-                q = {"mode": random.choice(("single", "coupon")), "from": rng["from"],
-                     "to": (day + timedelta(days=3)).isoformat().replace("+00:00", "Z"), "market": "any", "risk": "balanced"}
+                t0 = datetime.now(UTC)  # the backend accepts a period starting now (as the app sends it)
+                q = {"mode": random.choice(("single", "coupon")), "from": t0.isoformat().replace("+00:00", "Z"),
+                     "to": (t0 + timedelta(days=3)).isoformat().replace("+00:00", "Z"), "market": "any", "risk": "balanced"}
                 if q["mode"] == "coupon":
                     q["size"] = "3"
                 await self.call("quick", "GET", "/api/quick/pick?" + urllib.parse.urlencode(q))
@@ -119,12 +127,17 @@ class User:
             elif action == "search":
                 await self.call("search", "GET", "/api/sports/football/search?q=" + random.choice(SEARCHES))
             elif action == "week":
-                wk = {"from": rng["from"], "to": (day + timedelta(days=7)).isoformat().replace("+00:00", "Z")}
+                wk = {"from": rng["from"], "to": (day + timedelta(days=2)).isoformat().replace("+00:00", "Z")}  # 48 h max
                 await self.call("week", "GET", "/api/sports/football/events?" + urllib.parse.urlencode(wk))
 
     async def run(self, deadline: float) -> None:
+        if first_login_failed.is_set():
+            return
         if not await self.login():
             errors["login_failed"] += 1
+            if self.uid == UID_BASE:  # the target does not accept test-signed launches: not our container
+                first_login_failed.set()
+                print("STOP: the first test login failed — is this really the local test container?")
             return
         while time.monotonic() < deadline:
             await self.visit()
@@ -160,7 +173,7 @@ async def main() -> int:
     limits = httpx.Limits(max_connections=a.users + 10, max_keepalive_connections=a.users + 10)
     started = time.monotonic()
     deadline = started + a.duration
-    async with httpx.AsyncClient(limits=limits) as client:
+    async with httpx.AsyncClient(limits=limits, trust_env=False) as client:  # no proxy: loopback means loopback
         async def delayed(i: int) -> None:
             await asyncio.sleep(a.ramp * i / max(1, a.users))
             await User(client, a, UID_BASE + i).run(deadline)
@@ -180,6 +193,9 @@ async def main() -> int:
         print(f"{name:12} {row['n']:>6} {row['p50']:>7} {row['p95']:>7} {row['p99']:>7} {row['max']:>7}  {row['statuses']}")
         if any(s >= 500 for s in codes[name]) or (name not in ("quick",) and row["p95"] > a.p95_limit):
             ok = False
+    for k, v in reasons.most_common(15):
+        print(f"  {v:>6}  {k}")
+    summary["reasons"] = dict(reasons)
     if a.json:
         with open(a.json, "w") as f:
             json.dump(summary, f, indent=1)

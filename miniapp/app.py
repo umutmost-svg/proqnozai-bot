@@ -308,6 +308,8 @@ def create_app(
             return None
         if settings.allowed_user_ids is not None and found[1].user_id not in settings.allowed_user_ids:
             return None  # closed launch: a session of someone taken off the list stops working at once
+        if found[1].user_id in settings.blocked_user_ids:
+            return None  # blocked: an existing session stops working at once
         return found
 
     def session_payload(user: User, token: str, session: Session) -> dict[str, Any]:
@@ -374,6 +376,10 @@ def create_app(
         if settings.allowed_user_ids is not None and verified.user.id not in settings.allowed_user_ids:
             # Closed launch: nothing about this user is stored (no user row, no session).
             logger.info("auth.rejected reason=not_allowed")
+            raise ApiError(403, "not_allowed")
+        if verified.user.id in settings.blocked_user_ids:
+            # Same answer as the closed list; nothing about this user is stored.
+            logger.info("auth.rejected reason=blocked")
             raise ApiError(403, "not_allowed")
         retry_after = limiter.hit(f"user:{verified.user.id}")
         if retry_after is not None:

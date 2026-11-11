@@ -1,10 +1,12 @@
 """Idempotent migration of bot users into the Mini App user table.
 
 Runs INSIDE the Mini App container (it uses the app's own schema and language list), reading a COPY of
-bot.db that was put on the Mini App volume:
+bot.db put on the Mini App volume. The script is streamed in on stdin (it is not part of the image):
 
-    docker exec -i -u miniapp <ctr> python - /data/migration/bot-copy.db /data/miniapp.db          # dry run
-    docker exec -i -u miniapp <ctr> python - /data/migration/bot-copy.db /data/miniapp.db --apply  # write
+    docker exec -i -u miniapp <ctr> python - /data/migration/bot-copy.db /data/miniapp.db \
+      < /opt/sporbot/migrate_users.py                                       # dry run: reads only
+    docker exec -i -u miniapp <ctr> python - /data/migration/bot-copy.db /data/miniapp.db --apply \
+      < /opt/sporbot/migrate_users.py                                       # write
 
 What moves (docs/miniapp/migration.md, mapping table):
   users.user_id      -> users.telegram_user_id   (identity; positive ids only)
@@ -17,7 +19,9 @@ What moves (docs/miniapp/migration.md, mapping table):
 Never moves: chats, text forecasts, subscriptions, promo/partner data (archived with the bot backup).
 
 Re-runnable without duplicates: INSERT ... ON CONFLICT DO NOTHING keyed by the Telegram id, in one
-transaction. A user who already signed in to the Mini App keeps the Mini App row untouched (it is fresher).
+transaction. Policy: a row that already exists in the Mini App is never changed — whoever signed in to the
+Mini App before the delta keeps the Mini App's data, including the language (a language chosen in the bot
+after that first Mini App login is not carried over; the user changes it in the Mini App profile).
 Run it again on a later copy to bring over users who joined the bot since (the final delta at cutover).
 Blocked bot users (is_blocked=1) are NOT migrated and are listed by COUNT only; their ids go to
 --blocked-out (a file, 0600) for MINIAPP_BLOCKED_USER_IDS if the owner keeps them blocked.
@@ -87,9 +91,18 @@ def main() -> int:
         return 2
     rows, blocked, stats = plan(bot, now)
     bot.close()
-    Store(app_path).init_schema()  # refuses a file that is not a Mini App database
-    conn = sqlite3.connect(app_path, timeout=30, isolation_level=None)
-    conn.execute("PRAGMA busy_timeout=30000")
+    if a.apply:
+        Store(app_path).init_schema()  # refuses a file that is not a Mini App database
+        conn = sqlite3.connect(app_path, timeout=30, isolation_level=None)
+        conn.execute("PRAGMA busy_timeout=30000")
+    elif app_path.exists():  # dry run: strictly read-only (no schema, no WAL switch)
+        conn = sqlite3.connect(f"file:{app_path}?mode=ro", uri=True, timeout=30)
+        if not {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} >= {"users", "sessions"}:
+            print("STOP: the target is not a Mini App database")
+            return 2
+    else:
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE users (telegram_user_id INTEGER PRIMARY KEY)")
     before = conn.execute("SELECT count(*) FROM users").fetchone()[0]
     present = {r[0] for r in conn.execute("SELECT telegram_user_id FROM users")}
     new = [r for r in rows if r[0] not in present]
@@ -119,8 +132,10 @@ def main() -> int:
     ids = {r[0] for r in conn.execute("SELECT telegram_user_id FROM users")}
     conn.close()
     missing = [r[0] for r in rows if r[0] not in ids]
-    print(f"mini app users after {after} (+{after - before}) | eligible bot users missing {len(missing)}")
-    ok = not missing and after - before == len(new)
+    # The row count may also grow by Mini App logins during the run: reported, never a failure.
+    print(f"mini app users after {after} (+{after - before}; inserted by this run {len(new)}, "
+          f"other new rows meanwhile {max(0, after - before - len(new))}) | eligible bot users missing {len(missing)}")
+    ok = not missing
     print("RESULT", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
