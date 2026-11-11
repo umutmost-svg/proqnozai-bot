@@ -86,7 +86,8 @@ def category(home: int | None, away: int | None, teams: int) -> str:
 async def select(svc, day: date, today_max: int = PER_LEAGUE) -> list[dict]:
     done = load("ledger.json", [])
     # Distinct matches already taken (a retried match counts once against its league's five).
-    per_league = {code: len({r["event"] for r in done if r["league"] == code}) for code in LEAGUES}
+    taken = {r["event"] for r in done if r.get("status") in ("ok", "error", "in_flight")}  # skipped ones never count
+    per_league = {code: len({r["event"] for r in done if r["league"] == code and r["event"] in taken}) for code in LEAGUES}
     chosen = []
     for code in LEAGUES:
         room = min(PER_LEAGUE - per_league[code], today_max)  # spread the 5 per league over the three days
@@ -97,7 +98,8 @@ async def select(svc, day: date, today_max: int = PER_LEAGUE) -> list[dict]:
         rows = []
         for e in cal.events:
             kick = parse_instant(e.starts_at)
-            if e.status != "upcoming" or kick.date() != day or kick.timestamp() - LEAD_MIN * 60 < time.time():
+            if (e.status != "upcoming" or kick.date() != day or kick.timestamp() - LEAD_MIN * 60 < time.time()
+                    or e.id in taken):
                 continue
             h, a = table.get(e.home.id), table.get(e.away.id)
             rows.append({"event": e.id, "league": code, "home": e.home.name, "away": e.away.name, "kickoff": e.starts_at,
@@ -237,10 +239,12 @@ def report(history: ForecastHistory) -> bool:
     # Complete only when every delivered match is past kickoff + 3 h and checked: until then the criterion fails.
     settled_ok = len(finished) == len(ok_rows) > 0 and all(settled_right(x) for x in finished)
     criteria = {
-        # 20 different matches attempted and all delivered; at most one of them needed its single retry.
-        "1_twenty_matches_delivered_at_most_one_retry": len(attempted) == MAX_CALLS and len(ok_events) == len(attempted)
-            and not unrecovered
-            and sum(1 for e in attempted if sum(1 for y in ledger if y["event"] == e) > 1) <= 1,  # any repeated row = a retry
+        # Every attempted match delivered; at most one retry; matches + retries within the 20 paid calls, so
+        # 20 matches without a retry or 19 with one.
+        "1_all_attempted_delivered_19_or_20_at_most_one_retry": len(ok_events) == len(attempted)
+            and len(attempted) >= MAX_CALLS - 1 and not unrecovered
+            and (retried := sum(1 for e in attempted if sum(1 for y in ledger if y["event"] == e) > 1)) <= 1
+            and len(attempted) + retried <= MAX_CALLS,
         # At most one timeout in the whole run, and it must have been recovered by the match's retry.
         "2_p95_le_20s_and_at_most_one_recovered_timeout": p95 is not None and p95 <= 20 and
             sum(1 for x in errors if x.get("error") == "timeout") <= 1 and
@@ -257,16 +261,22 @@ def report(history: ForecastHistory) -> bool:
         "note": "20 matches: descriptive only, no statistical conclusions on accuracy",
     }, ensure_ascii=False, indent=1))
     picks = [x for x in ok_rows if ((x["result"].get("pick") or {}).get("market") or "NO_BET") != "NO_BET"]
+    from miniapp.forecast.markets import settle as settle_market  # the app's own 90-minute market rules
+    outcomes = [settle_market(x["result"]["pick"]["market"], rows[x["event"]][1], rows[x["event"]][2])
+                for x in picks if rows.get(x["event"], ("pending",))[0] == "settled"]
     markets: dict = {}
     for x in picks:
         markets[x["result"]["pick"]["market"]] = markets.get(x["result"]["pick"]["market"], 0) + 1
     print(json.dumps({"descriptive_only_not_statistically_meaningful": {
         "withRecommendation": len(picks), "withoutRecommendation": len(ok_rows) - len(picks),
         "markets": markets,
+        "recommendationShare": round(len(picks) / len(ok_rows), 3) if ok_rows else None,
         "meanPredictedProbabilityOfPicks": round(sum((x["result"]["pick"].get("probability") or 0) for x in picks)
                                                   / len(picks), 3) if picks else None,
+        "picksSettled": len(outcomes), "picksWon": outcomes.count("win"), "picksLost": outcomes.count("lose"),
+        "picksPush": outcomes.count("push"),
+        "observedWinFrequency": round(outcomes.count("win") / len(outcomes), 3) if outcomes else None,
         "noBetReasons": sorted({(x["result"].get("forecast") or {}).get("noBetReason") or "-" for x in ok_rows}),
-        "outcomesOfPicks": "see the Result column: whether each pick came true is read from the 90-minute score",
     }}, ensure_ascii=False, indent=1))
     print("| League | Match (table places) | Kickoff UTC | Kind | 1/X/2 | Pick | Reason | Result (90') | Time s | Tokens in/out | $ |")
     print("|---|---|---|---|---|---|---|---|---|---|---|")
