@@ -34,10 +34,13 @@ for g in "$DIR"/*.yml "$DIR"/*.yaml "$DIR"/*.toml; do
   grep -qiE 'dokploy-service-app|dokploy:3000' "$g" && add "$(basename "$g") names Dokploy's backend"
 done
 
+PATH="$PATH:/usr/bin:/usr/local/bin:/bin"   # cron's PATH is minimal
 if command -v docker >/dev/null 2>&1; then
   labels=$(docker service inspect dokploy --format '{{json .Spec.Labels}} {{json .Spec.TaskTemplate.ContainerSpec.Labels}}' 2>/dev/null) \
     || add "cannot inspect the dokploy service"
   printf '%s' "${labels:-}" | grep -qi 'traefik\.' && add "dokploy service has Traefik labels"   # labels are case-insensitive
+else
+  add "docker CLI not found: service labels not checked"   # a skipped check is never a healthy ping
 fi
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H 'Host: dokploy.docker.localhost' "http://$IP/")
