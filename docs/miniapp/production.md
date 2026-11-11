@@ -42,7 +42,18 @@ Dokploy; приложения `bot` и `dashboard` из GitHub `umutmost-svg/pro
 Autodeploy On Push, Preview OFF; Railway удалён. У исполнителя нет доступа к серверу и Dokploy (нет
 SSH-ключа сервера, токена Dokploy), поэтому фактическая картина собирается скриптом:
 
-**[владелец]** на сервере: `sh deploy/miniapp/prod-discovery.sh > discovery.txt` — только чтение,
+**[владелец] Точная инструкция** (скрипт берётся из GitHub по закреплённому коммиту и сверяется по SHA-256 до
+запуска; ничего не устанавливает и не меняет):
+```sh
+ssh root@<сервер>
+cd /root && curl -fsSL -o prod-discovery.sh \
+  https://raw.githubusercontent.com/umutmost-svg/proqnozai-bot/3e790aab6b62a3f5d97f2d2d4028b5036ecb2cf3/deploy/miniapp/prod-discovery.sh
+echo "7205796b0992a619ffdad8e05abfc3582e8753f522dbf1e9c5228fc39a685534  prod-discovery.sh" | sha256sum -c -   # OK, иначе не запускать
+sh prod-discovery.sh > discovery.txt 2>&1
+less discovery.txt   # просмотреть перед отправкой: имена контейнеров, домены, счётчики — без секретов и персональных данных
+rm prod-discovery.sh
+```
+Скрипт `sh deploy/miniapp/prod-discovery.sh` — только чтение,
 без значений переменных и секретов; выводит сервисы, образы, тома, порядок обновления Swarm, хосты
 Traefik, расписания бэкапов и счётчики 429 football-data в логах бота за 7 дней. Результат нужен для
 пунктов 2 (свободное место, имя сети Traefik, существующие тома/хосты) и 4 (реальная нагрузка бота).
@@ -218,6 +229,10 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
      --data-urlencode 'menu_button={"type":"web_app","text":"SporBot","web_app":{"url":"https://<MINIAPP_DOMAIN>"}}'
    rm -f "$CFG"
    ```
+   Проверка (тот же приём с `-K`, методы `getChatMenuButton`): с `chat_id=<id владельца>` — `web_app` с URL Mini
+   App; без `chat_id` (кнопка по умолчанию для всех) — прежнее значение. Кнопка ставится только для чата,
+   который уже открыт с ботом (иначе `Bad Request: user not found` — проверено на тестовом боте). Откат:
+   `setChatMenuButton` с `chat_id=<id владельца>` и `menu_button={"type":"default"}`.
    (бот не перезапускается). iOS/Android/Desktop/Web: вход, главная, поиск турнира, календарь, матч,
    AI-разбор (1 платный), эмблемы; в Telegram Web — закрыть и открыть Mini App снова, сессия сохраняется.
    **Обязательная положительная проверка входа:** в логах Mini App на каждый клиент `auth.session ...
