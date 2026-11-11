@@ -5,7 +5,7 @@
 # It changes nothing, starts or restarts nothing and writes no files (stdout only; no `sort`, no temp files).
 # It never prints environment values, command lines, log lines or crontab commands. It DOES print
 # operator-chosen names: Docker service/container/image names, Traefik Host() domains, Dokploy app and cron
-# file names; host paths only under known system roots (others become <host path>). Everything printed
+# file names; bind-mount host paths only at or under known system roots (others become <host path>). Everything printed
 # passes `scrub` (token-like strings and e-mail addresses -> <redacted>), which cannot recognise every
 # possible secret hidden in a name: READ discovery.txt BEFORE SENDING IT and blank anything sensitive.
 # Load on the live host is bounded: no `docker system df -v`; logs of at most MAX_LOG_CONTAINERS containers,
@@ -29,13 +29,11 @@ if command -v perl >/dev/null 2>&1; then
 else
   scrub() { sed -E 's/[A-Za-z0-9_+\/]{24,}={0,2}/<redacted>/g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<redacted-email>/g'; }
 fi
-# Host paths of bind mounts: shown only under known system roots, anything else as <host path>.
-paths() { awk '{ out = ""; for (i = 1; i <= NF; i++) { f = $i
-    if (f ~ /^bind:\//) { split(f, a, "->"); src = substr(a[1], 6)
-      if (src !~ /^\/(etc\/dokploy|var\/lib\/docker|var\/run\/docker\.sock|run\/docker\.sock|etc\/letsencrypt)/) src = "<host path>"
-      f = "bind:" src "->" a[2] }
-    out = out (i > 1 ? " " : "") f }
-  print out }'; }
+# One mount per line, "type|source|target|ro": a bind source is shown only when it IS a known system root
+# or lies under one (whole-path match with a "/" boundary, spaces included); anything else is <host path>.
+mounts() { awk -F'|' 'NF >= 4 { src = $2
+    if ($1 == "bind" && src !~ /^\/(etc\/dokploy|var\/lib\/docker|etc\/letsencrypt)(\/|$)/ && src !~ /^\/(var\/)?run\/docker\.sock$/) src = "<host path>"
+    printf "  %s:%s->%s%s\n", $1, src, $3, ($4 == "true" ? "(ro)" : "") }'; }
 # Runs a read-only command and says so when it fails, instead of an empty, misleading section.
 run() { out=$("$@" 2>&1); rc=$?; printf '%s\n' "$out" | scrub; [ $rc -eq 0 ] || echo "ERROR: '$1' failed (exit $rc)"; }
 dedupe() { awk '!seen[$0]++'; }
@@ -52,9 +50,11 @@ section "swarm / dokploy services (name, image, replicas, ports)"
 run docker service ls --format '{{.Name}}\t{{.Image}}\t{{.Replicas}}\t{{.Ports}}'
 
 section "service update/rollback order, restart policy, mount points (no env)"
-for s in $(docker service ls --format '{{.Name}}' 2>/dev/null); do
-  docker service inspect "$s" --format \
-    '{{.Spec.Name}} update={{with .Spec.UpdateConfig}}{{.Order}}/{{.FailureAction}}{{end}} rollback={{with .Spec.RollbackConfig}}{{.Order}}{{end}} restart={{with .Spec.TaskTemplate.RestartPolicy}}{{.Condition}}{{end}} mounts={{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Type}}:{{.Source}}->{{.Target}}{{if .ReadOnly}}(ro){{end}} {{end}}' 2>&1 | paths | scrub
+for svc in $(docker service ls --format '{{.Name}}' 2>/dev/null); do
+  docker service inspect "$svc" --format \
+    '{{.Spec.Name}} update={{with .Spec.UpdateConfig}}{{.Order}}/{{.FailureAction}}{{end}} rollback={{with .Spec.RollbackConfig}}{{.Order}}{{end}} restart={{with .Spec.TaskTemplate.RestartPolicy}}{{.Condition}}{{end}}' 2>&1 | scrub
+  docker service inspect "$svc" --format \
+    '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Type}}|{{.Source}}|{{.Target}}|{{.ReadOnly}}{{"\n"}}{{end}}' 2>&1 | mounts | scrub
 done
 
 section "running containers (name, image, status, published ports)"
@@ -62,7 +62,9 @@ run docker ps --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 
 section "container mounts (no env)"
 for c in $(docker ps --format '{{.Names}}'); do
-  docker inspect "$c" --format '{{.Name}} {{range .Mounts}}{{.Type}}:{{if .Name}}{{.Name}}{{else}}{{.Source}}{{end}}->{{.Destination}}{{if not .RW}}(ro){{end}} {{end}}' 2>&1 | paths | scrub
+  echo "$c" | scrub
+  docker inspect "$c" --format \
+    '{{range .Mounts}}{{.Type}}|{{if .Name}}{{.Name}}{{else}}{{.Source}}{{end}}|{{.Destination}}|{{if .RW}}false{{else}}true{{end}}{{"\n"}}{{end}}' 2>&1 | mounts | scrub
 done
 
 section "docker volumes (names only; sizes deliberately not measured)"
