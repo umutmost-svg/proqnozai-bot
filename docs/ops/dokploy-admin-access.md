@@ -32,8 +32,17 @@
 - **Коннектор:** отдельный контейнер `cloudflare/cloudflared:<фиксированная версия>` с `--network host` и
   `--restart unless-stopped`, **вне Swarm и вне Dokploy**: панель не управляет собственным путём доступа
   (сломанный Dokploy не отрезает доступ к нему же), выкладки приложений его не трогают. Без установки пакетов.
-- Токен туннеля — в `/root/cloudflared/tunnel.env` (0600, `TUNNEL_TOKEN=…`), в контейнер через `--env-file`;
-  в репозиторий, чат и логи не попадает. Удаленно управляемый туннель (настройки маршрутов — в Zero Trust).
+- Токен туннеля — файл `/root/cloudflared/token` (владелец UID 65532 — пользователь образа cloudflared,
+  права 0400), монтируется только на чтение и читается через `--token-file`: в `docker inspect`, аргументах и
+  окружении процесса его нет. Удаленно управляемый туннель (маршруты — в Zero Trust). Версия образа
+  зафиксирована: `cloudflare/cloudflared:2026.10.5` (amd64 есть; флаги `--token-file`, `--edge-ip-version`,
+  `--no-autoupdate` проверены).
+- **Сеть коннектора (проверено на сервере 2026-11-12, только чтение):** в сети host контейнер видит те же
+  адреса, что сам сервер: `http://127.0.0.1:3000` → 200 (Dokploy опубликован в режиме host на 0.0.0.0 и [::],
+  loopback не зависит от облачного firewall). Исходящие к Cloudflare: TCP 7844 до `region1`/`region2.v2.argotunnel.com`
+  открыт, `api.cloudflare.com:443` открыт. DNS отдаёт для туннеля и IPv6-адреса, а глобального IPv6 у
+  дроплета нет — отсюда `--edge-ip-version 4`. Отдельная Docker-сеть или подключение к `dokploy-network` не
+  нужны: без них коннектор не видит контейнеры приложений, только Dokploy на loopback.
 - **Маршрут туннеля:** `admin.proqnozai.com` → `http://127.0.0.1:3000`. HTTP внутри сервера допустим: снаружи
   соединение шифрует туннель. WebSocket (логи, терминал Dokploy) туннель пропускает.
 - **После закрытия :3000** в DigitalOcean Cloud Firewall порт остаётся доступен на самом сервере (127.0.0.1) —
@@ -62,12 +71,14 @@
    - Dokploy → профиль → **включить 2FA**, сохранить резервные коды (не в чат), выйти и войти заново с кодом.
 1. **[владелец] Zero Trust → Networks → Tunnels → Create tunnel** (Cloudflared), имя `proqnozai-admin`.
    Токен (показывается в команде установки) передаётся на сервер **не через чат и не в истории оболочки**:
-   владелец по SSH выполняет `install -d -m 700 /root/cloudflared; read -rs T; (umask 077; printf 'TUNNEL_TOKEN=%s\n' "$T" > /root/cloudflared/tunnel.env); unset T; stat -c '%a %U' /root/cloudflared/tunnel.env` (ожидается `600 root`).
-   Токен виден любому, у кого есть доступ к Docker (`docker inspect`) — на сервере это только root.
+   владелец по SSH выполняет
+   `install -d -m 700 /root/cloudflared; read -rs T; (umask 077; printf '%s' "$T" > /root/cloudflared/token); unset T; chown 65532:65532 /root/cloudflared/token; chmod 400 /root/cloudflared/token; stat -c '%a %u' /root/cloudflared/token`
+   (ожидается `400 65532`; с владельцем root cloudflared файл не прочитает — проверено: `permission denied`).
 2. **[сервер, по разрешению] Запуск коннектора** (не трогает бота, Dokploy, Traefik):
    ```sh
    docker run -d --name cloudflared --network host --restart unless-stopped \
-     --env-file /root/cloudflared/tunnel.env cloudflare/cloudflared:<версия> tunnel --no-autoupdate run
+     -v /root/cloudflared/token:/etc/cloudflared/token:ro cloudflare/cloudflared:2026.10.5 \
+     tunnel --no-autoupdate --edge-ip-version 4 run --token-file /etc/cloudflared/token
    docker logs --tail 20 cloudflared   # "Registered tunnel connection", без ошибок
    ```
    Zero Trust → Tunnels: статус **Healthy**.
@@ -78,13 +89,27 @@
    cp -p $F /root/dokploy.yml.bak-$(date -u +%Y%m%dT%H%M%SZ)
    # в rule роутера dokploy-router-app — только соединения с самого сервера (ClientIP: один CIDR на вызов):
    #   rule: Host(`dokploy.docker.localhost`) && PathPrefix(`/`) && ClientIP(`127.0.0.1/32`)
-   sleep 5; docker logs --since 1m dokploy-traefik 2>&1 | grep -iE "error|invalid" | grep -i dokploy   # пусто: правило загружено
-   curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: dokploy.docker.localhost' http://164.90.180.208/   # 404 (с самого сервера: источник — публичный IP, не loopback)
+   sleep 5
+   # правило ЗАГРУЖЕНО и работает: с loopback внутри Traefik — панель (200)
+   docker exec dokploy-traefik wget -q -S -O /dev/null --header 'Host: dokploy.docker.localhost' http://127.0.0.1/ 2>&1 | grep -m1 -oE 'HTTP/1.1 [0-9]+'   # HTTP/1.1 200
+   # и ЗАКРЫТО для всех остальных (с самого сервера источник — публичный IP, не loopback)
+   curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: dokploy.docker.localhost' http://164.90.180.208/   # 404
    ```
+   Обе проверки обязательны: ошибочное правило Traefik отбрасывает молча (в логах INFO ничего), и тогда тоже
+   будет 404 снаружи — но и не 200 изнутри. Проверено локально на `traefik:v3.6.7`: исходное правило — 200;
+   с `ClientIP(\`127.0.0.1/32\`)` — снаружи 404, с поддельными `X-Forwarded-For`/`X-Real-Ip: 127.0.0.1` — 404,
+   с loopback внутри Traefik — 200; правило с двумя аргументами `ClientIP` — 404 и без записи в логе.
    Снаружи то же: `curl -s -o /dev/null -w '%{http_code}' -H 'Host: dokploy.docker.localhost' http://164.90.180.208/` → **404**
    (было 200); `…httpworker…sslip.io` → 401 как прежде. Маршрут больше никому не нужен: панель — через туннель
-   на :3000. Ошибка в правиле тоже даёт 404 (роутер не загрузится) — поэтому обязательна проверка логов
-   Traefik выше. Откат: вернуть копию файла.
+   на :3000. Откат: вернуть копию файла.
+   **Устойчивость правки (исходный код Dokploy v0.29.12 + факт на сервере):** при каждом старте Dokploy вызывает
+   `createDefaultServerTraefikConfig()`, который пишет `dokploy.yml` **только если файла нет** — правка
+   переживает перезапуски, перезагрузки и обновления; на сервере файл не менялся с 2026-07-17, хотя Dokploy
+   перезапускался (последний раз — 2026-11-11 при ресайзе). Файл перезаписывают только: Settings → Web Server →
+   **домен сервера** (`updateServerTraefik` ставит `Host(<домен>)` без `ClientIP` — и открыл бы панель на
+   этом домене мимо Access) и редактор Traefik-конфига там же (`updateWebServerTraefikConfig`); удаление файла
+   вернёт исходный маршрут при следующем старте. **Эти настройки Dokploy не трогать**; почасовая проверка ниже
+   ловит любой такой откат.
    **Повторяющаяся проверка с уведомлением — часть шага 2a, без неё шаг не закрыт** (Dokploy может переписать
    маршрут при смене «Web Server/Domain» или обновлении):
    - **[владелец]** бесплатный аккаунт healthchecks.io → check `dokploy-bypass`, период 1 ч, grace 1 ч,
@@ -148,7 +173,7 @@
 |---|---|
 | Access не пускает (ошибка политики, потерян e-mail) | владелец входит в Cloudflare (свой логин и 2FA аккаунта) → Access → политика; панель Dokploy тем временем — по SSH-туннелю |
 | Туннель упал / контейнер `cloudflared` остановлен | SSH-туннель: `ssh -L 3000:127.0.0.1:3000 root@164.90.180.208` → `http://localhost:3000`; затем `docker logs cloudflared`, `docker restart cloudflared` |
-| Токен туннеля скомпрометирован | Zero Trust → Tunnels → туннель → Refresh token (старый токен больше не даёт **новых** подключений); новый `tunnel.env` (как в шаге 1); `docker rm -f cloudflared` и снова `docker run` из шага 2 (`docker restart` сохранил бы старый токен — `--env-file` читается при создании контейнера); затем **удалить существующие подключения туннеля** (Zero Trust → туннель → Connectors / API «delete tunnel connections»), чтобы отключить чужой коннектор; статус Healthy только с нашим |
+| Токен туннеля скомпрометирован | Zero Trust → Tunnels → туннель → Refresh token (старый токен больше не даёт **новых** подключений); новый токен — в `/root/cloudflared/token` тем же способом, что в шаге 1; `docker restart cloudflared` (файл читается при каждом старте процесса); затем **удалить существующие подключения туннеля** (Zero Trust → туннель → Connectors / API «delete tunnel connections»), чтобы отключить чужой коннектор; статус Healthy только с нашим |
 | SSH недоступен (ключ, sshd) | DigitalOcean → Droplet → **Recovery Console** (через панель DO; firewall на неё не влияет). На сервере вход только по ключу: консоли может понадобиться сброс пароля root (в настройках дроплета: Reset root password — раздел Access/Settings в панели DO) — это тоже выключение/перезагрузка, планировать как окно |
 | Ошибка firewall | DigitalOcean → Networking → Firewalls → убрать дроплет / поправить правило (действует сразу) |
 | Нужно убрать всё | `docker rm -f cloudflared`; удалить public hostname и туннель в Zero Trust; вернуть записанную DNS-запись `admin`; удалить firewall |
