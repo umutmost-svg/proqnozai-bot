@@ -1,29 +1,50 @@
 #!/bin/sh
-# Hourly guard for the Dokploy panel's Traefik route (docs/ops/dokploy-admin-access.md, step 2a). Root cron:
-#   17 * * * * sh /root/dokploy-bypass-check.sh
-# OK only when BOTH hold:
-#   1) every router rule in dokploy.yml carries ClientIP(`127.0.0.1/32`) — catches Dokploy rewriting the file
-#      (Settings -> Web Server domain sets Host(<domain>) without it; the editor may write anything);
-#   2) the known default Host is refused from the public address (404).
-# Result goes to healthchecks.io (URL in /root/.hc-dokploy-bypass, 0600): ping on OK, /fail otherwise; a missing
-# ping (server, cron or network down) alerts after the check's grace time. Prints nothing secret.
+# Hourly guard against a public route to the Dokploy panel (docs/ops/dokploy-admin-access.md, step 2a).
+#   setup, once, right after the verified edit:   sha256sum /etc/dokploy/traefik/dynamic/dokploy.yml > /root/.dokploy-route.sha256
+#   root cron:                                    17 * * * * sh /root/dokploy-bypass-check.sh
+# Fails (alert) on ANY of:
+#   1) dokploy.yml differs from the approved, verified copy (exact SHA-256) — any rewrite by Dokploy (domain in
+#      Settings -> Web Server, the config editor, an upgrade) or by hand needs a human look, whatever it says;
+#   2) another file in the Traefik dynamic directory points at Dokploy (dokploy-service-app or dokploy:3000);
+#   3) the Dokploy Swarm service carries Traefik labels (a route through the Swarm provider);
+#   4) the default Host is answered from the public address with anything but 404.
+# Result goes to healthchecks.io (URL in /root/.hc-dokploy-bypass, 0600): ping when all is well, /fail otherwise;
+# a missing ping (server, cron or network down) alerts after the check's grace time. Prints nothing secret.
 set -u
-F=${DOKPLOY_ROUTE_FILE:-/etc/dokploy/traefik/dynamic/dokploy.yml}
+DIR=${TRAEFIK_DYNAMIC_DIR:-/etc/dokploy/traefik/dynamic}
+F="$DIR/dokploy.yml"
+APPROVED=${APPROVED_SHA_FILE:-/root/.dokploy-route.sha256}
 IP=${PUBLIC_IP:-164.90.180.208}
 HC_FILE=${HC_FILE:-/root/.hc-dokploy-bypass}
 reason=""
-rules=$(grep -E '^[[:space:]]*rule:' "$F" 2>/dev/null) || reason="no rules readable in $F"
-if [ -z "$reason" ] && printf '%s\n' "$rules" | grep -vqF 'ClientIP(`127.0.0.1/32`)'; then
-  reason="a router rule in $F has no ClientIP restriction"
+add() { reason="${reason:+$reason; }$1"; }
+
+want=$(awk '{print $1}' "$APPROVED" 2>/dev/null)
+have=$(sha256sum "$F" 2>/dev/null | awk '{print $1}')
+[ -n "$want" ] || add "no approved hash in $APPROVED"
+[ -n "$have" ] || add "cannot read $F"
+[ -n "$want" ] && [ -n "$have" ] && [ "$want" != "$have" ] && add "dokploy.yml changed since it was approved"
+
+for g in "$DIR"/*.yml "$DIR"/*.yaml "$DIR"/*.toml; do
+  [ -f "$g" ] && [ "$g" != "$F" ] || continue
+  grep -qE 'dokploy-service-app|dokploy:3000' "$g" && add "$(basename "$g") routes to Dokploy"
+done
+
+if command -v docker >/dev/null 2>&1; then
+  labels=$(docker service inspect dokploy --format '{{json .Spec.Labels}} {{json .Spec.TaskTemplate.ContainerSpec.Labels}}' 2>/dev/null) \
+    || add "cannot inspect the dokploy service"
+  printf '%s' "${labels:-}" | grep -q 'traefik\.' && add "dokploy service has Traefik labels"
 fi
+
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H 'Host: dokploy.docker.localhost' "http://$IP/")
-[ "$code" = 404 ] || reason="${reason:+$reason; }default host answered $code"
+[ "$code" = 404 ] || add "default host answered $code"
+
 u=$(cat "$HC_FILE" 2>/dev/null) || u=""
 if [ -z "$reason" ]; then
   [ -n "$u" ] && curl -fsS -m 10 -o /dev/null "$u"
   exit 0
 fi
-logger -t dokploy-bypass "OPEN: $reason"
+logger -t dokploy-bypass "OPEN: $reason" 2>/dev/null
 [ -n "$u" ] && curl -fsS -m 10 -o /dev/null "$u/fail"
 echo "OPEN: $reason"
 exit 1

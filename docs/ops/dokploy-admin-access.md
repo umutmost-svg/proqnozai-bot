@@ -116,13 +116,20 @@
    - **[владелец]** бесплатный аккаунт healthchecks.io → check `dokploy-bypass`, период 1 ч, grace 1 ч,
      уведомления на e-mail и/или Telegram владельца; URL пинга (`https://hc-ping.com/<uuid>`) — не секрет уровня
      ключа, но в репозиторий и чат не публикуется; на сервер — в `/root/.hc-dokploy-bypass` (0600).
-   - скрипт `deploy/ops/dokploy-bypass-check.sh` → `/root/dokploy-bypass-check.sh` (0700, root), cron root:
-     `17 * * * * sh /root/dokploy-bypass-check.sh`. Проверяет **оба** условия: (1) **каждое** правило роутеров в
-     `dokploy.yml` содержит `ClientIP(\`127.0.0.1/32\`)` — так ловится перезапись файла Dokploy (домен в Web Server
-     ставит `Host(<домен>)`, по которому старый Host вернул бы 404 и проверка «прошла» бы); (2) старый Host с
-     публичного адреса даёт 404. Всё в порядке — пинг healthchecks, иначе `/fail` и запись в syslog
-     (`dokploy-bypass`). Нет пинга (сервер, cron, сеть) — healthchecks уведомит по истечении grace.
-     Проверено локально: верный файл + 404 → 0; переписанный файл (без `ClientIP`) при 404 → `OPEN`; нет ответа → `OPEN`.
+   - скрипт `deploy/ops/dokploy-bypass-check.sh` → `/root/dokploy-bypass-check.sh` (0700, root). Сразу после
+     проверенной правки зафиксировать одобренную версию файла:
+     `sha256sum /etc/dokploy/traefik/dynamic/dokploy.yml > /root/.dokploy-route.sha256` (0600); cron root:
+     `17 * * * * sh /root/dokploy-bypass-check.sh`. Тревога, если **хоть одно**: (1) `dokploy.yml` отличается от
+     одобренной версии (точный SHA-256 — любая перезапись Dokploy: домен в Web Server, редактор конфига,
+     обновление; разбор человеком, что бы там ни было, в т. ч. правила с `||`); (2) другой файл в `dynamic`
+     ведёт на Dokploy (`dokploy-service-app`, `dokploy:3000`); (3) у сервиса `dokploy` появились метки Traefik
+     (маршрут через Swarm-провайдер); (4) старый Host с публичного адреса отвечает не 404. Всё в порядке — пинг
+     healthchecks, иначе `/fail` и syslog (`dokploy-bypass`); нет пинга — уведомление по истечении grace.
+     Проверено локально: одобренный файл → 0; переписанный (в т. ч. `Host(new) || ClientIP(…)`) → OPEN; чужой
+     файл с `dokploy-service-app@file` → OPEN; метки Traefik → OPEN; нет одобренного хеша → OPEN. На сервере
+     сейчас ложных срабатываний нет: остальные файлы `dynamic` на Dokploy не ссылаются, меток Traefik у
+     `dokploy` нет, `sha256sum`/`logger`/`curl` есть.
+     После **намеренного** изменения `dokploy.yml` (повтор шага 2a) — снова обе проверки шага 2a и новый хеш.
    - **Тест уведомления (обязательно):** `curl -fsS "$(cat /root/.hc-dokploy-bypass)/fail"` → владелец получил
      уведомление; затем `curl -fsS "$(cat /root/.hc-dokploy-bypass)"` → статус снова up.
    - Плюс ручной прогон `sh /root/dokploy-bypass-check.sh` после любого изменения настроек или обновления Dokploy;
