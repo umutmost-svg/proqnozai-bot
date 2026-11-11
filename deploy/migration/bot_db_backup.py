@@ -8,7 +8,8 @@
 
 Uses the SQLite backup API from a read-only connection: safe while the bot keeps writing (WAL included), no
 restart. Steps of 256 pages with a pause let the bot's writers in between; a write during the copy restarts
-the pass, so the whole run is bounded by MAX_SECONDS (default 300) and then aborts cleanly.
+the pass. MAX_SECONDS (default 300) is checked after every step (a soft deadline: one step may still wait on
+the bot's lock up to the 30 s busy timeout), then the copy aborts and is removed.
 Before copying it checks free space on the volume (database + WAL, twice over, plus 50 MB): a full volume
 would stop the bot's own writes. A failed or aborted copy is deleted. The copy (0600, never overwrites)
 lands next to the database as bot-backup-<UTC stamp>.db; then integrity_check and row counts are printed —
@@ -55,7 +56,7 @@ try:
 except BaseException as exc:
     d.close()
     s.close()
-    for p in (dst, dst.with_name(dst.name + "-journal")):
+    for p in (dst, *(dst.with_name(dst.name + suffix) for suffix in ("-journal", "-wal", "-shm"))):
         p.unlink(missing_ok=True)
     sys.exit(f"STOP: copy failed and was removed ({type(exc).__name__}: {exc})")
 d.close()

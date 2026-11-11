@@ -30,10 +30,13 @@ case "${1:-serve}" in
     # --no-access-log: uvicorn logs the path WITH its query string, so a request that
     # puts init_data or a token in the URL would land in the logs; the app writes
     # its own structured events (auth.*, request_id) without request data.
+    # --timeout-keep-alive 95: longer than the proxy's idle timeout to the backend (Traefik's default
+    # idleConnTimeout is 90 s); a shorter one lets the app close a connection the proxy is about to
+    # reuse, which the user sees as a sporadic 502.
     exec python -m uvicorn --factory miniapp.asgi:create_app_from_env \
       --host 0.0.0.0 --port "${PORT:-8000}" --workers 1 \
       --no-proxy-headers --no-server-header --no-access-log \
-      --limit-concurrency 200 --timeout-keep-alive 5 --timeout-graceful-shutdown 10
+      --limit-concurrency 200 --timeout-keep-alive 95 --timeout-graceful-shutdown 10
     ;;
   admin)
     shift

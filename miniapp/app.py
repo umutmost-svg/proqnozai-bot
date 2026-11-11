@@ -149,6 +149,12 @@ async def _read_json_object(request: Request, max_bytes: int, allowed: set[str])
     return _json_object(await _read_body(request, max_bytes), allowed)
 
 
+def _is_busy(exc: sqlite3.OperationalError) -> bool:
+    """SQLite's lock timeouts ("database is locked" / "database table is locked" / busy)."""
+    text = str(exc).lower()
+    return "locked" in text or "busy" in text
+
+
 def _error_site(exc: BaseException) -> str:
     """`file:line` of the innermost frame: code location only, never data."""
     tb = exc.__traceback__
@@ -221,6 +227,15 @@ def create_app(
                 response: Response = JSONResponse({"error": "forbidden"}, status_code=403)
             else:
                 response = await call_next(request)
+        except sqlite3.OperationalError as exc:
+            if not _is_busy(exc):
+                logger.error("event=unhandled_error request_id=%s type=%s site=%s",
+                             request_id, type(exc).__name__, _error_site(exc))
+                response = JSONResponse({"error": "internal", "request_id": request_id}, status_code=500)
+            else:
+                # The database stayed locked past busy_timeout (overload): a retryable answer, not a bug.
+                logger.warning("event=db_busy request_id=%s site=%s", request_id, _error_site(exc))
+                response = JSONResponse({"error": "busy"}, status_code=503, headers={"Retry-After": "2"})
         except Exception as exc:
             # Handled here, not re-raised: Starlette's ServerErrorMiddleware would
             # re-raise to uvicorn, which logs the full traceback with the exception

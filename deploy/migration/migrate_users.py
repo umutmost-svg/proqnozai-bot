@@ -4,7 +4,7 @@ Runs INSIDE the Mini App container (it uses the app's own schema and language li
 bot.db put on the Mini App volume. The script is streamed in on stdin (it is not part of the image):
 
     docker exec -i -u miniapp <ctr> python - /data/migration/bot-copy.db /data/miniapp.db \
-      < /opt/sporbot/migrate_users.py                                       # dry run: reads only
+      < /opt/sporbot/migrate_users.py                                       # dry run: changes no data
     docker exec -i -u miniapp <ctr> python - /data/migration/bot-copy.db /data/miniapp.db --apply \
       < /opt/sporbot/migrate_users.py                                       # write
 
@@ -95,7 +95,7 @@ def main() -> int:
         Store(app_path).init_schema()  # refuses a file that is not a Mini App database
         conn = sqlite3.connect(app_path, timeout=30, isolation_level=None)
         conn.execute("PRAGMA busy_timeout=30000")
-    elif app_path.exists():  # dry run: strictly read-only (no schema, no WAL switch)
+    elif app_path.exists():  # dry run: changes no data (no schema, no WAL switch; SQLite may add a -shm sidecar)
         conn = sqlite3.connect(f"file:{app_path}?mode=ro", uri=True, timeout=30)
         if not {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} >= {"users", "sessions"}:
             print("STOP: the target is not a Mini App database")

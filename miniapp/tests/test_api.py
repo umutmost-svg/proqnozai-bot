@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -580,6 +581,34 @@ def test_unhandled_error_is_contained(client: TestClient, clock: FakeClock, capl
     assert f"event=unhandled_error request_id={request_id} type=RuntimeError site=test_api.py:" in caplog.text
     for leaked in ("AAsecret", "deadbeef", "initData=", "Traceback", "fake log line"):
         assert leaked not in caplog.text and leaked not in r.text
+
+
+def test_a_locked_database_is_a_retryable_503_not_a_500(client: TestClient, clock: FakeClock,
+                                                         caplog: pytest.LogCaptureFixture,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    logged_in(client, clock)
+
+    def locked(_: int) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(client.app.state.store, "get_user", locked)
+    caplog.set_level(logging.DEBUG)
+    r = client.get("/api/me")
+    assert r.status_code == 503 and r.json() == {"error": "busy"} and r.headers["retry-after"] == "2"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert "event=db_busy" in caplog.text and "event=unhandled_error" not in caplog.text
+
+
+def test_other_sqlite_errors_stay_internal_errors(client: TestClient, clock: FakeClock,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    logged_in(client, clock)
+
+    def broken(_: int) -> None:
+        raise sqlite3.OperationalError("no such table: users")
+
+    monkeypatch.setattr(client.app.state.store, "get_user", broken)
+    r = client.get("/api/me")
+    assert r.status_code == 500 and r.json()["error"] == "internal"
 
 
 def test_every_response_has_a_request_id(client: TestClient) -> None:

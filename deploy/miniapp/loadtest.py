@@ -40,7 +40,6 @@ lat: dict[str, list[float]] = collections.defaultdict(list)
 codes: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
 errors: collections.Counter = collections.Counter()
 reasons: collections.Counter = collections.Counter()
-first_login_failed = asyncio.Event()
 
 
 def init_data(token: str, uid: int) -> str:
@@ -130,19 +129,18 @@ class User:
                 wk = {"from": rng["from"], "to": (day + timedelta(days=2)).isoformat().replace("+00:00", "Z")}  # 48 h max
                 await self.call("week", "GET", "/api/sports/football/events?" + urllib.parse.urlencode(wk))
 
-    async def run(self, deadline: float) -> None:
-        if first_login_failed.is_set():
-            return
-        if not await self.login():
+    async def run(self, deadline: float, signed_in: bool = False) -> None:
+        if not signed_in and not await self.login():
             errors["login_failed"] += 1
-            if self.uid == UID_BASE:  # the target does not accept test-signed launches: not our container
-                first_login_failed.set()
-                print("STOP: the first test login failed — is this really the local test container?")
             return
         while time.monotonic() < deadline:
             await self.visit()
             await asyncio.sleep(random.uniform(self.a.pause_min, self.a.pause_max))  # app closed, reopened later
         await self.call("logout", "POST", "/api/auth/logout")
+
+
+async def probe_run(user: "User", deadline: float) -> None:
+    await user.run(deadline, signed_in=True)
 
 
 def pct(xs: list[float], p: float) -> float:
@@ -174,10 +172,15 @@ async def main() -> int:
     started = time.monotonic()
     deadline = started + a.duration
     async with httpx.AsyncClient(limits=limits, trust_env=False) as client:  # no proxy: loopback means loopback
+        probe = User(client, a, UID_BASE)  # one login first: a target that refuses test launches stops everything
+        if not await probe.login():
+            print("STOP: the first test login failed — is this really the local test container?")
+            return 2
+
         async def delayed(i: int) -> None:
             await asyncio.sleep(a.ramp * i / max(1, a.users))
             await User(client, a, UID_BASE + i).run(deadline)
-        await asyncio.gather(*(delayed(i) for i in range(a.users)))
+        await asyncio.gather(*(delayed(i) for i in range(1, a.users)), probe_run(probe, deadline))
     elapsed = time.monotonic() - started
     total = sum(len(v) for v in lat.values())
     summary = {"users": a.users, "seconds": round(elapsed), "requests": total, "rps": round(total / elapsed, 1),
