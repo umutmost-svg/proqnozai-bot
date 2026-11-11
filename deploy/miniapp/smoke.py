@@ -1,13 +1,18 @@
 """Post-deploy smoke test, run INSIDE the Mini App container (stdlib only, nothing to install):
 
-    docker exec -i -u miniapp -e SMOKE_USER_ID=<owner's own Telegram id> <container> python - < deploy/miniapp/smoke.py
+    docker exec -i -u miniapp <container> python - < deploy/miniapp/smoke.py                       # ed25519
+    docker exec -i -u miniapp -e SMOKE_USER_ID=<owner's own Telegram id> <container> python - < ...  # hmac
 
-It reads the bot token, edge secret and trusted origin from the container's own environment and never
-prints them. It talks to the app on 127.0.0.1 with the edge secret and signs Telegram initData for the
-OWNER'S OWN Telegram account (SMOKE_USER_ID, required): an id the operator controls, never a guessed one
-that could belong to someone else. If that user already exists in the database the run stops unless
-SMOKE_USER_EXISTS_OK=1 (a repeat run by the owner). It makes no paid AI call (read-only AI path only)
-and always ends exactly the one session it created (logout of that session, also after a failure).
+It reads its settings from the container's own environment and never prints secrets. It talks to the
+app on 127.0.0.1 with the edge secret and makes no paid AI call.
+
+- MINIAPP_INITDATA_MODE=ed25519 (production): there is no bot token, and only Telegram can sign a launch,
+  so the smoke checks that unsigned data is refused and that no token is present, and runs the data paths
+  in-process. The positive login check is the owner's real Telegram launch (production.md, step 9).
+- hmac: it signs initData for the OWNER'S OWN Telegram account (SMOKE_USER_ID, required): an id the
+  operator controls, never a guessed one. If that user already exists the run stops unless
+  SMOKE_USER_EXISTS_OK=1. It always ends exactly the one session it created (also after a failure).
+
 Exit code 0 = PASS.
 """
 import collections
