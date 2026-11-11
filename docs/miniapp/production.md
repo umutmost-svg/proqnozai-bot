@@ -299,6 +299,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 
 ### Восстановление из бэкапа (обе БД, проверено локально на копии в новом томе)
 ```sh
+# Выполнять целиком как один скрипт (`sh restore.sh`), не по строкам: каждый «STOP» прерывает его.
 S=<stamp>                                   # папка в /data/backups/ (или внешняя копия, скопированная в том)
 docker service scale $SVC=0
 # `scale` может вернуться раньше остановки: ждать, пока контейнера не станет (иначе стоп, том не трогать)
@@ -315,7 +316,7 @@ docker run --rm -v sporbot-miniapp-data:/data --entrypoint sh <образ sporbo
 # Сессии из копии отзываются ДО запуска сервиса — ни одна не успевает ожить (офлайн, без секретов):
 docker run --rm -v sporbot-miniapp-data:/data -e MINIAPP_ENV=development -e MINIAPP_DB_PATH=/data/miniapp.db \
   -e MINIAPP_BOT_TOKEN=000000:offline-maintenance-not-a-token -e MINIAPP_TRUSTED_ORIGINS=http://localhost \
-  <образ sporbot-miniapp> admin revoke-all --yes
+  <образ sporbot-miniapp> admin revoke-all --yes || { echo "STOP: sessions not revoked, do not start the service"; exit 1; }
 docker service scale $SVC=1
 for i in $(seq 1 90); do [ -n "$(docker ps -q -f name=$SVC -f health=healthy)" ] && break; sleep 2; done
 C=$(docker ps -q -f name=$SVC -f health=healthy); [ -n "$C" ] || { echo "STOP: not healthy, see docker service logs"; exit 1; }

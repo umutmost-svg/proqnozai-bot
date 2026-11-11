@@ -33,7 +33,7 @@ expired() { while read -r n; do
 fail() { echo "$(date -u +%FT%TZ) FAIL: $1"; sh -c "$NOTIFY \"\$1\"" _ "backup failed: $1" || true; exit 1; }
 
 case "$OFFSITE_KIND" in rclone|ssh|disk) ;; *) fail "OFFSITE_KIND is not configured" ;; esac
-case "$KEEP_DAYS" in ''|*[!0-9]*) fail "KEEP_DAYS must be a whole number of days" ;; esac
+case "$KEEP_DAYS" in ''|*[!0-9]*|0*) fail "KEEP_DAYS must be a whole number of days without leading zeros" ;; esac
 [ "${#KEEP_DAYS}" -le 3 ] && [ "$KEEP_DAYS" -ge 1 ] && [ "$KEEP_DAYS" -le 365 ] || fail "KEEP_DAYS must be 1..365"
 now=$(date -u +%s) || fail "date"
 CUTOFF=$(date -u -d "@$((now - KEEP_DAYS * 86400))" +%Y%m%dT%H%M%SZ 2>/dev/null \
@@ -55,7 +55,8 @@ chmod -R go-rwx "$local_copy" || fail "chmod host copy"
 
 # The destination must be this job's own (marker), checked before anything is written there.
 case "$OFFSITE_KIND" in
-  rclone) rclone lsf "$OFFSITE/.sporbot-offsite" >/dev/null 2>&1 || fail "no .sporbot-offsite marker in $OFFSITE" ;;
+  rclone) listing=$(rclone lsf --files-only --max-depth 1 "$OFFSITE") || fail "rclone list $OFFSITE"
+          printf '%s\n' "$listing" | grep -qx '.sporbot-offsite' || fail "no .sporbot-offsite marker in $OFFSITE" ;;
   ssh) ssh "${OFFSITE%%:*}" "test -f '${OFFSITE#*:}/.sporbot-offsite'" || fail "no .sporbot-offsite marker in $OFFSITE" ;;
   disk) [ -f "$OFFSITE/.sporbot-offsite" ] || fail "external disk not mounted or not dedicated (no $OFFSITE/.sporbot-offsite)" ;;
 esac
