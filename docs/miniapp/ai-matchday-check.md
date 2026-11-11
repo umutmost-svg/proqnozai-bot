@@ -11,12 +11,12 @@ $10**, **без реальных ставок**. Цель — проверить
 прогнозов и состоянием в отдельной папке (стенд и production не участвуют):
 
 ```sh
-S=<папка состояния, 0700>; install -m 600 <ключ football-data> $S/football_key; install -m 600 <ключ Anthropic> $S/anthropic_key
-python deploy/miniapp/ai_matchday_check.py $S select 2026-11-20 --per-league 2   # бесплатно: выбор матчей дня
-python deploy/miniapp/ai_matchday_check.py $S run                                # платно: анализ выбранных
+cd <корень репозитория на b6cf031 или release/miniapp-prod>; S=<папка состояния, 0700>; install -m 600 <ключ football-data> $S/football_key; install -m 600 <ключ Anthropic> $S/anthropic_key
+PYTHONPATH=. python deploy/miniapp/ai_matchday_check.py $S select 2026-11-20 --per-league 2   # бесплатно: выбор матчей дня
+PYTHONPATH=. python deploy/miniapp/ai_matchday_check.py $S run                                # платно: анализ выбранных
 # 21.11: select 2026-11-21 --per-league 3 → run;  22.11: select 2026-11-22 → run (добирает до 5 на лигу)
-python deploy/miniapp/ai_matchday_check.py $S settle   # после матчей (бесплатно): результаты из календарей
-python deploy/miniapp/ai_matchday_check.py $S report   # критерии + таблица по матчам
+PYTHONPATH=. python deploy/miniapp/ai_matchday_check.py $S settle   # после матчей (бесплатно): результаты из календарей
+PYTHONPATH=. python deploy/miniapp/ai_matchday_check.py $S report   # критерии + таблица по матчам
 ```
 
 - Только матчи этого дня (UTC), не позже чем за 60 мин до начала — данные после начала матча в анализ

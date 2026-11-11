@@ -3,10 +3,10 @@
 Runs LOCALLY on the release code (b6cf031) with real football-data and Anthropic keys, its own forecast
 history file and its own state; never touches the stand or production, never places bets.
 
-    python deploy/miniapp/ai_matchday_check.py <state dir> select [YYYY-MM-DD] [--per-league N]  # free: picks the day's matches
-    python deploy/miniapp/ai_matchday_check.py <state dir> run                   # paid: analyses the selection
-    python deploy/miniapp/ai_matchday_check.py <state dir> settle                # free: results after the matches
-    python deploy/miniapp/ai_matchday_check.py <state dir> report                # criteria + per-match table
+    PYTHONPATH=. python deploy/miniapp/ai_matchday_check.py <state dir> select [YYYY-MM-DD] [--per-league N]  # free: picks the day's matches
+    PYTHONPATH=. python deploy/miniapp/ai_matchday_check.py <state dir> run                   # paid: analyses the selection
+    PYTHONPATH=. python deploy/miniapp/ai_matchday_check.py <state dir> settle                # free: results after the matches
+    PYTHONPATH=. python deploy/miniapp/ai_matchday_check.py <state dir> report                # criteria + per-match table
 
 Keys come from the environment (MINIAPP_FOOTBALL_DATA_KEY, MINIAPP_ANTHROPIC_API_KEY), or else from
 <state dir>/football_key and <state dir>/anthropic_key (0600); never printed.
@@ -168,6 +168,21 @@ async def settle(svc, history: ForecastHistory) -> None:
     for code in LEAGUES:
         cal = await svc.calendar("football", f"fd:{code}")
         print(code, "settled rows:", await asyncio.to_thread(history.settle_events, cal.events))
+    # Independent reference for the report: the provider's match record (one request per analysed match).
+    import urllib.request
+    key = settings().football_data_key
+    source = load("source_results.json", {})
+    for x in load("ledger.json", []):
+        if x.get("status") != "ok" or x["event"] in source and source[x["event"]]["status"] == "FINISHED":
+            continue
+        req = urllib.request.Request(f"https://api.football-data.org/v4/matches/{x['event'].split(':')[1]}",
+                                     headers={"X-Auth-Token": key})
+        m = json.load(urllib.request.urlopen(req, timeout=15))
+        sc = m.get("score") or {}
+        ft = (sc.get("fullTime") if sc.get("duration") == "REGULAR" else sc.get("regularTime")) or {}
+        source[x["event"]] = {"status": m.get("status"), "score": [ft.get("home"), ft.get("away")]}
+        time.sleep(1)
+    save("source_results.json", source)
 
 
 def report(history: ForecastHistory) -> bool:
@@ -198,7 +213,16 @@ def report(history: ForecastHistory) -> bool:
             f.get("noBetReason") != "early_forecast",  # match day: never "too early"
         ]))
     finished = [x for x in ok_rows if x["kickoff"] < datetime.fromtimestamp(time.time() - 3 * 3600, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")]
-    settled_ok = all(rows.get(x["event"], ("pending",))[0] in ("settled", "void") for x in finished)
+    source = load("source_results.json", {})  # written by `settle`: football-data's own 90-minute score
+    def settled_right(x: dict) -> bool:
+        st = rows.get(x["event"])
+        src = source.get(x["event"])
+        if src is None or st is None:
+            return False
+        if src["status"] == "FINISHED":
+            return st[0] == "settled" and [st[1], st[2]] == src["score"]
+        return st[0] in ("pending", "void")  # postponed / cancelled: never a win or a loss
+    settled_ok = all(settled_right(x) for x in finished)
     criteria = {
         "1_delivery_19_of_20_and_errors_recovered": len(ok_events) >= 19 and not unrecovered,
         "2_p95_le_20s_and_every_timeout_recovered": p95 is not None and p95 <= 20 and all(
@@ -214,7 +238,6 @@ def report(history: ForecastHistory) -> bool:
         "finishedMatches": len(finished), "criteria": criteria, "PASS": all(criteria.values()),
         "note": "20 matches: descriptive only, no statistical conclusions on accuracy",
     }, ensure_ascii=False, indent=1))
-    return all(criteria.values())
     print("| League | Match (table places) | Kickoff UTC | Kind | 1/X/2 | Pick | Reason | Result (90') | Time s | Tokens in/out | $ |")
     print("|---|---|---|---|---|---|---|---|---|---|---|")
     for x in ledger:
@@ -228,6 +251,7 @@ def report(history: ForecastHistory) -> bool:
               f"{p.get('home', '')}/{p.get('draw', '')}/{p.get('away', '')} | {(r.get('pick') or {}).get('market', '')} | "
               f"{f.get('noBetReason') or ''} | {res} | {x.get('seconds', '')} | {x.get('inputTokens', '')}/{x.get('outputTokens', '')} | "
               f"{x.get('costUsd', 0):.4f} |")
+    return all(criteria.values())
 
 
 async def main() -> None:

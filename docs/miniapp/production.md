@@ -214,10 +214,13 @@ docker run --rm -v sporbot-miniapp-data:/data --entrypoint sh <образ sporbo
   set -e; cd /data; mkdir -p broken-$S && mv miniapp.db* miniapp.forecasts.db* broken-$S/ 2>/dev/null || true
   cp backups/$S/miniapp.db backups/$S/miniapp.forecasts.db /data/   # без -wal/-shm: копии самодостаточны
   chown miniapp:miniapp /data/miniapp.db /data/miniapp.forecasts.db; chmod 600 /data/miniapp*.db"
+# Сессии из копии отзываются ДО запуска сервиса — ни одна не успевает ожить (офлайн, без секретов):
+docker run --rm -v sporbot-miniapp-data:/data -e MINIAPP_ENV=development -e MINIAPP_DB_PATH=/data/miniapp.db \
+  -e MINIAPP_BOT_TOKEN=000000:offline-maintenance-not-a-token -e MINIAPP_TRUSTED_ORIGINS=http://localhost \
+  <образ sporbot-miniapp> admin revoke-all --yes
 docker service scale sporbot-miniapp=1
 C=$(docker ps -q -f name=sporbot-miniapp); docker exec -i -u miniapp $C python - verify /data < /opt/sporbot/backup.py
 docker exec -i -u miniapp -e SMOKE_USER_ID=<id владельца> -e SMOKE_USER_EXISTS_OK=1 $C python - < /opt/sporbot/smoke.py
-docker exec -u miniapp $C python -m miniapp.admin revoke-all --yes   # восстановленные сессии не оживают
 ```
 Повреждённые файлы остаются в `/data/broken-<stamp>/` до разбора. Пока сервис в 0 реплик, Mini App
 недоступна (бот работает).

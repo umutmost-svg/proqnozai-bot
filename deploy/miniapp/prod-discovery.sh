@@ -42,8 +42,18 @@ docker ps --format '{{.Image}}' | grep -i dokploy | sort -u
 ls /etc/dokploy/applications 2>/dev/null; ls /etc/dokploy/compose 2>/dev/null
 
 section "backups: schedules only (no command text: it may carry credentials)"
-# Only the five schedule fields and whether the line mentions a backup — never the command itself.
-crontab -l 2>/dev/null | grep -vE '^\s*(#|$)' | awk '{ b = ($0 ~ /backup|dump|rsync|s3|restic|borg/) ? "backup-like" : "other"; print $1, $2, $3, $4, $5, b }'
+# A line is shown only as its five schedule fields when they parse as a schedule (minute and hour start
+# with a digit or "*"); @macros show only the macro name; anything else (variable assignments, odd lines)
+# is counted, never printed. The command itself is reduced to a backup-like flag.
+crontab -l 2>/dev/null | awk '
+  /^[[:space:]]*(#|$)/ { next }
+  { b = ($0 ~ /backup|dump|rsync|s3|restic|borg/) ? "backup-like" : "other" }
+  $1 ~ /^@(reboot|yearly|annually|monthly|weekly|daily|midnight|hourly)$/ { print $1, b; next }
+  $1 ~ /^[0-9*][0-9*\/,-]*$/ && $2 ~ /^[0-9*][0-9*\/,-]*$/ && $3 ~ /^[0-9*][0-9*\/,-]*$/ &&
+  $4 ~ /^([0-9*][0-9*\/,-]*|[A-Za-z][A-Za-z][A-Za-z])$/ && $5 ~ /^([0-9*][0-9*\/,-]*|[A-Za-z][A-Za-z][A-Za-z](-[A-Za-z][A-Za-z][A-Za-z])?)$/ {
+    print $1, $2, $3, $4, $5, b; next }
+  { hidden++ }
+  END { if (hidden) print hidden " other line(s) hidden (assignments or non-schedule text)" }'
 for f in /etc/cron.d/*; do [ -f "$f" ] && printf '%s: %s entries\n' "$(basename "$f")" "$(grep -cvE '^\s*(#|$)' "$f")"; done 2>/dev/null
 ls /etc/dokploy/backups 2>/dev/null | head -20
 
