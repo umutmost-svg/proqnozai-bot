@@ -36,6 +36,9 @@ FEATURED = ("fd:PL", "fd:PD", "fd:BL1", "fd:SA", "fd:FL1", "fd:CL", "fd:DED", "f
 SEARCHES = ("real", "bayern", "arsenal", "milan", "porto", "ajax", "liverpool", "barcelona")
 UID_BASE = 7_700_000_000  # synthetic ids, local throw-away database only
 
+# Statuses that are a correct answer, per endpoint. AI read: 404 = no analysis made yet (no key at launch),
+# 503 = the AI's own temporary reasons. Quick: 429 = the app's deliberate back-pressure (rate printed).
+EXPECTED = {"ai_read": {200, 404, 503}, "quick": {200, 429}}
 lat: dict[str, list[float]] = collections.defaultdict(list)
 codes: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
 errors: collections.Counter = collections.Counter()
@@ -194,8 +197,9 @@ async def main() -> int:
                "max": round(max(xs), 3), "statuses": dict(codes[name])}
         summary["endpoints"][name] = row
         print(f"{name:12} {row['n']:>6} {row['p50']:>7} {row['p95']:>7} {row['p99']:>7} {row['max']:>7}  {row['statuses']}")
-        if any(s >= 500 for s in codes[name]) or (name not in ("quick",) and row["p95"] > a.p95_limit):
-            ok = False
+        allowed = EXPECTED.get(name, {200})
+        if set(codes[name]) - allowed or (name not in ("quick",) and row["p95"] > a.p95_limit):
+            ok = False  # any status the app should not give here (401/403/5xx …) fails the run
     for k, v in reasons.most_common(15):
         print(f"  {v:>6}  {k}")
     summary["reasons"] = dict(reasons)
