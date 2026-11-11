@@ -301,6 +301,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 ```sh
 # Выполнять целиком как один скрипт (`sh restore.sh`), не по строкам: set -e и каждый «STOP» прерывают его.
 set -eu
+SVC=<фактическое имя сервиса из docker service ls>
 S=<stamp>                                   # папка в /data/backups/ (или внешняя копия, скопированная в том)
 IMG=<образ sporbot-miniapp>
 # Копия проверяется ДО того, как трогать рабочие базы: обе БД на месте и проходят integrity_check.
@@ -308,8 +309,13 @@ docker run --rm --user miniapp -v sporbot-miniapp-data:/data -e MINIAPP_DB_PATH=
   "$IMG" - verify "/data/backups/$S" < /opt/sporbot/backup.py || { echo "STOP: backup $S is not usable"; exit 1; }
 docker service scale $SVC=0
 # `scale` может вернуться раньше остановки: ждать, пока контейнера не станет (иначе стоп, том не трогать)
-for i in $(seq 1 60); do [ -z "$(docker ps -q -f name=$SVC)" ] && break; sleep 2; done
-[ -z "$(docker ps -q -f name=$SVC)" ] || { echo "STOP: writer still running"; exit 1; }
+stopped=""
+for i in $(seq 1 60); do
+  running=$(docker ps -q -f "name=$SVC") || { echo "STOP: docker ps failed"; exit 1; }   # a failed check is never "stopped"
+  [ -z "$running" ] && { stopped=1; break; }
+  sleep 2
+done
+[ -n "$stopped" ] || { echo "STOP: writer still running"; exit 1; }
 docker run --rm -v sporbot-miniapp-data:/data --entrypoint sh "$IMG" -c "
   set -e; cd /data; mkdir broken-$S
   for f in miniapp.db miniapp.db-wal miniapp.db-shm miniapp.forecasts.db miniapp.forecasts.db-wal miniapp.forecasts.db-shm; do
