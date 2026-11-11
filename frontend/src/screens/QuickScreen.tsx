@@ -44,6 +44,11 @@ type Run = {
 /** Monotonic milliseconds (performance.now): never moves back when the device clock is changed. */
 export const monotonic = { now: () => performance.now() };
 
+function nextUtcMidnight(iso: string): number {
+  const d = new Date(iso);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+}
+
 function successState(answer: QuickAnswer, sentAt: number, receivedAt: number) {
   const skewMs = Math.max(0, Date.parse(answer.computedAt) - sentAt);
   const first = answer.legs.length ? Math.min(...answer.legs.map((l) => Date.parse(l.event.startsAt))) : Infinity;
@@ -52,9 +57,7 @@ function successState(answer: QuickAnswer, sentAt: number, receivedAt: number) {
   // A preview lists matches of later UTC days: at the next UTC midnight (server time) the first of them may
   // become a match-day one, so it goes by then at the latest — counted from the server time at receipt
   // (delivery included); already past it, the preview is not shown at all.
-  const computed = new Date(answer.computedAt);
-  const midnight = Date.UTC(computed.getUTCFullYear(), computed.getUTCMonth(), computed.getUTCDate() + 1);
-  const left = midnight - (receivedAt + skewMs);
+  const left = nextUtcMidnight(answer.computedAt) - (receivedAt + skewMs);
   if (answer.preview.length && left <= 0) answer = { ...answer, preview: [] };
   const keep = answer.preview.length ? Math.min(EMPTY_RESULT_KEEP_MS, left) : EMPTY_RESULT_KEEP_MS;
   return { status: 'success' as const, answer, skewMs, deadline, keepUntil: monotonic.now() + keep };
@@ -66,7 +69,12 @@ const EMPTY_RESULT_KEEP_MS = 10 * 60_000;
 /** Why a shown answer must go: "kickoff" (a leg started), "old" (an empty answer aged out), or null. */
 function staleness(state: Extract<Run['state'], { status: 'success' }>, deviceNow: number): 'kickoff' | 'old' | null {
   const { answer, skewMs, deadline, keepUntil } = state;
-  if (answer.legs.length === 0) return monotonic.now() >= keepUntil ? 'old' : null;
+  if (answer.legs.length === 0) {
+    if (monotonic.now() >= keepUntil) return 'old';
+    // A preview is about later UTC days: past the next UTC midnight (server-adjusted wall clock — the
+    // monotonic one may stop while the device sleeps) it is yesterday's and goes.
+    return answer.preview.length && deviceNow + skewMs >= nextUtcMidnight(answer.computedAt) ? 'old' : null;
+  }
   const first = Math.min(...answer.legs.map((l) => Date.parse(l.event.startsAt)));
   // Either clock saying "kicked off" is enough: the monotonic deadline survives a device clock
   // set back; the server-adjusted device time covers a monotonic clock that slept.
