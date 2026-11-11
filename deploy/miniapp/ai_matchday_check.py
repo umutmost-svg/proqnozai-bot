@@ -226,13 +226,18 @@ def report(history: ForecastHistory) -> bool:
             return False
         if src["status"] == "FINISHED":
             return st[0] == "settled" and [st[1], st[2]] == src["score"]
-        return st[0] in ("pending", "void")  # postponed / cancelled: never a win or a loss
+        if src["status"] in ("POSTPONED", "SUSPENDED"):
+            return st[0] == "pending"  # not played: never a win or a loss
+        if src["status"] in ("CANCELLED", "AWARDED"):
+            return st[0] in ("void", "pending")
+        return False  # still in play / not started at the source: not verifiable yet
     # Complete only when every delivered match is past kickoff + 3 h and checked: until then the criterion fails.
     settled_ok = len(finished) == len(ok_rows) > 0 and all(settled_right(x) for x in finished)
     criteria = {
         # 20 different matches attempted and all delivered; at most one of them needed its single retry.
         "1_twenty_matches_delivered_at_most_one_retry": len(attempted) == MAX_CALLS and len(ok_events) == len(attempted)
-            and not unrecovered and len({x["event"] for x in errors}) <= 1,
+            and not unrecovered
+            and sum(1 for e in attempted if sum(1 for y in ledger if y["event"] == e) > 1) <= 1,  # any repeated row = a retry
         # At most one timeout in the whole run, and it must have been recovered by the match's retry.
         "2_p95_le_20s_and_at_most_one_recovered_timeout": p95 is not None and p95 <= 20 and
             sum(1 for x in errors if x.get("error") == "timeout") <= 1 and

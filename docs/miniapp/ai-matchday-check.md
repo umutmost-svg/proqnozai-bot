@@ -7,11 +7,11 @@ $10**, **без реальных ставок**. Цель — проверить
 
 ## Как запускается
 
-Локально, на коде релиза `b6cf031`, с реальными football-data и Anthropic, с собственной историей
+Локально, на ветке `release/miniapp-prod` (код приложения идентичен `b6cf031`; скрипт добавлен в ветку), с реальными football-data и Anthropic, с собственной историей
 прогнозов и состоянием в отдельной папке (стенд и production не участвуют):
 
 ```sh
-cd <корень репозитория на b6cf031 или release/miniapp-prod>; S=<папка состояния, 0700>; install -m 600 <ключ football-data> $S/football_key; install -m 600 <ключ Anthropic> $S/anthropic_key
+cd <корень репозитория на ветке release/miniapp-prod (код приложения = b6cf031)>; S=<папка состояния, 0700>; install -m 600 <ключ football-data> $S/football_key; install -m 600 <ключ Anthropic> $S/anthropic_key
 PYTHONPATH=. python deploy/miniapp/ai_matchday_check.py $S select 2026-11-20 --per-league 2   # бесплатно: выбор матчей дня
 PYTHONPATH=. python deploy/miniapp/ai_matchday_check.py $S run                                # платно: анализ выбранных
 # 21.11: select 2026-11-21 --per-league 3 → run;  22.11: select 2026-11-22 → run (добирает до 5 на лигу)
