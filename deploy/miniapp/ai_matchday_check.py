@@ -8,7 +8,10 @@ history file and its own state; never touches the stand or production, never pla
     python deploy/miniapp/ai_matchday_check.py <state dir> settle                # free: results after the matches
     python deploy/miniapp/ai_matchday_check.py <state dir> report                # criteria + per-match table
 
-Keys are read from files: <state dir>/football_key and <state dir>/anthropic_key (0600, never printed).
+Keys come from the environment (MINIAPP_FOOTBALL_DATA_KEY, MINIAPP_ANTHROPIC_API_KEY), or else from
+<state dir>/football_key and <state dir>/anthropic_key (0600); never printed.
+Every paid request is RESERVED in ledger.json before it is sent (a crash or timeout still counts against
+the 20 calls / $10 with its worst-case cost) and reconciled with the reported usage afterwards.
 Only matches kicking off on the chosen UTC day and at least LEAD_MIN minutes ahead are analysed, so no
 data from after kickoff can enter; the report re-checks it for every row.
 """
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 import types
@@ -50,12 +54,16 @@ def save(name: str, data) -> None:
     (STATE / name).write_text(json.dumps(data, ensure_ascii=False, indent=1))
 
 
+def secret(env: str, file: str) -> str:
+    return (os.environ.get(env) or (STATE / file).read_text()).strip()
+
+
 def settings():
     return types.SimpleNamespace(
-        football_data_key=(STATE / "football_key").read_text().strip(), football_data_per_minute=40,
+        football_data_key=secret("MINIAPP_FOOTBALL_DATA_KEY", "football_key"), football_data_per_minute=40,
         football_data_per_day=2000, football_data_competitions=_competitions("all"),
         sports_unknown_lookups_per_hour=60, football_data_live_plan=True,
-        anthropic_api_key=(STATE / "anthropic_key").read_text().strip(), ai_model="claude-opus-5-5",
+        anthropic_api_key=secret("MINIAPP_ANTHROPIC_API_KEY", "anthropic_key"), ai_model="claude-opus-5-5",
         ai_per_user_daily=1000, ai_daily_budget=1000)
 
 
@@ -107,6 +115,11 @@ async def run(svc, ai, client) -> None:
     real = client._client.beta.messages.create
 
     async def create(**kw):
+        # Durable reservation BEFORE the request leaves: counted even if it then fails or the process dies.
+        entry["paidCalls"] = entry.get("paidCalls", 0) + 1
+        entry["costUsd"] = round(entry.get("costUsd", 0) + WORST_CALL_USD, 5)
+        entry["reserved"] = True
+        save("ledger.json", ledger)
         resp = await real(**kw)
         usage.append(resp.usage)
         return resp
@@ -116,7 +129,7 @@ async def run(svc, ai, client) -> None:
         spent = sum(x.get("costUsd", 0) for x in ledger)
         calls = sum(x.get("paidCalls", 0) for x in ledger)
         # Before each analysis: room for its worst case in both limits (one request = at most one paid call;
-        # a failed analysis is not retried here, so it never pays twice).
+        # a failed analysis is repeated at most once, by a later `run`, and that repeat is checked here too).
         if calls + 1 > MAX_CALLS or spent + WORST_CALL_USD > CAP_USD:
             print(f"STOP: limits (calls {calls}/{MAX_CALLS}, spent ${spent:.2f}/${CAP_USD})"); break
         tries = [x for x in ledger if x["event"] == r["event"]]
@@ -126,7 +139,8 @@ async def run(svc, ai, client) -> None:
             ledger.append({**r, "status": "skipped_started"}); continue
         usage.clear()
         t0 = time.monotonic()
-        entry = {**r, "requestedAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        entry = {**r, "requestedAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "status": "in_flight"}
+        ledger.append(entry)
         try:
             res = await ai.analyse(r["event"], 1, create=True)
             entry.update(status="ok", result=res.to_json() if res else None)
@@ -135,12 +149,15 @@ async def run(svc, ai, client) -> None:
         except Exception as exc:  # noqa: BLE001 — recorded, the run goes on
             entry.update(status="error", error=type(exc).__name__)
         entry["seconds"] = round(time.monotonic() - t0, 2)
-        ins = sum((u.input_tokens or 0) + (getattr(u, "cache_creation_input_tokens", 0) or 0)
-                  + (getattr(u, "cache_read_input_tokens", 0) or 0) for u in usage)
-        out = sum(u.output_tokens or 0 for u in usage)
-        entry.update(paidCalls=len(usage), inputTokens=ins, outputTokens=out,
-                     costUsd=round(ins * PRICE_IN + out * PRICE_OUT, 5))
-        ledger.append(entry)
+        if len(usage) == entry.get("paidCalls", 0):  # every sent request answered: real cost replaces the reserve
+            ins = sum((u.input_tokens or 0) + (getattr(u, "cache_creation_input_tokens", 0) or 0)
+                      + (getattr(u, "cache_read_input_tokens", 0) or 0) for u in usage)
+            out = sum(u.output_tokens or 0 for u in usage)
+            entry.update(inputTokens=ins, outputTokens=out, costUsd=round(ins * PRICE_IN + out * PRICE_OUT, 5),
+                         reserved=False)
+            if ins > 12000:
+                save("ledger.json", ledger)
+                print("STOP: a prompt exceeded the 12 000-token bound the budget assumes"); break
         save("ledger.json", ledger)
         res = entry.get("result") or {}
         print(f"{r['league']:4} {r['home'][:20]:20} - {r['away'][:20]:20} {entry['status']:5} "
@@ -153,7 +170,7 @@ async def settle(svc, history: ForecastHistory) -> None:
         print(code, "settled rows:", await asyncio.to_thread(history.settle_events, cal.events))
 
 
-def report(history: ForecastHistory) -> None:
+def report(history: ForecastHistory) -> bool:
     import sqlite3
     ledger = load("ledger.json", [])
     rows = {}
@@ -180,12 +197,24 @@ def report(history: ForecastHistory) -> None:
             (r.get("pick") or {}).get("market") == "NO_BET" or f.get("noBetReason") is None,
             f.get("noBetReason") != "early_forecast",  # match day: never "too early"
         ]))
+    finished = [x for x in ok_rows if x["kickoff"] < datetime.fromtimestamp(time.time() - 3 * 3600, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")]
+    settled_ok = all(rows.get(x["event"], ("pending",))[0] in ("settled", "void") for x in finished)
+    criteria = {
+        "1_delivery_19_of_20_and_errors_recovered": len(ok_events) >= 19 and not unrecovered,
+        "2_p95_le_20s_and_every_timeout_recovered": p95 is not None and p95 <= 20 and all(
+            x["event"] in ok_events for x in errors if x.get("error") == "timeout"),
+        "3_calls_le_20_and_cost_le_10usd": calls <= MAX_CALLS and spent <= CAP_USD,
+        "4_5_integrity_and_match_day_logic": all(integrity) and len(integrity) == len(ok_rows),
+        "6_settlement_of_finished_matches": settled_ok,
+    }
     print(json.dumps({
         "analysed": len(ok_rows), "errors": [(x["event"], x.get("error")) for x in errors],
-        "unrecoveredErrors": unrecovered,
-        "paidCalls": calls, "spentUsd": round(spent, 4), "p95Seconds": p95,
-        "integrityAllPass": all(integrity) and len(integrity) == len(ok_rows),
+        "unrecoveredErrors": unrecovered, "paidCalls": calls, "spentUsd": round(spent, 4),
+        "reservedNotReconciled": sum(1 for x in ledger if x.get("reserved")), "p95Seconds": p95,
+        "finishedMatches": len(finished), "criteria": criteria, "PASS": all(criteria.values()),
+        "note": "20 matches: descriptive only, no statistical conclusions on accuracy",
     }, ensure_ascii=False, indent=1))
+    return all(criteria.values())
     print("| League | Match (table places) | Kickoff UTC | Kind | 1/X/2 | Pick | Reason | Result (90') | Time s | Tokens in/out | $ |")
     print("|---|---|---|---|---|---|---|---|---|---|---|")
     for x in ledger:
@@ -207,7 +236,7 @@ async def main() -> None:
     history = ForecastHistory(STATE / "forecasts.db")
     history.init_schema()
     if MODE == "report":
-        report(history); return
+        sys.exit(0 if report(history) else 1)
     if MODE == "select":
         args = sys.argv[3:]
         today_max = int(args[args.index("--per-league") + 1]) if "--per-league" in args else PER_LEAGUE

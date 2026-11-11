@@ -1,8 +1,8 @@
 #!/bin/sh
 # READ-ONLY inventory of the production server before the first Mini App release.
 # Run on the Dokploy host as a user that can read Docker (e.g. root):   sh prod-discovery.sh > discovery.txt
-# It changes nothing, starts nothing, and never prints environment values, tokens, keys or
-# Dokploy credentials: only names, images, mounts, ports, routing hosts and counts.
+# It changes nothing, starts nothing, and prints no environment values, command lines, log lines,
+# tokens, keys or Dokploy credentials: only names, images, mounts, ports, routing hosts, schedules and counts.
 # Send discovery.txt back; review it first — it lists container names and domains.
 set -u
 
@@ -41,10 +41,11 @@ section "dokploy version / applications (names only)"
 docker ps --format '{{.Image}}' | grep -i dokploy | sort -u
 ls /etc/dokploy/applications 2>/dev/null; ls /etc/dokploy/compose 2>/dev/null
 
-section "backups: crontabs and dokploy backup dirs (names only)"
-crontab -l 2>/dev/null | grep -v '^#' | sed 's/[A-Za-z0-9_\-]\{24,\}/<redacted>/g'
-ls /etc/cron.d 2>/dev/null
-ls -la /etc/dokploy/backups 2>/dev/null | head -20
+section "backups: schedules only (no command text: it may carry credentials)"
+# Only the five schedule fields and whether the line mentions a backup — never the command itself.
+crontab -l 2>/dev/null | grep -vE '^\s*(#|$)' | awk '{ b = ($0 ~ /backup|dump|rsync|s3|restic|borg/) ? "backup-like" : "other"; print $1, $2, $3, $4, $5, b }'
+for f in /etc/cron.d/*; do [ -f "$f" ] && printf '%s: %s entries\n' "$(basename "$f")" "$(grep -cvE '^\s*(#|$)' "$f")"; done 2>/dev/null
+ls /etc/dokploy/backups 2>/dev/null | head -20
 
 section "bot: football-data 429s and API errors in the last 7 days (counts only)"
 for c in $(docker ps --format '{{.Names}}' | grep -iE 'bot|proqnoz' ); do
