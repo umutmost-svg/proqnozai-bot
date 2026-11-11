@@ -104,9 +104,10 @@ async def select(svc, day: date, today_max: int = PER_LEAGUE) -> list[dict]:
                          "homePos": h.position if h else None, "awayPos": a.position if a else None,
                          "category": category(h.position if h else None, a.position if a else None, len(table))})
         picked, cats = [], {r["category"] for r in done if r["league"] == code}
-        for r in sorted(rows, key=lambda r: (r["category"] in cats, r["kickoff"])):  # new kinds of match first
-            if len(picked) < room:
-                picked.append(r); cats.add(r["category"])
+        rows.sort(key=lambda r: r["kickoff"])
+        while rows and len(picked) < room:  # each pick prefers a kind of match not taken yet
+            r = next((x for x in rows if x["category"] not in cats), rows[0])
+            rows.remove(r); picked.append(r); cats.add(r["category"])
         chosen += picked
     return chosen
 
@@ -137,7 +138,7 @@ async def run(svc, ai, client) -> None:
         tries = [x for x in ledger if x["event"] == r["event"]]
         if any(x.get("status") in ("ok", "skipped_started") for x in tries) or len(tries) >= 2:
             continue  # done, or already retried once: a failed analysis is repeated at most once (next `run`)
-        if parse_instant(r["kickoff"]).timestamp() - A.KICKOFF_MARGIN_S - 60 <= time.time():
+        if parse_instant(r["kickoff"]).timestamp() - LEAD_MIN * 60 <= time.time():  # the documented 60-min cutoff
             ledger.append({**r, "status": "skipped_started"}); continue
         usage.clear()
         t0 = time.monotonic()
@@ -213,6 +214,8 @@ def report(history: ForecastHistory) -> bool:
         p = r.get("probabilities") or {}
         integrity.append(all([
             bool(f.get("dataUntil")) and bool(r.get("generatedAt")) and f["dataUntil"] < r["generatedAt"] < x["kickoff"],
+            bool(r.get("generatedAt")) and parse_instant(x["kickoff"]).timestamp()
+            - parse_instant(r["generatedAt"]).timestamp() >= LEAD_MIN * 60 - 120,  # 60-min cutoff (2 min for the call)
             99 <= sum(p.values()) <= 101,
             (r.get("pick") or {}).get("market") == "NO_BET" or f.get("noBetReason") is None,
             f.get("noBetReason") != "early_forecast",  # match day: never "too early"
@@ -253,6 +256,18 @@ def report(history: ForecastHistory) -> bool:
         "finishedMatches": len(finished), "criteria": criteria, "PASS": all(criteria.values()),
         "note": "20 matches: descriptive only, no statistical conclusions on accuracy",
     }, ensure_ascii=False, indent=1))
+    picks = [x for x in ok_rows if ((x["result"].get("pick") or {}).get("market") or "NO_BET") != "NO_BET"]
+    markets: dict = {}
+    for x in picks:
+        markets[x["result"]["pick"]["market"]] = markets.get(x["result"]["pick"]["market"], 0) + 1
+    print(json.dumps({"descriptive_only_not_statistically_meaningful": {
+        "withRecommendation": len(picks), "withoutRecommendation": len(ok_rows) - len(picks),
+        "markets": markets,
+        "meanPredictedProbabilityOfPicks": round(sum((x["result"]["pick"].get("probability") or 0) for x in picks)
+                                                  / len(picks), 3) if picks else None,
+        "noBetReasons": sorted({(x["result"].get("forecast") or {}).get("noBetReason") or "-" for x in ok_rows}),
+        "outcomesOfPicks": "see the Result column: whether each pick came true is read from the 90-minute score",
+    }}, ensure_ascii=False, indent=1))
     print("| League | Match (table places) | Kickoff UTC | Kind | 1/X/2 | Pick | Reason | Result (90') | Time s | Tokens in/out | $ |")
     print("|---|---|---|---|---|---|---|---|---|---|---|")
     for x in ledger:
