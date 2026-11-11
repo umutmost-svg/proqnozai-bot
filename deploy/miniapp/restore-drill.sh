@@ -24,7 +24,12 @@ cleanup() {
     ids=$(docker ps -aq -f "label=sporbot.drill=$TOKEN") || { echo "CLEANUP FAILED: listing containers"; rc=1; ids=""; }
     for id in $ids; do docker rm -f "$id" >/dev/null 2>&1 || { echo "CLEANUP FAILED: container $id"; rc=1; }; done
   fi
-  [ -n "$VOL" ] && { docker volume rm "$T" >/dev/null 2>&1 || { echo "CLEANUP FAILED: volume $T"; rc=1; }; }
+  # The volume only if it carries this run's token (it may have been created before the ownership check failed).
+  if [ -n "$VOL" ]; then
+    lbl=$(docker volume inspect -f '{{index .Labels "sporbot.drill"}}' "$T" 2>/dev/null) || lbl=""
+    if [ "$lbl" = "$TOKEN" ]; then docker volume rm "$T" >/dev/null 2>&1 || { echo "CLEANUP FAILED: volume $T"; rc=1; }
+    elif docker volume inspect "$T" >/dev/null 2>&1; then echo "CLEANUP: volume $T is not this run's — left alone"; rc=1; fi
+  fi
   [ -n "$W" ] && { rm -rf "$W" || { echo "CLEANUP FAILED: $W"; rc=1; }; }
   [ "$rc" -eq 0 ] && [ -n "${OK:-}" ] && echo "DRILL OK: $S restored into a test volume, integrity ok, container healthy, cleaned up"
   exit "$rc"
@@ -35,9 +40,9 @@ W=$(mktemp -d "${WORK:-/root}/sporbot-drill.XXXXXX")
 cp -a "$SRC/$S" "$W/$S"
 # A volume is ours only if it carries this run's token: `volume create` silently returns an existing one.
 TOKEN=$(basename "$W")
+VOL=1   # cleanup re-checks the token before removing anything
 docker volume create --label "sporbot.drill=$TOKEN" "$T" >/dev/null
 [ "$(docker volume inspect -f '{{index .Labels "sporbot.drill"}}' "$T")" = "$TOKEN" ] || { echo "STOP: $T is not this run's volume"; exit 1; }
-VOL=1
 docker run --rm -v "$T":/data -v "$W":/in:ro --entrypoint sh "$IMG" -c \
   "cp /in/$S/miniapp.db /in/$S/miniapp.forecasts.db /data/ && chown miniapp:miniapp /data /data/miniapp*.db && chmod 700 /data && chmod 600 /data/miniapp*.db"
 docker run --rm --user miniapp -v "$T":/data -e MINIAPP_DB_PATH=/data/miniapp.db --entrypoint python -i \
