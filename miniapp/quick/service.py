@@ -306,18 +306,21 @@ class QuickService:
         partial = missing or today_failed or (unchecked and not events)
         if result.status != "ok" and partial:
             result = QuickResult(STATUS_UNAVAILABLE, (), result.suitable, None)
-        if datetime.fromtimestamp(now, UTC).date() != today:
-            # The UTC day changed while the data loaded: "today's" picks and "later" matches were
-            # judged against the previous day. Never a mixed answer; asked again it is consistent.
-            result, next_match_at = QuickResult(STATUS_UNAVAILABLE, (), 0, None), None
-        matches = sum(1 for e in events.values() if parse_instant(e.starts_at).timestamp() > now)
-        by_id = {e.id: e for e in usable}
         preview: tuple[tuple[FootballEvent, MatchForecast], ...] = ()
         if result.status != "ok":
             try:
                 preview = await asyncio.wait_for(self._preview(tournaments, today), PREVIEW_WAIT_S)
             except TimeoutError:
                 logger.info("quick.preview_skipped reason=timeout")
+        # Read the clock again after the preview: a day change during it would make a "later" match today's.
+        now = max(now, self._clock())
+        if datetime.fromtimestamp(now, UTC).date() != today:
+            preview = ()
+            # The UTC day changed while the data loaded: "today's" picks and "later" matches were
+            # judged against the previous day. Never a mixed answer; asked again it is consistent.
+            result, next_match_at = QuickResult(STATUS_UNAVAILABLE, (), 0, None), None
+        matches = sum(1 for e in events.values() if parse_instant(e.starts_at).timestamp() > now)
+        by_id = {e.id: e for e in usable}
         return QuickAnswer(criteria, result, by_id, matches, forecasts, reasons,
                            tuple(unavailable), unchecked,
                            datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), next_match_at,
@@ -341,13 +344,13 @@ class QuickService:
                         and today < parse_instant(e.starts_at).date() and parse_instant(e.starts_at) < horizon):
                     found.append((e, history))
         found.sort(key=lambda x: (x[0].starts_at, x[0].id))
-        chosen = found[:PREVIEW_MAX]
+        chosen = found[:PREVIEW_MAX * 3]  # some may have no model figures: keep looking a little further
         if not chosen:
             return ()
         histories = {e.tournament_id: h for e, h in chosen}
         events = [e for e, _ in chosen]
         outcomes = await asyncio.get_running_loop().run_in_executor(self._worker, self._forecast_all, events, histories)
-        return tuple((e, f) for e, f in zip(events, outcomes, strict=True) if isinstance(f, MatchForecast))
+        return tuple((e, f) for e, f in zip(events, outcomes, strict=True) if isinstance(f, MatchForecast))[:PREVIEW_MAX]
 
     def _prices(self, result: QuickResult, events: dict[str, FootballEvent]) -> dict[str, tuple[MarketQuote, float, float]]:
         """The chosen legs' prices: no request, only what the bot has pushed (matched strictly)."""

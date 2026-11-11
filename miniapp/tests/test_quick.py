@@ -465,3 +465,45 @@ def test_cached_model_history_never_asks_the_provider(tmp_path) -> None:
     h = svc.cached_model_history("fd:PL")
     assert h is not None and [e.id for e in h.events] == ["fd:2"] and h.previous_missing == "transient"
     assert len(t.calls) == 1  # only the calendar load itself
+
+
+def test_a_day_change_during_the_preview_drops_it() -> None:
+    later = ev(10, utc="2027-01-16T15:00:00Z", home=(20, "H FC"), away=(40, "A FC"))
+    by_id = {"fd:1": forecast(None, reason="no_qualifying_market"), "fd:10": forecast(None, reason="early_forecast")}
+    clock = {"now": NOW}
+    svc, sports = service([ev(1)], by_id, clock=lambda: clock["now"])
+    sports.cached = {"fd:PL": ModelHistory([later], "2026-08-01", True)}
+
+    def midnight_passes(tournament):  # the preview reads the cache exactly while UTC midnight passes
+        clock["now"] = at("2027-01-16T00:00:01Z").timestamp()
+        return sports.cached.get(tournament)
+
+    sports.cached_model_history = midnight_passes
+    body = pick(svc, f"{DAY}T23:00:00Z")
+    assert body["preview"] == [] and body["status"] == "unavailable"
+
+
+def test_the_preview_keeps_looking_past_matches_without_model_figures() -> None:
+    later = [ev(10 + i, utc=f"2027-01-{16 + i}T15:00:00Z", home=(20 + i, f"H{i} FC"), away=(40 + i, f"A{i} FC"))
+             for i in range(8)]
+    by_id = {"fd:1": forecast(None, reason="no_qualifying_market")}
+    by_id |= {e.id: Unavailable("small_sample") for e in later[:3]}
+    by_id |= {e.id: forecast(None, reason="early_forecast") for e in later[3:]}
+    svc, sports = service([ev(1)], by_id)
+    sports.cached = {"fd:PL": ModelHistory(later, "2026-08-01", True)}
+    assert [p["event"]["id"] for p in pick(svc, f"{DAY}T23:00:00Z")["preview"]] == ["fd:13", "fd:14", "fd:15", "fd:16", "fd:17"]
+
+
+def test_an_old_cached_calendar_is_not_used_for_the_preview(tmp_path) -> None:
+    from miniapp.sports.search import MAX_AGE_S
+    from miniapp.tests.test_sports import FakeTransport, make_service
+    from miniapp.tests.test_tournaments_crests import season_payload
+    from miniapp.tests.conftest import FakeClock
+    clock = FakeClock()
+    t = FakeTransport()
+    svc = make_service(t, clock)
+    t.script = [t.ok(season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0))))]
+    asyncio.run(svc.calendar("football", "fd:PL"))
+    assert svc.cached_model_history("fd:PL") is not None
+    clock.advance(MAX_AGE_S + 1)
+    assert svc.cached_model_history("fd:PL") is None and len(t.calls) == 1

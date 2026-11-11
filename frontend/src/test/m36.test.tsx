@@ -490,6 +490,10 @@ describe('quick prediction errors', () => {
     expect(readQuick(answer({ ...noBet, preview: [item({ event: today, recommendationDay: '2026-11-08' })] }), SINGLE, RANGE, asEvent)).toBeNull();
     expect(readQuick(answer({ ...noBet, preview: Array.from({ length: 6 }, () => item()) }), SINGLE, RANGE, asEvent)).toBeNull();
     expect(readQuick(answer(noBet), SINGLE, RANGE, asEvent)?.preview).toEqual([]); // an older backend: no preview at all
+    const finished = ev(9, 'E', 'F', { startsAt: '2026-11-21T12:30:00Z', status: 'finished' });
+    expect(readQuick(answer({ ...noBet, preview: [item({ event: finished })] }), SINGLE, RANGE, asEvent)).toBeNull();
+    const tennis = ev(10, 'G', 'H', { startsAt: '2026-11-21T12:30:00Z', sport: 'tennis' });
+    expect(readQuick(answer({ ...noBet, preview: [item({ event: tennis })] }), SINGLE, RANGE, asEvent)).toBeNull();
   });
 
   it('a next-match time outside the asked period is a broken answer', () => {

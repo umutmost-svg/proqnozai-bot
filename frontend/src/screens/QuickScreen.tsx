@@ -49,7 +49,12 @@ function successState(answer: QuickAnswer, sentAt: number, receivedAt: number) {
   const first = answer.legs.length ? Math.min(...answer.legs.map((l) => Date.parse(l.event.startsAt))) : Infinity;
   // Time to kickoff as estimated now (server-adjusted), fixed on the monotonic clock.
   const deadline = monotonic.now() + (first - (receivedAt + skewMs));
-  return { status: 'success' as const, answer, skewMs, deadline, keepUntil: monotonic.now() + EMPTY_RESULT_KEEP_MS };
+  // A preview lists matches of later UTC days: at the next UTC midnight (server time) the first of them may
+  // become a match-day one, so the answer goes by then at the latest.
+  const computed = Date.parse(answer.computedAt);
+  const toMidnight = Date.UTC(new Date(computed).getUTCFullYear(), new Date(computed).getUTCMonth(), new Date(computed).getUTCDate() + 1) - computed;
+  const keep = answer.preview.length ? Math.min(EMPTY_RESULT_KEEP_MS, toMidnight) : EMPTY_RESULT_KEEP_MS;
+  return { status: 'success' as const, answer, skewMs, deadline, keepUntil: monotonic.now() + keep };
 }
 
 /** "No matches" / "no pick" answers are about the moment they were computed: kept briefly only. */

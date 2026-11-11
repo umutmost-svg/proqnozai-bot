@@ -1366,6 +1366,8 @@ export function readQuick(
     const [home, draw, away] = [percent(p.home), percent(p.draw), percent(p.away)];
     const day = str(raw.recommendationDay);
     if (!event || home === null || draw === null || away === null || !day || !ZONED_INSTANT.test(event.startsAt)) return null;
+    // Only upcoming football matches; the validated-competition choice is the backend's (its frozen rules).
+    if (event.sport !== 'football' || event.status !== 'upcoming') return null;
     if (home + draw + away < 99 || home + draw + away > 101) return null;
     if (day !== utcDay(event.startsAt) || day <= utcDay(computedAt)) return null;
     if (criteria.tournaments.length && !criteria.tournaments.includes(event.tournamentId)) return null;

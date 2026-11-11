@@ -21,7 +21,7 @@ from .cache import Cached, SportsCache
 from .client import LOW_PRIORITY_DAY_SHARE, LOW_PRIORITY_RESERVE, UpstreamError
 from .crests import CrestStore
 from .football_data import FootballDataAdapter, Season, Standings
-from .search import REFRESH_AFTER_S, WARM_SPACING_S, SearchIndex, search_pacing
+from .search import MAX_AGE_S as SEARCH_MAX_AGE_S, REFRESH_AFTER_S, WARM_SPACING_S, SearchIndex, search_pacing
 from .models import SPORTS, FootballEvent, Provenance, Sport, SportEvent, Tournament
 
 logger = logging.getLogger("miniapp.sports")
@@ -495,10 +495,12 @@ class SportsService:
 
     def cached_model_history(self, tournament_id: str) -> ModelHistory | None:
         """model_history() from what is already in the cache — never a provider request (None when the
-        current calendar is not cached; without a cached previous season the history is partial)."""
+        current calendar is not cached or older than the search's bound; without a cached previous season
+        the history is partial)."""
         code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
         current = self.cache.peek(f"football:calendar:{code}")
-        if current is None or self.football is None:
+        # An old calendar may list a moved or cancelled match as upcoming: same age bound as the search.
+        if current is None or self.football is None or self._clock() - current.fetched_at > SEARCH_MAX_AGE_S:
             return None
         events, season = current.value
         start = season.start
