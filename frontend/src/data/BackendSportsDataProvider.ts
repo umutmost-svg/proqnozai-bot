@@ -11,6 +11,7 @@ import type {
   QuickAnswer,
   QuickCriteria,
   QuickLeg,
+  QuickPreview,
   QuickReason,
   TopMatch,
   BasketballEvent,
@@ -1353,6 +1354,24 @@ export function readQuick(
     // The floor applies to the exact probability; the shown percent may be a point below it.
     if (l.probability < floor - SHOWN_TOLERANCE) return null;
   }
+  // Preview: only without a pick, at most five different later matches, each in the asked competitions,
+  // after the pick's own UTC day, with whole-percent 1/X/2 that add up (rounding: 99..101).
+  const rawPreview = b.preview === undefined ? [] : b.preview;
+  if (!Array.isArray(rawPreview) || rawPreview.length > 5 || (status === 'ok' && rawPreview.length > 0)) return null;
+  const preview: QuickPreview[] = [];
+  for (const raw of rawPreview) {
+    if (!isObj(raw) || !isObj(raw.probabilities)) return null;
+    const event = readEvent(raw.event);
+    const p = raw.probabilities;
+    const [home, draw, away] = [percent(p.home), percent(p.draw), percent(p.away)];
+    const day = str(raw.recommendationDay);
+    if (!event || home === null || draw === null || away === null || !day || !ZONED_INSTANT.test(event.startsAt)) return null;
+    if (home + draw + away < 99 || home + draw + away > 101) return null;
+    if (day !== utcDay(event.startsAt) || day <= utcDay(computedAt)) return null;
+    if (criteria.tournaments.length && !criteria.tournaments.includes(event.tournamentId)) return null;
+    preview.push({ event, probabilities: { home, draw, away }, recommendationDay: day });
+  }
+  if (new Set(preview.map((x) => x.event.id)).size !== preview.length) return null;
   return {
     mode: criteria.mode,
     status,
@@ -1368,5 +1387,6 @@ export function readQuick(
     couponOdds,
     experimental: b.experimental,
     computedAt,
+    preview,
   };
 }

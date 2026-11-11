@@ -42,8 +42,8 @@ export function TournamentList({ catalogue }: { catalogue: ReturnType<typeof use
   return <Catalogue tournaments={tournaments} />;
 }
 
-/** Few competitions: one plain list. Many: the main ones, and a search that finds every other one (grouped by
- *  country) — the whole catalogue is never listed at once. */
+/** Few competitions: one plain list. Many: a search field, the main ones first, then every other one
+ *  grouped by country (scrolled), narrowed by the search. */
 function Catalogue({ tournaments }: { tournaments: Tournament[] }) {
   const t = useT();
   const [query, setQuery] = useState('');
@@ -51,7 +51,7 @@ function Catalogue({ tournaments }: { tournaments: Tournament[] }) {
   const shown = tournaments.filter((x) => matchesQuery(x, query, x.area ? areaName(t, x.area) : ''));
   const asked = query.trim() !== '';
   const featured = large && !asked ? shown.filter((x) => x.featured) : [];
-  const rest = large && !asked ? [] : shown;
+  const rest = large && !asked ? shown.filter((x) => !x.featured) : shown;
   const groups = new Map<string, Tournament[]>();
   if (large) {
     for (const x of rest) {

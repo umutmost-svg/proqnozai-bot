@@ -378,17 +378,16 @@ describe('tournament search in the filter', () => {
     expect(within(strip).getByTestId('tournament-search-toggle')).toHaveFocus();
   });
 
-  it('home lists only the main tournaments; every other one is found by the search', async () => {
+  it('home lists the main tournaments, then every other one by country; the search narrows it', async () => {
     const user = userEvent.setup();
     renderApp('#/', { data: manyBackend() });
     const list = await screen.findByTestId('tournament-list');
     await waitFor(() => expect(within(list).getByRole('link', { name: /Premier League/ })).toBeInTheDocument());
-    expect(within(list).queryByRole('link', { name: /Regionalliga/ })).toBeNull();
-    expect(within(list).queryAllByTestId('tournament-group')).toHaveLength(0);
-    await user.type(within(list).getByRole('searchbox'), '   '); // blanks are no query: still the main ones only
-    expect(within(list).queryByRole('link', { name: /Regionalliga/ })).toBeNull();
-    await user.type(within(list).getByRole('searchbox'), 'Bayern');
+    // The whole catalogue stays reachable by scrolling: grouped by country under the main ones.
     expect(within(list).getByRole('link', { name: /Regionalliga Bayern/ })).toBeInTheDocument();
+    expect(within(list).getAllByTestId('tournament-group').length).toBeGreaterThan(0);
+    await user.type(within(list).getByRole('searchbox'), 'Bayern');
+    expect(within(list).getAllByRole('link')).toHaveLength(1);
     // the strip on home uses the same loaded catalogue: its search is there too
     expect(within(screen.getByTestId('tournament-strip')).getByTestId('tournament-search-toggle')).toBeInTheDocument();
   });

@@ -17,6 +17,11 @@ analysis reads. Nothing is ever guessed:
   can be retried later, when the cache is warm; it never turns into "no bet".
 - The model runs on one dedicated worker thread with its own engine; each user may
   run one pick at a time and a few per minute.
+- Without a pick, a short preview: the nearest upcoming matches of the validated competitions
+  (PREVIEW_DAYS ahead, from their season calendars as already cached — the warm-up keeps them —
+  never a provider request) with the model's 1/X/2 and the UTC day their recommendation becomes
+  possible. A preview is never a pick: the match-day rule and the validated-competition rule are
+  unchanged. It is optional: bounded by PREVIEW_WAIT_S (model time), else left out.
 """
 
 from __future__ import annotations
@@ -54,6 +59,9 @@ PER_USER_PER_MINUTE = 6
 MAX_IN_FLIGHT = 4
 # Provider requests always left for everything else in the same minute (catalogue, AI analysis).
 UPSTREAM_RESERVE = 3
+PREVIEW_MAX = 5
+PREVIEW_DAYS = 14
+PREVIEW_WAIT_S = 8.0
 
 
 class QuickBusy(Exception):
@@ -76,6 +84,8 @@ class QuickAnswer:
     next_match_at: str | None = None
     # Current prices of the chosen legs, by event id (strictly matched, fresh; see miniapp/odds).
     prices: dict[str, tuple[MarketQuote, float, float]] = field(default_factory=dict)  # quote, fetched at, valid for
+    # Without a pick: nearest later matches of validated competitions with the model's 1/X/2 (never a pick).
+    preview: tuple[tuple[FootballEvent, MatchForecast], ...] = ()
 
     def to_json(self) -> dict:
         combined = self.result.combined
@@ -99,6 +109,12 @@ class QuickAnswer:
             "experimental": FROZEN.experimental,
             "modelVersion": MODEL_VERSION,
             "computedAt": self.computed_at,
+            "preview": [{
+                "event": e.to_json(),
+                "probabilities": {"home": f.display["1"], "draw": f.display["X"], "away": f.display["2"]},
+                # The UTC day the match-day rule allows a recommendation for it (and only if it passes the rules).
+                "recommendationDay": e.starts_at[:10],
+            } for e, f in self.preview],
         }
 
     def _bounds(self) -> list[int]:
@@ -296,10 +312,42 @@ class QuickService:
             result, next_match_at = QuickResult(STATUS_UNAVAILABLE, (), 0, None), None
         matches = sum(1 for e in events.values() if parse_instant(e.starts_at).timestamp() > now)
         by_id = {e.id: e for e in usable}
+        preview: tuple[tuple[FootballEvent, MatchForecast], ...] = ()
+        if result.status != "ok":
+            try:
+                preview = await asyncio.wait_for(self._preview(tournaments, today), PREVIEW_WAIT_S)
+            except TimeoutError:
+                logger.info("quick.preview_skipped reason=timeout")
         return QuickAnswer(criteria, result, by_id, matches, forecasts, reasons,
                            tuple(unavailable), unchecked,
                            datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), next_match_at,
-                           self._prices(result, by_id))
+                           self._prices(result, by_id), preview)
+
+    async def _preview(self, tournaments: frozenset[str] | None, today: date,
+                       ) -> tuple[tuple[FootballEvent, MatchForecast], ...]:
+        """Nearest later matches of validated competitions with the model's figures; never a pick."""
+        served = {t.id for t in self.sports.tournaments("football")}
+        candidates = sorted(f"fd:{code}" for code in FROZEN.validated
+                            if f"fd:{code}" in served and (tournaments is None or f"fd:{code}" in tournaments))
+        horizon = datetime.combine(today + timedelta(days=PREVIEW_DAYS + 1), datetime.min.time(), UTC)
+        found: list[tuple[FootballEvent, ModelHistory]] = []
+        for tournament in candidates:
+            # Cache only: a preview never costs a provider request (the warm-up keeps calendars cached).
+            history = self.sports.cached_model_history(tournament)
+            if history is None:
+                continue
+            for e in history.events:
+                if (isinstance(e, FootballEvent) and e.status == "upcoming" and e.tournament_id == tournament
+                        and today < parse_instant(e.starts_at).date() and parse_instant(e.starts_at) < horizon):
+                    found.append((e, history))
+        found.sort(key=lambda x: (x[0].starts_at, x[0].id))
+        chosen = found[:PREVIEW_MAX]
+        if not chosen:
+            return ()
+        histories = {e.tournament_id: h for e, h in chosen}
+        events = [e for e, _ in chosen]
+        outcomes = await asyncio.get_running_loop().run_in_executor(self._worker, self._forecast_all, events, histories)
+        return tuple((e, f) for e, f in zip(events, outcomes, strict=True) if isinstance(f, MatchForecast))
 
     def _prices(self, result: QuickResult, events: dict[str, FootballEvent]) -> dict[str, tuple[MarketQuote, float, float]]:
         """The chosen legs' prices: no request, only what the bot has pushed (matched strictly)."""

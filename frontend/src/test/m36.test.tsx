@@ -461,6 +461,37 @@ describe('quick prediction errors', () => {
     await waitFor(() => expect(window.location.hash).toBe('#/matches'));
   });
 
+  it('without a pick the nearest validated matches are shown with the model\'s 1/X/2, never as a pick', async () => {
+    const user = userEvent.setup();
+    const later = ev(7, 'Manchester City FC', 'Fulham FC', { startsAt: '2026-11-21T12:30:00Z' });
+    const preview = [{ event: later, probabilities: { home: 65, draw: 22, away: 13 }, recommendationDay: '2026-11-21' }];
+    const { data } = backend(() => answer({ status: 'no_bet', legs: [], suitable: 0, reasons: { unvalidated_competition: 25 }, preview }));
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    const block = await screen.findByTestId('quick-preview');
+    expect(block).toHaveTextContent('Ближайшие матчи проверенных лиг');
+    expect(block).toHaveTextContent('Это не рекомендация');
+    const item = within(block).getByTestId('quick-preview-item');
+    expect(item).toHaveTextContent('Manchester City FC');
+    expect(item).toHaveTextContent('65% / 22% / 13%');
+    expect(item).toHaveTextContent('Рекомендация возможна 21');
+    expect(screen.queryByTestId('quick-leg')).toBeNull();
+  });
+
+  it('a preview that could pass for a pick or does not add up is a broken answer', () => {
+    const later = ev(7, 'A', 'B', { startsAt: '2026-11-21T12:30:00Z' });
+    const item = (over: Record<string, unknown> = {}) => ({ event: later, probabilities: { home: 65, draw: 22, away: 13 }, recommendationDay: '2026-11-21', ...over });
+    const noBet = { status: 'no_bet', legs: [], suitable: 0 };
+    expect(readQuick(answer({ ...noBet, preview: [item()] }), SINGLE, RANGE, asEvent)?.preview).toHaveLength(1);
+    expect(readQuick(answer({ preview: [item()] }), SINGLE, RANGE, asEvent)).toBeNull(); // never next to a pick
+    expect(readQuick(answer({ ...noBet, preview: [item({ probabilities: { home: 70, draw: 22, away: 13 } })] }), SINGLE, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ ...noBet, preview: [item({ recommendationDay: '2026-11-22' })] }), SINGLE, RANGE, asEvent)).toBeNull();
+    const today = ev(8, 'C', 'D', { startsAt: '2026-11-08T20:00:00Z' });
+    expect(readQuick(answer({ ...noBet, preview: [item({ event: today, recommendationDay: '2026-11-08' })] }), SINGLE, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ ...noBet, preview: Array.from({ length: 6 }, () => item()) }), SINGLE, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer(noBet), SINGLE, RANGE, asEvent)?.preview).toEqual([]); // an older backend: no preview at all
+  });
+
   it('a next-match time outside the asked period is a broken answer', () => {
     expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-12T20:00:00Z' }), SINGLE, RANGE, asEvent)).toBeNull();
     expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-31T15:00:00Z' }), SINGLE, RANGE, asEvent)).toBeNull();

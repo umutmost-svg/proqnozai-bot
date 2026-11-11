@@ -426,6 +426,13 @@ export interface QuickLeg {
   price: (MarketQuote & { fetchedAt: string; expires: PriceDeadline }) | null;
 }
 
+export interface QuickPreview {
+  event: SportEvent;
+  probabilities: { home: number; draw: number; away: number };
+  /** UTC day (YYYY-MM-DD) of the match: the only day the rules may recommend it. */
+  recommendationDay: string;
+}
+
 export interface QuickAnswer {
   mode: QuickMode;
   /** unavailable: today's data could not be loaded now (retry later; never a "no bet"). */
@@ -453,4 +460,9 @@ export interface QuickAnswer {
   couponOdds: { odds: number; fetchedAt: string; expires: PriceDeadline } | null;
   experimental: boolean;
   computedAt: string;
+  /**
+   * Without a pick only: the nearest later matches of the validated competitions with the model's 1/X/2
+   * and the UTC day a recommendation becomes possible. Never a pick (the rules are unchanged).
+   */
+  preview: readonly QuickPreview[];
 }

@@ -8,7 +8,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { ALL_TOURNAMENTS } from '../data/filter';
 import { quickPicks } from '../data/tournaments';
 import { DataError } from '../data/provider';
-import type { PriceDeadline, QuickAnswer, QuickCriteria, QuickLeg, QuickReason } from '../data/models';
+import type { PriceDeadline, QuickAnswer, QuickCriteria, QuickLeg, QuickPreview, QuickReason } from '../data/models';
 import { QUICK_REASONS } from '../data/models';
 import {
   COUPON_SIZES,
@@ -351,6 +351,48 @@ function NextSteps({ answer, period, onWeek }: { answer: QuickAnswer; period: Qu
   );
 }
 
+/**
+ * Without a pick: the nearest later matches of the validated leagues with the model's 1/X/2. Not a
+ * recommendation — it says on which (UTC) day one may appear, if the outcome passes the rules then.
+ */
+function Preview({ items }: { items: readonly QuickPreview[] }) {
+  const { t, timeZone } = useSettings();
+  const { data } = useServices();
+  const navigate = useNavigate();
+  return (
+    <section className={s.card} data-testid="quick-preview">
+      <h2 className={s.resultTitle}>{t('quick.preview.title')}</h2>
+      <p className={s.hint}>{t('quick.preview.note')}</p>
+      {items.map(({ event, probabilities: p, recommendationDay }) => {
+        const start = new Date(event.startsAt);
+        return (
+          <article key={event.id} className={s.leg} data-testid="quick-preview-item" data-event={event.id}>
+            <button type="button" className={s.legMatch} onClick={() => navigate(`/event/${event.id}`)}>
+              <span className={s.legTeams}>
+                <span className={s.legTeam}>
+                  <Emblem competitor={event.home} size={28} crestBox={22} variant="plain" />
+                  {event.home.name}
+                </span>
+                <span className={s.legTeam}>
+                  <Emblem competitor={event.away} size={28} crestBox={22} variant="plain" />
+                  {event.away.name}
+                </span>
+              </span>
+              <span className={s.legMeta}>
+                {data.getTournament(event.tournamentId)?.name}
+                <br />
+                {`${formatDayMonth(t, dayKeyOf(start, timeZone))} · ${timeOf(start, timeZone)}`}
+              </span>
+            </button>
+            <p className={s.legProbability}>{t('quick.preview.odds', { home: p.home, draw: p.draw, away: p.away })}</p>
+            <p className={s.hint}>{t('quick.preview.day', { date: formatDayMonth(t, recommendationDay) })}</p>
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
 /** The earliest of the answer's price deadlines: every price goes at once (a coupon is one view). */
 function firstDeadline(answer: QuickAnswer): PriceDeadline | undefined {
   const all = [...answer.legs.map((l) => l.price?.expires), answer.couponOdds?.expires].filter((d): d is PriceDeadline => !!d);
@@ -385,6 +427,7 @@ function Result({ answer, period, onWeek }: { answer: QuickAnswer; period: Quick
           <EmptyState title={t('quick.empty.noBetTitle')} text={t('quick.empty.noBetText')} testId="quick-no-bet" />
         )}
         {answer.status !== 'unavailable' && <NextSteps answer={answer} period={period} onWeek={onWeek} />}
+        {answer.preview.length > 0 && <Preview items={answer.preview} />}
         {!empty || answer.status === 'unavailable' || answer.uncheckedDays > 0 ? (
           <Counts answer={answer} />
         ) : (

@@ -129,6 +129,10 @@ class StubSports:
         return EventsResult(sport, [e for e in self._events if start <= at(e.starts_at) < end], [], FETCHED, self.stale)
 
     transient: frozenset = frozenset()
+    cached: dict = {}  # tournament -> ModelHistory available without a request (the preview)
+
+    def cached_model_history(self, tournament):
+        return self.cached.get(tournament)
 
     async def model_history(self, tournament):
         self.history_calls.append(tournament)
@@ -400,3 +404,64 @@ def test_unvalidated_competitions_cost_no_history_requests() -> None:
     body = pick(svc, f"{DAY}T23:59:00Z")
     assert sports.history_calls == ["fd:PL"]  # the Süper Lig match was classified without a request
     assert body["reasons"].get(NO_BET_UNVALIDATED) == 1
+
+
+# --- preview: without a pick, the nearest later matches of validated competitions (cache only) -------
+
+def test_no_pick_shows_the_nearest_later_validated_matches_from_cache_only() -> None:
+    today = [ev(1)]
+    later = [ev(10 + i, utc=f"2027-01-{16 + i}T15:00:00Z", home=(20 + i, f"H{i} FC"), away=(40 + i, f"A{i} FC"))
+             for i in range(7)]
+    far = ev(30, utc="2027-02-20T15:00:00Z", home=(60, "Far FC"), away=(61, "Away FC"))  # beyond 14 days
+    pd = ev(31, code="PD", utc="2027-01-16T12:00:00Z", home=(62, "P FC"), away=(63, "Q FC"))
+    by_id = {"fd:1": forecast(None, reason="no_qualifying_market")}
+    by_id |= {e.id: forecast(None, reason="early_forecast") for e in later + [far, pd]}
+    svc, sports = service(today, by_id)
+    sports.cached = {"fd:PL": ModelHistory(today + later + [far], "2026-08-01", True),
+                     "fd:PD": ModelHistory([pd], "2026-08-01", True)}
+    body = pick(svc, f"{DAY}T23:00:00Z")
+    assert body["status"] == STATUS_NO_BET
+    preview = body["preview"]
+    # five nearest, later days only, both competitions, sorted by kickoff; nothing for the far one
+    assert [p["event"]["id"] for p in preview] == ["fd:31", "fd:10", "fd:11", "fd:12", "fd:13"]
+    assert all(p["recommendationDay"] == p["event"]["startsAt"][:10] for p in preview)
+    p0 = preview[0]["probabilities"]
+    assert set(p0) == {"home", "draw", "away"} and 99 <= sum(p0.values()) <= 101
+    assert sorted(sports.history_calls) == ["fd:PL"]  # only today's own competition: the preview asked nothing
+
+
+def test_preview_respects_the_tournament_filter_and_is_absent_with_a_pick() -> None:
+    today = [ev(1)]
+    pd = ev(31, code="PD", utc="2027-01-16T12:00:00Z", home=(62, "P FC"), away=(63, "Q FC"))
+    later_pl = ev(10, utc="2027-01-17T15:00:00Z", home=(20, "H FC"), away=(40, "A FC"))
+    by_id = {"fd:1": forecast(None, reason="no_qualifying_market"), "fd:31": forecast(None, reason="early_forecast"),
+             "fd:10": forecast(None, reason="early_forecast")}
+    svc, sports = service(today, by_id)
+    sports.cached = {"fd:PL": ModelHistory([later_pl], "2026-08-01", True), "fd:PD": ModelHistory([pd], "2026-08-01", True)}
+    body = pick(svc, f"{DAY}T23:00:00Z", tournaments=frozenset({"fd:PL"}))
+    assert [p["event"]["id"] for p in body["preview"]] == ["fd:10"]
+    svc2, sports2 = service(today, {"fd:1": forecast(("1", 0.64, 0.45)), "fd:10": forecast(None, reason="early_forecast")})
+    sports2.cached = {"fd:PL": ModelHistory([later_pl], "2026-08-01", True)}
+    assert pick(svc2, f"{DAY}T23:00:00Z")["status"] == STATUS_OK
+    assert pick(svc2, f"{DAY}T23:00:00Z", user=2)["preview"] == []
+
+
+def test_without_cached_calendars_there_is_no_preview_and_no_request() -> None:
+    svc, sports = service([ev(1)], {"fd:1": forecast(None, reason="no_qualifying_market")})
+    body = pick(svc, f"{DAY}T23:00:00Z")
+    assert body["preview"] == [] and sports.history_calls == ["fd:PL"]
+
+
+def test_cached_model_history_never_asks_the_provider(tmp_path) -> None:
+    from miniapp.tests.test_sports import FakeTransport, make_service
+    from miniapp.tests.test_tournaments_crests import season_payload
+    from miniapp.tests.conftest import FakeClock
+    clock = FakeClock()
+    t = FakeTransport()
+    svc = make_service(t, clock)
+    assert svc.cached_model_history("fd:PL") is None and t.calls == []
+    t.script = [t.ok(season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0))))]
+    asyncio.run(svc.calendar("football", "fd:PL"))
+    h = svc.cached_model_history("fd:PL")
+    assert h is not None and [e.id for e in h.events] == ["fd:2"] and h.previous_missing == "transient"
+    assert len(t.calls) == 1  # only the calendar load itself

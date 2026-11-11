@@ -493,6 +493,25 @@ class SportsService:
             if speculative is not None and not speculative.done():
                 speculative.cancel()  # only this waiter: the shielded cache load runs on and is kept
 
+    def cached_model_history(self, tournament_id: str) -> ModelHistory | None:
+        """model_history() from what is already in the cache — never a provider request (None when the
+        current calendar is not cached; without a cached previous season the history is partial)."""
+        code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+        current = self.cache.peek(f"football:calendar:{code}")
+        if current is None or self.football is None:
+            return None
+        events, season = current.value
+        start = season.start
+        past_events: list[SportEvent] = []
+        missing: str | None = None
+        if start is not None:
+            past = self.cache.peek(f"football:season:{code}:{int(start[:4]) - 1}")
+            if past is not None:
+                past_events = list(past.value[0])
+            else:
+                missing = "transient"
+        return ModelHistory(past_events + list(events), start, bool(past_events), missing)
+
     async def _past_season(self, tournament_id: str, year: int, *, background: bool = False,
                            ) -> tuple[list[SportEvent] | None, str | None]:
         """The goal model's previous season: (events, None), or (None, why it is missing). A background
