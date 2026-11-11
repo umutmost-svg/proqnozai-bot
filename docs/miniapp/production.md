@@ -248,8 +248,8 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 8. **[сервер] Ежедневные бэкапы:** скопировать `deploy/miniapp/backup-job.sh` в `/opt/sporbot/` (0700, root),
    один раз задать в нём `SVC`, `OFFSITE_KIND` (`rclone` / `ssh` / `disk`), `OFFSITE` (для `disk` — каталог на
    внешнем диске с файлом-меткой `.sporbot-offsite`, созданным на самом диске) и `NOTIFY` (команда уведомления владельцу); cron root: `17 3 * * * /opt/sporbot/backup-job.sh >> /var/log/sporbot-backup.log 2>&1`.
-   Задание: копия обеих БД с `integrity_check` → внешняя копия → хранение 7 дней (удаляются только каталоги-копии
-   вида `YYYYMMDDTHHMMSSZ[-n]`; приёмник лучше отдельный); любой сбой — код ≠ 0 и
+   Задание: копия обеих БД с `integrity_check` → внешняя копия → хранение 7 дней (удаляются только каталоги, имя которых
+   в точности `YYYYMMDDTHHMMSSZ` или `YYYYMMDDTHHMMSSZ-n`, по времени UTC из самого имени; приёмник лучше отдельный); любой сбой — код ≠ 0 и
    `NOTIFY`. Первый запуск — вручную, проверить `OK:` в логе и наличие копии во внешнем приёмнике. **Проверка
    уведомления:** `OFFSITE_KIND=test /opt/sporbot/backup-job.sh` — задание обязано упасть и владелец обязан получить
    уведомление «backup failed: OFFSITE_KIND is not configured»; без этого задание не считается настроенным. Один раз —

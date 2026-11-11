@@ -21,9 +21,16 @@ NOTIFY="${NOTIFY:-<command that alerts the owner>}"
 KEEP_DAYS="${KEEP_DAYS:-7}"
 DIR="${SPORBOT_DIR:-/opt/sporbot}"
 
-# Only this job's copies are ever deleted: top-level directories named like a backup stamp, older than KEEP_DAYS.
-STAMPS='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z*'
-AGE="+$((KEEP_DAYS * 1440))"   # minutes: exactly KEEP_DAYS days (find -mtime +N would mean N+1 days)
+# Only this job's copies are ever deleted: directories named EXACTLY like a backup stamp
+# (YYYYMMDDTHHMMSSZ or YYYYMMDDTHHMMSSZ-n), older than KEEP_DAYS judged by the UTC time in the name itself
+# (the same rule for every destination, independent of file times).
+now=$(date -u +%s)
+CUTOFF=$(date -u -d "@$((now - KEEP_DAYS * 86400))" +%Y%m%dT%H%M%SZ 2>/dev/null \
+  || date -u -r "$((now - KEEP_DAYS * 86400))" +%Y%m%dT%H%M%SZ)
+expired() { while read -r n; do
+    printf '%s\n' "$n" | grep -Eq '^[0-9]{8}T[0-9]{6}Z(-[0-9]+)?$' || continue
+    [ "$(printf '%.16s' "$n")" \< "$CUTOFF" ] && printf '%s\n' "$n"
+  done; }
 fail() { echo "$(date -u +%FT%TZ) FAIL: $1"; sh -c "$NOTIFY \"\$1\"" _ "backup failed: $1" || true; exit 1; }
 
 case "$OFFSITE_KIND" in rclone|ssh|disk) ;; *) fail "OFFSITE_KIND is not configured" ;; esac
@@ -44,20 +51,21 @@ chmod -R go-rwx "$local_copy" || fail "chmod host copy"
 case "$OFFSITE_KIND" in
   rclone)
     rclone copy "$local_copy" "$OFFSITE/$stamp" || fail "rclone copy"
-    rclone delete "$OFFSITE" --min-age "${KEEP_DAYS}d" --include "/${STAMPS}/**" || fail "rclone retention"
-    rclone rmdirs "$OFFSITE" --leave-root || fail "rclone rmdirs" ;;
+    names=$(rclone lsf --dirs-only "$OFFSITE") || fail "rclone list"
+    for n in $(printf '%s\n' "$names" | sed 's#/$##' | expired); do rclone purge "$OFFSITE/$n" || fail "rclone retention"; done ;;
   ssh)
     host=${OFFSITE%%:*}; path=${OFFSITE#*:}
     rsync -a "$local_copy/" "$OFFSITE/$stamp/" || fail "rsync"
-    ssh "$host" "find '$path' -mindepth 1 -maxdepth 1 -type d -name '$STAMPS' -mmin $AGE -exec rm -rf {} +" || fail "ssh retention" ;;
+    names=$(ssh "$host" "ls -1 '$path'") || fail "ssh list"
+    for n in $(printf '%s\n' "$names" | expired); do ssh "$host" "rm -rf '$path/$n'" || fail "ssh retention"; done ;;
   disk)
     [ -f "$OFFSITE/.sporbot-offsite" ] || fail "external disk not mounted (no $OFFSITE/.sporbot-offsite)"
     cp -a "$local_copy" "$OFFSITE/$stamp" || fail "copy to disk"
-    find "$OFFSITE" -mindepth 1 -maxdepth 1 -type d -name "$STAMPS" -mmin "$AGE" -exec rm -rf {} + || fail "disk retention" ;;
+    for n in $(ls -1 "$OFFSITE" | expired); do rm -rf "${OFFSITE:?}/$n" || fail "disk retention"; done ;;
 esac
 
 # Retention here and inside the volume (the app user owns those copies).
-find "$DIR/backups" -mindepth 1 -maxdepth 1 -type d -name "$STAMPS" -mmin "$AGE" -exec rm -rf {} + || fail "host retention"
-docker exec -u miniapp "$C" find /data/backups -mindepth 1 -maxdepth 1 -type d -name "$STAMPS" -mmin "$AGE" -exec rm -rf {} + \
-  || fail "volume retention"
+for n in $(ls -1 "$DIR/backups" | expired); do rm -rf "$DIR/backups/$n" || fail "host retention"; done
+names=$(docker exec -u miniapp "$C" ls -1 /data/backups) || fail "volume list"
+for n in $(printf '%s\n' "$names" | expired); do docker exec -u miniapp "$C" rm -rf "/data/backups/$n" || fail "volume retention"; done
 echo "$(date -u +%FT%TZ) OK: $stamp copied ($OFFSITE_KIND)"
