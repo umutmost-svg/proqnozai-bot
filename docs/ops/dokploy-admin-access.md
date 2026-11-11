@@ -85,12 +85,18 @@
    (было 200); `…httpworker…sslip.io` → 401 как прежде. Маршрут больше никому не нужен: панель — через туннель
    на :3000. Ошибка в правиле тоже даёт 404 (роутер не загрузится) — поэтому обязательна проверка логов
    Traefik выше. Откат: вернуть копию файла.
-   **Повторяющаяся проверка** (Dokploy может переписать маршрут при смене «Web Server/Domain» или обновлении):
-   cron root на сервере раз в час —
-   `17 * * * * c=$(curl -s -o /dev/null -w '\%{http_code}' -m 10 -H 'Host: dokploy.docker.localhost' http://164.90.180.208/); [ "$c" = 404 ] || logger -t dokploy-bypass "OPEN code=$c"`
-   плюс ручной прогон после любого изменения настроек/версии Dokploy; при `OPEN` — повторить шаг 2a.
-   Доставка алерта владельцу — тем же каналом `NOTIFY`, что и бэкапы (`production.md`, шаг 8), когда он будет
-   настроен.
+   **Повторяющаяся проверка с уведомлением — часть шага 2a, без неё шаг не закрыт** (Dokploy может переписать
+   маршрут при смене «Web Server/Domain» или обновлении):
+   - **[владелец]** бесплатный аккаунт healthchecks.io → check `dokploy-bypass`, период 1 ч, grace 1 ч,
+     уведомления на e-mail и/или Telegram владельца; URL пинга (`https://hc-ping.com/<uuid>`) — не секрет уровня
+     ключа, но в репозиторий и чат не публикуется; на сервер — в `/root/.hc-dokploy-bypass` (0600).
+   - cron root раз в час (пинг только при 404; при любом другом ответе — явный сигнал `/fail`):
+     `17 * * * * u=$(cat /root/.hc-dokploy-bypass); c=$(curl -s -o /dev/null -w '\%{http_code}' -m 10 -H 'Host: dokploy.docker.localhost' http://164.90.180.208/); if [ "$c" = 404 ]; then curl -fsS -m 10 -o /dev/null "$u"; else logger -t dokploy-bypass "OPEN code=$c"; curl -fsS -m 10 -o /dev/null "$u/fail"; fi`
+     Нет пинга (сервер/cron/сеть) — healthchecks тоже уведомит по истечении grace.
+   - **Тест уведомления (обязательно):** `curl -fsS "$(cat /root/.hc-dokploy-bypass)/fail"` → владелец получил
+     уведомление; затем `curl -fsS "$(cat /root/.hc-dokploy-bypass)"` → статус снова up.
+   - Плюс ручной прогон после любого изменения настроек или версии Dokploy; при `OPEN` — повторить шаг 2a.
+   Тот же сервис подходит как канал `NOTIFY` для бэкапов (`production.md`, шаг 8).
 3. **[владелец] Public hostname** туннеля: `admin.proqnozai.com` → Service `HTTP` `127.0.0.1:3000`.
    Cloudflare создаёт CNAME на `<id>.cfargotunnel.com` и **отклонит** сохранение, пока есть другая запись
    `admin` (A/AAAA/CNAME): сначала удалить все записи `admin` (значения записаны в шаге 0), потом сохранить
@@ -113,13 +119,16 @@
    | Направление | Протокол | Порты | Источник / назначение |
    |---|---|---|---|
    | Inbound | TCP | 22 | All IPv4, All IPv6 (вход только по ключу; сузить до IP владельца — позже, если IP постоянный) |
-   | Inbound | TCP | 80, 443 | All IPv4, All IPv6 (Traefik: дашборд бота и партнёрские ссылки, затем Mini App) |
+   | Inbound | TCP | 80 | All IPv4, All IPv6 (Traefik: дашборд бота и партнёрские ссылки, затем Mini App) |
+   | Inbound | TCP | 443 | All IPv4, All IPv6 (то же) |
    | Inbound | UDP | 443 | All IPv4, All IPv6 (HTTP/3 Traefik — как сейчас) |
    | Inbound | ICMP | — | All IPv4, All IPv6 |
-   | Outbound | TCP, UDP | All ports | All IPv4, All IPv6 (Telegram, MB, GitHub, Docker Hub, NTP, Cloudflare Tunnel 7844) |
+   | Outbound | TCP | All ports | All IPv4, All IPv6 (Telegram, MB, GitHub, Docker Hub, Cloudflare Tunnel 7844, healthchecks) |
+   | Outbound | UDP | All ports | All IPv4, All IPv6 (DNS 53, NTP 123, Cloudflare Tunnel QUIC 7844) |
    | Outbound | ICMP | — | All IPv4, All IPv6 |
 
-   Всё остальное входящее (в т. ч. **3000**, 2377, 7946, 4789, 8080) — закрыто. UFW не меняется.
+   Каждая строка — отдельное правило DigitalOcean (несмежные порты одним правилом не задаются). Всё остальное
+   входящее (в т. ч. **3000**, 2377, 7946, 4789, 8080) — закрыто. UFW не меняется.
 6. **Проверка после firewall (сразу):**
    - с внешней машины `sh deploy/miniapp/origin-check.sh --ports 164.90.180.208 none 3000` → `RESULT: isolated`;
    - SSH работает (новая сессия, старую не закрывать до проверки);
