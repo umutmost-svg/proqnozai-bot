@@ -211,7 +211,7 @@ Telegram») в режиме `MINIAPP_CSP_MODE=report-only`. Нарушения �
 | Cloudflare | Always Use HTTPS; SSL mode — по разделу «Настройка Cloudflare», шаг 2 (не Flexible; Full (strict), если у сервера доверенный сертификат); Under Attack / Bot Fight не включать — это браузерные челленджи, они ломают API и WebView |
 | Cloudflare Transform Rule | Modify Request Header → Set `X-Edge-Auth` = секрет. Set перезаписывает значение, присланное клиентом |
 | Приложение | без секрета → 403 до любой логики. Origin проверяется до чтения тела. Тело ≤ 8 КиБ (`Content-Length` и потоковый счётчик), строгий JSON. HMAC проверяется до любой записи в БД. Лимит по проверенному `user.id`. Сожжённый initData отклоняется до лимита. Неподписанный трафик не тратит ничей бюджет |
-| uvicorn | `--limit-concurrency 200` (сверх — 503), `--timeout-keep-alive 5`, 1 воркер |
+| uvicorn | `--limit-concurrency 500` (сверх — 503; считаются и простаивающие keep-alive соединения, поэтому выше пула Traefik 200 и ниже мягкого лимита 1024 открытых файлов), `--timeout-keep-alive 95` (дольше 90 с простоя у Traefik — без 502 на гонке закрытия), 1 воркер |
 
 Ответ 429 от Cloudflare — HTML. Frontend распознаёт 429 по статусу
 (`api.ts`), поэтому пользователь видит «Слишком много попыток».

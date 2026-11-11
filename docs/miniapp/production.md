@@ -130,7 +130,7 @@ Deploy бота). Цена — перерыв бота на остановку +
 - BotFather (владелец): username и числовой id production-бота (`MINIAPP_BOT_ID` = часть токена до `:`), текущая
   Menu Button.
 - football-data.org (владелец): аккаунт и тариф для отдельного ключа Mini App.
-- Anthropic Console (владелец): отдельный ключ Mini App и лимит расходов (Workspace spend limit).
+- Anthropic Console (владелец): отдельный ключ Mini App и лимит расходов (Workspace spend limit) — понадобится при включении AI после 20–22.11, на запуске не задаётся.
 - Сервер: результат `prod-discovery.sh` (ниже).
 
 Известно со слов владельца (2026-11-07/08), **не проверено чтением сервера**: DigitalOcean Droplet +
@@ -222,7 +222,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 | `MINIAPP_FOOTBALL_DATA_PER_MINUTE` | `100` при отдельном ключе; `30` в режиме общего ключа (раздел 3) | |
 | `MINIAPP_FOOTBALL_DATA_PER_DAY` | `10000` | |
 | `MINIAPP_FOOTBALL_DATA_COMPETITIONS` | `all` | |
-| `MINIAPP_ANTHROPIC_API_KEY` | ключ Anthropic **только для Mini App** (не `ANTHROPIC_API_KEY` бота) | да |
+| `MINIAPP_ANTHROPIC_API_KEY` | **на публичном запуске НЕ задавать**: AI-разбор выключен (кнопки нет, вызова модели нет) до проверки качества 20–22.11 и исправления условий из `tech-debt.md` («Условия включения AI-разбора»). Потом — ключ Anthropic **только для Mini App** (не `ANTHROPIC_API_KEY` бота) с лимитом расходов | да (позже) |
 | `MINIAPP_AI_PER_USER_DAILY` / `MINIAPP_AI_DAILY_BUDGET` | `10` / `200` (≈ $0,007 за анализ → до ~$1,5 в сутки) | |
 | `MINIAPP_ODDS_FEED_ENABLED` | `false` (экспорт коэффициентов бота в этот релиз не входит) | |
 | `MINIAPP_LOGINS_ENABLED` | `true` (аварийно — `false`) | |
@@ -278,7 +278,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 | 6 | Бэкап и пробное восстановление | `deploy/miniapp/backup.py` от пользователя `miniapp` (обе БД, SQLite backup API, 0600/0700, integrity_check); копия восстановлена в новый volume, новый контейнер здоров, данные совпали | ✅ локально; на сервере — шаги 7–8 и раздел 7 |
 | 7 | Права доступа | секреты только в Dokploy env; порт не публикуется; edge-секрет; volume владелец `miniapp` | на сервере — шаг runbook |
 | 8 | Health check | `/api/health` (чтение БД), Swarm healthcheck из образа | ✅ в образе |
-| 9 | Внешние API | football-data (ключ, план, остаток минуты), Anthropic (ключ Mini App), Telegram (подпись initData) | на сервере — шаг runbook |
+| 9 | Внешние API | football-data (ключ, план, остаток минуты), Telegram (подпись initData); Anthropic — нет: `ai.status` в `/api/sports/coverage` = `not_connected` | на сервере — шаг runbook |
 | 10 | Откат | первый релиз: остановить приложение + вернуть кнопку бота; бот не затронут | план ниже |
 | 11 | Нагрузка football-data | `discovery.txt`: 429 у бота за 7 дней | **ждёт владельца** |
 | 12 | Сверка прогнозов на стенде | первые матчи 12.11; проверка 13.11 ~02:07 (Баку) | **ждёт даты** |
@@ -323,7 +323,7 @@ Telegram. Остаточный риск для бота — контроллер
      доказательство. Способ без перерыва бота (онлайн-копия SQLite backup API изнутри контейнера бота, как
      `backup.py` у Mini App) — отдельная задача и отдельное разрешение: это команда в production-контейнере.
 1. **[владелец] Разрешения и данные:** домен `<MINIAPP_DOMAIN>`, ключи (football-data — отдельный или
-   общий режим; Anthropic для Mini App), `discovery.txt`.
+   общий режим; ключ Anthropic на запуске не задаётся), `discovery.txt`.
 2. **[исполнитель, по разрешению] Push ветки:** проверка из раздела 0 (код = `<TESTED_CODE_SHA>`, Ed25519 в ветке выкладки),
    затем `git push origin release/miniapp-prod`. Перед этим в Dokploy
    убедиться, что у `bot` и `dashboard` branch = `main` (тогда их Autodeploy не сработает).
@@ -442,7 +442,7 @@ Telegram. Остаточный риск для бота — контроллер
    `setChatMenuButton` с `chat_id=<id владельца>` и **сохранённым до шага значением** (`{"type":"default"}` —
    только если сохранено именно оно).
    (бот не перезапускается). iOS/Android/Desktop/Web: вход, главная, поиск турнира, календарь, матч,
-   AI-разбор (1 платный), эмблемы; в Telegram Web — закрыть и открыть Mini App снова, сессия сохраняется.
+   эмблемы; AI-разбора нет (ключ не задан — кнопка AI не показывается, это и проверить); в Telegram Web — закрыть и открыть Mini App снова, сессия сохраняется.
    **Обязательная положительная проверка входа:** в логах Mini App на каждый клиент `auth.session ...
    created=True` и ни одного `auth.rejected reason=bad_signature|missing_signature|bad_signature_format`
    (перед входом `T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)` — после smoke, чей намеренный отказ не считается; затем
