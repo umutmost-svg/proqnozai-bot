@@ -206,7 +206,8 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
    AI-разбор (1 платный), эмблемы; в Telegram Web — закрыть и открыть Mini App снова, сессия сохраняется.
    **Обязательная положительная проверка входа:** в логах Mini App на каждый клиент `auth.session ...
    created=True` и ни одного `auth.rejected reason=bad_signature|missing_signature|bad_signature_format`
-   (`docker service logs sporbot-miniapp --since 30m | grep -E 'auth\.(session|rejected)'`). *Стоп:* любой
+   (перед входом `T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)` — после smoke, чей намеренный отказ не считается; затем
+   `docker service logs sporbot-miniapp --since "$T0" | grep -E 'auth\.(session|rejected)'`). *Стоп:* любой
    такой отказ — неверный `MINIAPP_BOT_ID`/`MINIAPP_TELEGRAM_ENV` или клиент без подписи → выключить кнопку
    владельца, разобрать; запасной вариант — `hmac` с токеном.
 10. **[владелец] Открыть пользователям:** BotFather → production-бот → Menu Button / Main Mini App =
