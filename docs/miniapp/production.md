@@ -187,6 +187,7 @@ Traefik, расписания бэкапов и счётчики 429 football-da
   - Вход в любом случае ограничен ещё и самим приложением (`auth.rate_limited`). Для закрытого запуска
     достаточно варианта Free; перед открытием всем — пересмотреть. Если нужного поля нет в UI — тариф не тот,
     взять вариант для фактического тарифа, не изобретать выражение.
+  - Действие — **Block**; длительность блокировки: Free — 10 с (единственный вариант), Pro — 1 мин.
   - Проверка: правило(а) Enabled (Security → WAF → Rate limiting rules).
 - WAF: для хоста только методы `GET, HEAD, POST`.
 - Cache Rule: `/api/crests/*` — Eligible for cache, «Respect origin» (`public, max-age=86400`, флаг-заменитель —
@@ -338,7 +339,7 @@ Telegram. Остаточный риск для бота — контроллер
          - certFile: /etc/dokploy/traefik/dynamic/certificates/<каталог сертификата>/chain.crt
            keyFile: /etc/dokploy/traefik/dynamic/certificates/<каталог сертификата>/privkey.key
      ```
-     (фактические имена — `ls /etc/dokploy/traefik/dynamic/certificates/`; права файла 0600). Traefik
+     (фактические имена — `ls /etc/dokploy/traefik/dynamic/certificates/`; права файла 0600, владелец root — Traefik у Dokploy работает от root; если иначе — читаемым для его пользователя). Traefik
      подхватывает файл без перезапуска. Это касается только Traefik нового сервера; production-сервер не трогается.
      *Стоп:* после этого issuer всё ещё не CloudFlare Origin или `https://<MINIAPP_DOMAIN>` даёт 525/526 — Mini App не
      открывать, разбирать.
@@ -372,21 +373,18 @@ Telegram. Остаточный риск для бота — контроллер
    docker exec -i -u miniapp $C python - < /opt/sporbot/backup.py                   # первый бэкап, integrity=ok
    ```
    **[владелец] С машины вне Cloudflare и вне серверов** (ноутбук владельца, не с сервера Mini App — проверка
-   его собственного IP с него же ничего не говорит о firewall). Переменные задаются **здесь же**; результат —
-   по коду выхода curl, а не по `000` (пустой адрес тоже даёт `000`):
+   его собственного IP с него же ничего не говорит о firewall):
    ```sh
-   D=<MINIAPP_DOMAIN>; IP=<MINIAPP_SERVER_IP>; IP6=<MINIAPP_SERVER_IPV6 или пусто, если IPv6 у дроплета нет>
-   [ -n "$D" ] && [ -n "$IP" ] || echo "ЗАДАЙТЕ D и IP"
-   probe() { curl -sk -m 8 -o /dev/null "$@"; rc=$?
-     case $rc in 7|28) echo "закрыто (exit $rc)";; 0|22|35|52|56|60) echo "ОТКРЫТО (exit $rc) — СТОП";; *) echo "тест неверен (exit $rc)";; esac; }
-   curl -s -m 8 -o /dev/null https://$D/api/health && echo "контроль: через Cloudflare доступно"   # иначе сеть ноутбука не годится для проверки
-   probe --resolve "$D:443:$IP" "https://$D/"
-   probe "http://$IP/"
-   [ -z "$IP6" ] || { curl -6 -s -m 8 -o /dev/null https://www.cloudflare.com/ && probe -6 --resolve "$D:443:[$IP6]" "https://$D/"; } || echo "у ноутбука нет IPv6 — IPv6 проверить с другой машины"
+   sh deploy/miniapp/origin-check.sh <MINIAPP_DOMAIN> <MINIAPP_SERVER_IP> <MINIAPP_SERVER_IPV6 | none>
    ```
-   Ожидается: контроль доступен, обе (три) пробы — «закрыто». *Стоп:* «ОТКРЫТО» — любой ответ, **включая 403**:
-   firewall пускает не только Cloudflare; запуск не продолжать до исправления правил. «тест неверен» — повторить
-   с исправленными переменными/сетью. Ошибка 525/526 через `https://$D` — origin-сертификат (шаг 4).
+   `none` — только если в панели DigitalOcean у дроплета IPv6 не включён. Скрипт проверяет входные данные;
+   контроль — `https://<домен>/api/health` через Cloudflare с `{"status":"ok"}` (525/526 и прочие HTTP-ошибки —
+   провал контроля); прямые пробы — без прокси, «закрыто» только если TCP-соединение **не установилось**
+   (соединение, затем таймаут — это «открыто»); IPv6 — только если у этой машины рабочий IPv6, иначе
+   «inconclusive». Код выхода: 0 — `RESULT: origin isolated`; 1 — `ORIGIN REACHABLE` (**стоп**: firewall пускает не
+   только Cloudflare, любой ответ, включая 403); 2 — проверка не состоялась (повторить, для IPv6 — из другой сети).
+   Проверено локально: закрытый адрес → 0, отвечающий адрес → 1 (в т. ч. «соединился и завис»), нет IPv6 / неверный
+   домен / контроль не OK → 2.
    В режиме `ed25519` smoke не может войти сам (подписать вход может только Telegram): положительная
    проверка входа — шаг 9. В режиме `hmac` нужен `-e SMOKE_USER_ID=<id владельца>`: smoke входит под
    аккаунтом владельца и завершает только свою сессию. *Стоп:* любой FAIL.
