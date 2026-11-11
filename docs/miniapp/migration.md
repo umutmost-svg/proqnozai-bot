@@ -100,9 +100,10 @@ Ed25519 не держит токен бота, лента коэффициент
 
 По `production.md`: отдельный дроплет 2 ГБ как Remote Server Dokploy; сборка на нём; том `sporbot-miniapp-data`;
 Cloudflare (proxied, Origin Certificate, Transform Rule, rate limit); firewall только Cloudflare на 80/443;
-Ed25519 без токена бота; отдельные ключи football-data и Anthropic; лимиты AI (на пользователя и в сутки);
+Ed25519 без токена бота; отдельный ключ football-data; **ключа Anthropic на запуске нет** (AI-разбор выключен до
+проверки 20–22.11; отдельный ключ и лимиты AI — при включении, `tech-debt.md`);
 внешние бэкапы `backup-job.sh` + проверенное восстановление `restore-drill.sh`; мониторинг `/api/health`.
-Публичный режим отличается от закрытого только отсутствием `MINIAPP_ALLOWED_USER_IDS` (сессии и вход —
+Публичный режим отличается от закрытого отсутствием `MINIAPP_ALLOWED_USER_IDS` (и в обоих нет ключа Anthropic) (сессии и вход —
 те же); отдельный ключ football-data для публичного режима **обязателен**, не опция.
 
 Для публичного режима rate limit Cloudflare по IP поднять: у мобильных операторов (CGNAT) один IP у многих
