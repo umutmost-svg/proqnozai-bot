@@ -2,18 +2,23 @@
 # READ-ONLY inventory of the production server before the first Mini App release.
 # Run on the Dokploy host as a user that can read Docker (e.g. root):   sh prod-discovery.sh > discovery.txt
 #
-# It changes nothing, starts or restarts nothing, writes no files (output goes to stdout only; no `sort`,
-# no temporary files) and prints no environment values, command lines, log lines, tokens, keys or Dokploy
-# credentials: only names, images, mount points, routing hosts, schedules and counts. Every printed value
-# passes `scrub` (long token-like strings and e-mail addresses are replaced by <redacted>).
-# Load on the live host is kept low: no `docker system df -v` (it walks every filesystem), each bot log is
-# read ONCE, bounded by time and line count, at the lowest CPU/IO priority.
-# Send discovery.txt back; review it first.
+# It changes nothing, starts or restarts nothing and writes no files (stdout only; no `sort`, no temp files).
+# It never prints environment values, command lines, log lines or crontab commands. It DOES print
+# operator-chosen names: Docker service/container/image names, Traefik Host() domains, Dokploy app and cron
+# file names; host paths only under known system roots (others become <host path>). Everything printed
+# passes `scrub` (token-like strings and e-mail addresses -> <redacted>), which cannot recognise every
+# possible secret hidden in a name: READ discovery.txt BEFORE SENDING IT and blank anything sensitive.
+# Load on the live host is bounded: no `docker system df -v`; logs of at most MAX_LOG_CONTAINERS containers,
+# each read once with --since/--tail and a hard timeout, at the lowest CPU/IO priority of the client.
 set -u
 
-LOG_TAIL=300000   # at most this many recent log lines per bot container (one pass)
+LOG_TAIL=100000          # at most this many recent log lines per bot container (one pass)
+LOG_TIMEOUT=90           # seconds per container read, hard stop
+MAX_LOG_CONTAINERS=5
 LOW="nice -n 19"
 command -v ionice >/dev/null 2>&1 && LOW="ionice -c3 nice -n 19"
+STOP=""
+command -v timeout >/dev/null 2>&1 && STOP="timeout $LOG_TIMEOUT"
 
 section() { printf '\n===== %s =====\n' "$1"; }
 # Masks anything that could be a credential or a personal address, whatever field it came from.
@@ -24,12 +29,19 @@ if command -v perl >/dev/null 2>&1; then
 else
   scrub() { sed -E 's/[A-Za-z0-9_+\/]{24,}={0,2}/<redacted>/g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<redacted-email>/g'; }
 fi
+# Host paths of bind mounts: shown only under known system roots, anything else as <host path>.
+paths() { awk '{ out = ""; for (i = 1; i <= NF; i++) { f = $i
+    if (f ~ /^bind:\//) { split(f, a, "->"); src = substr(a[1], 6)
+      if (src !~ /^\/(etc\/dokploy|var\/lib\/docker|var\/run\/docker\.sock|run\/docker\.sock|etc\/letsencrypt)/) src = "<host path>"
+      f = "bind:" src "->" a[2] }
+    out = out (i > 1 ? " " : "") f }
+  print out }'; }
 # Runs a read-only command and says so when it fails, instead of an empty, misleading section.
 run() { out=$("$@" 2>&1); rc=$?; printf '%s\n' "$out" | scrub; [ $rc -eq 0 ] || echo "ERROR: '$1' failed (exit $rc)"; }
 dedupe() { awk '!seen[$0]++'; }
 
 section "host"
-uname -srm; uptime
+{ uname -srm; uptime; } | scrub
 run df -h /
 [ -d /var/lib/docker ] && run df -h /var/lib/docker
 run free -m
@@ -42,7 +54,7 @@ run docker service ls --format '{{.Name}}\t{{.Image}}\t{{.Replicas}}\t{{.Ports}}
 section "service update/rollback order, restart policy, mount points (no env)"
 for s in $(docker service ls --format '{{.Name}}' 2>/dev/null); do
   docker service inspect "$s" --format \
-    '{{.Spec.Name}} update={{with .Spec.UpdateConfig}}{{.Order}}/{{.FailureAction}}{{end}} rollback={{with .Spec.RollbackConfig}}{{.Order}}{{end}} restart={{with .Spec.TaskTemplate.RestartPolicy}}{{.Condition}}{{end}} mounts={{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Type}}:{{.Source}}->{{.Target}}{{if .ReadOnly}}(ro){{end}} {{end}}' 2>&1 | scrub
+    '{{.Spec.Name}} update={{with .Spec.UpdateConfig}}{{.Order}}/{{.FailureAction}}{{end}} rollback={{with .Spec.RollbackConfig}}{{.Order}}{{end}} restart={{with .Spec.TaskTemplate.RestartPolicy}}{{.Condition}}{{end}} mounts={{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Type}}:{{.Source}}->{{.Target}}{{if .ReadOnly}}(ro){{end}} {{end}}' 2>&1 | paths | scrub
 done
 
 section "running containers (name, image, status, published ports)"
@@ -50,16 +62,16 @@ run docker ps --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 
 section "container mounts (no env)"
 for c in $(docker ps --format '{{.Names}}'); do
-  docker inspect "$c" --format '{{.Name}} {{range .Mounts}}{{.Type}}:{{if .Name}}{{.Name}}{{else}}{{.Source}}{{end}}->{{.Destination}}{{if not .RW}}(ro){{end}} {{end}}' 2>&1 | scrub
+  docker inspect "$c" --format '{{.Name}} {{range .Mounts}}{{.Type}}:{{if .Name}}{{.Name}}{{else}}{{.Source}}{{end}}->{{.Destination}}{{if not .RW}}(ro){{end}} {{end}}' 2>&1 | paths | scrub
 done
 
 section "docker volumes (names only; sizes deliberately not measured)"
 run docker volume ls --format '{{.Name}}'
 
 section "traefik routing: hosts only"
-for d in /etc/dokploy/traefik/dynamic /etc/dokploy/traefik; do
-  [ -d "$d" ] && grep -rhoE 'Host\(`[^`]+`\)' "$d" 2>/dev/null | dedupe | scrub
-done
+# Only small config files, two levels deep: no unbounded recursive read.
+[ -d /etc/dokploy/traefik ] && find /etc/dokploy/traefik -maxdepth 2 -type f \( -name '*.yml' -o -name '*.yaml' -o -name '*.toml' \) -size -1024k \
+  -exec grep -hoE 'Host\(`[^`]+`\)' {} + 2>/dev/null | dedupe | scrub
 
 section "dokploy version / applications (names only)"
 docker ps --format '{{.Image}}' | grep -i dokploy | dedupe | scrub
@@ -82,16 +94,22 @@ for f in /etc/cron.d/*; do [ -f "$f" ] && printf '%s: %s entries\n' "$(basename 
 [ -d /etc/dokploy/backups ] && ls /etc/dokploy/backups 2>&1 | head -20 | scrub
 
 section "bot containers: one bounded pass over 7 days of logs (counts only, never a log line)"
+[ -n "$STOP" ] || echo "note: no 'timeout' command here: log reads have no hard time limit"
+n=0
 for c in $(docker ps --format '{{.Names}}' | grep -iE 'bot|proqnoz'); do
-  # One read per container; awk keeps only counters and the top 5 busiest hours (no sort, no temp files).
-  $LOW docker logs --since 168h --timestamps --tail "$LOG_TAIL" "$c" 2>&1 | awk -v name="$c" '
+  n=$((n + 1)); [ "$n" -gt "$MAX_LOG_CONTAINERS" ] && { echo "more bot-like containers: not read (limit $MAX_LOG_CONTAINERS)"; break; }
+  # One read per container, hard-stopped; the exit status travels as a marker so a failed read is reported,
+  # never counted as an empty log. awk keeps counters and the top 5 hours only (no sort, no temp files).
+  { $LOW $STOP docker logs --since 168h --timestamps --tail "$LOG_TAIL" "$c" 2>&1; echo "__READ_RC__=$?"; } | awk -v name="$c" '
+    /^__READ_RC__=/ { rc = substr($0, 13); next }
     { lines++ }
     /football API 429/ { fd429++ }
     /football API/ { fdwarn++ }
     /ERROR|Traceback/ { errors++ }
-    /[Ff]orecast|прогноз/ { hour = substr($1, 1, 13); per[hour]++ }
+    /[Ff]orecast|прогноз/ { hour = substr($1, 1, 13); if (hour ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}$/) per[hour]++ }
     /[Cc]onflict: terminated by other getUpdates/ { conflict++ }
     END {
+      if (rc != 0) { printf "%s: ERROR log read failed or timed out (exit %s); counts below are partial\n", name, rc }
       printf "%s: lines_read=%d football_429=%d football_api_warnings=%d errors=%d getUpdates_conflicts=%d\n", name, lines, fd429, fdwarn, errors, conflict
       for (k = 0; k < 5; k++) { best = ""; max = 0
         for (h in per) if (per[h] > max) { max = per[h]; best = h }
