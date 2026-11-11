@@ -178,12 +178,16 @@ Traefik, расписания бэкапов и счётчики 429 football-da
   SSL/TLS **Full (strict)**; на новом сервере — Cloudflare Origin Certificate в Traefik этого сервера.
 - Transform Rule → Modify Request Header → **Set** (не Add) `X-Edge-Auth` = `<MINIAPP_EDGE_SECRET>` для
   хоста `<MINIAPP_DOMAIN>`: значение, присланное клиентом, всегда перезаписывается.
-- Rate limiting (проверить тариф зоны: на Free доступно **одно** правило с периодом 10 с, на Pro — два):
-  - Pro и выше: `POST /api/auth/session` — 20/мин по IP; весь `/api/*` — 300/мин по IP (защита SQLite и квоты
-    от массовых GET под сессией);
-  - Free: одно правило на `/api/*` — 50 запросов за 10 с по IP; вход дополнительно ограничен самим приложением
-    (лимитер `auth.rate_limited`). Для закрытого запуска этого достаточно; перед открытием всем — пересмотреть.
-  - Проверка: правило в состоянии Enabled (Security → WAF → Rate limiting rules), выражение — хост `<MINIAPP_DOMAIN>`.
+- Rate limiting — по тарифу зоны (по таблице Cloudflare «Availability»: Free — **одно** правило, период 10 с,
+  в выражении только путь URI, без Host; Pro — два правила, Host и путь, без метода). Счёт по IP.
+  - Free: одно правило «URI Path starts with `/api/`» — 50 запросов за 10 с. Без Host оно действует на `/api/`
+    всех хостов зоны — проверить, что другие поддомены зоны (если есть) этим путём не пользуются.
+  - Pro: (1) Host = `<MINIAPP_DOMAIN>` и путь = `/api/auth/session` (любой метод) — 20/мин; (2) Host =
+    `<MINIAPP_DOMAIN>` и путь начинается с `/api/` — 300/мин.
+  - Вход в любом случае ограничен ещё и самим приложением (`auth.rate_limited`). Для закрытого запуска
+    достаточно варианта Free; перед открытием всем — пересмотреть. Если нужного поля нет в UI — тариф не тот,
+    взять вариант для фактического тарифа, не изобретать выражение.
+  - Проверка: правило(а) Enabled (Security → WAF → Rate limiting rules).
 - WAF: для хоста только методы `GET, HEAD, POST`.
 - Cache Rule: `/api/crests/*` — Eligible for cache, «Respect origin» (`public, max-age=86400`, флаг-заменитель —
   3600): поток картинок не доходит до приложения.
@@ -323,9 +327,21 @@ Telegram. Остаточный риск для бота — контроллер
      ключ сохранить сразу (ключ показывается один раз; это секрет — только в Dokploy, не в репозиторий/чат).
    - Dokploy → Certificates → Add Certificate: вставить сертификат и ключ, **Server = сервер Mini App**.
    - В шаге 5 у домена приложения: HTTPS включён, Certificate Provider = **None** (не Let's Encrypt: 80 открыт
-     только Cloudflare, HTTP-01 не пройдёт); Traefik сервера Mini App отдаёт загруженный сертификат по имени хоста.
-     Сверить с документацией Dokploy Certificates (версия v0.29.x) — создать сертификат мало, он должен быть
-     привязан к нужному серверу.
+     только Cloudflare, HTTP-01 не пройдёт).
+   - **Загрузка в Dokploy сама не включает сертификат** (документация Dokploy Certificates; известный дефект с
+     Cloudflare Origin CA): Traefik должен его подгрузить. Проверка — шаг 7 (issuer). Если там «TRAEFIK DEFAULT
+     CERT», на **сервере Mini App** добавить файл динамической конфигурации Traefik (каталог, который Traefik этого
+     сервера читает как file provider; у Dokploy — `/etc/dokploy/traefik/dynamic/`), например `miniapp-tls.yml`:
+     ```yaml
+     tls:
+       certificates:
+         - certFile: /etc/dokploy/traefik/dynamic/certificates/<каталог сертификата>/chain.crt
+           keyFile: /etc/dokploy/traefik/dynamic/certificates/<каталог сертификата>/privkey.key
+     ```
+     (фактические имена — `ls /etc/dokploy/traefik/dynamic/certificates/`; права файла 0600). Traefik
+     подхватывает файл без перезапуска. Это касается только Traefik нового сервера; production-сервер не трогается.
+     *Стоп:* после этого issuer всё ещё не CloudFlare Origin или `https://<MINIAPP_DOMAIN>` даёт 525/526 — Mini App не
+     открывать, разбирать.
    - SSL/TLS режим зоны (или Configuration Rule для хоста) — **Full (strict)**.
    *Стоп:* домен не резолвится через Cloudflare. Проверка TLS — шаг 7.
 5. **[сервер] Dokploy → Create Application** `sporbot-miniapp` **на Remote Server** по таблице раздела 2 (Autodeploy OFF,
@@ -356,14 +372,21 @@ Telegram. Остаточный риск для бота — контроллер
    docker exec -i -u miniapp $C python - < /opt/sporbot/backup.py                   # первый бэкап, integrity=ok
    ```
    **[владелец] С машины вне Cloudflare и вне серверов** (ноутбук владельца, не с сервера Mini App — проверка
-   его собственного IP с него же ничего не говорит о firewall):
+   его собственного IP с него же ничего не говорит о firewall). Переменные задаются **здесь же**; результат —
+   по коду выхода curl, а не по `000` (пустой адрес тоже даёт `000`):
    ```sh
-   curl -sk -m 8 -o /dev/null -w '%{http_code}\n' --resolve $D:443:<MINIAPP_SERVER_IP> https://$D/   # 000 (нет соединения)
-   curl -sk -m 8 -o /dev/null -w '%{http_code}\n' http://<MINIAPP_SERVER_IP>/                         # 000
-   curl -6 -sk -m 8 -o /dev/null -w '%{http_code}\n' --resolve "$D:443:[<MINIAPP_SERVER_IPV6>]" https://$D/   # 000, если у дроплета есть IPv6
+   D=<MINIAPP_DOMAIN>; IP=<MINIAPP_SERVER_IP>; IP6=<MINIAPP_SERVER_IPV6 или пусто, если IPv6 у дроплета нет>
+   [ -n "$D" ] && [ -n "$IP" ] || echo "ЗАДАЙТЕ D и IP"
+   probe() { curl -sk -m 8 -o /dev/null "$@"; rc=$?
+     case $rc in 7|28) echo "закрыто (exit $rc)";; 0|22|35|52|56|60) echo "ОТКРЫТО (exit $rc) — СТОП";; *) echo "тест неверен (exit $rc)";; esac; }
+   curl -s -m 8 -o /dev/null https://$D/api/health && echo "контроль: через Cloudflare доступно"   # иначе сеть ноутбука не годится для проверки
+   probe --resolve "$D:443:$IP" "https://$D/"
+   probe "http://$IP/"
+   [ -z "$IP6" ] || { curl -6 -s -m 8 -o /dev/null https://www.cloudflare.com/ && probe -6 --resolve "$D:443:[$IP6]" "https://$D/"; } || echo "у ноутбука нет IPv6 — IPv6 проверить с другой машины"
    ```
-   *Стоп:* любой ответ, **включая 403** — firewall пускает не только Cloudflare; запуск не продолжать до
-   исправления правил. Ошибка 526/525 через `https://$D` — неверный origin-сертификат (шаг 4).
+   Ожидается: контроль доступен, обе (три) пробы — «закрыто». *Стоп:* «ОТКРЫТО» — любой ответ, **включая 403**:
+   firewall пускает не только Cloudflare; запуск не продолжать до исправления правил. «тест неверен» — повторить
+   с исправленными переменными/сетью. Ошибка 525/526 через `https://$D` — origin-сертификат (шаг 4).
    В режиме `ed25519` smoke не может войти сам (подписать вход может только Telegram): положительная
    проверка входа — шаг 9. В режиме `hmac` нужен `-e SMOKE_USER_ID=<id владельца>`: smoke входит под
    аккаунтом владельца и завершает только свою сессию. *Стоп:* любой FAIL.
@@ -379,16 +402,22 @@ Telegram. Остаточный риск для бота — контроллер
    **Пробное восстановление из внешней копии** (обязательно до шага 9; рабочий сервис и том не трогаются):
    ```sh
    S=<stamp из лога: «OK: <stamp> copied»>; IMG=$(docker service inspect $SVC --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')
+   OFFSITE=<то же значение, что в backup-job.sh>
    mkdir -m 700 -p /root/drill-in
-   rclone copy "$OFFSITE/$S" /root/drill-in/$S        # ssh: rsync -a "$OFFSITE/$S/" /root/drill-in/$S/   disk: cp -a "$OFFSITE/$S" /root/drill-in/
-   sh /opt/sporbot/restore-drill.sh "$S" "$IMG" /root/drill-in /opt/sporbot/backup.py   # DRILL OK …
-   docker exec -i -u miniapp $(docker ps -q -f name=$SVC) python - verify /data/backups/$S < /opt/sporbot/backup.py
+   # одна команда — по OFFSITE_KIND из backup-job.sh:
+   rclone copy "$OFFSITE/$S" /root/drill-in/$S          # rclone
+   # rsync -a "$OFFSITE/$S/" /root/drill-in/$S/        # ssh
+   # cp -a "$OFFSITE/$S" /root/drill-in/               # disk
+   sh /opt/sporbot/restore-drill.sh "$S" "$IMG" /root/drill-in /opt/sporbot/backup.py   # (А) строки integrity/счётчики + DRILL OK
+   docker exec -i -u miniapp $(docker ps -q -f name=$SVC) python - verify /data/backups/$S < /opt/sporbot/backup.py   # (Б)
    rm -rf /root/drill-in
    ```
-   Скрипт: тестовый том `sporbot-restore-test` → обе БД → `integrity_check` и число строк по таблицам → временный
-   контейнер на этом томе без сети и без секретов → `healthy` → том и контейнер удаляются (и при сбое).
-   Числа строк из `DRILL OK`-прогона должны **совпасть** с выводом `verify` той же копии в рабочем томе
-   (последняя команда). *Стоп:* `STOP: …`, расхождение чисел или нездоровый контейнер.
+   Скрипт: уникальный тестовый том → обе БД → `integrity_check` и число строк по таблицам → временный контейнер на
+   этом томе без сети и без секретов → `healthy` → удаляет только созданное им (и при сбое/прерывании; не
+   удалось — `CLEANUP FAILED` и код ≠ 0). Сравнить строки `miniapp.db: integrity=…` и
+   `miniapp.forecasts.db: integrity=…` из (А) — восстановленная **внешняя** копия — и из (Б) — та же метка в рабочем
+   томе: счётчики должны **совпасть** (внешняя копия = локальная). *Стоп:* `STOP: …`, `CLEANUP FAILED`,
+   расхождение чисел или нет `DRILL OK`.
    (Проверено локально на образе `724cea5`: копия → тестовый том → `integrity=ok` → healthy → очистка.)
 9. **[владелец] Проверка в Telegram до открытия всем.** Mini App принимает только запуски из
    production-бота (подпись Telegram для его `MINIAPP_BOT_ID`), поэтому тестовый бот не подойдёт: кнопка
