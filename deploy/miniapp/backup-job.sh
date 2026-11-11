@@ -56,7 +56,7 @@ chmod -R go-rwx "$local_copy" || fail "chmod host copy"
 # The destination must be this job's own (marker), checked before anything is written there.
 case "$OFFSITE_KIND" in
   rclone) listing=$(rclone lsf --files-only --max-depth 1 "$OFFSITE") || fail "rclone list $OFFSITE"
-          printf '%s\n' "$listing" | grep -qx '.sporbot-offsite' || fail "no .sporbot-offsite marker in $OFFSITE" ;;
+          printf '%s\n' "$listing" | grep -Fqx '.sporbot-offsite' || fail "no .sporbot-offsite marker in $OFFSITE" ;;
   ssh) ssh "${OFFSITE%%:*}" "test -f '${OFFSITE#*:}/.sporbot-offsite'" || fail "no .sporbot-offsite marker in $OFFSITE" ;;
   disk) [ -f "$OFFSITE/.sporbot-offsite" ] || fail "external disk not mounted or not dedicated (no $OFFSITE/.sporbot-offsite)" ;;
 esac
