@@ -33,13 +33,14 @@ case "${1:-serve}" in
     # --timeout-keep-alive 95: longer than the proxy's idle timeout to the backend (Traefik's default
     # idleConnTimeout is 90 s); a shorter one lets the app close a connection the proxy is about to
     # reuse, which the user sees as a sporadic 502.
-    # --limit-concurrency 1000: uvicorn counts OPEN connections, idle keep-alive ones included; Traefik
+    # --limit-concurrency 500: uvicorn counts OPEN connections, idle keep-alive ones included; Traefik
     # keeps up to 200 idle connections per backend by default, so the limit must sit well above that
-    # (a limit at 200 would answer 503 to new requests while nothing is running).
+    # (at 200 new requests would get 503 while nothing runs) and below the process's soft limit of 1024
+    # open files (sockets + SQLite files), so overload still gets uvicorn's clean 503.
     exec python -m uvicorn --factory miniapp.asgi:create_app_from_env \
       --host 0.0.0.0 --port "${PORT:-8000}" --workers 1 \
       --no-proxy-headers --no-server-header --no-access-log \
-      --limit-concurrency 1000 --timeout-keep-alive 95 --timeout-graceful-shutdown 10
+      --limit-concurrency 500 --timeout-keep-alive 95 --timeout-graceful-shutdown 10
     ;;
   admin)
     shift
