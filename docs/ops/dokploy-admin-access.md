@@ -78,7 +78,7 @@
    ```sh
    docker run -d --name cloudflared --network host --restart unless-stopped \
      -v /root/cloudflared/token:/etc/cloudflared/token:ro cloudflare/cloudflared:2026.10.5 \
-     tunnel --no-autoupdate --edge-ip-version 4 run --token-file /etc/cloudflared/token
+     tunnel --no-autoupdate --edge-ip-version 4 --metrics 127.0.0.1:20241 run --token-file /etc/cloudflared/token
    docker logs --tail 20 cloudflared   # "Registered tunnel connection", без ошибок
    ```
    Zero Trust → Tunnels: статус **Healthy**.
