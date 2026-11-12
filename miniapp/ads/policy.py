@@ -9,6 +9,7 @@ to a wider audience or a foreign link.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -18,6 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from miniapp.ads import targeting
 from miniapp.store import SUPPORTED_LANGS
@@ -233,13 +238,39 @@ def canonical(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
-def seal(body: dict[str, Any]) -> dict[str, Any]:
-    """The file content: the body plus the SHA-256 of its canonical form."""
-    body = {k: v for k, v in body.items() if k != "sha256"}
-    return {**body, "sha256": hashlib.sha256(canonical(body)).hexdigest()}
+_SEAL_FIELDS = ("sha256", "signature")
 
 
-def parse(raw: bytes) -> Policy:
+def _body(data: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in data.items() if k not in _SEAL_FIELDS}
+
+
+def sign(body: dict[str, Any], key: Ed25519PrivateKey) -> dict[str, Any]:
+    """The file content: the body, the SHA-256 of its canonical form and the admin's Ed25519 signature of it.
+
+    The checksum alone would not do: whoever can write the shared volume could recompute it. Only the admin
+    process holds the private key; the Mini App verifies with the public key from its own env."""
+    body = _body(body)
+    content = canonical(body)
+    return {**body, "sha256": hashlib.sha256(content).hexdigest(),
+            "signature": base64.urlsafe_b64encode(key.sign(content)).decode().rstrip("=")}
+
+
+def public_key_hex(key: Ed25519PrivateKey) -> str:
+    return key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+
+
+def load_public_key(value: str) -> Ed25519PublicKey:
+    try:
+        raw = bytes.fromhex(value)
+        if len(raw) != 32:
+            raise ValueError
+        return Ed25519PublicKey.from_public_bytes(raw)
+    except ValueError:
+        raise PolicyError("bad_public_key") from None
+
+
+def parse(raw: bytes, public_key: Ed25519PublicKey) -> Policy:
     """Validates a snapshot file completely; any defect raises PolicyError (the reader keeps its last good one)."""
     if len(raw) > MAX_FILE_BYTES:
         raise PolicyError("too_large")
@@ -249,9 +280,14 @@ def parse(raw: bytes) -> Policy:
         raise PolicyError("bad_json") from None
     if not isinstance(data, dict) or data.get("schema") != SCHEMA:
         raise PolicyError("bad_schema")
-    sha = data.get("sha256")
-    if not isinstance(sha, str) or seal(data)["sha256"] != sha:
+    content = canonical(_body(data))
+    sha, signature = data.get("sha256"), data.get("signature")
+    if not isinstance(sha, str) or hashlib.sha256(content).hexdigest() != sha:
         raise PolicyError("bad_checksum")
+    try:
+        public_key.verify(base64.urlsafe_b64decode(str(signature) + "=" * (-len(str(signature)) % 4)), content)
+    except (InvalidSignature, ValueError, TypeError):
+        raise PolicyError("bad_signature") from None
     version = _int(data.get("version"), 1, 2**62, "bad_version")
     generated = _int(data.get("generatedAt"), 0, 2**40, "bad_version")
     raw_aud = data.get("audiences")
@@ -277,10 +313,11 @@ def parse(raw: bytes) -> Policy:
     return Policy(version=version, generated_at=generated, campaigns=parsed, audiences=audiences, sha256=sha)
 
 
-def read_version(path: Path) -> int | None:
-    """Version of a valid snapshot file at `path`, or None (missing or invalid)."""
+def read_version(path: Path, public_key: Ed25519PublicKey) -> tuple[int, str] | None:
+    """(version, sha256) of a valid snapshot file at `path`, or None (missing or invalid)."""
     try:
-        return parse(path.read_bytes()).version
+        parsed = parse(path.read_bytes(), public_key)
+        return parsed.version, parsed.sha256
     except (OSError, PolicyError):
         return None
 

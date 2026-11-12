@@ -19,6 +19,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from miniapp.admin_web.accounts import ActionError, Admin, AdminStore, reason_digest
+from miniapp.admin_web.ads import bump_revision as bump_ads_revision
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS crm_tags (
@@ -351,6 +352,7 @@ class CrmStore:
                              "admin_id = excluded.admin_id", (user_id, mb_id, now, actor.id))
             else:
                 conn.execute("DELETE FROM crm_external_ids WHERE user_id = ?", (user_id,))
+            bump_ads_revision(conn)  # MB holders feed the ads audiences: the snapshot is out of date
             self.accounts._event(conn, now, actor.id, "user.mb_id", "user", str(user_id),
                                  {"set": had}, {"set": bool(mb_id)}, None, None, "done")
         return {"mbId": mb_id or None}

@@ -6,7 +6,10 @@ import json
 
 import pytest
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from miniapp.ads import policy, targeting
+from miniapp.admin_web.ads import load_signing_key
 from miniapp.admin_web.demo import DEMO_ID_BASE
 from miniapp.tests.test_admin_web import code, env, login, post  # noqa: F401 — env is a fixture
 
@@ -29,6 +32,10 @@ def campaign_body(partner_id: int, now: int, **extra) -> dict:
             "variants": [{"key": "A", "weight": 100, "headline": "Бонус 100%", "body": "Текст",
                           "extra": "", "cta": "Забрать", "url": "https://partner.example.com/promo?x=1"}],
             **extra}
+
+
+def pub(config):
+    return load_signing_key(config.admin_db.parent / "ads-signing.key").public_key()
 
 
 def dangerous(secrets_, clock, email, key="publish-key-1", **extra) -> dict:
@@ -176,7 +183,7 @@ def test_publish_writes_a_valid_snapshot_with_compiled_audiences(ads_env):
     result = ok.json()
     assert result["after"]["campaigns"] == [cid] and result["fileWritten"] is True
     raw = config.ads_policy_file.read_bytes()
-    snap = policy.parse(raw)
+    snap = policy.parse(raw, pub(config))
     assert snap.version == result["after"]["version"] and [c.id for c in snap.campaigns] == [cid]
     c = snap.campaigns[0]
     assert c.countries == ("AZ",)  # the campaign narrows the partner's list, never widens it
@@ -207,10 +214,10 @@ def test_emergency_stop_pauses_everything_and_publishes_empty(ads_env):
     cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()))).json()["id"]
     post(client, f"/api/admin/ads/campaigns/{cid}/status", csrf, {"action": "activate"})
     publish(client, csrf, secrets_, clock)
-    assert len(policy.parse(config.ads_policy_file.read_bytes()).campaigns) == 1
+    assert len(policy.parse(config.ads_policy_file.read_bytes(), pub(config)).campaigns) == 1
     stop = publish(client, csrf, secrets_, clock, key="stop-key-1", pauseAll=True).json()
     assert stop["after"]["campaigns"] == []
-    assert policy.parse(config.ads_policy_file.read_bytes()).campaigns == ()
+    assert policy.parse(config.ads_policy_file.read_bytes(), pub(config)).campaigns == ()
     assert client.get(f"/api/admin/ads/campaigns/{cid}").json()["status"] == "paused"
 
 
@@ -239,12 +246,85 @@ def test_lost_or_tampered_file_is_rewritten_from_admin_db(ads_env):
     tampered["campaigns"][0]["variants"][0]["url"] = "https://evil.example.org/"
     config.ads_policy_file.write_bytes(json.dumps(tampered).encode())
     with pytest.raises(policy.PolicyError, match="bad_checksum"):
-        policy.parse(config.ads_policy_file.read_bytes())
-    resealed = policy.seal(tampered)  # even a correctly sealed file cannot point outside the partner's hosts
-    with pytest.raises(policy.PolicyError, match="url_host_not_allowed"):
-        policy.parse(policy.canonical(resealed))
+        policy.parse(config.ads_policy_file.read_bytes(), pub(config))
+    # Whoever can write the volume can recompute the checksum, but cannot sign with the admin's key.
+    forged = policy.sign(tampered, Ed25519PrivateKey.generate())
+    with pytest.raises(policy.PolicyError, match="bad_signature"):
+        policy.parse(policy.canonical(forged), pub(config))
+    config.ads_policy_file.write_bytes(policy.canonical(forged))
     client.get("/api/admin/ads/publication")
     assert config.ads_policy_file.read_bytes() == original
+    # Even a file signed by the admin cannot point outside the partner's hosts.
+    with pytest.raises(policy.PolicyError, match="url_host_not_allowed"):
+        policy.parse(policy.canonical(policy.sign(tampered, load_signing_key(config.admin_db.parent / "ads-signing.key"))),
+                     pub(config))
+
+
+def test_same_version_with_other_content_is_repaired(ads_env):
+    config, clock, client, _, secrets_, csrf, pid = ads_env
+    publish(client, csrf, secrets_, clock)
+    original = config.ads_policy_file.read_bytes()
+    other = json.loads(original)
+    other["generatedAt"] += 1
+    key = load_signing_key(config.admin_db.parent / "ads-signing.key")
+    config.ads_policy_file.write_bytes(policy.canonical(policy.sign(other, key)))
+    client.get("/api/admin/ads/publication")
+    assert config.ads_policy_file.read_bytes() == original
+
+
+def test_multi_group_leaf_at_full_depth_still_publishes(ads_env):
+    config, clock, client, _, secrets_, csrf, pid = ads_env
+    g1 = post(client, "/api/admin/ads/groups", csrf, {"name": "G1"}).json()["id"]
+    g2 = post(client, "/api/admin/ads/groups", csrf, {"name": "G2"}).json()["id"]
+    post(client, f"/api/admin/ads/groups/{g1}/members", csrf, {"add": [U1]})
+    post(client, f"/api/admin/ads/groups/{g2}/members", csrf, {"add": [U1, U2]})
+    deep = {"all": [{"any": [{"not": {"group_in": [g1, g2]}}]}]}  # the leaf sits at depth 4
+    cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()), condition=deep)).json()["id"]
+    post(client, f"/api/admin/ads/campaigns/{cid}/status", csrf, {"action": "activate"})
+    result = publish(client, csrf, secrets_, clock).json()
+    assert result["after"]["campaigns"] == [cid] and result["after"]["skipped"] == []
+    snap = policy.parse(config.ads_policy_file.read_bytes(), pub(config))
+    assert snap.audiences == {f"g:{g1},{g2}": frozenset({U1, U2})}
+
+
+def test_unpublished_changes_cover_partners_groups_and_mb_ids(ads_env):
+    config, clock, client, _, secrets_, csrf, pid = ads_env
+    publish(client, csrf, secrets_, clock)
+    assert client.get("/api/admin/ads/publication").json()["unpublishedChanges"] is False
+    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB1"})
+    assert client.get("/api/admin/ads/publication").json()["unpublishedChanges"] is True
+    publish(client, csrf, secrets_, clock, key="publish-key-2")
+    gid = post(client, "/api/admin/ads/groups", csrf, {"name": "G"}).json()["id"]
+    assert client.get("/api/admin/ads/publication").json()["unpublishedChanges"] is True
+    publish(client, csrf, secrets_, clock, key="publish-key-3")
+    post(client, f"/api/admin/ads/groups/{gid}/members", csrf, {"add": [U1]})
+    assert client.get("/api/admin/ads/publication").json()["unpublishedChanges"] is True
+
+
+def test_publication_beyond_reader_limits_is_refused(ads_env, monkeypatch):
+    config, clock, client, accounts, secrets_, csrf, pid = ads_env
+    for _ in range(3):
+        cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()))).json()["id"]
+        post(client, f"/api/admin/ads/campaigns/{cid}/status", csrf, {"action": "activate"})
+    monkeypatch.setattr(policy, "MAX_CAMPAIGNS", 2)
+    result = publish(client, csrf, secrets_, clock)
+    assert result.status_code == 409 and result.json()["error"] == "too_many_campaigns"
+    assert not config.ads_policy_file.exists() and accounts.events(action="ads.publish") == []
+    monkeypatch.setattr(policy, "MAX_CAMPAIGNS", 200)
+    monkeypatch.setattr(policy, "MAX_FILE_BYTES", 500)
+    result = publish(client, csrf, secrets_, clock, key="publish-key-2")
+    assert result.status_code == 409 and result.json()["error"] == "snapshot_too_large"
+
+
+def test_copy_keeps_the_suffix_of_a_long_name(ads_env):
+    _, clock, client, _, _, csrf, pid = ads_env
+    cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()), name="x" * 120)).json()["id"]
+    copy = post(client, f"/api/admin/ads/campaigns/{cid}/copy", csrf, {}).json()["id"]
+    name = client.get(f"/api/admin/ads/campaigns/{copy}").json()["name"]
+    assert len(name) == 120 and name.endswith(" (копия)")
+
+
+KEY = Ed25519PrivateKey.generate()
 
 
 def test_snapshot_reader_rejects_unknown_audience_and_bad_schema():
@@ -254,9 +334,14 @@ def test_snapshot_reader_rejects_unknown_audience_and_bad_schema():
         "disclosure": {}, "condition": {"aud": "g:9"}, "experiment": {"salt": "s" * 16, "controlPct": 0},
         "variants": [{"key": "A", "weight": 100, "headline": "h", "body": "", "extra": "", "cta": "c",
                       "url": "https://a.example.com/"}]}]}
+    pk = KEY.public_key()
     with pytest.raises(policy.PolicyError, match="unknown_audience"):
-        policy.parse(policy.canonical(policy.seal(body)))
+        policy.parse(policy.canonical(policy.sign(body, KEY)), pk)
     body["audiences"] = {"g:9": [1, 2]}
-    assert policy.parse(policy.canonical(policy.seal(body))).audiences["g:9"] == frozenset({1, 2})
+    assert policy.parse(policy.canonical(policy.sign(body, KEY)), pk).audiences["g:9"] == frozenset({1, 2})
     with pytest.raises(policy.PolicyError, match="bad_schema"):
-        policy.parse(policy.canonical(policy.seal({**body, "schema": 2})))
+        policy.parse(policy.canonical(policy.sign({**body, "schema": 2}, KEY)), pk)
+    unsigned = policy.sign(body, KEY)
+    del unsigned["signature"]
+    with pytest.raises(policy.PolicyError, match="bad_signature"):
+        policy.parse(policy.canonical(unsigned), pk)

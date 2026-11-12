@@ -13,12 +13,20 @@ or older. Versions only grow: max(now in ms, last publication + 1, file + 1, Min
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import os
 import secrets
 import sqlite3
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 
 from miniapp.ads import policy, targeting
 from miniapp.ads.policy import PolicyError
@@ -103,7 +111,8 @@ CREATE TABLE IF NOT EXISTS ad_publications (
     campaigns    INTEGER NOT NULL,
     published_at INTEGER NOT NULL,
     admin_id     INTEGER,
-    event_id     INTEGER
+    event_id     INTEGER,
+    revision     INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -155,6 +164,11 @@ class AdsStore:
         self.accounts = accounts
         self.policy_file = policy_file
         self.applied_file = applied_file
+        admin_dir = accounts.path.parent  # admin-only directory (never mounted into the Mini App)
+        self.lock_file = admin_dir / "ads-publish.lock"
+        self.signing_key = load_signing_key(admin_dir / "ads-signing.key")
+        self.public_key = self.signing_key.public_key()
+        self._thread_lock = threading.Lock()
 
     def init_schema(self) -> None:
         with self.accounts._connect() as conn:
@@ -219,6 +233,7 @@ class AdsStore:
                         (*values, partner_id))
             except sqlite3.IntegrityError:
                 raise ActionError("name_taken", 409) from None
+            bump_revision(conn)
             event = self.accounts._event(conn, now, actor.id, "ads.partner_save", "ad_partner", str(partner_id),
                                          before, item, None, None, "done")
         return {"id": partner_id, "eventId": event}
@@ -248,6 +263,7 @@ class AdsStore:
                     raise ActionError("not_found", 404)
             except sqlite3.IntegrityError:
                 raise ActionError("name_taken", 409) from None
+            bump_revision(conn)
             self.accounts._event(conn, now, actor.id, "ads.group_save", "ad_group", str(group_id), None,
                                  {"name": name}, None, None, "done")
         return {"id": group_id}
@@ -269,6 +285,7 @@ class AdsStore:
             total = conn.execute("SELECT COUNT(*) FROM ad_group_members WHERE group_id = ?", (group_id,)).fetchone()[0]
             if total > MAX_GROUP_MEMBERS:
                 raise ActionError("group_too_large", 409)
+            bump_revision(conn)
             self.accounts._event(conn, now, actor.id, "ads.group_members", "ad_group", str(group_id), None,
                                  {"added": added, "removed": removed, "total": total,
                                   "digest": _digest([add_ids, remove_ids])}, None, None, "done")
@@ -413,6 +430,7 @@ class AdsStore:
             after = self._audit_view(item)
             if copied_from is not None:
                 after["copiedFrom"] = copied_from
+            bump_revision(conn)
             event = self.accounts._event(conn, now, actor.id, "ads.campaign_save", "ad_campaign", str(campaign_id),
                                          before, after, None, None, "done")
         return {"id": campaign_id, "eventId": event}
@@ -439,6 +457,7 @@ class AdsStore:
                              "WHERE campaign_id = ?", (now, campaign_id))
             elif action == "archive":
                 conn.execute("UPDATE ad_experiments SET stopped_at = ? WHERE campaign_id = ?", (now, campaign_id))
+            bump_revision(conn)
             event = self.accounts._event(conn, now, actor.id, "ads.campaign_status", "ad_campaign", str(campaign_id),
                                          {"status": c["status"]}, {"status": target}, None, None, "done")
         return {"id": campaign_id, "status": target, "eventId": event}
@@ -460,7 +479,8 @@ class AdsStore:
         source = self.campaign(campaign_id, now)
         if source is None:
             raise ActionError("not_found", 404)
-        data = {**source, "name": (source["name"] + " (копия)")[:MAX_NAME]}
+        suffix = " (копия)"
+        data = {**source, "name": source["name"][:MAX_NAME - len(suffix)] + suffix}
         return self.save_campaign(actor, data, now, copied_from=campaign_id)
 
     # ---- publication -------------------------------------------------------------------------
@@ -505,7 +525,9 @@ class AdsStore:
             raise ActionError("snapshot_too_large", 409)
         body = {"schema": policy.SCHEMA, "version": version, "generatedAt": now, "campaigns": campaigns,
                 "audiences": {k: sorted(v) for k, v in sorted(audiences.items())}}
-        return policy.seal(body), included, skipped
+        if len(campaigns) > policy.MAX_CAMPAIGNS:
+            raise ActionError("too_many_campaigns", 409)
+        return policy.sign(body, self.signing_key), included, skipped
 
     @staticmethod
     def _compile(conn: sqlite3.Connection, node: dict | None, audiences: dict[str, list[int]]) -> dict | None:
@@ -518,14 +540,14 @@ class AdsStore:
         if key == "not":
             return {key: AdsStore._compile(conn, value, audiences)}
         if key == "group_in":
-            refs = []
-            for gid in value:
-                name = f"g:{gid}"
-                if name not in audiences:
-                    audiences[name] = [r[0] for r in conn.execute(
-                        "SELECT user_id FROM ad_group_members WHERE group_id = ? ORDER BY user_id", (gid,))]
-                refs.append({"aud": name})
-            return refs[0] if len(refs) == 1 else {"any": refs}
+            # One union audience per leaf: the compiled tree keeps the editor tree's depth.
+            name = "g:" + ",".join(str(g) for g in value)
+            if name not in audiences:
+                placeholders = ",".join("?" * len(value))
+                audiences[name] = [r[0] for r in conn.execute(
+                    f"SELECT DISTINCT user_id FROM ad_group_members WHERE group_id IN ({placeholders}) ORDER BY user_id",
+                    value)]
+            return {"aud": name}
         if key == "mb_verified":
             if "mb" not in audiences:
                 audiences["mb"] = [r[0] for r in conn.execute("SELECT user_id FROM crm_external_ids ORDER BY user_id")]
@@ -539,9 +561,9 @@ class AdsStore:
 
     def _next_version(self, conn: sqlite3.Connection, now: int) -> int:
         last = conn.execute("SELECT MAX(version) FROM ad_publications").fetchone()[0] or 0
-        file_version = policy.read_version(self.policy_file) or 0
+        on_file = policy.read_version(self.policy_file, self.public_key)
         applied = self.applied_version() or 0
-        return max(now * 1000, last + 1, file_version + 1, applied + 1)
+        return max(now * 1000, last + 1, (on_file[0] if on_file else 0) + 1, applied + 1)
 
     def applied_version(self) -> int | None:
         """The version the Mini App last applied (its mark file), or None."""
@@ -567,16 +589,24 @@ class AdsStore:
                                  (now, actor.id, cid))
                     self.accounts._event(conn, now, actor.id, "ads.campaign_status", "ad_campaign", str(cid),
                                          {"status": "active"}, {"status": "paused"}, reason, None, "done")
+                bump_revision(conn)
             version = self._next_version(conn, now)
             payload, included, skipped = self._build(conn, version, now)
+            content = policy.canonical(payload)
+            if len(content) > policy.MAX_FILE_BYTES:
+                raise ActionError("snapshot_too_large", 409)
+            try:  # exactly the reader's check: a publication the Mini App would reject is never committed
+                policy.parse(content, self.public_key)
+            except PolicyError as exc:
+                raise ActionError(f"snapshot_invalid_{exc}", 409) from None
             after = {"version": version, "sha256": payload["sha256"], "campaigns": included, "skipped": skipped,
                      "requested": requested}
             event = self.accounts._event(conn, now, actor.id, "ads.publish", "ads_policy", None, None, after,
                                          reason, key, "done")
             conn.execute("INSERT INTO ad_publications (version, sha256, payload, campaigns, published_at, admin_id, "
-                         "event_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                         (version, payload["sha256"], policy.canonical(payload).decode(), len(included), now,
-                          actor.id, event))
+                         "event_id, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (version, payload["sha256"], content.decode(), len(included), now, actor.id, event,
+                          current_revision(conn)))
             if included:
                 conn.execute(f"UPDATE ad_campaigns SET published_version = ? WHERE id IN ({','.join('?' * len(included))})",
                              (version, *included))
@@ -589,35 +619,83 @@ class AdsStore:
         except OSError:
             return False
         latest = self.latest_publication()
-        return latest is None or (policy.read_version(self.policy_file) or 0) >= latest["version"]
+        on_file = policy.read_version(self.policy_file, self.public_key)
+        return latest is None or (on_file is not None and on_file[0] >= latest["version"])
 
     def latest_publication(self) -> dict | None:
         with self.accounts._connect() as conn:
-            row = conn.execute("SELECT version, sha256, payload, campaigns, published_at FROM ad_publications "
+            row = conn.execute("SELECT version, sha256, payload, campaigns, published_at, revision FROM ad_publications "
                                "ORDER BY version DESC LIMIT 1").fetchone()
         if row is None:
             return None
-        return {"version": row[0], "sha256": row[1], "payload": row[2], "campaigns": row[3], "publishedAt": row[4]}
+        return {"version": row[0], "sha256": row[1], "payload": row[2], "campaigns": row[3], "publishedAt": row[4],
+                "revision": row[5]}
+
+    @contextmanager
+    def _file_lock(self) -> Iterator[None]:
+        """Serializes check + write across threads and admin processes: an older publication read before a
+        newer one was written can never be written after it."""
+        with self._thread_lock:
+            fd = os.open(self.lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
 
     def ensure_published(self) -> bool:
-        """Re-writes the latest publication when the file is missing, invalid or older. True if it wrote."""
-        latest = self.latest_publication()
-        if latest is None:
-            return False
-        current = policy.read_version(self.policy_file)
-        if current is not None and current >= latest["version"]:
-            return False
-        policy.write_atomic(self.policy_file, latest["payload"].encode())
-        return True
+        """Re-writes the latest publication when the file is missing, invalid, older, or of the same version with
+        other content. A valid (signed) file of a HIGHER version is left alone: the next publication goes above it.
+        True if it wrote."""
+        with self._file_lock():
+            latest = self.latest_publication()  # re-read under the lock
+            if latest is None:
+                return False
+            on_file = policy.read_version(self.policy_file, self.public_key)
+            if on_file is not None and (on_file[0] > latest["version"]
+                                        or on_file == (latest["version"], latest["sha256"])):
+                return False
+            policy.write_atomic(self.policy_file, latest["payload"].encode())
+            return True
 
     def publication_status(self) -> dict:
         self._try_write()
         latest = self.latest_publication()
         with self.accounts._connect() as conn:
-            changed = conn.execute(
-                "SELECT COUNT(*) FROM ad_campaigns WHERE updated_at > COALESCE((SELECT MAX(published_at) "
-                "FROM ad_publications), -1)").fetchone()[0]
+            revision = current_revision(conn)
+        on_file = policy.read_version(self.policy_file, self.public_key)
+        if latest is None:
+            unpublished = revision > 0
+        else:
+            unpublished = revision != latest["revision"]
         return {"latest": None if latest is None else {k: latest[k] for k in ("version", "sha256", "campaigns",
                                                                                 "publishedAt")},
-                "fileVersion": policy.read_version(self.policy_file), "appliedVersion": self.applied_version(),
-                "unpublishedChanges": changed}
+                "fileVersion": on_file[0] if on_file else None, "appliedVersion": self.applied_version(),
+                # Any change to campaigns, partners, groups or MB ids since the latest publication.
+                "unpublishedChanges": unpublished,
+                "publicKey": policy.public_key_hex(self.signing_key)}
+
+
+def current_revision(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT value FROM meta WHERE key = 'ads_revision'").fetchone()
+    return int(row[0]) if row else 0
+
+
+def bump_revision(conn: sqlite3.Connection) -> None:
+    """Every change to a snapshot input (campaigns, partners, groups, MB ids) moves the revision, in its own
+    transaction; a publication records the revision it was built from."""
+    conn.execute("INSERT INTO meta (key, value) VALUES ('ads_revision', '1') ON CONFLICT(key) DO UPDATE SET "
+                 "value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")
+
+
+def load_signing_key(path: Path) -> Ed25519PrivateKey:
+    """The admin's snapshot signing key: created once (0600, in the admin-only directory), never logged or
+    returned by the API; only its public half is shown (to configure MINIAPP_ADS_POLICY_PUBLIC_KEY)."""
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        raw = Ed25519PrivateKey.generate().private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(raw.hex())
+    return Ed25519PrivateKey.from_private_bytes(bytes.fromhex(path.read_text().strip()))

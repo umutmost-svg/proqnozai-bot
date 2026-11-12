@@ -21,7 +21,8 @@ MAX_IDS_PER_LEAF = 5000
 MAX_TG_ID = 2**53
 COUNTRY = re.compile(r"^[A-Z]{2}$")
 MB_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
-AUDIENCE_NAME = re.compile(r"^(g:[1-9][0-9]{0,9}|mb)$")
+# "mb" = every user with an MB id; "g:1,5" = the union of the members of groups 1 and 5.
+AUDIENCE_NAME = re.compile(r"^(g:[1-9][0-9]{0,9}(,[1-9][0-9]{0,9}){0,49}|mb)$")
 
 # Activity segments (§4): parameter -> inclusive bounds. Evaluated by the Mini App over its own data.
 SEGMENTS: dict[str, dict[str, tuple[int, int]]] = {
@@ -146,3 +147,33 @@ def redact(node: dict[str, Any] | None) -> dict[str, Any] | None:
     if key in ("user_in", "mb_id_in"):
         return {key: {"count": len(value)}}
     return {key: value}
+
+
+# ---- evaluation (Mini App side, over a validated snapshot condition) --------------------------------
+
+
+def matches(node: dict[str, Any] | None, viewer: Any, audiences: dict[str, frozenset[int]]) -> bool:
+    """True if the viewer is in the audience. `viewer` is engine.Viewer (duck-typed to keep this module
+    free of the engine): user_id, lang, country (ISO2 or None = unknown) and segment(name, params)."""
+    if node is None:
+        return True
+    (key, value), = node.items()
+    if key == "all":
+        return all(matches(child, viewer, audiences) for child in value)
+    if key == "any":
+        return any(matches(child, viewer, audiences) for child in value)
+    if key == "not":
+        return not matches(value, viewer, audiences)
+    if key == "geo_in":
+        return viewer.country is not None and viewer.country in value
+    if key == "geo_unknown":
+        return viewer.country is None
+    if key == "user_in":
+        return viewer.user_id in value
+    if key == "aud":
+        return viewer.user_id in audiences.get(value, frozenset())
+    if key == "lang_in":
+        return viewer.lang in value
+    if key == "segment":
+        return bool(viewer.segment(value["name"], value["params"]))
+    return False  # unreachable for a validated snapshot; an unknown leaf never widens the audience
