@@ -616,6 +616,35 @@ def test_shared_key_leaves_the_reserve_to_the_bot(clock: FakeClock, caplog: pyte
     assert len(t.calls) == 3
 
 
+@pytest.mark.parametrize("status", [404, 500, 503])
+def test_error_answers_also_respect_the_bots_reserve(clock: FakeClock, status: int) -> None:
+    t = FakeTransport()
+    t.script = [HttpResponse(status, {"x-requests-available-minute": "40", "x-requestcounter-reset": "15"}, b"{}")]
+    c = make_client(t, clock, per_minute=100, shared_reserve=40)
+    with pytest.raises(UpstreamError):
+        run(c.get_json("/a"))  # the error itself; a 5xx must NOT be retried into the reserve
+    assert len(t.calls) == 1
+    with pytest.raises(UpstreamError) as exc:
+        run(c.get_json("/b"))
+    assert exc.value.code == "rate_limited" and len(t.calls) == 1
+    clock.advance(16)
+    t.script = [t.ok({})]
+    run(c.get_json("/b"))
+
+
+def test_reserve_reached_without_a_reset_header_waits_a_full_minute(clock: FakeClock) -> None:
+    t = FakeTransport()
+    t.script = [t.ok({}, {"x-requests-available-minute": "10"})]
+    c = make_client(t, clock, per_minute=100, shared_reserve=40)
+    run(c.get_json("/a"))
+    clock.advance(59)
+    with pytest.raises(UpstreamError):
+        run(c.get_json("/b"))
+    clock.advance(2)
+    t.script = [t.ok({})]
+    run(c.get_json("/b"))
+
+
 def test_without_a_shared_reserve_only_an_empty_minute_pauses(clock: FakeClock) -> None:
     t = FakeTransport()
     t.script = [t.ok({}, {"x-requests-available-minute": "1"}), t.ok({})]

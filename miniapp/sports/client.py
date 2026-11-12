@@ -274,6 +274,10 @@ class ProviderClient:
                 except TransportError:
                     error = UpstreamError("timeout")
                 else:
+                    # Every answer carries the key's remaining minute (errors too): respect it before
+                    # returning, failing or retrying, so no path spends the bot's reserve.
+                    if response.status != 429:
+                        self._respect_remaining(response.headers)
                     if response.status == 200:
                         try:
                             data = json.loads(response.body)
@@ -283,7 +287,6 @@ class ProviderClient:
                             raise self._fail(UpstreamError("bad_response", status=200))
                         self.last_error = None
                         self.last_success_at = self._clock()
-                        self._respect_remaining(response.headers)
                         return data, response.headers
                     if response.status == 429:
                         self._cool_down(response.headers)
