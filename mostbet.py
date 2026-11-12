@@ -125,6 +125,9 @@ last_rate_limited_at: float = 0.0
 # earlier generation): the generation's own timestamp can be newer than some of its entries.
 # Background callers that rely on a line's fresh state (e.g. "not live yet") check this.
 line_seen_at: dict[int, float] = {}
+# When a list fetch last read every page (a partial one may miss lines): background callers
+# that conclude "nothing is due" need a complete list.
+list_complete_at: float = 0.0
 
 
 def _note_lines_seen(matches: list, now: float) -> None:
@@ -256,6 +259,10 @@ async def _mostbet_load_matches() -> list:
             now = time.time()
             mostbet_cache[cache_key] = (now, published)
             _note_lines_seen(all_matches, now)
+            # The cache now holds this generation: complete only if read to the end and not a
+            # suspect shrink; a merged one withdraws an earlier proof.
+            global list_complete_at
+            list_complete_at = now if complete and published is all_matches else 0.0
             logger.info(f"Mostbet cache updated: {len(published)} total matches "
                         f"({'complete' if complete else 'merged/partial'})")
             return published

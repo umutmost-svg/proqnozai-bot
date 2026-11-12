@@ -138,3 +138,30 @@ def test_only_lines_in_fetched_pages_count_as_freshly_seen(monkeypatch, clean_mo
     result = asyncio.run(_mostbet_load_matches())
     assert len(result) == 150
     assert set(mostbet.line_seen_at) == set(range(1, 101))  # 101..150 came from the old tail
+
+
+def test_only_a_list_read_to_its_end_counts_as_complete(monkeypatch, clean_mostbet_cache):
+    """mostbet.list_complete_at: the export may conclude "nothing due" only from a complete list."""
+    monkeypatch.setattr(mostbet, "list_complete_at", 0.0)
+    clean_mostbet_cache["all_matches"] = (0, _gen(range(1, 151), "prev"))
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", _SeqClient([_gen(range(1, 101), "fresh")]))
+    asyncio.run(_mostbet_load_matches())  # the connection drops after page 1
+    assert mostbet.list_complete_at == 0.0
+    clean_mostbet_cache["all_matches"] = (0, _gen(range(1, 121), "prev"))
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient",
+                        _SeqClient([_gen(range(1, 101), "fresh"), _gen(range(101, 111), "fresh")]))
+    asyncio.run(_mostbet_load_matches())  # short last page: the natural end
+    assert mostbet.list_complete_at > 0
+    clean_mostbet_cache["all_matches"] = (0, _gen(range(1, 301), "prev"))
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", _SeqClient([_gen(range(1, 51), "fresh")]))
+    asyncio.run(_mostbet_load_matches())  # "complete" but shrank 300 -> 50: suspect truncation
+    assert mostbet.list_complete_at == 0.0  # the earlier complete list's proof is withdrawn
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient",
+                        _SeqClient([_gen(range(1, 101), "fresh"), _gen(range(101, 111), "fresh")]))
+    clean_mostbet_cache["all_matches"] = (0, _gen(range(1, 121), "prev"))
+    asyncio.run(_mostbet_load_matches())
+    assert mostbet.list_complete_at > 0
+    clean_mostbet_cache["all_matches"] = (0, _gen(range(1, 151), "prev"))
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", _SeqClient([_gen(range(1, 101), "fresh")]))
+    asyncio.run(_mostbet_load_matches())  # then a partial fetch, merged with the old tail
+    assert mostbet.list_complete_at == 0.0

@@ -12,7 +12,10 @@ swap only. Any exception or failed check after the first change -> verified roll
 the :pre-odds image and loses the odds variables, Dokploy gets its env, branch and autoDeploy back.
 Rollback triggers: deployment error, Swarm update not completed, the new task is not the release build,
 more than one running task at any sample, a new task after the release one (restart), a getUpdates conflict,
-a traceback, the export disabled at startup, no accepted push (odds_export.pushed = HTTP 200) in PUSH_WAIT_S.
+a traceback, the export disabled at startup, and no export cycle with an outcome in PUSH_WAIT_S: an accepted
+push (odds_export.pushed = HTTP 200) or, when no line of a served competition is due within 48 h (e.g. an
+international break), an idle cycle on a fresh list whose empty signed heartbeat the Mini App accepted
+(odds_export.idle due=0 list=fresh heartbeat=accepted); any other idle state is not proof.
 Dokploy keeps stop-first after a rollback on purpose (the owner's rule for this bot).
 Prints names, states and counts only — never an env value, token or secret.
 """
@@ -40,7 +43,8 @@ MAX_LINES = "10"
 ODDS_FILE = Path("/root/miniapp-secrets/odds-feed")
 STATE = Path("/root/bot-window")
 SNAPSHOT = STATE / "pre-odds.json"
-BUILD_WAIT_S, WATCH_S, PUSH_WAIT_S, SAMPLE_S = 20 * 60, 240, 8 * 60, 5
+# The first export cycle runs ~6 min after start (then every 5 min): 13 min sees at least two.
+BUILD_WAIT_S, WATCH_S, PUSH_WAIT_S, SAMPLE_S = 20 * 60, 240, 13 * 60, 5
 JOB_DRAIN_S = 25 * 60  # a rollback first waits out a Dokploy job still running (it would redeploy after us)
 CMD_TIMEOUT_S, CONVERGE_S = 60, 180
 UPDATE_CFG = {"Parallelism": 1, "Order": "stop-first", "FailureAction": "rollback", "Monitor": 60_000_000_000}
@@ -336,13 +340,14 @@ def watch(pre_id: str, pre_tasks: set[str], t0: str) -> str:
                 raise WindowError("traceback in bot log")
             if "odds_export.disabled" in out:
                 raise WindowError("odds export disabled at startup")
-            pushed = pushed or "odds_export.pushed" in out
+            pushed = pushed or "odds_export.pushed" in out or "odds_export.idle due=0 list=fresh heartbeat=accepted" in out
     out = service_logs(t0)
     if "terminated by other getUpdates" in out or "telegram.error.Conflict" in out or "Traceback" in out:
         raise WindowError("conflict or traceback in bot log")
-    if "odds_export.pushed" not in out:
-        raise WindowError("no accepted push to the Mini App")
-    print("pushes accepted:", out.count("odds_export.pushed"), "| refused:", out.count("odds_export.push_refused"),
+    if "odds_export.pushed" not in out and "odds_export.idle due=0 list=fresh heartbeat=accepted" not in out:
+        raise WindowError("no accepted push and no idle cycle (nothing due) of the export")
+    print("pushes accepted:", out.count("odds_export.pushed"), "| idle (nothing due):",
+          out.count("odds_export.idle due=0 list=fresh heartbeat=accepted"), "| refused:", out.count("odds_export.push_refused"),
           "| failed:", out.count("odds_export.push_failed"))
     return release_task
 

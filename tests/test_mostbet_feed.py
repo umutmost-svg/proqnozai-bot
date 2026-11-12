@@ -74,7 +74,10 @@ def env(monkeypatch):
     def listed():  # the lines as a just-fetched list page: confirmed now
         for m in state["matches"]:
             seen.setdefault(m["id"], clock.now)
+        if state.get("complete", True):
+            mostbet.list_complete_at = clock.now  # every page read
         return list(state["matches"])
+    monkeypatch.setattr(mostbet, "list_complete_at", 0.0)
     export = feed.OddsExport("https://stand.example/api/internal/odds", SECRET, clock=clock, sleep=sleep, post=post)
     return export, clock, state, posts, fetched, sleeps
 
@@ -97,6 +100,135 @@ def test_only_known_competitions_upcoming_and_not_live_are_priced(env) -> None:
     picked = [m["id"] for _, m in export.candidates(lines)]
     assert picked == [1, 9]
     assert export._skipped[("Ukraine", "Premier League")] == 1
+
+
+def test_the_live_feed_names_are_priced_and_match_the_mini_apps_table(env) -> None:
+    """Season suffix and per-country names as the live feed spells them (2026-11-12), same rule both sides."""
+    from miniapp.odds.matching import league_key, leagues
+    export, clock, *_ = env
+    names = [("England", "Premier League. Season 26/27"), ("Spain", "Primera Division. Season 26/27"),
+             ("Netherlands", "Premier League"), ("Champions League UEFA", "League phase")]
+    lines = [raw(i, country=c, league=lg) for i, (c, lg) in enumerate(names, 1)]
+    lines.append(raw(9, country="Russia", league="Premier League. Season 26/27"))
+    mostbet.line_seen_at.update({m["id"]: clock.now for m in lines})
+    assert [m["id"] for _, m in export.candidates(lines)] == [1, 2, 3, 4]
+    for c, lg in names:
+        assert feed.league_key(lg) == league_key(lg)
+        assert leagues().code(c, lg) is not None
+
+
+def _idle_logs(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if "odds_export.idle" in r.getMessage()]
+
+
+def test_nothing_due_on_a_fresh_list_sends_an_accepted_heartbeat_once_an_hour(env, caplog) -> None:
+    export, clock, state, posts, *_ = env
+    state["matches"] = [raw(1, start=NOW + 72 * 3600)]  # beyond the window: nothing due
+    with caplog.at_level("INFO"):
+        assert run(export.cycle()) == 0
+        clock.now += feed.CYCLE_S
+        assert run(export.cycle()) == 0
+        clock.now += feed.SKIPPED_LOG_EVERY_S
+        mostbet.line_seen_at[1] = clock.now  # the bot re-read the list meanwhile
+        assert run(export.cycle()) == 0
+    assert _idle_logs(caplog) == ["odds_export.idle due=0 list=fresh heartbeat=accepted"] * 2
+    assert len(posts) == 2
+    for _, body, headers in posts:  # an empty, signed push the Mini App accepts and stores nothing from
+        sent_at = float(headers["X-Odds-Timestamp"])  # checked as the Mini App would on arrival
+        assert FeedReceiver(SECRET, lambda: sent_at).verify(headers["X-Odds-Timestamp"], headers["X-Odds-Signature"], body) == []
+
+
+def test_a_refused_heartbeat_is_not_proof_and_is_tried_again_next_cycle(env, caplog) -> None:
+    export, clock, state, posts, *_ = env
+    state["matches"], state["status"] = [raw(1, start=NOW + 72 * 3600)], 401
+    with caplog.at_level("INFO"):
+        run(export.cycle())
+        clock.now += feed.CYCLE_S
+        state["status"] = 200
+        run(export.cycle())
+    assert _idle_logs(caplog) == ["odds_export.idle due=0 list=fresh heartbeat=failed",
+                                  "odds_export.idle due=0 list=fresh heartbeat=accepted"]
+
+
+def test_an_empty_stale_or_paused_list_is_never_reported_as_nothing_due(env, monkeypatch, caplog) -> None:
+    export, clock, state, posts, *_ = env
+    with caplog.at_level("INFO"):
+        run(export.cycle())  # cold cache: no list yet
+    assert _idle_logs(caplog) == ["odds_export.idle due=0 list=empty heartbeat=skipped"]
+
+    caplog.clear()
+    stale = feed.OddsExport(export.url, SECRET, clock=clock, sleep=export._sleep, post=export._post)
+    monkeypatch.setattr(mostbet, "cached_matches", lambda: [raw(2, start=NOW + 72 * 3600)])
+    mostbet.line_seen_at[2] = clock.now - feed.LIST_MAX_AGE_S - 1
+    with caplog.at_level("INFO"):
+        run(stale.cycle())
+    assert _idle_logs(caplog) == ["odds_export.idle due=0 list=stale heartbeat=skipped"]
+
+    caplog.clear()
+    paused = feed.OddsExport(export.url, SECRET, clock=clock, sleep=export._sleep, post=export._post)
+    mostbet.line_seen_at[2] = clock.now
+    monkeypatch.setattr(mostbet, "last_rate_limited_at", clock.now - 1)
+    with caplog.at_level("INFO"):
+        run(paused.cycle())
+    assert _idle_logs(caplog) == ["odds_export.idle due=0 list=paused heartbeat=skipped"]
+    assert posts == []
+
+
+def test_a_recent_heartbeat_does_not_hide_a_later_unpriced_due_line(env, monkeypatch, caplog) -> None:
+    export, clock, state, posts, *_ = env
+    state["matches"] = [raw(1, start=NOW + 72 * 3600)]
+    with caplog.at_level("INFO"):
+        run(export.cycle())  # nothing due: accepted heartbeat
+
+        async def no_odds(line_id, *, retry_on_429=True, page_spacing_s=0.0):
+            return {}
+        monkeypatch.setattr(mostbet, "mostbet_get_odds", no_odds)
+        clock.now += feed.CYCLE_S
+        state["matches"].append(raw(2, start=clock.now + 3600))
+        run(export.cycle())
+    assert _idle_logs(caplog) == ["odds_export.idle due=0 list=fresh heartbeat=accepted",
+                                  "odds_export.idle due=1 list=fresh heartbeat=skipped"]
+
+
+def test_without_a_recent_complete_list_nothing_due_is_not_known(env, caplog) -> None:
+    export, clock, state, posts, *_ = env
+    state["matches"], state["complete"] = [raw(1, start=NOW + 72 * 3600)], False  # a partial first fetch
+    with caplog.at_level("INFO"):
+        run(export.cycle())
+    assert _idle_logs(caplog) == ["odds_export.idle due=0 list=stale heartbeat=skipped"] and posts == []
+
+
+def test_a_list_that_recovers_proves_itself_on_the_next_cycle(env, caplog) -> None:
+    export, clock, state, posts, *_ = env
+    with caplog.at_level("INFO"):
+        run(export.cycle())  # cold cache
+        clock.now += feed.CYCLE_S
+        state["matches"] = [raw(1, start=NOW + 72 * 3600)]
+        run(export.cycle())
+    assert _idle_logs(caplog) == ["odds_export.idle due=0 list=empty heartbeat=skipped",
+                                  "odds_export.idle due=0 list=fresh heartbeat=accepted"]
+
+
+def test_a_stale_line_in_the_window_beside_fresh_ones_is_not_nothing_due(env, monkeypatch, caplog) -> None:
+    export, clock, state, posts, *_ = env
+    fresh_far, stale_near = raw(1, start=NOW + 72 * 3600), raw(2, start=NOW + 3600)
+    monkeypatch.setattr(mostbet, "cached_matches", lambda: [fresh_far, stale_near])
+    mostbet.line_seen_at.update({1: clock.now, 2: clock.now - feed.LIST_MAX_AGE_S - 1})  # merged tail of a partial refresh
+    with caplog.at_level("INFO"):
+        run(export.cycle())
+    assert _idle_logs(caplog) == ["odds_export.idle due=0 list=stale heartbeat=skipped"] and posts == []
+
+
+def test_lines_due_but_none_priced_is_not_nothing_due(env, monkeypatch, caplog) -> None:
+    export, clock, state, posts, *_ = env
+    state["matches"] = [raw(1)]
+
+    async def no_odds(line_id, *, retry_on_429=True, page_spacing_s=0.0):
+        return {}
+    monkeypatch.setattr(mostbet, "mostbet_get_odds", no_odds)
+    with caplog.at_level("INFO"):
+        run(export.cycle())
+    assert _idle_logs(caplog) == ["odds_export.idle due=1 list=fresh heartbeat=skipped"] and posts == []
 
 
 def test_a_cycle_pushes_a_body_the_mini_app_accepts(env) -> None:

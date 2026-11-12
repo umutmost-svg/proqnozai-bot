@@ -1,5 +1,5 @@
 {
-  "_comment": "Feed competition -> football-data.org code. Shared by the bot's odds export (which lines to price) and the Mini App's matcher (which competition a line belongs to). Names are compared after miniapp.sports.search.normalize (case, accents and punctuation ignored); a (country, league) pair must match exactly — 'England / Premier League' never matches 'Ukraine / Premier League', and there are no wildcards: for an international competition the feed puts the competition in 'country' and the stage in 'league', so every accepted stage is listed (a women's, youth or unknown stage gives no odds). The names follow the bot's feed conventions and MUST be confirmed against the live feed before the export is switched on (the export logs every football country/league pair it skips).",
+  "_comment": "Feed competition -> football-data.org code. Shared by the bot's odds export (which lines to price) and the Mini App's matcher (which competition a line belongs to). Names are compared after miniapp.sports.search.normalize (case, accents and punctuation ignored; a trailing season such as '. Season 26/27' on the league is dropped); a (country, league) pair must match exactly — 'England / Premier League' never matches 'Ukraine / Premier League', and there are no wildcards: for an international competition the feed puts the competition in 'country' and the stage in 'league', so every accepted stage is listed (a women's, youth or unknown stage gives no odds). The names follow the bot's feed conventions and MUST be confirmed against the live feed before the export is switched on (the export logs every football country/league pair it skips).",
   "version": 1,
   "competitions": [
     {
@@ -66,7 +66,8 @@
         "Netherlands"
       ],
       "league": [
-        "Eredivisie"
+        "Eredivisie",
+        "Premier League"
       ]
     },
     {
@@ -77,7 +78,8 @@
       "league": [
         "Primeira Liga",
         "Liga Portugal",
-        "Liga Portugal Betclic"
+        "Liga Portugal Betclic",
+        "Premier League"
       ]
     },
     {
@@ -94,7 +96,8 @@
     {
       "code": "CL",
       "country": [
-        "UEFA Champions League"
+        "UEFA Champions League",
+        "Champions League UEFA"
       ],
       "league": [
         "League phase",

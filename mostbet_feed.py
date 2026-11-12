@@ -89,10 +89,19 @@ def normalize(text: str) -> str:
     return re.sub(r"[^0-9a-z]+", " ", plain).strip()
 
 
+# The feed appends the season to some league names ("Premier League. Season 26/27"); the
+# season is not part of the competition. Same rule as miniapp.odds.matching.league_key.
+_SEASON = re.compile(r" season \d{2,4}(?: \d{2,4})?$")
+
+
+def league_key(text: str) -> str:
+    return _SEASON.sub("", normalize(text))
+
+
 def load_table(path: Path = LEAGUES_PATH) -> frozenset[tuple[str, str]]:
     """The exact (country, league) pairs to price (no wildcards)."""
     raw = json.loads(path.read_text())
-    return frozenset((normalize(country), normalize(league))
+    return frozenset((normalize(country), league_key(league))
                      for entry in raw["competitions"] for country in entry["country"] for league in entry["league"])
 
 
@@ -122,12 +131,14 @@ class OddsExport:
         self._skipped: Counter = Counter()
         self._stale_lines = 0
         self._skipped_logged_at = 0.0
+        self._idle_logged_at: float | None = None  # last accepted heartbeat
+        self._idle_noted_at: float | None = None  # last log of an idle state that proves nothing
 
     # --- which lines -------------------------------------------------------------------
 
     def _known(self, m: dict) -> bool:
         country = normalize(str(m.get("lineSuperCategory") or ""))
-        league = normalize(str(m.get("lineSubCategory") or ""))
+        league = league_key(str(m.get("lineSubCategory") or ""))
         return (country, league) in self.pairs
 
     def candidates(self, matches: list[dict]) -> list[tuple[float, dict]]:
@@ -211,7 +222,8 @@ class OddsExport:
         # Live markers need no API request: sent even while prices are paused.
         markers = self.went_live(matches)
         lines: list[dict] = []
-        if self._paused():
+        paused = self._paused()
+        if paused:
             logger.info("odds_export.paused reason=rate_limited")
             due = []
         else:
@@ -233,6 +245,7 @@ class OddsExport:
             lines.append(self._payload(m, kickoff, live=False, fetched_at=entry[0],
                                        odds={k: v for k, v in odds.items() if isinstance(v, (int, float))}))
         if not lines and not markers:
+            await self._idle(matches, due, paused)
             return 0
         if not await self._send(lines + markers):
             return 0  # nothing recorded: prices and markers go again next cycle
@@ -248,6 +261,36 @@ class OddsExport:
             del self._marked[line_id]
         logger.info("odds_export.pushed lines=%d live_markers=%d", len(lines), len(markers))
         return len(lines) + len(markers)
+
+    async def _idle(self, matches: list[dict], due: list, paused: bool) -> None:
+        """Proof of life when nothing was pushed (first cycle, then hourly). Only a fresh, non-empty list
+        with nothing due and no rate-limit pause counts as "nothing to price"; then an empty signed push
+        (a heartbeat: the Mini App stores nothing) proves the URL, the secret and the receiver."""
+        now = self._clock()
+        if paused:
+            state = "paused"
+        elif not matches:
+            state = "empty"
+        # A line of a served competition in the window but not confirmed by a recent list page
+        # (a partial refresh), or no recent COMPLETE list (unread pages may hold a due line):
+        # then "nothing due" is not known.
+        elif (self._stale_lines or now - mostbet.list_complete_at > LIST_MAX_AGE_S or not any(
+                now - mostbet.line_seen_at.get(m.get("id"), float("-inf")) <= LIST_MAX_AGE_S for m in matches)):
+            state = "stale"
+        else:
+            state = "fresh"
+        if state == "fresh" and not due:
+            if self._idle_logged_at is not None and now - self._idle_logged_at < SKIPPED_LOG_EVERY_S:
+                return  # proven within the hour
+            beat = "accepted" if await self._send([]) else "failed"
+            logger.info("odds_export.idle due=0 list=fresh heartbeat=%s", beat)
+            if beat == "accepted":  # otherwise tried again next cycle
+                self._idle_logged_at = now
+            return
+        # Nothing provable this cycle: noted hourly, and a proof is tried again on the next cycle.
+        if self._idle_noted_at is None or now - self._idle_noted_at >= SKIPPED_LOG_EVERY_S:
+            self._idle_noted_at = now
+            logger.info("odds_export.idle due=%d list=%s heartbeat=skipped", len(due), state)
 
     async def _send(self, lines: list[dict]) -> bool:
         """One signed push; True when the Mini App accepted it. A 410 means the feed is switched

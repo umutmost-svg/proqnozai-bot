@@ -146,6 +146,24 @@ def test_the_competition_pair_is_exact_never_a_substring() -> None:
     assert LEAGUES.code("Champions League", "League phase") is None
 
 
+def test_the_live_feed_names_of_2026_11_12_map_to_their_competitions() -> None:
+    """Names as the Mostbet feed really spells them (window of 2026-11-12): a season suffix is dropped,
+    Eredivisie and Primeira Liga are 'Premier League' of their country, the CL country is reversed."""
+    live = {("England", "Premier League. Season 26/27"): "PL", ("Italy", "Serie A. Season 26/27"): "SA",
+            ("Spain", "Primera Division. Season 26/27"): "PD", ("Germany", "Bundesliga. Season 26/27"): "BL1",
+            ("England", "Championship"): "ELC", ("France", "Ligue 1"): "FL1", ("Brazil", "Serie A"): "BSA",
+            ("Netherlands", "Premier League"): "DED", ("Portugal", "Premier League"): "PPL",
+            ("Champions League UEFA", "League phase"): "CL"}
+    for (country, league), code in live.items():
+        assert LEAGUES.code(country, league) == code, (country, league)
+    # Only a trailing season goes: other suffixes and other countries stay unmatched.
+    for country, league in [("Ukraine", "Premier League. Season 26/27"), ("Germany", "Bundesliga 2"),
+                            ("England", "FA Trophy. Round 128"), ("Russia", "Premier League. Season 26/27"),
+                            ("Europe League UEFA", "League phase"), ("England", "Isthmian. Premier League"),
+                            ("England", "Season 26/27")]:
+        assert LEAGUES.code(country, league) is None, (country, league)
+
+
 def test_names_match_through_the_short_name_club_forms_and_aliases() -> None:
     assert team_key("Arsenal FC") == team_key("arsenal") == "arsenal"
     assert find(cand("Arsenal", "Chelsea"))[1] == "matched"

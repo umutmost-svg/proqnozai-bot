@@ -18,6 +18,7 @@ gives no odds (and a log line, so the alias table can be extended), never a gues
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
@@ -35,6 +36,15 @@ NOISE = frozenset({"fc", "cf", "afc", "sc", "ac", "as", "ssc", "ss", "sv", "cd",
                    "fk", "sk", "bk", "club", "de", "calcio", "1"})
 
 
+# The feed appends the season to some league names ("Premier League. Season 26/27"); the
+# season is not part of the competition. Same rule as mostbet_feed.league_key in the bot.
+_SEASON = re.compile(r" season \d{2,4}(?: \d{2,4})?$")
+
+
+def league_key(text: str) -> str:
+    return _SEASON.sub("", normalize(text))
+
+
 def team_key(name: str) -> str:
     return " ".join(t for t in normalize(name).split() if t not in NOISE)
 
@@ -46,7 +56,7 @@ class Leagues:
     codes: frozenset[str]
 
     def code(self, country: str, league: str) -> str | None:
-        return self.pairs.get((normalize(country), normalize(league)))
+        return self.pairs.get((normalize(country), league_key(league)))
 
 
 def load_leagues(path: Path = LEAGUES_PATH) -> Leagues:
@@ -58,7 +68,7 @@ def load_leagues(path: Path = LEAGUES_PATH) -> Leagues:
             raise ValueError("wildcard stages are not allowed: list every accepted stage")
         for country in entry["country"]:
             for league in entry["league"]:
-                key = (normalize(country), normalize(league))
+                key = (normalize(country), league_key(league))
                 if pairs.get(key, code) != code:
                     raise ValueError(f"{key} maps to two competitions")
                 pairs[key] = code
