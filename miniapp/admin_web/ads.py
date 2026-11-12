@@ -563,9 +563,11 @@ class AdsStore:
     def _next_version(self, conn: sqlite3.Connection, now: int) -> int:
         last = conn.execute("SELECT MAX(version) FROM ad_publications").fetchone()[0] or 0
         on_file = policy.read_version(self.policy_file, self.public_key)
+        # A file that verifies with the admin key was published by us: always a floor, however far ahead (a
+        # restored admin.db or a corrected clock must still publish above it, or readers would keep the old one).
+        # Only the unsigned applied mark is checked for plausibility.
         applied = self.applied_version(now) or 0
-        file_version = on_file[0] if on_file and policy.plausible_version(on_file[0], now) else 0
-        return max(now * 1000, last + 1, file_version + 1, applied + 1)
+        return max(now * 1000, last + 1, (on_file[0] if on_file else 0) + 1, applied + 1)
 
     def applied_version(self, now: float | None = None) -> int | None:
         """The version the Mini App last applied (its mark file), or None — also for an implausible mark (far in
@@ -658,6 +660,8 @@ class AdsStore:
             on_file = policy.read_version(self.policy_file, self.public_key)
             if on_file is not None and (on_file[0] > latest["version"]
                                         or on_file == (latest["version"], latest["sha256"])):
+                # Already in place — but its directory entry may not have been synced (an earlier sync failed).
+                policy.sync_dir(self.policy_file.parent)
                 return False
             policy.write_atomic(self.policy_file, latest["payload"].encode())
             return True
@@ -698,7 +702,7 @@ def load_signing_key(path: Path) -> Ed25519PrivateKey:
     if not path.exists():
         if not path.parent.exists():
             path.parent.mkdir(parents=True, mode=0o700)
-            _sync_dir(path.parent.parent)
+            policy.sync_dir(path.parent.parent)
         raw = Ed25519PrivateKey.generate().private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
         # Written completely and synced under a temporary name, then installed with link(): the final name
         # never holds a partial key (a crash leaves only a stray temporary file), and of two processes
@@ -716,13 +720,6 @@ def load_signing_key(path: Path) -> Ed25519PrivateKey:
                 pass
         finally:
             os.unlink(tmp)
-        _sync_dir(path.parent)  # the new name survives a power loss (else a restart would mint another key)
+        policy.sync_dir(path.parent)  # the new name survives a power loss (else a restart would mint another key)
     return Ed25519PrivateKey.from_private_bytes(bytes.fromhex(path.read_text().strip()))
 
-
-def _sync_dir(directory: Path) -> None:
-    fd = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)

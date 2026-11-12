@@ -328,8 +328,8 @@ def write_atomic(path: Path, content: bytes, mode: int = 0o640) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        os.chmod(tmp, mode)  # before the sync: a crash never leaves a valid file with the wrong mode
         with os.fdopen(fd, "wb") as fh:
+            os.fchmod(fh.fileno(), mode)  # before the sync: a crash never leaves a valid file with the wrong mode
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
@@ -342,7 +342,11 @@ def write_atomic(path: Path, content: bytes, mode: int = 0o640) -> None:
         raise
     # The rename survives a power loss only once the directory entry is synced; a failure here is a failed
     # write (the caller reports it and the repair runs again), never a silent success.
-    dir_fd = os.open(path.parent, os.O_RDONLY)
+    sync_dir(path.parent)
+
+
+def sync_dir(directory: Path) -> None:
+    dir_fd = os.open(directory, os.O_RDONLY)
     try:
         os.fsync(dir_fd)
     finally:

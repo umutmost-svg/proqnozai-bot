@@ -408,3 +408,36 @@ def test_an_implausible_applied_mark_cannot_block_the_emergency_stop(ads_env):
     stop = publish(client, csrf, secrets_, clock, pauseAll=True)
     assert stop.status_code == 200, stop.text
     assert policy.parse(config.ads_policy_file.read_bytes(), pub(config)).campaigns == ()
+
+
+def test_a_signed_file_far_ahead_is_a_floor_for_the_emergency_stop(ads_env):
+    # e.g. admin.db restored from an old copy, or the clock corrected by more than a day
+    config, clock, client, _, secrets_, csrf, pid = ads_env
+    cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()))).json()["id"]
+    post(client, f"/api/admin/ads/campaigns/{cid}/status", csrf, {"action": "activate"})
+    publish(client, csrf, secrets_, clock)
+    ahead = json.loads(config.ads_policy_file.read_bytes())
+    ahead["version"] = int(clock() * 1000) + 30 * DAY * 1000
+    key = load_signing_key(config.admin_db.parent / "ads-signing.key")
+    config.ads_policy_file.write_bytes(policy.canonical(policy.sign(ahead, key)))
+    stop = publish(client, csrf, secrets_, clock, key="stop-key-1", pauseAll=True).json()
+    assert stop["after"]["version"] > ahead["version"] and stop["fileWritten"] is True
+    snap = policy.parse(config.ads_policy_file.read_bytes(), pub(config))
+    assert snap.version == stop["after"]["version"] and snap.campaigns == ()
+
+
+def test_a_failed_directory_sync_is_retried_by_the_repair(ads_env, monkeypatch):
+    config, clock, client, _, secrets_, csrf, pid = ads_env
+    calls = []
+    real = policy.sync_dir
+
+    def flaky(directory):
+        calls.append(directory)
+        if len(calls) == 1:
+            raise OSError("fsync failed")
+        real(directory)
+    monkeypatch.setattr(policy, "sync_dir", flaky)
+    first = publish(client, csrf, secrets_, clock).json()
+    assert first["fileWritten"] is False
+    assert client.get("/api/admin/ads/publication").json()["fileVersion"] == first["after"]["version"]
+    assert len(calls) >= 2  # the repair synced the directory again although the content already matched
