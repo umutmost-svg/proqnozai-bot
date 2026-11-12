@@ -92,8 +92,8 @@ if app is not None:
     cur = call("application.one", {"applicationId": app["applicationId"]}, method="GET")
     if cur.get("name") != APP or not str(cur.get("appName", "")).startswith(APP):
         sys.exit("STOP: an application with this name is not the Mini App")
-    if cur.get("sourceType") not in ("docker",) and cur.get("dockerImage"):
-        sys.exit("STOP: unexpected source type")
+    if cur.get("sourceType") != "docker":
+        sys.exit("STOP: the existing application is not image-based")
     if cur.get("ports") or ((cur.get("endpointSpecSwarm") or {}).get("Ports")):
         sys.exit("STOP: the application publishes host ports")
 if app is None:
