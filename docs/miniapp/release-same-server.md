@@ -61,7 +61,7 @@ https://admin.proqnozai.com ──> Cloudflare Access ──> тот же тун
 | `MINIAPP_ALLOWED_USER_IDS` | id владельца (= `ADMIN_ID` бота) — **закрытый режим до проверки клиентов**; убирается при открытии |
 | `MINIAPP_BLOCKED_USER_IDS` | пусто (в базе бота заблокированных 0) |
 | `MINIAPP_FOOTBALL_DATA_KEY` | **отдельный ключ** (нет — блокер, см. ниже); ключ бота не используется |
-| `MINIAPP_FOOTBALL_DATA_LIVE_PLAN` / `PER_MINUTE` / `PER_DAY` / `COMPETITIONS` | по тарифу ключа (Pro: `true`/`100`/`10000`/`all`) |
+| `MINIAPP_FOOTBALL_DATA_LIVE_PLAN` / `PER_MINUTE` / `PER_DAY` / `COMPETITIONS` | по тарифу ключа. Тариф как у бота (провайдер даёт 120 запросов/мин): `true` / `100` (потолок приложения ниже лимита провайдера — запас на повторы) / `10000` / `all`. Бесплатный ключ (10/мин): `false` / `8` / `3000` / список 12 турниров |
 | `MINIAPP_ANTHROPIC_API_KEY` | **не задаётся** (AI выключен) |
 | `MINIAPP_ODDS_FEED_ENABLED` | `false` |
 | `MINIAPP_LOGINS_ENABLED` | `true` |
@@ -74,8 +74,11 @@ https://admin.proqnozai.com ──> Cloudflare Access ──> тот же тун
 3. Проверка Access → [владелец, отдельное разрешение] firewall :3000.
 
 **B. Mini App** (независимо от A до шага B5)
-1. [я] сборка amd64-образа, smoke в локальном контейнере (production-режим, ed25519, без ключей → ожидаемые
-   отказы), перенос на сервер, `registry:2` на `127.0.0.1:5000`, push образа туда.
+1. [я] сборка amd64-образа из чистой копии коммита (`git archive <коммит> | tar -x -C <каталог>`, затем в нём
+   `docker buildx build --platform linux/amd64 --load -f deploy/miniapp/Dockerfile --build-arg VITE_DATA_MODE=real -t proqnozai-miniapp:<коммит> .`;
+   без `VITE_DATA_MODE=real` Dockerfile сборку отклоняет), smoke образа в локальном контейнере в production-режиме
+   (ed25519, список допуска) — **сделано: `98d90e6`, 12/12 PASS**; перенос `docker save --platform linux/amd64 … | gzip | ssh … docker load`,
+   тег и push в `127.0.0.1:5000` — **сделано**.
 2. [я] секреты на сервере; [владелец] Dokploy API-ключ на сервер (одна команда).
 3. [я] через API Dokploy: проект/приложение/переменные/том/домен/ресурсы/stop-first → Deploy. Проверка: задача
    1/1 healthy; `docker service inspect`: 1 реплика, `stop-first` + `rollback` (и для отката `stop-first`),
@@ -105,8 +108,13 @@ https://admin.proqnozai.com ──> Cloudflare Access ──> тот же тун
    блокер, см. ниже), `NOTIFY` = `curl -fsS -m 10 <URL проверки healthchecks «miniapp-backup»>/fail`; первый запуск,
    тест уведомления (`OFFSITE_KIND=test` → уведомление пришло), пробное восстановление из внешней копии
    (`restore-drill.sh`); **ежедневное расписание** — cron root (одна строка; пинг успеха только после `OK`
-   задания, URL проверки healthchecks «miniapp-backup» с периодом 1 сутки и grace 2 ч — в `/root/.hc-miniapp-backup`, 0600):
-   `17 3 * * * L=/var/log/proqnozai-miniapp-backup.log; /opt/sporbot/backup-job.sh >> $L 2>&1 && curl -fsS -m 10 -o /dev/null "$(cat /root/.hc-miniapp-backup)" && echo "$(date -u +\%FT\%TZ) PING OK" >> $L`
+   задания, URL проверки healthchecks «miniapp-backup» с периодом 1 сутки и grace 2 ч — в `/root/.hc-miniapp-backup`, 0600).
+   Настройки задания — **один файл** `/opt/sporbot/backup.env` (0600, root), им пользуются и ручной запуск
+   (`set -a; . /opt/sporbot/backup.env; set +a; /opt/sporbot/backup-job.sh`), и cron:
+   `SVC=proqnozai-miniapp`, `SPORBOT_DIR=/opt/sporbot`, `KEEP_DAYS=7`, `OFFSITE_KIND=<rclone|ssh|disk>`, `OFFSITE=<приёмник>`,
+   `NOTIFY='curl -fsS -m 10 -o /dev/null "$(cat /root/.hc-miniapp-backup)/fail"'`. В приёмнике заранее создать
+   файл-метку `.sporbot-offsite` (без неё задание ничего не пишет и не чистит — защита чужих данных).
+   `17 3 * * * L=/var/log/proqnozai-miniapp-backup.log; set -a; . /opt/sporbot/backup.env; set +a; /opt/sporbot/backup-job.sh >> $L 2>&1 && curl -fsS -m 10 -o /dev/null "$(cat /root/.hc-miniapp-backup)" && echo "$(date -u +\%FT\%TZ) PING OK" >> $L`
    Пропущенный или упавший запуск → пинга нет → healthchecks уведомляет по истечении grace; сбой внутри задания
    ещё и сразу шлёт `NOTIFY` (`…/fail`). **Проверка перед открытием:** после первого ночного запуска в логе есть
    `OK:` и `PING OK`, во внешнем приёмнике — новая копия, проверка «miniapp-backup» в healthchecks — up. Мониторинг: внешний uptime на `https://app.proqnozai.com/api/health`.
