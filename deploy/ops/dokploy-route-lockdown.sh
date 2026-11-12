@@ -51,6 +51,14 @@ verify() {
   return 1
 }
 
+# The watcher (dokploy-bypass-check.sh) compares against this file: success is reported only once it is written.
+record_approved() {
+  sha256sum "$F" > "$APPROVED.tmp" && mv -f "$APPROVED.tmp" "$APPROVED" \
+    && [ "$(awk '{print $1}' "$APPROVED")" = "$(sha "$F")" ] \
+    && { echo "approved hash recorded in $APPROVED"; return 0; }
+  echo "FAILED to record the approved hash in $APPROVED"; return 1
+}
+
 put_in_place() {  # $1 = prepared file in BACKUP_DIR; rename into place keeping 0644 root:root
   chmod 644 "$1" && chown root:root "$1" && mv -f "$1" "$F"
 }
@@ -64,7 +72,8 @@ case ${1:-} in
     if [ "$have" = "$APPLIED_SHA" ]; then
       echo "already applied (sha256 $have) — verifying only"
       verify || exit 1
-      sha256sum "$F" > "$APPROVED" && echo "approved hash recorded in $APPROVED"; exit 0
+      record_approved || exit 1
+      exit 0
     fi
     [ "$have" = "$ORIG_SHA" ] || { echo "STOP: $F differs from the audited original (sha256 $have) — needs a human look, nothing changed"; exit 1; }
     [ "$(grep -Fxc "      $OLD" "$F")" = 1 ] || { echo "STOP: the expected rule line is not there exactly once"; exit 1; }
@@ -79,7 +88,7 @@ case ${1:-} in
     diff "$F" "$new"
     put_in_place "$new" || { echo "STOP: could not put the new file in place; original untouched? check $F against $bak"; exit 1; }
     if verify; then
-      sha256sum "$F" > "$APPROVED" && echo "approved hash recorded in $APPROVED"
+      record_approved || { echo "the route IS locked down; record the hash by hand: sha256sum $F > $APPROVED"; exit 1; }
       echo "DONE. Rollback: sh $0 rollback $bak"
       exit 0
     fi

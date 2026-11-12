@@ -226,3 +226,19 @@ def test_passphrase_never_in_argv(env, monkeypatch):
     assert pb.cmd_pull(cfg, ["bot"]) == 0
     assert seen and all("x" * 32 not in " ".join(a) for a in seen)
     assert all(os.environ.get(k, "") != "x" * 32 for k in os.environ)
+
+
+def test_sweep_removes_only_stale_leftovers_of_killed_runs(env):
+    cfg, _, _ = env
+    work = cfg.backup_dir / ".work"
+    old_verify, old_drill, fresh, kind_dir = (work / "verify-abc", work / "drill.XYZ", work / "verify-new", work / "bot")
+    for d in (old_verify, old_drill, fresh, kind_dir):
+        d.mkdir(parents=True)
+        (d / "stream.tar").write_bytes(b"plaintext")
+    past = pb.time.time() - pb.STALE_SECONDS - 60
+    for d in (old_verify, old_drill, kind_dir):
+        os.utime(d, (past, past))
+    pb.sweep_stale(cfg)
+    assert not old_verify.exists() and not old_drill.exists()
+    assert fresh.exists()          # may belong to a drill running right now
+    assert kind_dir.exists()       # emptied by the pull of that kind under its own lock

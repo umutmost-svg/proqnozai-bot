@@ -23,12 +23,14 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import tarfile
 import tempfile
 import threading
+import time
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -334,8 +336,29 @@ def _lock(cfg: Config, kind: str):
     return f
 
 
+STALE_SECONDS = 6 * 3600   # a verify/drill work dir older than this belongs to a killed run (a drill takes minutes)
+
+
+def sweep_stale(cfg: Config) -> None:
+    """Removes decrypted leftovers of killed `verify`/`extract`/drill runs (SIGKILL, power loss) under .work.
+    Per-kind pull dirs are emptied by the pull itself under its lock."""
+    work = cfg.backup_dir / ".work"
+    if not work.is_dir():
+        return
+    cutoff = time.time() - STALE_SECONDS
+    for p in work.iterdir():
+        if p.name in KINDS:
+            continue
+        try:
+            if p.lstat().st_mtime < cutoff:
+                shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()
+        except OSError as exc:
+            print(f"warning: cannot remove stale {p.name}: {exc}", file=sys.stderr)
+
+
 def cmd_pull(cfg: Config, kinds: list[str]) -> int:
     rc = 0
+    sweep_stale(cfg)
     for kind in kinds:
         ts = datetime.now(UTC).strftime("%FT%TZ")
         try:
@@ -376,6 +399,7 @@ def cmd_verify(cfg: Config, archive: Path) -> int:
     try:
         kind = _kind_of(archive)
         expect = _recorded_sha(archive)
+        sweep_stale(cfg)
         work = _private_dir(cfg.backup_dir / ".work")
         with tempfile.TemporaryDirectory(dir=work, prefix="verify-") as tmp:
             _, files = decrypt_and_check(cfg, passphrase(cfg), kind, archive, Path(tmp), expect_sha=expect)
@@ -406,8 +430,16 @@ def cmd_extract(cfg: Config, archive: Path, dest: Path) -> int:
     return 0
 
 
+def _terminate(signum, _frame) -> None:
+    # SIGTERM/SIGHUP (launchd stop, logout, a closed terminal) unwind through the finally/with blocks that
+    # delete decrypted data; only SIGKILL skips them — sweep_stale() collects that case on the next run.
+    raise SystemExit(128 + signum)
+
+
 def main(argv: list[str]) -> int:
     os.umask(0o077)
+    signal.signal(signal.SIGTERM, _terminate)
+    signal.signal(signal.SIGHUP, _terminate)
     try:
         cfg = load_config()
     except BackupError as exc:

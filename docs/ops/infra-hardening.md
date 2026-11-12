@@ -62,8 +62,9 @@ systemctl daemon-reload && systemctl enable --now proqnozai-docker-user.service 
 Проверка: **с внешней машины** (ноутбук владельца) `sh deploy/miniapp/origin-check.sh --ports 164.90.180.208 none 3000`
 → `RESULT: isolated`; `https://admin.proqnozai.com` → Access → Dokploy работает; счётчик
 `iptables -L DOCKER-USER -v -n` растёт при внешних попытках; бот/дашборд/`/r/` — как до (их порты не задеты).
-Откат (мгновенный): `systemctl disable --now proqnozai-docker-user.service; sh /opt/proqnozai-ops/docker-user-3000.sh remove`.
-После включения сервиса `host-monitor.sh` (раздел 4) сам проверяет каждые 5 минут, что правило на месте.
+Откат (мгновенный): `systemctl disable --now proqnozai-docker-user.service; rm /etc/systemd/system/proqnozai-docker-user.service; systemctl daemon-reload; sh /opt/proqnozai-ops/docker-user-3000.sh remove`.
+Пока файл юнита установлен, `host-monitor.sh` (раздел 4) каждые 5 минут требует: юнит включён **и** правило на
+месте — иначе тревога `host`. Удаление файла юнита (только при откате) снимает это требование.
 
 **1b. [владелец, отдельное разрешение] DigitalOcean Cloud Firewall** `proqnozai-prod-fw` — таблица правил,
 порядок, гейт «ни один уже применённый firewall не разрешает 3000» и проверки — `dokploy-admin-access.md`
@@ -128,17 +129,18 @@ RPO — 12 ч (две выгрузки в сутки). Если Mac выключ
 Проверено локально (2026-11-12): `backup-export.sh` в отдельном «сервере» с Docker против настоящего образа
 Mini App `b92e863` и контейнера-«бота` → `pull_backups.py pull all` → архивы 0600, расшифровки на диске не
 осталось; учения (раздел 5) — PASS для обоих, включая запуск контейнера Mini App на восстановленных данных;
-испорченный манифест → FAIL; «осиротевшая» копия убрана следующим запуском; подмена строки состояния
-(`bot /app/data/bot.db`) отклонена — живая база не удаляется. Найдено и исправлено при этом: копии Mini App —
+испорченный манифест → FAIL; «осиротевшая» копия прерванного запуска (в т. ч. без напечатанного имени)
+убрана следующим запуском; ручные копии, существовавшие до запуска, и сама `bot.db` не трогаются. Найдено и исправлено при этом: копии Mini App —
 WAL-базы, рядом остаются пустой `-wal` и `-shm`; выгружаются только два `.db` после проверки, что `-wal` пуст.
 Логика Mac-части покрыта офлайн-тестами `deploy/ops/tests/test_pull_backups.py` (12 тестов).
 
 **Владелец предоставляет / делает [владелец]** (на Mac, в своём терминале):
-1. Пароль архивов в Keychain (случайный, 44 символа) **и его копия вне Mac** (менеджер паролей/бумага в сейфе —
-   без неё потеря Mac = потеря всех копий):
+1. Пароль архивов: **сначала** сгенерировать в менеджере паролей (≥ 40 случайных символов) и сохранить там —
+   это копия вне Mac, без неё потеря Mac = потеря всех копий. Затем положить в Keychain через **запрос** (пароль
+   не попадает в аргументы процессов и историю оболочки; `-w` последним — `security` спросит его дважды):
    ```sh
-   security add-generic-password -s proqnozai-auto-backup -a proqnozai -T /usr/bin/security -w "$(openssl rand -base64 33)"
-   security find-generic-password -s proqnozai-auto-backup -a proqnozai -w   # переписать в менеджер паролей; не в чат
+   security add-generic-password -s proqnozai-auto-backup -a proqnozai -T /usr/bin/security -w
+   security find-generic-password -s proqnozai-auto-backup -a proqnozai >/dev/null && echo present   # значение не печатается
    ```
 2. Ключ SSH только для бэкапа (без пароля — его использует launchd; ключ умеет только выгрузку, см. п. 3):
    `ssh-keygen -t ed25519 -f ~/.ssh/proqnozai_backup_ed25519 -N '' -C proqnozai-backup-pull` и прислать
@@ -175,7 +177,7 @@ launchctl kickstart gui/$(id -u)/com.proqnozai.backup-pull && sleep 60 && tail ~
 При первом обращении launchd к Keychain macOS может спросить разрешение — «Always Allow» (выдаётся
 `/usr/bin/security`, благодаря `-T` при создании записи вопроса не будет).
 Проверка готовности: в логе `OK` для обоих, в healthchecks обе проверки up, на сервере
-`docker exec <miniapp> ls /data/backups` пусто и в томе бота нет новых `bot-backup-*` (`cat /var/lib/proqnozai-ops/export-pending` пуст).
+`docker exec <miniapp> ls /data/backups` пусто, в томе бота нет новых `bot-backup-*`, `ls /var/lib/proqnozai-ops/` пуст (нет `inflight-*`).
 Тест тревоги: `chmod 000 ~/.ssh/proqnozai_backup_ed25519; python3 ~/proqnozai-ops/pull_backups.py pull bot; chmod 600 ~/.ssh/proqnozai_backup_ed25519`
 → healthchecks прислал «bot backup failed: server export failed…».
 Откат: `launchctl bootout gui/$(id -u)/com.proqnozai.backup-pull`; удалить строку ключа из `authorized_keys` на сервере.
@@ -203,8 +205,9 @@ URL пинга каждой проверки (`https://hc-ping.com/<uuid>`) кл
 Файл на сервере владелец создаёт сам, не показывая URL: `read -rs U; (umask 077; printf '%s' "$U" > /root/.hc-host); unset U`.
 
 `host-monitor.sh` (`host`): диск `/` ≤ 85 %, `MemAvailable` ≥ 400 МБ (swap нет — это порог до OOM), контейнер
-`cloudflared` запущен и `/ready` показывает ≥ 1 соединение, все сервисы Swarm `n/n`, а после 1a — правило
-`DOCKER-USER` на месте. `miniapp-health`: `GET /api/health` через Traefik на loopback (`Host: app.proqnozai.com`).
+`cloudflared` запущен и `/ready` показывает ≥ 1 соединение, все сервисы Swarm `n/n` и ни один из ожидаемых
+(`dokploy`, `dokploy-postgres`, бот, дашборд, Mini App — `EXPECT_SERVICES`) не пропал, а после 1a — юнит включён
+и правило `DOCKER-USER` на месте. `miniapp-health`: `GET /api/health` через Traefik на loopback (`Host: app.proqnozai.com`).
 При сбое — `/fail` с причинами в теле (видны в healthchecks) и запись в syslog (`proqnozai-monitor`); пороги —
 переменные `DISK_MAX_PCT`, `MEM_MIN_MB`. Сервер/сеть/cron умерли → пингов нет → тревога по grace.
 Снаружи через Cloudflare (DNS, Access, туннель целиком) это не видит — по желанию владельца бесплатный внешний
@@ -230,6 +233,9 @@ sh ~/proqnozai-ops/restore-drill-local.sh bot          # PASS: … bot.db integr
 MINIAPP_IMAGE=proqnozai-miniapp:<коммит в проде> sh ~/proqnozai-ops/restore-drill-local.sh miniapp
                                                        # PASS: … Mini App container healthy on the restored data; cleaned up
 ```
+Расшифрованные данные живут только во временных каталогах под `~/.proqnozai-backups/auto/.work/`; при
+SIGTERM/SIGHUP они удаляются сразу, после SIGKILL/сбоя питания — следующим `pull`/`verify` (старше 6 ч).
+
 Что делает: свежий архив → расшифровка и проверки (`pull_backups.py extract`) во временный 0700-каталог → **новый**
 том Docker с меткой этого запуска → копирование баз в него офлайн-контейнером → `integrity_check`, таблицы и
 число строк, прочитанные **из тома**, сравниваются с манифестом → для Mini App при `MINIAPP_IMAGE` — сам
