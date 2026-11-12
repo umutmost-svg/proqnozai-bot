@@ -69,7 +69,10 @@ if not _admin or _admin != OWNER:
     sys.exit("STOP: the stored owner id differs from the bot's ADMIN_ID")
 
 # Odds feed (signed push from the bot): validated BEFORE any change; absent file = feed off, said so.
-ODDS_SECRET = secret("/root/miniapp-secrets/odds-feed") if Path("/root/miniapp-secrets/odds-feed").exists() else ""
+_ODDS_FILE = Path("/root/miniapp-secrets/odds-feed")
+ODDS_SECRET = secret(str(_ODDS_FILE)) if _ODDS_FILE.exists() else ""
+if _ODDS_FILE.exists() and not ODDS_SECRET:
+    sys.exit("STOP: the odds feed secret file exists but is empty")
 if ODDS_SECRET and len(ODDS_SECRET) < 32:
     sys.exit("STOP: the odds feed secret is shorter than 32 characters")
 print("odds feed:", "on (secret present)" if ODDS_SECRET else "off (no /root/miniapp-secrets/odds-feed)")
