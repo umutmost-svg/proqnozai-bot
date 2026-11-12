@@ -138,7 +138,7 @@ sealed). В репозитории есть лишь плейсхолдеры в
 | `MINIAPP_CSP_MODE` | `report-only` на первом прогоне в клиентах, затем `enforce` | — |
 | `MINIAPP_LOGINS_ENABLED` | `true` (аварийно — `false`) | — |
 | `MINIAPP_MAX_SESSIONS_PER_USER` | `5` (необязательна; допустимо 1…5) | — |
-| `MINIAPP_FOOTBALL_DATA_KEY` | ключ football-data.org **только для Mini App** (не `FOOTBALL_KEY` бота); без него футбол и AI — «не подключены» | да |
+| `MINIAPP_FOOTBALL_DATA_KEY` | ключ football-data.org для backend Mini App (своя переменная; может быть тем же ключом, что `FOOTBALL_KEY` бота — тогда задать `MINIAPP_FOOTBALL_DATA_SHARED_RESERVE`, см. `production.md` §3); без него футбол и AI — «не подключены» | да |
 | `MINIAPP_FOOTBALL_DATA_COMPETITIONS`, `MINIAPP_FOOTBALL_DATA_LIVE_PLAN`, `MINIAPP_FOOTBALL_DATA_PER_MINUTE`, `MINIAPP_FOOTBALL_DATA_PER_DAY`, `MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR` | по умолчанию (`PL,PD,SA,BL1,FL1,CL,ELC,DED,PPL,BSA` — все клубные турниры бесплатного плана, `false`, `8`, `3000`, `20`) | — |
 | `MINIAPP_ANTHROPIC_API_KEY` | ключ Anthropic **только для Mini App** (не `ANTHROPIC_API_KEY` бота); без него кнопки AI нет | да |
 | `MINIAPP_AI_MODEL`, `MINIAPP_AI_PER_USER_DAILY`, `MINIAPP_AI_DAILY_BUDGET` | по умолчанию (`claude-opus-5-5`, `10`, `200`); бюджет — потолок платных вызовов в сутки | — |
