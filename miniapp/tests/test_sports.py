@@ -632,6 +632,32 @@ def test_error_answers_also_respect_the_bots_reserve(clock: FakeClock, status: i
     run(c.get_json("/b"))
 
 
+def test_shared_key_never_retries_when_the_remaining_minute_is_unknown(clock: FakeClock) -> None:
+    from miniapp.sports.client import TransportError
+    t = FakeTransport()
+    t.script = [HttpResponse(500, {}, b"{}")]  # no remaining header on the error
+    c = make_client(t, clock, per_minute=100, shared_reserve=40)
+    with pytest.raises(UpstreamError):
+        run(c.get_json("/a"))
+    assert len(t.calls) == 1
+    t.script = [TransportError("timeout")]
+    with pytest.raises(UpstreamError):
+        run(c.get_json("/b"))
+    assert len(t.calls) == 2
+    # with a known remainder above the reserve a transient 5xx is still retried
+    t.script = [HttpResponse(500, {"x-requests-available-minute": "80"}, b"{}"), t.ok({})]
+    run(c.get_json("/c"))
+    assert len(t.calls) == 4
+
+
+def test_a_key_of_our_own_keeps_the_usual_retries(clock: FakeClock) -> None:
+    t = FakeTransport()
+    t.script = [HttpResponse(500, {}, b"{}"), t.ok({})]
+    c = make_client(t, clock, per_minute=100)
+    run(c.get_json("/a"))
+    assert len(t.calls) == 2
+
+
 def test_reserve_reached_without_a_reset_header_waits_a_full_minute(clock: FakeClock) -> None:
     t = FakeTransport()
     t.script = [t.ok({}, {"x-requests-available-minute": "10"})]

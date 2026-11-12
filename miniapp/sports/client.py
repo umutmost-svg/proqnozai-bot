@@ -244,17 +244,20 @@ class ProviderClient:
                 break
         self._cooldown_until = self._clock() + min(max(wait, 1.0), self._limits.max_cooldown_s)
 
-    def _respect_remaining(self, headers: Mapping[str, str]) -> None:
+    def _respect_remaining(self, headers: Mapping[str, str]) -> bool:
         # The docs name this header two ways. It counts the whole key, so it also sees what other
         # clients of a shared key (the bot) used: when the remainder falls to their reserve, pause
         # until the provider's reset instead of taking their requests or collecting a 429.
         for key in ("x-requests-available-minute", "x-requestsavailable"):
             raw = headers.get(key)
-            if raw is not None and raw.strip().isdigit() and int(raw.strip()) <= self._limits.shared_reserve:
-                if self._limits.shared_reserve:
-                    logger.info("event=provider_shared_reserve provider=%s available=%s", self.name, raw.strip())
-                self._cool_down(headers)
-                return
+            if raw is not None and raw.strip().isdigit():
+                if int(raw.strip()) <= self._limits.shared_reserve:
+                    if self._limits.shared_reserve:
+                        logger.info("event=provider_shared_reserve provider=%s available=%s", self.name, raw.strip())
+                    self._cool_down(headers)
+                    return False
+                return True
+        return False  # remaining unknown
 
     # --- requests ------------------------------------------------------------
 
@@ -269,6 +272,7 @@ class ProviderClient:
             attempt = 0
             while True:
                 self._reserve()
+                known_above_reserve = False
                 try:
                     response = await self._transport(url, headers, self._limits.timeout_s)
                 except TransportError:
@@ -277,7 +281,7 @@ class ProviderClient:
                     # Every answer carries the key's remaining minute (errors too): respect it before
                     # returning, failing or retrying, so no path spends the bot's reserve.
                     if response.status != 429:
-                        self._respect_remaining(response.headers)
+                        known_above_reserve = self._respect_remaining(response.headers)
                     if response.status == 200:
                         try:
                             data = json.loads(response.body)
@@ -301,6 +305,10 @@ class ProviderClient:
                     if response.status < 500:
                         raise self._fail(error)
                 if attempt >= self._limits.retries:
+                    raise self._fail(error)
+                if self._limits.shared_reserve and not known_above_reserve:
+                    # Shared key and the remaining minute is unknown (timeout, no header): a retry could
+                    # spend the bot's reserve, so the error is returned instead of retried.
                     raise self._fail(error)
                 attempt += 1
                 await self._sleep(self._limits.backoff_s * (2 ** (attempt - 1)))
