@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { Emblem } from '../components/Emblem';
@@ -202,6 +203,30 @@ function OddsCard({ event, odds }: { event: SportEvent; odds: EventOdds }) {
   );
 }
 
+/** How often an open match page asks again: the bot refreshes a line every 5-10 minutes. */
+export const ODDS_REFRESH_MS = 60_000;
+
+/** The odds of the last answer, refreshed while the page is open: a changed price replaces the old one. */
+function OddsSection({ event }: { event: SportEvent }) {
+  const { data } = useServices();
+  const [odds, setOdds] = useState<EventOdds | null>(() => data.eventOdds(event.id));
+  useEffect(() => {
+    let alive = true;
+    const every = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      data.getEvent(event.id).then(
+        () => alive && setOdds(data.eventOdds(event.id)),
+        () => undefined, // a failed refresh keeps the old prices only until their own deadline
+      );
+    }, ODDS_REFRESH_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(every);
+    };
+  }, [data, event.id]);
+  return odds ? <OddsCard event={event} odds={odds} /> : null;
+}
+
 export function EventScreen() {
   const { id = '' } = useParams();
   const [params, setParams] = useSearchParams();
@@ -256,10 +281,7 @@ export function EventScreen() {
           {tab === 'overview' ? (
             <>
               <Overview event={event} />
-              {(() => {
-                const odds = data.eventOdds(event.id);
-                return odds && event.status === 'upcoming' ? <OddsCard event={event} odds={odds} /> : null;
-              })()}
+              {event.status === 'upcoming' && <OddsSection event={event} />}
               {aiEnabled && (
                 // Opens the AI screen, which only reads; creating is its own explicit button there.
                 <button type="button" className={ui.primary} onClick={openAi}>

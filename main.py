@@ -153,6 +153,18 @@ async def _publish_commands(application) -> None:
             logger.warning(f"set_my_commands failed (lang={lang}): {e}")
 
 
+def _start_odds_export() -> None:
+    """Odds for the Mini App (signed push): off unless MINIAPP_ODDS_URL and its secret are set.
+    Never allowed to stop the bot: any failure while setting it up only leaves the export off."""
+    try:
+        from mostbet_feed import from_env as odds_export_from_env, run_odds_export
+        odds_export = odds_export_from_env()
+        if odds_export is not None:
+            asyncio.create_task(run_odds_export(odds_export))
+    except Exception as exc:
+        logger.error("odds_export.disabled reason=setup_failed type=%s", type(exc).__name__)
+
+
 def main():
     logger.info(f"=== ProqnozAI worker booting | commit={_deploy_version()} | "
                 f"python={sys.version.split()[0]} ===")
@@ -173,11 +185,7 @@ def main():
         asyncio.create_task(poller(application))
         asyncio.create_task(daily_push(application))
         asyncio.create_task(_preload_mostbet())
-        # Odds for the Mini App (signed push): off unless MINIAPP_ODDS_URL and its secret are set.
-        from mostbet_feed import from_env as odds_export_from_env, run_odds_export
-        odds_export = odds_export_from_env()
-        if odds_export is not None:
-            asyncio.create_task(run_odds_export(odds_export))
+        _start_odds_export()
         asyncio.create_task(check_odds_changes(application))
         asyncio.create_task(_broadcast_menu_update(application))
         asyncio.create_task(_publish_commands(application))

@@ -39,3 +39,18 @@ for (const width of [320, 390]) {
     await expect(card).toHaveCount(0); // never shown after its validity, not even greyed out
   });
 }
+
+test('a changed price replaces the old one while the page is open', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.clock.install({ time: NOW });
+  const data = withOdds(600);
+  await mockApi(page, data);
+  await page.goto('/#/event/fd%3A4');
+  const card = page.getByTestId('event-odds');
+  await expect(card).toContainText('4,20', { timeout: 15_000 });
+  const ev = data['/api/sports/event/fd:4'] as { odds: { quotes: { odds: number }[] } };
+  ev.odds.quotes[0]!.odds = 4.6; // the bot pushed a new price
+  await page.clock.fastForward(61_000);
+  await expect(card).toContainText('4,60');
+  await expect(card).not.toContainText('4,20');
+});

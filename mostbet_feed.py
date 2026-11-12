@@ -225,7 +225,7 @@ class OddsExport:
             if self._paused():
                 break
             # Stops at the first 429 (no retries of its own) and leaves the bot's cache untouched.
-            odds = await mostbet.mostbet_get_odds(m["id"], retry_on_429=False)
+            odds = await mostbet.mostbet_get_odds(m["id"], retry_on_429=False, page_spacing_s=SPACING_S)
             entry = mostbet.mostbet_cache.get(f"odds_{m['id']}")
             # Only a set read in full (all pages): a partial one could miss or misplace prices.
             if not entry or not mostbet.odds_complete(m["id"]) or not any(v is not None for v in odds.values()):

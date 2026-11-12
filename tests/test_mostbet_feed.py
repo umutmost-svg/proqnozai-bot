@@ -47,8 +47,9 @@ def env(monkeypatch):
     sleeps: list = []
     state = {"matches": [], "status": 200}
 
-    async def get_odds(line_id, *, retry_on_429=True):
+    async def get_odds(line_id, *, retry_on_429=True, page_spacing_s=0.0):
         assert retry_on_429 is False  # the export never retries a 429 itself
+        assert page_spacing_s == feed.SPACING_S  # and keeps its pace per request, pages included
         fetched.append(line_id)
         mostbet.mostbet_cache[f"odds_{line_id}"] = (clock.now - 30, dict(ODDS))
         return dict(ODDS)
@@ -138,7 +139,7 @@ def test_a_recent_429_pauses_the_export_before_and_during_a_cycle(env, monkeypat
     assert run(export.cycle()) == 0 and fetched == [] and posts == []
     monkeypatch.setattr(mostbet, "last_rate_limited_at", 0.0)
 
-    async def limited(line_id, *, retry_on_429=True):
+    async def limited(line_id, *, retry_on_429=True, page_spacing_s=0.0):
         fetched.append(line_id)
         mostbet.last_rate_limited_at = clock.now  # the API said 429 to this request
         return {k: None for k in ODDS}
@@ -161,7 +162,7 @@ def test_a_line_without_any_price_is_not_sent(env, monkeypatch) -> None:
     export, clock, state, posts, *_ = env
     state["matches"] = [raw(1)]
 
-    async def empty(line_id, *, retry_on_429=True):
+    async def empty(line_id, *, retry_on_429=True, page_spacing_s=0.0):
         mostbet.mostbet_cache[f"odds_{line_id}"] = (clock.now, {"w1": None})
         return {"w1": None}
 
@@ -469,3 +470,44 @@ def test_the_loop_survives_a_failing_cycle_and_keeps_the_cadence() -> None:
     with pytest.raises(asyncio.CancelledError):
         run(feed.run_odds_export(_Export(), clock=clock, sleep=sleep))
     assert sleeps == [60, feed.CYCLE_S - 40, feed.CYCLE_S - 40] and calls["n"] == 3
+
+
+def test_a_background_fetch_paces_every_page_not_only_every_line(monkeypatch, clean_mostbet_cache) -> None:
+    # 10 lines x up to 10 pages each: without a pause per page the export could burst at the source.
+    page = _saved_outcomes()
+    full = {**page, "lineMatchOutcomes": (page["lineMatchOutcomes"] * 100)[:100]}  # a full page: there is a next one
+    last = {**page, "lineMatchOutcomes": []}
+    client = _Client([_Answer(full), _Answer(full), _Answer(last)])
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", client)
+    pauses: list = []
+
+    async def fake_sleep(s):
+        pauses.append(s)
+    monkeypatch.setattr(mostbet.asyncio, "sleep", fake_sleep)
+    run(mostbet.mostbet_get_odds(9, retry_on_429=False, page_spacing_s=2.0))
+    assert len(client.requests) == 3 and pauses == [2.0, 2.0]  # before page 2 and page 3, never before the first
+
+
+def test_the_bots_own_fetch_keeps_its_speed(monkeypatch, clean_mostbet_cache) -> None:
+    page = _saved_outcomes()
+    full = {**page, "lineMatchOutcomes": (page["lineMatchOutcomes"] * 100)[:100]}
+    client = _Client([_Answer(full), _Answer({**page, "lineMatchOutcomes": []})])
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", client)
+    pauses: list = []
+
+    async def fake_sleep(s):
+        pauses.append(s)
+    monkeypatch.setattr(mostbet.asyncio, "sleep", fake_sleep)
+    run(mostbet.mostbet_get_odds(10))
+    assert len(client.requests) == 2 and pauses == []
+
+
+def test_a_broken_export_setup_never_stops_the_bot(monkeypatch, caplog) -> None:
+    import main
+
+    def broken(env=None):
+        raise ValueError("unreadable leagues table")
+    monkeypatch.setattr(feed, "from_env", broken)
+    with caplog.at_level("ERROR"):
+        main._start_odds_export()  # returns: polling and handlers start as usual
+    assert "odds_export.disabled reason=setup_failed type=ValueError" in caplog.text

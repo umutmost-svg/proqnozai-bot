@@ -68,6 +68,12 @@ OWNER = secret("/root/miniapp-secrets/owner-id")
 if not _admin or _admin != OWNER:
     sys.exit("STOP: the stored owner id differs from the bot's ADMIN_ID")
 
+# Odds feed (signed push from the bot): validated BEFORE any change; absent file = feed off, said so.
+ODDS_SECRET = secret("/root/miniapp-secrets/odds-feed") if Path("/root/miniapp-secrets/odds-feed").exists() else ""
+if ODDS_SECRET and len(ODDS_SECRET) < 32:
+    sys.exit("STOP: the odds feed secret is shorter than 32 characters")
+print("odds feed:", "on (secret present)" if ODDS_SECRET else "off (no /root/miniapp-secrets/odds-feed)")
+
 if len(sys.argv) < 2 or not sys.argv[1].isalnum():
     sys.exit("usage: python3 - <IMAGE_TAG> [--deploy] < dokploy_deploy.py")
 tag, deploy = sys.argv[1], "--deploy" in sys.argv[2:]
@@ -126,15 +132,13 @@ env_vars = {
     "MINIAPP_FOOTBALL_DATA_SHARED_RESERVE": "40",
     "MINIAPP_FOOTBALL_DATA_COMPETITIONS": "all",
     # Odds from the bot (signed push): on once its shared secret exists on this host (same value in the bot).
-    "MINIAPP_ODDS_FEED_ENABLED": "true" if Path("/root/miniapp-secrets/odds-feed").exists() else "false",
+    "MINIAPP_ODDS_FEED_ENABLED": "true" if ODDS_SECRET else "false",
     "MINIAPP_LOGINS_ENABLED": "true",
 }
 if not OWNER.isdigit():
     sys.exit("STOP: owner id is not a Telegram id")
-if Path("/root/miniapp-secrets/odds-feed").exists():
-    env_vars["MINIAPP_ODDS_FEED_SECRET"] = secret("/root/miniapp-secrets/odds-feed")
-    if len(env_vars["MINIAPP_ODDS_FEED_SECRET"]) < 32:
-        sys.exit("STOP: the odds feed secret is shorter than 32 characters")
+if ODDS_SECRET:
+    env_vars["MINIAPP_ODDS_FEED_SECRET"] = ODDS_SECRET
 for k, v in env_vars.items():
     if "\n" in v or not v:
         sys.exit(f"STOP: bad value for {k}")

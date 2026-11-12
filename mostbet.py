@@ -323,10 +323,11 @@ async def mostbet_find_match(team1: str, team2: str) -> dict | None:
     return None
 
 
-async def mostbet_get_odds(line_id: int, *, retry_on_429: bool = True) -> dict:
+async def mostbet_get_odds(line_id: int, *, retry_on_429: bool = True, page_spacing_s: float = 0.0) -> dict:
     """Get odds for a match from Mostbet with caching.
 
-    retry_on_429=False (background callers such as the Mini App odds export): the first 429
+    page_spacing_s: a pause before every page after the first (background callers keep their own pace
+    per REQUEST, not only per line). retry_on_429=False (background callers such as the Mini App odds export): the first 429
     ends the fetch at once, and that interrupted result is NOT cached, so a bot user asking
     for the same line right after still gets a real fetch instead of an empty cached one."""
     cache_key = f"odds_{line_id}"
@@ -372,6 +373,8 @@ async def mostbet_get_odds(line_id: int, *, retry_on_429: bool = True) -> dict:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as h:
             last_id = 0
             for _page in range(10):  # safety cap: up to 1000 outcomes
+                if _page and page_spacing_s > 0:
+                    await asyncio.sleep(page_spacing_s)
                 r = None
                 for attempt in range(3):
                     r = await h.get(
