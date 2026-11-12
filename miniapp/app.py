@@ -333,9 +333,14 @@ def create_app(
     if settings.ads_enabled:
         from miniapp.ads.telemetry import Telemetry, telemetry_path
 
-        telemetry = Telemetry(telemetry_path(settings.db_path))
-        telemetry.init_schema()
-        telemetry.purge(now())
+        try:
+            telemetry = Telemetry(telemetry_path(settings.db_path))
+            telemetry.init_schema()
+            telemetry.maybe_purge(now())
+        except (sqlite3.Error, OSError, RuntimeError) as exc:
+            # Non-authoritative data must not stop the Mini App: without telemetry there are no ads (routes 404).
+            logger.error("event=ads_telemetry_unavailable type=%s", type(exc).__name__)
+            telemetry = None
 
     def note_activity(user_id: int, field: str = "requests") -> None:
         """Neutral app activity for ads segments; never breaks the request it is attached to."""
@@ -343,6 +348,7 @@ def create_app(
             return
         try:
             telemetry.record_activity(user_id, now(), field)
+            telemetry.maybe_purge(now())
         except sqlite3.Error as exc:
             logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
 

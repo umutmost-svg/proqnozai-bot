@@ -82,8 +82,27 @@ export function createAdsApi(options: {
   const fetchImpl = options.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const base = options.base ?? '/api';
   let disabled = false;
+  // Until the backend has answered once, requests wait for the first one: concurrent cards on a backend
+  // without ads still cost a single request.
+  let probe: Promise<unknown> | null = null;
+  let probed = false;
 
   async function call(path: string, init: RequestInit): Promise<{ status: number; body: unknown } | null> {
+    if (!probed) {
+      if (probe) {
+        await probe;
+      } else {
+        const first = exchange(path, init);
+        probe = first;
+        const result = await first;
+        probed = true;
+        return result;
+      }
+    }
+    return exchange(path, init);
+  }
+
+  async function exchange(path: string, init: RequestInit): Promise<{ status: number; body: unknown } | null> {
     if (disabled) return null;
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = setTimeout(() => controller?.abort(), TIMEOUT_MS);

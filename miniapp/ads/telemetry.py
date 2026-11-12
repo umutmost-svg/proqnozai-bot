@@ -82,6 +82,7 @@ class Telemetry:
     def __init__(self, path: Path, read_only: bool = False) -> None:
         self.path = path
         self.read_only = read_only
+        self._purged_day: str | None = None
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -218,6 +219,13 @@ class Telemetry:
                     f"AND user_id IN ({','.join('?' * len(chunk))}) ORDER BY at", (campaign_id, since, *chunk)).fetchall()
                 out.update({uid: variant for uid, variant in rows})
         return out
+
+    def maybe_purge(self, now: int) -> None:
+        """Retention while the process runs: at most once per UTC day (best effort, called on app traffic)."""
+        today = day_of(now)
+        if self._purged_day != today:
+            self._purged_day = today
+            self.purge(now)
 
     def purge(self, now: int) -> None:
         events_before = day_of(now - EVENTS_RETENTION_DAYS * DAY)

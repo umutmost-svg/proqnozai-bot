@@ -46,6 +46,14 @@ describe('partner offers client', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('concurrent first calls to a backend without ads still cost one request', async () => {
+    const fetchImpl = vi.fn(() => json(404, { error: 'not_found' }));
+    const api = createAdsApi({ getCsrfToken: () => 'csrf', fetchImpl: fetchImpl as unknown as typeof fetch });
+    const answers = await Promise.all([api.offer('quick_pick', 'fd:1'), api.offer('quick_pick', 'fd:2'), api.impression('t')]);
+    expect(answers.slice(0, 2)).toEqual([{ kind: 'none' }, { kind: 'none' }]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('sends CSRF with every write and returns the link from the click', async () => {
     const calls: [string, RequestInit][] = [];
     const fetchImpl = vi.fn((url: string, init: RequestInit) => {

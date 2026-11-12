@@ -169,9 +169,9 @@ class Segments:
             return self.created_at is not None and self.created_at >= self.now - params["days"] * DAY
         if name == "active":
             return len([r for r in self._since(params["days"]) if r["requests"] > 0]) >= params["min_visits"]
-        if name == "inactive":  # no visit in the N days before today (today's own visit does not count)
-            start = days_back(self.now, params["days"])
-            return not [r for r in self._activity() if start <= r["day"] < today and r["requests"] > 0]
+        if name == "inactive":  # the last visit before today was N or more days ago (a first visit is not "inactive")
+            earlier = [r["day"] for r in self._activity() if r["day"] < today and r["requests"] > 0]
+            return bool(earlier) and _gap(earlier[-1], today) >= params["days"]
         if name == "returned":  # a visit within M days that came after a break of at least N days
             visits = [r["day"] for r in self._activity() if r["requests"] > 0]
             start = days_back(self.now, params["within_days"] - 1)

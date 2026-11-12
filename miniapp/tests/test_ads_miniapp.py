@@ -310,3 +310,76 @@ def test_a_successful_quick_pick_counts_as_activity():
     for _ in range(3):
         assert c.get("/api/quick/pick", params=params).status_code == 200
     assert seen == [(USER, "quick_single_ok"), (USER, "quick_coupon_ok")]
+
+
+@pytest.mark.parametrize("change", [
+    {"countries": ["TR"]},                                   # the user's country was removed
+    {"ageMin": 18},                                          # an age minimum was added
+    {"condition": {"user_in": [OTHER]}},                     # the audience was narrowed
+    {"experiment": {"salt": "another-salt-2", "controlPct": 100 // 2}, "variants": [
+        {"key": "B", "weight": 100, "headline": "B", "body": "", "extra": "", "cta": "Go",
+         "url": "https://p.example.com/b"}]},                # the variant no longer exists
+])
+def test_an_old_token_follows_the_current_targeting(tmp_path, change):
+    env = Env(tmp_path)
+    publish(tmp_path, campaign())
+    c, csrf = env.user()
+    token = env.offer(c).json()["offer"]["impressionToken"]
+    publish(tmp_path, campaign(**change), version=11)
+    env.clock.advance(31)
+    assert post(c, "/api/ads/click", csrf, {"impressionToken": token}).status_code == 410
+    assert post(c, "/api/ads/impression", csrf, {"impressionToken": token}).json()["counted"] is False
+
+
+def test_telemetry_failures_degrade_without_breaking_answers(tmp_path, monkeypatch):
+    from miniapp.ads.telemetry import Telemetry
+
+    env = Env(tmp_path)
+    publish(tmp_path, campaign(), campaign(2, priority=5, ageMin=18))
+    c, csrf = env.user()
+    token = env.offer(c).json()["offer"]["impressionToken"]  # campaign 1 (2 needs an age statement)
+
+    def boom(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(Telemetry, "click", boom)
+    monkeypatch.setattr(Telemetry, "exposure", boom)
+    monkeypatch.setattr(Telemetry, "confirm_age", boom)
+    assert post(c, "/api/ads/click", csrf, {"impressionToken": token}).json() == {"url": "https://p.example.com/promo"}
+    assert post(c, "/api/ads/impression", csrf, {"impressionToken": token}).json()["counted"] is False
+    assert post(c, "/api/ads/age", csrf, {"min": 18}).status_code == 503
+    monkeypatch.setattr(Telemetry, "confirmed_age", boom)
+    answer = env.offer(c).json()
+    assert answer["offer"]["id"] == 1 and "ageGate" not in answer  # unreadable age: gated offers denied, no prompt
+
+
+def test_unusable_telemetry_keeps_the_app_up_without_ads(tmp_path):
+    from miniapp.ads.telemetry import telemetry_path as tpath
+
+    tpath(tmp_path / "miniapp.db").mkdir(parents=True)  # a directory where the database file should be
+    env = Env(tmp_path)
+    c, _ = env.user()
+    assert c.get("/api/me").status_code == 200
+    assert env.offer(c).status_code == 404
+
+
+def test_retention_runs_without_a_restart(tmp_path):
+    env = Env(tmp_path)
+    c, _ = env.user()
+    old = int(env.clock.now) - 91 * DAY
+    with sqlite3.connect(telemetry_path(tmp_path / "miniapp.db")) as conn:
+        conn.execute("INSERT INTO ad_events (at, day, user_id, campaign_id, variant, placement, event_key, country, kind) "
+                     "VALUES (?, '2000-01-01', 1, 1, 'A', 'quick_pick', 'fd:1', NULL, 'impression')", (old,))
+    env.clock.advance(DAY)
+    assert c.get("/api/me").status_code == 200
+    assert env.rows("impression") == []
+
+
+def test_inactive_needs_an_earlier_visit(tmp_path):
+    env = Env(tmp_path)
+    publish(tmp_path, campaign(condition={"segment": {"name": "inactive", "params": {"days": 3}}}))
+    c, _ = env.user()
+    assert env.offer(c).json() == {"offer": None}   # first visit ever: not "inactive"
+    env.clock.advance(4 * DAY)
+    assert c.get("/api/me").status_code == 200       # back after 4 days
+    env.clock.advance(31)
+    assert env.offer(c).json()["offer"]["id"] == 1
