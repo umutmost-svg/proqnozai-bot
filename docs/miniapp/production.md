@@ -138,7 +138,7 @@ Deploy бота). Цена — перерыв бота на остановку +
 - Cloudflare (владелец): зона домена, режим SSL/TLS, существующие DNS-записи, Transform Rules, Rate limiting.
 - BotFather (владелец): username и числовой id production-бота (`MINIAPP_BOT_ID` = часть токена до `:`), текущая
   Menu Button.
-- football-data.org (владелец): аккаунт и тариф для отдельного ключа Mini App.
+- football-data.org: ключ — общий с ботом (§3); владельцу — по желанию письменное подтверждение провайдера по п. 2.3.
 - Anthropic Console (владелец): отдельный ключ Mini App и лимит расходов (Workspace spend limit) — понадобится при включении AI после 20–22.11, на запуске не задаётся.
 - Сервер: результат `prod-discovery.sh` (ниже).
 
