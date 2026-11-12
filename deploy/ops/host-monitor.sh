@@ -23,10 +23,16 @@ UNIT=${UNIT_FILE:-/etc/systemd/system/proqnozai-docker-user.service}
 # Swarm services that must exist (exact name, or the name followed by Dokploy's "-<suffix>").
 EXPECT_SERVICES=${EXPECT_SERVICES:-dokploy dokploy-postgres proqnozai-proqnozaibot proqnozai-httpworkerrailwayinternal8888 proqnozai-miniapp}
 
+# The ping URL is a bearer secret: it goes to curl through a config on stdin, never through argv (ps).
+hc_curl() {  # $1 url, $2.. extra curl args
+  hc_u=$1; shift
+  printf 'url = "%s"\n' "$hc_u" | curl -fsS -m 10 -o /dev/null -K - "$@"
+}
+
 ping_hc() {  # $1 url file, $2 ok|fail, $3 body
   u=$(cat "$1" 2>/dev/null) || { echo "$(date -u +%FT%TZ) no healthchecks URL in $1"; return 1; }
   case $2 in ok) suffix="";; *) suffix="/fail";; esac
-  curl -fsS -m 10 -o /dev/null --data-raw "$3" "$u$suffix" || echo "$(date -u +%FT%TZ) healthchecks ping failed ($1)"
+  hc_curl "$u$suffix" --data-raw "$3" || echo "$(date -u +%FT%TZ) healthchecks ping failed ($1)"
 }
 
 report() {  # $1 name, $2 url file, $3 reasons ("" = ok), $4 summary

@@ -182,6 +182,10 @@ launchctl kickstart gui/$(id -u)/com.proqnozai.backup-pull && sleep 60 && tail ~
 → healthchecks прислал «bot backup failed: server export failed…».
 Откат: `launchctl bootout gui/$(id -u)/com.proqnozai.backup-pull`; удалить строку ключа из `authorized_keys` на сервере.
 
+**Ручные копии на сервере** (`bot_db_backup.py`, `backup.py` вне выгрузки) — только под тем же замком, иначе
+выгрузка, идущая в ту же секунду, может принять новую ручную копию за свою и удалить её:
+`flock /run/proqnozai-backup-export.lock docker exec -i <бот> python - < /opt/proqnozai-ops/bot_db_backup.py`.
+
 **[разрешение] Уборка старых копий в томе бота:** `docker exec <бот> sh -c 'rm -f /app/data/bot-backup-2026111*.db'`
 — только после первой успешной автоматической выгрузки и проверки (`verify` PASS). Это 4 незашифрованные копии
 с данными пользователей; зашифрованные экземпляры трёх из них уже лежат в `~/.proqnozai-backups/`.
@@ -221,7 +225,8 @@ sh /opt/proqnozai-ops/dokploy-bypass-check.sh; echo $?       # 0, без выв�
 sh /opt/proqnozai-ops/host-monitor.sh; echo $?                # без вывода
 ```
 Проверка: в healthchecks все три серверные проверки up в течение 5–60 минут. **Тест тревоги (обязательно):**
-`curl -fsS "$(cat /root/.hc-host)/fail"` → уведомление пришло → `curl -fsS "$(cat /root/.hc-host)"` → снова up;
+`printf 'url = "%s/fail"\n' "$(cat /root/.hc-host)" | curl -fsS -K -` → уведомление пришло →
+`printf 'url = "%s"\n' "$(cat /root/.hc-host)" | curl -fsS -K -` → снова up (URL через stdin, не в аргументах `curl`);
 то же для двух других файлов. Откат: `rm /etc/cron.d/proqnozai-ops` (и пауза проверок в healthchecks).
 Лог `/var/log/proqnozai-monitor.log` пишется только при проблемах.
 
@@ -234,7 +239,10 @@ MINIAPP_IMAGE=proqnozai-miniapp:<коммит в проде> sh ~/proqnozai-ops/
                                                        # PASS: … Mini App container healthy on the restored data; cleaned up
 ```
 Расшифрованные данные живут только во временных каталогах под `~/.proqnozai-backups/auto/.work/`; при
-SIGTERM/SIGHUP они удаляются сразу, после SIGKILL/сбоя питания — следующим `pull`/`verify` (старше 6 ч).
+SIGTERM/SIGHUP они удаляются сразу, после SIGKILL/сбоя питания — следующим `pull`/`verify` (старше 6 ч; рабочий
+каталог выгрузки своего вида — в начале каждой выгрузки, ещё до обращения к Keychain). Тома и контейнеры учений,
+оставшиеся после SIGKILL (метка `proqnozai.drill`, рабочего каталога нет или ему > 6 ч), удаляет следующий запуск
+учений.
 
 Что делает: свежий архив → расшифровка и проверки (`pull_backups.py extract`) во временный 0700-каталог → **новый**
 том Docker с меткой этого запуска → копирование баз в него офлайн-контейнером → `integrity_check`, таблицы и

@@ -197,12 +197,18 @@ def decrypt_and_check(cfg: Config, pw: bytes, kind: str, archive: Path, dest: Pa
     return tar_sha, files
 
 
-def pull_one(cfg: Config, kind: str, pw: bytes, now: datetime | None = None) -> str:
+def clean_kind(cfg: Config, kind: str) -> tuple[Path, Path]:
+    """A pull killed mid-way may have left a decrypted copy or a partial archive: removed under the kind's lock,
+    before anything that can fail (Keychain, network) — a broken run never keeps plaintext waiting."""
     base = _private_dir(cfg.backup_dir / kind)
     work = _private_dir(cfg.backup_dir / ".work" / kind)
-    # A run killed mid-way may have left a decrypted copy or a partial archive: remove before anything else.
     for leftover in list(work.iterdir()) + list(base.glob(".*.partial")):
-        shutil.rmtree(leftover) if leftover.is_dir() else leftover.unlink()
+        shutil.rmtree(leftover) if leftover.is_dir() and not leftover.is_symlink() else leftover.unlink()
+    return base, work
+
+
+def pull_one(cfg: Config, kind: str, pw: bytes, now: datetime | None = None) -> str:
+    base, work = clean_kind(cfg, kind)
     stamp = (now or datetime.now(UTC)).strftime("%Y%m%dT%H%M%SZ")
     final = base / f"{kind}-{stamp}.tar.enc"
     manifest = base / f"{kind}-{stamp}.manifest.json"
@@ -364,6 +370,7 @@ def cmd_pull(cfg: Config, kinds: list[str]) -> int:
         try:
             lock = _lock(cfg, kind)
             try:
+                clean_kind(cfg, kind)
                 summary = pull_one(cfg, kind, passphrase(cfg))
             finally:
                 lock.close()

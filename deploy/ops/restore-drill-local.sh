@@ -31,6 +31,33 @@ MAN=$(printf '%s\n' "$A" | sed 's/\.tar\.enc$/.manifest.json/')
 [ -f "$MAN" ] || fail "no manifest next to $A"
 docker info >/dev/null 2>&1 || fail "Docker is not running"
 
+# Leftovers of drills killed by SIGKILL / power loss (their trap never ran): every container and volume labelled
+# proqnozai.drill=<token> whose work dir .work/drill.<suffix> is gone or untouched for 6 h (pull_backups.py deletes
+# such dirs) holds decrypted data of a dead run and is removed before this drill starts. A running drill keeps a
+# fresh work dir and is never touched. A leftover that cannot be removed = FAIL.
+alive() {  # $1 token "drillXXXXXX"
+  case $1 in drill[A-Za-z0-9]*) ;; *) return 1;; esac
+  d="$BACKUP_DIR/.work/drill.${1#drill}"
+  [ -d "$d" ] && [ -n "$(find "$d" -maxdepth 0 -mmin -360 2>/dev/null)" ]
+}
+sweep_orphans() {
+  ids=$(docker ps -aq -f label=proqnozai.drill) || return 1
+  vols=$(docker volume ls -q -f label=proqnozai.drill) || return 1
+  bad=0
+  for id in $ids; do
+    t=$(docker inspect -f '{{index .Config.Labels "proqnozai.drill"}}' "$id") || { bad=1; continue; }
+    alive "$t" || docker rm -f "$id" >/dev/null || { echo "cannot remove orphan drill container $id"; bad=1; }
+  done
+  for v in $vols; do
+    t=$(docker volume inspect -f '{{index .Labels "proqnozai.drill"}}' "$v") || { bad=1; continue; }
+    alive "$t" && continue
+    if docker volume rm "$v" >/dev/null; then echo "removed orphan drill volume $v"
+    else echo "cannot remove orphan drill volume $v"; bad=1; fi
+  done
+  return "$bad"
+}
+sweep_orphans || fail "leftovers of an earlier drill could not be removed"
+
 W=""; TOKEN=""; VOL=""
 cleanup() {
   rc=$?; trap - EXIT INT TERM HUP
@@ -106,7 +133,7 @@ case $KIND in
     OK="both databases integrity ok, row counts equal to the manifest"
     if [ -n "${MINIAPP_IMAGE:-}" ]; then
       # The app itself on a restored copy: its own drill (own labelled volume, offline, removed afterwards).
-      WORK="$W" sh "$MINIAPP_DRILL" "$S" "$MINIAPP_IMAGE" "$X" "$BACKUP_PY" || fail "Mini App container drill"
+      WORK="$W" DRILL_PARENT="$TOKEN" sh "$MINIAPP_DRILL" "$S" "$MINIAPP_IMAGE" "$X" "$BACKUP_PY" || fail "Mini App container drill"
       OK="$OK; Mini App container healthy on the restored data"
     else
       echo "note: MINIAPP_IMAGE not set — app container start skipped (data-level drill only)"

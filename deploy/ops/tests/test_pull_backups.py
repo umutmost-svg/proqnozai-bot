@@ -242,3 +242,21 @@ def test_sweep_removes_only_stale_leftovers_of_killed_runs(env):
     assert not old_verify.exists() and not old_drill.exists()
     assert fresh.exists()          # may belong to a drill running right now
     assert kind_dir.exists()       # emptied by the pull of that kind under its own lock
+
+
+def test_killed_pull_leftovers_removed_even_when_keychain_fails(env, monkeypatch):
+    cfg, _, pings = env
+    work = cfg.backup_dir / ".work" / "bot"
+    work.mkdir(parents=True)
+    (work / "stream.tar").write_bytes(b"decrypted leftover")
+    base = cfg.backup_dir / "bot"
+    base.mkdir(parents=True, exist_ok=True)
+    (base / ".bot-x.tar.enc.partial").write_bytes(b"partial")
+
+    def locked(cfg):
+        raise pb.BackupError("no usable passphrase in the Keychain")
+
+    monkeypatch.setattr(pb, "passphrase", locked)
+    assert pb.cmd_pull(cfg, ["bot"]) == 1
+    assert list(work.iterdir()) == [] and list(base.iterdir()) == []
+    assert "Keychain" in pings[-1][2]

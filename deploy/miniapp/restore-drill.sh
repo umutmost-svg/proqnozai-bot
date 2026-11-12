@@ -41,13 +41,14 @@ cp -a "$SRC/$S" "$W/$S"
 # A volume is ours only if it carries this run's token: `volume create` silently returns an existing one.
 TOKEN=$(basename "$W")
 VOL=1   # cleanup re-checks the token before removing anything
-docker volume create --label "sporbot.drill=$TOKEN" "$T" >/dev/null
+# DRILL_PARENT (optional): an extra label from a calling drill, which removes our leftovers after a SIGKILL.
+docker volume create --label "sporbot.drill=$TOKEN" ${DRILL_PARENT:+--label "proqnozai.drill=$DRILL_PARENT"} "$T" >/dev/null
 [ "$(docker volume inspect -f '{{index .Labels "sporbot.drill"}}' "$T")" = "$TOKEN" ] || { echo "STOP: $T is not this run's volume"; exit 1; }
 docker run --rm -v "$T":/data -v "$W":/in:ro --entrypoint sh "$IMG" -c \
   "cp /in/$S/miniapp.db /in/$S/miniapp.forecasts.db /data/ && chown miniapp:miniapp /data /data/miniapp*.db && chmod 700 /data && chmod 600 /data/miniapp*.db"
 docker run --rm --user miniapp -v "$T":/data -e MINIAPP_DB_PATH=/data/miniapp.db --entrypoint python -i \
   "$IMG" - verify /data < "$4" || { echo "STOP: restored copy is not usable"; exit 1; }
-CTR=$(docker run -d --name "$T" --label "sporbot.drill=$TOKEN" --network none -v "$T":/data -e MINIAPP_ENV=development -e MINIAPP_DB_PATH=/data/miniapp.db \
+CTR=$(docker run -d --name "$T" --label "sporbot.drill=$TOKEN" ${DRILL_PARENT:+--label "proqnozai.drill=$DRILL_PARENT"} --network none -v "$T":/data -e MINIAPP_ENV=development -e MINIAPP_DB_PATH=/data/miniapp.db \
   -e MINIAPP_BOT_TOKEN=000000:offline-maintenance-not-a-token -e MINIAPP_TRUSTED_ORIGINS=http://localhost "$IMG")   # set only when the container was created
 for i in $(seq 1 45); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$CTR")" = healthy ] && break; sleep 2; done
 [ "$(docker inspect -f '{{.State.Health.Status}}' "$CTR")" = healthy ] || { echo "STOP: test container not healthy"; docker logs --tail 20 "$CTR"; exit 1; }

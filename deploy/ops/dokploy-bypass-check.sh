@@ -46,12 +46,17 @@ fi
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H 'Host: dokploy.docker.localhost' "http://$IP/")
 [ "$code" = 404 ] || add "default host answered $code"
 
+# The ping URL is a bearer secret: it goes to curl through a config on stdin, never through argv (ps).
+hc_curl() {  # $1 url, $2.. extra curl args
+  hc_u=$1; shift
+  printf 'url = "%s"\n' "$hc_u" | curl -fsS -m 10 -o /dev/null -K - "$@"
+}
 u=$(cat "$HC_FILE" 2>/dev/null) || u=""
 if [ -z "$reason" ]; then
-  [ -n "$u" ] && curl -fsS -m 10 -o /dev/null "$u"
+  [ -n "$u" ] && hc_curl "$u"
   exit 0
 fi
 logger -t dokploy-bypass "OPEN: $reason" 2>/dev/null
-[ -n "$u" ] && curl -fsS -m 10 -o /dev/null "$u/fail"
+[ -n "$u" ] && hc_curl "$u/fail"
 echo "OPEN: $reason"
 exit 1

@@ -12,7 +12,8 @@
 # $STATE_DIR/inflight-<kind>. Whatever appears there afterwards and matches the helper's naming is this job's
 # copy (also a half-written one whose name was never printed) and is removed — at the end of this run, or at the
 # start of the next one if this run was killed. Pre-existing names (e.g. manual copies) are never touched, and
-# nothing outside the exact copy naming (never bot.db or miniapp.db) can match.
+# nothing outside the exact copy naming (never bot.db or miniapp.db) can match. A MANUAL copy made while an
+# export runs would look like the export's own: manual runs take the same lock (flock $LOCK ..., runbook §3).
 # Encryption happens on the Mac before anything touches its disk. Progress and errors go to stderr.
 set -u
 umask 077
