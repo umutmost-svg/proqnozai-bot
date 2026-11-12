@@ -125,11 +125,16 @@ env_vars = {
     "MINIAPP_FOOTBALL_DATA_PER_DAY": "14400",
     "MINIAPP_FOOTBALL_DATA_SHARED_RESERVE": "40",
     "MINIAPP_FOOTBALL_DATA_COMPETITIONS": "all",
-    "MINIAPP_ODDS_FEED_ENABLED": "false",
+    # Odds from the bot (signed push): on once its shared secret exists on this host (same value in the bot).
+    "MINIAPP_ODDS_FEED_ENABLED": "true" if Path("/root/miniapp-secrets/odds-feed").exists() else "false",
     "MINIAPP_LOGINS_ENABLED": "true",
 }
 if not OWNER.isdigit():
     sys.exit("STOP: owner id is not a Telegram id")
+if Path("/root/miniapp-secrets/odds-feed").exists():
+    env_vars["MINIAPP_ODDS_FEED_SECRET"] = secret("/root/miniapp-secrets/odds-feed")
+    if len(env_vars["MINIAPP_ODDS_FEED_SECRET"]) < 32:
+        sys.exit("STOP: the odds feed secret is shorter than 32 characters")
 for k, v in env_vars.items():
     if "\n" in v or not v:
         sys.exit(f"STOP: bad value for {k}")

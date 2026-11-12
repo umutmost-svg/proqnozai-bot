@@ -135,6 +135,7 @@ export const uz: Dictionary = {
   'event.tabs': 'Voqea boʻlimlari',
   'event.tabOverview': 'Umumiy',
   'event.tabStats': 'Statistika',
+  'event.odds.title': 'Koeffitsiyentlar',
   'event.tabAi': 'AI tahlil',
   'event.prematchTitle': 'Boshlanishidan oldin',
   'event.prematch.football': 'Jamoalar shakli, oʻzaro uchrashuvlar va ma’lum tarkiblar — bitta tahlilda.',

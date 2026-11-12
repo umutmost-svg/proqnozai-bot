@@ -365,6 +365,21 @@ export interface PriceDeadline {
   wall: number;
 }
 
+/** One outcome of the match's own market (match page): odds and the market probability without the margin. */
+export interface BookQuote {
+  market: MarketKey;
+  odds: number;
+  marketProbability: number;
+  margin: number;
+}
+
+/** The match's current odds: numbers only (never the source's name), valid until `expires`. */
+export interface EventOdds {
+  fetchedAt: string;
+  expires: PriceDeadline;
+  quotes: readonly BookQuote[];
+}
+
 export interface MarketPrices {
   /** When the prices were taken. */
   fetchedAt: string;

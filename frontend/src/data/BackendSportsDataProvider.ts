@@ -2,7 +2,7 @@ import { addDays, dayKeyOf, zonedTimeToInstant, type DayKey } from '../time/zone
 import { ALL_TOURNAMENTS, filterEvents, type EventQuery } from './filter';
 import { MODEL_CONFIRMED, quickRange } from './quick';
 import { TOURNAMENTS as DEMO_TOURNAMENTS } from './fixtures';
-import type {
+import type { BookQuote, EventOdds,
   AiAnalysis,
   MarketPrices,
   PriceDeadline,
@@ -446,7 +446,15 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     return { tournament, season, blocks: blocks as StandingBlock[], fetchedAt: validInstant(body.fetchedAt), stale: body.stale === true };
   }
 
+  /** Odds of the last answer per match (bounded): read with the event, shown only while valid. */
+  private odds = new Map<string, EventOdds | null>();
+
+  eventOdds(id: string): EventOdds | null {
+    return this.odds.get(id) ?? null;
+  }
+
   async getEvent(id: string): Promise<SportEvent | null> {
+    const sent = clocksNow();
     const body = await this.get('event', `/sports/event/${encodeURIComponent(id)}`, true);
     if (body === null) return null;
     if (!isObj(body.event)) throw new DataError('event', 'bad_response');
@@ -458,6 +466,9 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     // A malformed real event, or a different event than asked for, is an error —
     // never "no such event" and never another match under this id.
     if (!event || event.id !== id) throw new DataError('event', 'bad_response');
+    // Odds are an extra: a malformed block is dropped (never shown), the match page still opens.
+    if (this.odds.size > 200) this.odds.clear();
+    this.odds.set(id, readEventOdds(body.odds, sent));
     return event;
   }
 
@@ -1038,6 +1049,25 @@ function priceDeadline(v: unknown, sent: PriceDeadline): PriceDeadline | null {
   const seconds = int(v);
   if (seconds === null || seconds < 1 || seconds > MAX_VALID_FOR_S) return null;
   return { mono: sent.mono + seconds * 1000, wall: sent.wall + seconds * 1000 };
+}
+
+/** The match page's odds block; anything outside the backend's shape gives null (nothing shown). */
+export function readEventOdds(v: unknown, sent: PriceDeadline): EventOdds | null {
+  if (!isObj(v) || !Array.isArray(v.quotes) || v.quotes.length === 0 || v.quotes.length > PRICED_MARKETS.size) return null;
+  const fetchedAt = str(v.fetchedAt);
+  const expires = priceDeadline(v.validFor, sent);
+  if (!fetchedAt || !ZONED_INSTANT.test(fetchedAt) || !expires) return null;
+  const quotes: BookQuote[] = [];
+  for (const q of v.quotes) {
+    if (!isObj(q) || !isMarketKey(q.market) || !PRICED_MARKETS.has(q.market)) return null;
+    const { odds, marketProbability, margin } = q;
+    if (typeof odds !== 'number' || !(odds > 1 && odds < 1000)) return null;
+    if (typeof marketProbability !== 'number' || !(marketProbability > 0 && marketProbability < 100)) return null;
+    if (typeof margin !== 'number' || !(margin > -50 && margin < 100)) return null;
+    quotes.push({ market: q.market, odds, marketProbability, margin });
+  }
+  if (new Set(quotes.map((q) => q.market)).size !== quotes.length) return null;
+  return { fetchedAt, expires, quotes };
 }
 
 function readPrices(v: unknown, markets: Record<MarketKey, number>, sent: PriceDeadline): MarketPrices | null {

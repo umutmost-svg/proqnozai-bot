@@ -9,12 +9,14 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
+from ..odds.store import OddsStore
+from ..odds.value import book_json
 from .client import UpstreamError
 from .crests import KINDS, media_type
 from .models import SPORTS
@@ -57,8 +59,21 @@ def _short(coverage: dict) -> dict:
     }
 
 
+def _event_odds(odds: OddsStore | None, event: Any) -> dict | None:
+    """The match's current odds (fresh, strictly matched, before kickoff), numbers only; else None."""
+    if odds is None or getattr(event, "sport", None) != "football":
+        return None
+    found = odds.lookup(event)
+    quotes = book_json(found.book) if found is not None else []
+    if found is None or not quotes:
+        return None
+    return {"fetchedAt": datetime.fromtimestamp(found.fetched_at, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "validFor": int(found.valid_for), "quotes": quotes}
+
+
 def register_sports_routes(app: FastAPI, service: SportsService, current_session: SessionCheck,
-                           ai_status: Callable[[], str] = lambda: "not_connected") -> None:
+                           ai_status: Callable[[], str] = lambda: "not_connected",
+                           odds: OddsStore | None = None) -> None:
     async def signed_in(request: Request) -> bool:
         if await current_session(request) is None:
             return False
@@ -162,7 +177,8 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
         return JSONResponse({"event": found.to_json(),
                              "tournament": service.tournament_json(tournament) if tournament else None,
                              "coverage": _short(service.coverage()["sports"][found.sport]),
-                             "ai": {"status": ai_status()}})
+                             "ai": {"status": ai_status()},
+                             "odds": _event_odds(odds, found)})
 
     @app.get("/api/sports/{sport}/tournaments/{tournament_id}/calendar")
     async def calendar(sport: str, tournament_id: str, request: Request) -> JSONResponse:

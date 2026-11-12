@@ -135,6 +135,7 @@ export const tr: Dictionary = {
   'event.tabs': 'Etkinlik bölümleri',
   'event.tabOverview': 'Genel bakış',
   'event.tabStats': 'İstatistik',
+  'event.odds.title': 'Oranlar',
   'event.tabAi': 'AI analizi',
   'event.prematchTitle': 'Maç öncesi',
   'event.prematch.football': 'Takımların formu, aralarındaki maçlar ve mevcut kadrolar — tek analizde.',

@@ -165,3 +165,74 @@
   width: 56px;
   text-align: center;
 }
+
+/* The match's odds (numbers only): name across, odds and market probability on the right; fits 320 px. */
+.odds {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 16px;
+  border-radius: var(--radius-card);
+  background: var(--glass-18);
+  border: 1px solid var(--line-74);
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+}
+
+.oddsTitle {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.oddsHead,
+.oddsRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px 64px;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.oddsHead {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.oddsRows {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.oddsRow {
+  padding: 8px 0;
+  font-size: 15px;
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.oddsRow + .oddsRow {
+  border-top: 1px solid var(--line-74);
+}
+
+.oddsName {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oddsNote {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}

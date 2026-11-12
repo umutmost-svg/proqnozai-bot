@@ -135,6 +135,7 @@ export const ptBR: Dictionary = {
   'event.tabs': 'Seções do evento',
   'event.tabOverview': 'Resumo',
   'event.tabStats': 'Estatísticas',
+  'event.odds.title': 'Odds',
   'event.tabAi': 'Análise AI',
   'event.prematchTitle': 'Antes do início',
   'event.prematch.football': 'Fase dos times, confrontos diretos e escalações disponíveis — em uma só análise.',

@@ -137,6 +137,7 @@ export const az: Dictionary = {
   'event.tabs': 'Hadisə bölmələri',
   'event.tabOverview': 'İcmal',
   'event.tabStats': 'Statistika',
+  'event.odds.title': 'Əmsallar',
   'event.tabAi': 'AI analizi',
   'event.prematchTitle': 'Başlamazdan əvvəl',
   'event.prematch.football': 'Komandaların forması, qarşılıqlı oyunlar və mövcud heyətlər — bir analizdə.',

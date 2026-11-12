@@ -573,7 +573,7 @@ def create_app(
         return found
 
     register_sports_routes(app, sports, active_session,
-                           ai_status=lambda: "connected" if ai.connected else "not_connected")
+                           ai_status=lambda: "connected" if ai.connected else "not_connected", odds=odds)
     register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session)
 
     @app.get("/api/ai/analysis")

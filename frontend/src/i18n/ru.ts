@@ -133,6 +133,7 @@ export const ru = {
   'event.tabs': 'Разделы события',
   'event.tabOverview': 'Обзор',
   'event.tabStats': 'Статистика',
+  'event.odds.title': 'Коэффициенты',
   'event.tabAi': 'AI-разбор',
   'event.prematchTitle': 'Перед началом',
   'event.prematch.football': 'Форма команд, очные встречи и доступные составы — в одном разборе.',

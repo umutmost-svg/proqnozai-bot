@@ -542,3 +542,34 @@ def test_a_repeated_live_marker_is_idempotent(clock: FakeClock) -> None:
         marker = line(live=True, odds={}, fetchedAt=iso(clock.now))
         store.ingest(FeedReceiver(SECRET, clock).verify(*signed(clock, body(clock, marker, nonce=f"{i:032x}"))))
         assert store.lookup(_event("TIMED")) is None and len(store) == 1
+
+
+# --- the match page ------------------------------------------------------------------------------
+
+def test_the_match_page_carries_fresh_odds_as_numbers_only(clock: FakeClock) -> None:
+    from miniapp.sports.routes import _event_odds
+    store = OddsStore(clock)
+    assert _event_odds(store, _event("TIMED")) is None          # nothing pushed yet
+    assert _event_odds(None, _event("TIMED")) is None           # feed switched off
+    ingest(store, clock, line())
+    got = _event_odds(store, _event("TIMED"))
+    assert got is not None and got["fetchedAt"] == iso(clock.now - 60) and 0 < got["validFor"] <= 15 * 60
+    quotes = {q["market"]: q for q in got["quotes"]}
+    assert set(quotes) == {"1", "X", "2", "1X", "X2", "12", "O2.5", "U2.5", "BTTS_Y", "BTTS_N"}
+    assert quotes["1"]["odds"] == 1.8 and 0 < quotes["1"]["marketProbability"] < 100
+    assert set(quotes["1"]) == {"market", "odds", "marketProbability", "margin"}  # never the source's name
+    assert "mostbet" not in json.dumps(got).lower()
+    assert _event_odds(store, _event("IN_PLAY")) is None        # a started match shows no pre-match odds
+    clock.advance(16 * 60)
+    assert _event_odds(store, _event("TIMED")) is None          # stale prices are not shown
+
+
+def test_the_market_book_keeps_compare_unchanged(clock: FakeClock) -> None:
+    from miniapp.odds.value import book_json, compare, market_book
+    book = {"1": 1.8, "X": 3.9, "2": 4.5, "O2.5": 1.9, "U2.5": 1.95}
+    model = {"1": 0.5, "X": 0.25, "2": 0.25, "O2.5": 0.55, "U2.5": 0.45}
+    quotes = compare(book, model)
+    view = {q["market"]: q for q in book_json(book)}
+    for k, (price, fair, group_margin) in market_book(book).items():
+        assert quotes[k].odds == price and quotes[k].market == fair and quotes[k].margin == group_margin
+        assert view[k]["marketProbability"] == round(fair * 100, 1)

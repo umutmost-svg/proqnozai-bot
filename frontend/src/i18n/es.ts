@@ -135,6 +135,7 @@ export const es: Dictionary = {
   'event.tabs': 'Secciones del evento',
   'event.tabOverview': 'Resumen',
   'event.tabStats': 'Estadísticas',
+  'event.odds.title': 'Cuotas',
   'event.tabAi': 'Análisis AI',
   'event.prematchTitle': 'Antes del inicio',
   'event.prematch.football': 'Forma de los equipos, enfrentamientos directos y alineaciones disponibles, en un solo análisis.',
