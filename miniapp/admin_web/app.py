@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from miniapp.admin_web import crm_routes, demo
+from miniapp.admin_web import ads_routes, crm_routes, demo
 from miniapp.admin_web.accounts import ActionError, Admin, AdminStore, AuthError, can
 from miniapp.admin_web.config import AdminWebConfig
 from miniapp.forecast.history import GATE_MIN_FORECASTS, ForecastHistory
@@ -463,11 +463,13 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
                       "after": None, "reason": None} for i in items]
         return {"items": items}
 
-    crm_routes.register(app, SimpleNamespace(
+    ctx = SimpleNamespace(
         accounts=accounts, store=store, now=now, today=today, page=page, period=period, admin_of=admin_of,
         body=body, dangerous=dangerous, step_up_guard=step_up_guard, demo_allowed=demo_allowed, history=history,
         tournament_name=tournament_name, dataset=config.dataset,
-        can_personal=lambda request: can(request.state.admin.role, "read_personal")))
+        can_personal=lambda request: can(request.state.admin.role, "read_personal"))
+    crm_routes.register(app, ctx)
+    ads_routes.register(app, ctx, config.ads_policy_file, config.ads_applied_file)  # after CRM: MB ids live there
 
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def api_not_found(rest: str, request: Request) -> Response:

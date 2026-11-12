@@ -43,6 +43,16 @@ class AdminWebConfig:
         return self.data_dir / "admin" / "admin.db"
 
     @property
+    def ads_policy_file(self) -> Path:
+        """The published ads snapshot, next to the Mini App database (shared data directory, §2)."""
+        return self.data_dir / "ads-policy.json"
+
+    @property
+    def ads_applied_file(self) -> Path:
+        """Written by the Mini App: the snapshot version it applied last."""
+        return self.data_dir / "ads-policy.applied"
+
+    @property
     def labels_file(self) -> Path:
         return self.data_dir / "event_labels.json"
 

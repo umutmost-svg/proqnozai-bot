@@ -171,6 +171,11 @@ def can(role: str, permission: str) -> bool:
         "manage_users": ("owner", "admin"),
         "manage_settings": ("owner", "admin"),
         "manage_admins": ("owner",),
+        # Ads (ads-architecture.md §8): owner — everything; admin — campaigns, groups and publication;
+        # analyst — read and analytics only. Partners define the allowed link hosts and countries: owner only.
+        "manage_ads": ("owner", "admin"),
+        "publish_ads": ("owner", "admin"),
+        "manage_partners": ("owner",),
     }
     return role in allowed[permission]
 
