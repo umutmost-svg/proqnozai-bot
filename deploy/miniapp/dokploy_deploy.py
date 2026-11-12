@@ -4,12 +4,17 @@
 
 Reads, never prints: /root/.dokploy-api-key (Dokploy API key), /root/miniapp-secrets/{edge,csrf,
 football-data-key,owner-id}. Talks only to http://127.0.0.1:3000 (Dokploy on this host).
-Idempotent: finds the project/application by name, re-saves image, environment, resources, Swarm update
-config, the data volume and the domain (each only once). Without --deploy it configures and stops (a dry
-configuration); with --deploy it then starts a Dokploy deployment. Closed mode: MINIAPP_ALLOWED_USER_IDS =
-the bot's ADMIN_ID. See docs/miniapp/release-same-server.md.
+Idempotent configuration: finds the project/application by exact name, checks it BEFORE any change (no
+published ports), re-saves image, environment, resources, Swarm update config, the data volume and the domain
+(each only once). Without --deploy it configures and stops; every run WITH --deploy starts one Dokploy
+deployment. Closed mode: MINIAPP_ALLOWED_USER_IDS = the bot's ADMIN_ID, re-read from the running bot and
+compared with the stored value. On the FIRST deployment there is no previous revision to roll back to: health is
+verified explicitly afterwards (release-same-server.md, B3); later updates roll back automatically.
+Errors print the procedure, HTTP status and the API's error code only — never a body or a value.
+See docs/miniapp/release-same-server.md.
 """
 import json
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -36,7 +41,7 @@ def call(proc: str, body: dict | None = None, method: str = "POST"):
     url = API + proc
     data = None
     if method == "GET" and body:
-        url += "?input=" + urllib.parse.quote(json.dumps(body))
+        url += "?" + urllib.parse.urlencode(body)  # Dokploy's OpenAPI: flat query parameters
     elif body is not None:
         data = json.dumps(body).encode()
     req = urllib.request.Request(url, data=data, method=method,
@@ -45,11 +50,23 @@ def call(proc: str, body: dict | None = None, method: str = "POST"):
         with urllib.request.urlopen(req, timeout=60) as r:
             raw = r.read()
     except urllib.error.HTTPError as e:
-        # The body may echo input (never a secret we send in a GET); print status and a short code only.
-        msg = e.read()[:300].decode(errors="replace")
-        sys.exit(f"STOP: {proc} -> HTTP {e.code}: {msg if 'env' not in proc and 'Environment' not in proc else '(hidden)'}")
+        try:
+            code = json.loads(e.read() or b"{}").get("code", "")
+        except ValueError:
+            code = ""
+        code = code if isinstance(code, str) and code.replace("_", "").isalnum() and len(code) < 40 else "?"
+        sys.exit(f"STOP: {proc} -> HTTP {e.code} {code}")
     return json.loads(raw) if raw[:1] in (b"{", b"[") else raw.decode()
 
+
+# The closed list is the bot's admin: re-read from the running bot and compared with the stored copy.
+_bot = subprocess.run(["docker", "ps", "-q", "-f", "name=proqnozai-proqnozaibot"], capture_output=True, text=True).stdout.split()
+if len(_bot) != 1:
+    sys.exit("STOP: cannot identify the running bot container")
+_admin = subprocess.run(["docker", "exec", _bot[0], "printenv", "ADMIN_ID"], capture_output=True, text=True).stdout.strip()
+OWNER = secret("/root/miniapp-secrets/owner-id")
+if not _admin or _admin != OWNER:
+    sys.exit("STOP: the stored owner id differs from the bot's ADMIN_ID")
 
 if len(sys.argv) < 2 or not sys.argv[1].isalnum():
     sys.exit("usage: python3 - <IMAGE_TAG> [--deploy] < dokploy_deploy.py")
@@ -70,6 +87,15 @@ environment_id = env["environmentId"]
 # 2) application (found by appName prefix; Dokploy may add a suffix)
 apps = [a for e in project.get("environments", []) for a in e.get("applications", [])]
 app = next((a for a in apps if a.get("name") == APP), None)
+if app is not None:
+    # An existing app is changed only if it is exactly ours and publishes nothing on the host.
+    cur = call("application.one", {"applicationId": app["applicationId"]}, method="GET")
+    if cur.get("name") != APP or not str(cur.get("appName", "")).startswith(APP):
+        sys.exit("STOP: an application with this name is not the Mini App")
+    if cur.get("sourceType") not in ("docker",) and cur.get("dockerImage"):
+        sys.exit("STOP: unexpected source type")
+    if cur.get("ports") or ((cur.get("endpointSpecSwarm") or {}).get("Ports")):
+        sys.exit("STOP: the application publishes host ports")
 if app is None:
     app = call("application.create", {"name": APP, "appName": APP, "environmentId": environment_id,
                                        "description": "ProqnozAI Mini App (closed mode)"})
@@ -92,7 +118,7 @@ env_vars = {
     "MINIAPP_DB_PATH": "/data/miniapp.db",
     "MINIAPP_CSP_MODE": "enforce",
     "MINIAPP_COOKIE_SAMESITE": "none",
-    "MINIAPP_ALLOWED_USER_IDS": secret("/root/miniapp-secrets/owner-id"),
+    "MINIAPP_ALLOWED_USER_IDS": OWNER,
     "MINIAPP_FOOTBALL_DATA_KEY": secret("/root/miniapp-secrets/football-data-key"),
     "MINIAPP_FOOTBALL_DATA_LIVE_PLAN": "true",
     "MINIAPP_FOOTBALL_DATA_PER_MINUTE": "60",
@@ -102,6 +128,8 @@ env_vars = {
     "MINIAPP_ODDS_FEED_ENABLED": "false",
     "MINIAPP_LOGINS_ENABLED": "true",
 }
+if not OWNER.isdigit():
+    sys.exit("STOP: owner id is not a Telegram id")
 for k, v in env_vars.items():
     if "\n" in v or not v:
         sys.exit(f"STOP: bad value for {k}")
@@ -114,10 +142,11 @@ call("application.update", {
     "applicationId": app_id, "replicas": 1, "autoDeploy": False,
     "memoryLimit": str(512 * 2**20), "memoryReservation": str(256 * 2**20),
     "cpuLimit": str(1_000_000_000), "cpuReservation": str(250_000_000),
-    "updateConfigSwarm": {"Parallelism": 1, "Order": "stop-first", "FailureAction": "rollback", "Monitor": 30000000000},
+    # Monitor 150 s: the image's healthcheck (start 10 s, every 30 s, 3 retries) needs ~100 s to call a task unhealthy.
+    "updateConfigSwarm": {"Parallelism": 1, "Order": "stop-first", "FailureAction": "rollback", "Monitor": 150_000_000_000},
     "rollbackConfigSwarm": {"Parallelism": 1, "Order": "stop-first"},
 })
-print("resources: 512 MiB / 1 CPU, stop-first, rollback on failure")
+print("resources: 512 MiB / 1 CPU, stop-first, rollback on failure of later updates")
 
 # 6) data volume (once)
 full = call("application.one", {"applicationId": app_id}, method="GET")
@@ -131,7 +160,8 @@ if not any(d.get("host") == DOMAIN for d in full.get("domains", [])):
     call("domain.create", {"host": DOMAIN, "path": "/", "port": 8000, "https": False, "certificateType": "none",
                            "applicationId": app_id, "domainType": "application"})
 print("domain:", DOMAIN, "-> :8000 (http, entrypoint web)")
-if full.get("ports"):
+full = call("application.one", {"applicationId": app_id}, method="GET")
+if full.get("ports") or ((full.get("endpointSpecSwarm") or {}).get("Ports")):
     sys.exit("STOP: the application publishes host ports")
 
 if deploy:
