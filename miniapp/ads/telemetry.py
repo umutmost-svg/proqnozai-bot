@@ -190,6 +190,35 @@ class Telemetry:
             row = conn.execute("SELECT age FROM age_confirmations WHERE user_id = ?", (user_id,)).fetchone()
         return int(row[0]) if row else 0
 
+    # ---- analytics reads (the admin opens this file read-only) -------------------------------
+
+    def ad_totals(self, since_day: str, group: str = "variant", campaign_id: int | None = None) -> list[dict]:
+        """Events, distinct users per (campaign, <group>, kind) from `since_day`; group: variant | day | country."""
+        column = {"variant": "variant", "day": "day", "country": "COALESCE(country, '')"}[group]
+        where, args = "day >= ?", [since_day]
+        if campaign_id is not None:
+            where += " AND campaign_id = ?"
+            args.append(campaign_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT campaign_id, {column}, kind, COUNT(*), COUNT(DISTINCT user_id) FROM ad_events WHERE {where} "
+                f"GROUP BY campaign_id, {column}, kind ORDER BY campaign_id, {column}", args).fetchall()
+        return [{"campaignId": r[0], "key": r[1], "kind": r[2], "events": r[3], "users": r[4]} for r in rows]
+
+    def last_click_variants(self, campaign_id: int, user_ids: list[int], since: int) -> dict[int, str]:
+        """The variant each user last clicked on for this campaign (attribution of a confirmed conversion)."""
+        if not user_ids:
+            return {}
+        out: dict[int, str] = {}
+        with self._connect() as conn:
+            for start in range(0, len(user_ids), 500):
+                chunk = user_ids[start:start + 500]
+                rows = conn.execute(
+                    f"SELECT user_id, variant FROM ad_events WHERE kind = 'click' AND campaign_id = ? AND at >= ? "
+                    f"AND user_id IN ({','.join('?' * len(chunk))}) ORDER BY at", (campaign_id, since, *chunk)).fetchall()
+                out.update({uid: variant for uid, variant in rows})
+        return out
+
     def purge(self, now: int) -> None:
         events_before = day_of(now - EVENTS_RETENTION_DAYS * DAY)
         activity_before = day_of(now - ACTIVITY_RETENTION_DAYS * DAY)

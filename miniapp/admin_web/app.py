@@ -469,7 +469,8 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         tournament_name=tournament_name, dataset=config.dataset,
         can_personal=lambda request: can(request.state.admin.role, "read_personal"))
     crm_routes.register(app, ctx)
-    ads_routes.register(app, ctx, config.ads_policy_file, config.ads_applied_file)  # after CRM: MB ids live there
+    ads_routes.register(app, ctx, config.ads_policy_file, config.ads_applied_file,  # after CRM: MB ids live there
+                        config.telemetry_db)
 
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def api_not_found(rest: str, request: Request) -> Response:

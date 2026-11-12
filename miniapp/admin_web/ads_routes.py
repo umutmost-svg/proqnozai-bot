@@ -8,15 +8,19 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from fastapi import FastAPI, Request
+from fastapi.responses import Response
 
 from miniapp.ads import targeting
 from miniapp.admin_web.accounts import ActionError
 from miniapp.admin_web.ads import AdsStore
+from miniapp.admin_web.ads_analytics import AdsAnalytics
 
 
-def register(app: FastAPI, ctx: SimpleNamespace, policy_file, applied_file) -> AdsStore:
+def register(app: FastAPI, ctx: SimpleNamespace, policy_file, applied_file, telemetry_file) -> AdsStore:
     ads = AdsStore(ctx.accounts, policy_file, applied_file)
     ads.init_schema()
+    analytics = AdsAnalytics(ctx.accounts, telemetry_file)
+    analytics.init_schema()
     try:  # a publication committed just before a crash reaches the file now
         ads.ensure_published()
     except OSError:
@@ -115,5 +119,36 @@ def register(app: FastAPI, ctx: SimpleNamespace, policy_file, applied_file) -> A
         if not isinstance(pause_all, bool):
             raise ActionError("invalid_value")
         return ctx.step_up_guard(admin, lambda: ads.publish(admin, reason, key, code, ctx.now(), pause_all))
+
+    # ---- analytics (aggregates only: every role) ------------------------------------------
+
+    def campaign_filter(request: Request) -> int | None:
+        raw = request.query_params.get("campaign")
+        if not raw:
+            return None
+        if not raw.isdigit() or len(raw) > 12:
+            raise ActionError("bad_filter")
+        return int(raw)
+
+    def report(request: Request) -> dict:
+        names = {c["id"]: c["name"] for c in ads.campaigns(ctx.now())}
+        return analytics.report(ctx.now(), ctx.period(request), campaign_filter(request), names)
+
+    @app.get("/api/admin/ads/analytics")
+    async def ads_analytics(request: Request) -> dict:
+        ctx.admin_of(request)
+        return report(request)
+
+    @app.get("/api/admin/ads/analytics.csv")
+    async def ads_analytics_csv(request: Request) -> Response:
+        ctx.admin_of(request)
+        return Response(analytics.csv(report(request)), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="ads-analytics.csv"'})
+
+    @app.post("/api/admin/ads/campaigns/{campaign_id}/conversions")
+    async def conversions(campaign_id: int, request: Request) -> dict:
+        admin = ctx.admin_of(request, "manage_ads")
+        data = await ctx.body(request)
+        return analytics.record_conversions(admin, campaign_id, data.get("mbIds"), ctx.now())
 
     return ads

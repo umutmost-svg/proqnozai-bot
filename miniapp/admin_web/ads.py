@@ -201,7 +201,7 @@ class AdsStore:
         return {
             "name": _check(policy.check_text, data.get("name"), "name", MAX_NAME),
             "hosts": _check(policy.check_hosts, data.get("hosts")),
-            "countries": _check(policy.check_countries, data.get("countries") or []),
+            "countries": _check(policy.check_countries, data.get("countries", [])),
             "allowUnknownCountry": allow_unknown,
             "ageMin": _int_field(age, 0, policy.MAX_AGE, "invalid_age"),
             "disclosure": _check(policy.check_disclosure, data.get("disclosure")),
@@ -380,7 +380,7 @@ class AdsStore:
             "name": _check(policy.check_text, data.get("name"), "name", MAX_NAME),
             "tier": tier, "priority": _int_field(data.get("priority", 0), 0, 1000, "invalid_priority"),
             "langIn": sorted(set(langs)), "placements": sorted(set(placements)),
-            "countries": _check(policy.check_countries, data.get("countries") or []),
+            "countries": _check(policy.check_countries, data.get("countries", [])),
             "allowUnknownCountry": allow_unknown, "startsAt": starts, "endsAt": ends, "partnerId": partner_id,
             "disclosure": _check(policy.check_disclosure, data.get("disclosure")),
             "condition": _check(targeting.validate, data.get("condition"), "editor"),

@@ -43,6 +43,11 @@ class AdminWebConfig:
         return self.data_dir / "admin" / "admin.db"
 
     @property
+    def telemetry_db(self) -> Path:
+        """Mini App telemetry (activity, ad events): read-only for the admin (admin-dashboard.md §3)."""
+        return self.data_dir / "miniapp.telemetry.db"
+
+    @property
     def ads_policy_file(self) -> Path:
         """The published ads snapshot, next to the Mini App database (shared data directory, §2)."""
         return self.data_dir / "ads-policy.json"
