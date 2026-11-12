@@ -127,3 +127,14 @@ def test_natural_end_publishes_fresh_generation(monkeypatch, clean_mostbet_cache
 
     assert len(result) == 110                                # 110/120 ≥ 60%: fresh wins
     assert all(m["src"] == "fresh" for m in result)
+
+
+def test_only_lines_in_fetched_pages_count_as_freshly_seen(monkeypatch, clean_mostbet_cache):
+    """A partial refresh merges the previous tail under the new generation's timestamp; the
+    per-line record (mostbet.line_seen_at) marks only the lines that were actually fetched."""
+    monkeypatch.setattr(mostbet, "line_seen_at", {})
+    clean_mostbet_cache["all_matches"] = (0, _gen(range(1, 151), "prev"))
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", _SeqClient([_gen(range(1, 101), "fresh")]))
+    result = asyncio.run(_mostbet_load_matches())
+    assert len(result) == 150
+    assert set(mostbet.line_seen_at) == set(range(1, 101))  # 101..150 came from the old tail

@@ -173,6 +173,11 @@ def main():
         asyncio.create_task(poller(application))
         asyncio.create_task(daily_push(application))
         asyncio.create_task(_preload_mostbet())
+        # Odds for the Mini App (signed push): off unless MINIAPP_ODDS_URL and its secret are set.
+        from mostbet_feed import from_env as odds_export_from_env, run_odds_export
+        odds_export = odds_export_from_env()
+        if odds_export is not None:
+            asyncio.create_task(run_odds_export(odds_export))
         asyncio.create_task(check_odds_changes(application))
         asyncio.create_task(_broadcast_menu_update(application))
         asyncio.create_task(_publish_commands(application))

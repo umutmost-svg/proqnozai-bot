@@ -1,0 +1,235 @@
+{
+  "_comment": "Feed competition -> football-data.org code. Shared by the bot's odds export (which lines to price) and the Mini App's matcher (which competition a line belongs to). Names are compared after miniapp.sports.search.normalize (case, accents and punctuation ignored); a (country, league) pair must match exactly — 'England / Premier League' never matches 'Ukraine / Premier League', and there are no wildcards: for an international competition the feed puts the competition in 'country' and the stage in 'league', so every accepted stage is listed (a women's, youth or unknown stage gives no odds). The names follow the bot's feed conventions and MUST be confirmed against the live feed before the export is switched on (the export logs every football country/league pair it skips).",
+  "version": 1,
+  "competitions": [
+    {
+      "code": "PL",
+      "country": [
+        "England"
+      ],
+      "league": [
+        "Premier League",
+        "English Premier League"
+      ]
+    },
+    {
+      "code": "ELC",
+      "country": [
+        "England"
+      ],
+      "league": [
+        "Championship",
+        "EFL Championship"
+      ]
+    },
+    {
+      "code": "PD",
+      "country": [
+        "Spain"
+      ],
+      "league": [
+        "LaLiga",
+        "La Liga",
+        "Primera Division"
+      ]
+    },
+    {
+      "code": "SA",
+      "country": [
+        "Italy"
+      ],
+      "league": [
+        "Serie A"
+      ]
+    },
+    {
+      "code": "BL1",
+      "country": [
+        "Germany"
+      ],
+      "league": [
+        "Bundesliga"
+      ]
+    },
+    {
+      "code": "FL1",
+      "country": [
+        "France"
+      ],
+      "league": [
+        "Ligue 1"
+      ]
+    },
+    {
+      "code": "DED",
+      "country": [
+        "Netherlands"
+      ],
+      "league": [
+        "Eredivisie"
+      ]
+    },
+    {
+      "code": "PPL",
+      "country": [
+        "Portugal"
+      ],
+      "league": [
+        "Primeira Liga",
+        "Liga Portugal",
+        "Liga Portugal Betclic"
+      ]
+    },
+    {
+      "code": "BSA",
+      "country": [
+        "Brazil"
+      ],
+      "league": [
+        "Serie A",
+        "Brasileirao Serie A",
+        "Brasileiro Serie A"
+      ]
+    },
+    {
+      "code": "CL",
+      "country": [
+        "UEFA Champions League"
+      ],
+      "league": [
+        "League phase",
+        "League stage",
+        "Knockout phase play-offs",
+        "Knockout round play-offs",
+        "Play-offs",
+        "Round of 16",
+        "1/8 finals",
+        "Quarter-finals",
+        "Quarterfinals",
+        "1/4 finals",
+        "Semi-finals",
+        "Semifinals",
+        "1/2 finals",
+        "Final"
+      ]
+    }
+  ],
+  "_aliasesComment": "Extra names of clubs, keyed by the football-data team number, used only when the feed's name differs from football-data's name, short name and the search aliases.",
+  "aliases": {
+    "5": [
+      "Bayern Munich"
+    ],
+    "4": [
+      "Borussia Dortmund"
+    ],
+    "18": [
+      "Borussia Monchengladbach"
+    ],
+    "108": [
+      "Inter Milan",
+      "Inter"
+    ],
+    "98": [
+      "AC Milan"
+    ],
+    "113": [
+      "Napoli"
+    ],
+    "100": [
+      "AS Roma",
+      "Roma"
+    ],
+    "110": [
+      "Lazio"
+    ],
+    "77": [
+      "Athletic Bilbao",
+      "Athletic Club"
+    ],
+    "559": [
+      "Sevilla"
+    ],
+    "90": [
+      "Real Betis"
+    ],
+    "92": [
+      "Real Sociedad"
+    ],
+    "95": [
+      "Valencia"
+    ],
+    "94": [
+      "Villarreal"
+    ],
+    "524": [
+      "Paris Saint-Germain",
+      "Paris SG",
+      "PSG"
+    ],
+    "548": [
+      "Monaco",
+      "AS Monaco"
+    ],
+    "516": [
+      "Marseille",
+      "Olympique Marseille"
+    ],
+    "523": [
+      "Lyon",
+      "Olympique Lyonnais"
+    ],
+    "1903": [
+      "Benfica"
+    ],
+    "503": [
+      "FC Porto",
+      "Porto"
+    ],
+    "498": [
+      "Sporting CP",
+      "Sporting Lisbon"
+    ],
+    "678": [
+      "Ajax",
+      "Ajax Amsterdam"
+    ],
+    "674": [
+      "PSV",
+      "PSV Eindhoven"
+    ],
+    "675": [
+      "Feyenoord"
+    ],
+    "66": [
+      "Manchester United",
+      "Man United"
+    ],
+    "65": [
+      "Manchester City",
+      "Man City"
+    ],
+    "73": [
+      "Tottenham Hotspur",
+      "Tottenham"
+    ],
+    "76": [
+      "Wolverhampton Wanderers",
+      "Wolves"
+    ],
+    "563": [
+      "West Ham United",
+      "West Ham"
+    ],
+    "67": [
+      "Newcastle United",
+      "Newcastle"
+    ],
+    "351": [
+      "Nottingham Forest"
+    ],
+    "397": [
+      "Brighton & Hove Albion",
+      "Brighton"
+    ]
+  }
+}
