@@ -140,6 +140,10 @@ class ClientLimits:
     retries: int = 2
     backoff_s: float = 0.5
     max_cooldown_s: float = 300.0
+    # Requests of the provider's per-minute counter left to OTHER clients of the same key (the Telegram
+    # bot): when the provider reports this many or fewer remaining, this client pauses until the
+    # counter resets. 0 = pause only at 0 (a key used by this app alone).
+    shared_reserve: int = 0
 
 
 class ProviderClient:
@@ -241,11 +245,14 @@ class ProviderClient:
         self._cooldown_until = self._clock() + min(max(wait, 1.0), self._limits.max_cooldown_s)
 
     def _respect_remaining(self, headers: Mapping[str, str]) -> None:
-        # The docs name this header two ways; when the provider says the minute is
-        # used up, pause until its reset instead of collecting a 429.
+        # The docs name this header two ways. It counts the whole key, so it also sees what other
+        # clients of a shared key (the bot) used: when the remainder falls to their reserve, pause
+        # until the provider's reset instead of taking their requests or collecting a 429.
         for key in ("x-requests-available-minute", "x-requestsavailable"):
             raw = headers.get(key)
-            if raw is not None and raw.strip() == "0":
+            if raw is not None and raw.strip().isdigit() and int(raw.strip()) <= self._limits.shared_reserve:
+                if self._limits.shared_reserve:
+                    logger.info("event=provider_shared_reserve provider=%s available=%s", self.name, raw.strip())
                 self._cool_down(headers)
                 return
 

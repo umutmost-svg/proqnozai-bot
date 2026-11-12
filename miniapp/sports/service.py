@@ -754,7 +754,8 @@ def build_service(settings, *, clock: Callable[[], float] = time.time, transport
             football_data.PROVIDER,
             football_data.BASE_URL,
             {"X-Auth-Token": settings.football_data_key},
-            ClientLimits(per_minute=settings.football_data_per_minute, per_day=settings.football_data_per_day),
+            ClientLimits(per_minute=settings.football_data_per_minute, per_day=settings.football_data_per_day,
+                         shared_reserve=settings.football_data_shared_reserve),
             transport=transport or urllib_transport,
             clock=clock,
         )

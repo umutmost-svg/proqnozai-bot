@@ -129,6 +129,8 @@ class Settings:
     # Self-imposed budgets below the provider's own limits (free tier: 10 requests/minute).
     football_data_per_minute: int = 8
     football_data_per_day: int = 3000
+    # Shared key: per-minute requests always left to the other client of the key (the bot), see ClientLimits.
+    football_data_shared_reserve: int = 0
     # Event ids never seen in a listing may cost an upstream call: capped per hour.
     sports_unknown_lookups_per_hour: int = 20
     # Odds pushed by the bot (HMAC-signed, POST /api/internal/odds). Unset: the route is off
@@ -249,6 +251,8 @@ class Settings:
         if not 1 <= self.football_data_per_minute <= max_per_minute:
             raise SettingsError(f"football_data_per_minute must be 1..{max_per_minute} "
                                 "(free tier: 10/minute; more only with MINIAPP_FOOTBALL_DATA_LIVE_PLAN)")
+        if not 0 <= self.football_data_shared_reserve < max_per_minute:
+            raise SettingsError(f"football_data_shared_reserve must be 0..{max_per_minute - 1}")
         if not 1 <= self.football_data_per_day <= 14400:
             raise SettingsError("football_data_per_day must be 1..14400")
         if not 0 <= self.sports_unknown_lookups_per_hour <= 600:
@@ -334,6 +338,7 @@ class Settings:
             football_data_live_plan=boolean("MINIAPP_FOOTBALL_DATA_LIVE_PLAN", False),
             football_data_per_minute=integer("MINIAPP_FOOTBALL_DATA_PER_MINUTE", 8),
             football_data_per_day=integer("MINIAPP_FOOTBALL_DATA_PER_DAY", 3000),
+            football_data_shared_reserve=integer("MINIAPP_FOOTBALL_DATA_SHARED_RESERVE", 0),
             sports_unknown_lookups_per_hour=integer("MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR", 20),
             odds_feed_secret=optional("MINIAPP_ODDS_FEED_SECRET"),
             odds_feed_enabled=boolean("MINIAPP_ODDS_FEED_ENABLED", True),

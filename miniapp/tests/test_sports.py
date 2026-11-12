@@ -595,6 +595,49 @@ def test_provider_reporting_an_empty_minute_budget_pauses_us_before_a_429(clock:
     run(c.get_json("/b"))
 
 
+def test_shared_key_leaves_the_reserve_to_the_bot(clock: FakeClock, caplog: pytest.LogCaptureFixture) -> None:
+    # The provider's counter covers the whole key: when what is left for this minute falls to the
+    # bot's reserve, the Mini App stops until the provider's reset — it never spends the reserve.
+    t = FakeTransport()
+    t.script = [t.ok({}, {"x-requests-available-minute": "41", "x-requestcounter-reset": "30"}),
+                t.ok({}, {"x-requests-available-minute": "40", "x-requestcounter-reset": "25"})]
+    c = make_client(t, clock, per_minute=100, shared_reserve=40)
+    with caplog.at_level("INFO", logger="miniapp.sports"):
+        run(c.get_json("/a"))  # 41 left: above the reserve, carry on
+        run(c.get_json("/b"))  # 40 left: the reserve is reached -> pause
+    with pytest.raises(UpstreamError) as exc:
+        run(c.get_json("/c"))
+    assert exc.value.code == "rate_limited" and len(t.calls) == 2
+    assert "event=provider_shared_reserve provider=football-data.org available=40" in caplog.text
+    assert KEY not in caplog.text
+    clock.advance(26)  # the provider's minute has reset
+    t.script = [t.ok({}, {"x-requests-available-minute": "119"})]
+    run(c.get_json("/c"))
+    assert len(t.calls) == 3
+
+
+def test_without_a_shared_reserve_only_an_empty_minute_pauses(clock: FakeClock) -> None:
+    t = FakeTransport()
+    t.script = [t.ok({}, {"x-requests-available-minute": "1"}), t.ok({})]
+    c = make_client(t, clock, per_minute=100)
+    run(c.get_json("/a"))
+    run(c.get_json("/b"))
+    assert len(t.calls) == 2
+
+
+@pytest.mark.parametrize("raw,ok", [("40", True), ("0", True), ("", True), ("119", True), ("120", False), ("-1", False)])
+def test_shared_reserve_from_env(tmp_path, raw: str, ok: bool) -> None:
+    from miniapp.settings import Settings, SettingsError
+    env = {"MINIAPP_BOT_TOKEN": "1:x", "MINIAPP_DB_PATH": str(tmp_path / "m.db"), "MINIAPP_TRUSTED_ORIGINS": "http://127.0.0.1:8000",
+           "MINIAPP_ENV": "development", "MINIAPP_FOOTBALL_DATA_LIVE_PLAN": "true", "MINIAPP_FOOTBALL_DATA_PER_MINUTE": "60",
+           "MINIAPP_FOOTBALL_DATA_SHARED_RESERVE": raw}
+    if not ok:
+        with pytest.raises(SettingsError):
+            Settings.from_env(env)
+        return
+    assert Settings.from_env(env).football_data_shared_reserve == (int(raw) if raw else 0)
+
+
 def test_live_plan_switch_changes_only_the_declared_freshness(tmp_path, clock: FakeClock) -> None:
     paid = build_service(base_settings(tmp_path, football_data_key=KEY, football_data_live_plan=True), clock=clock)
     free = build_service(base_settings(tmp_path, football_data_key=KEY), clock=clock)
