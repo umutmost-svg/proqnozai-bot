@@ -100,12 +100,13 @@ https://admin.proqnozai.com ──> Cloudflare Access ──> тот же тун
    `{"type":"default"}`. [владелец] меню-кнопка только для своего чата (`setChatMenuButton` с `chat_id` владельца — выполняю я из
    контейнера бота, токен не покидает контейнер) → вход на iOS, Android, Desktop, macOS, Web K, Web A; [я]
    проверяю по логам `auth.session … created=True` и отсутствие `auth.rejected` по подписи.
-8. [я] бэкапы Mini App: `backup-job.sh` с **`SVC=proqnozai-miniapp`**, `OFFSITE_KIND`/`OFFSITE` (приёмник —
+8. [я] бэкапы Mini App: скрипты в `/opt/sporbot/` (`backup.py`, `backup-job.sh` 0700, `restore-drill.sh`; сверка
+   `sha256sum` с репозиторием), `backup-job.sh` с **`SVC=proqnozai-miniapp`**, `OFFSITE_KIND`/`OFFSITE` (приёмник —
    блокер, см. ниже), `NOTIFY` = `curl -fsS -m 10 <URL проверки healthchecks «miniapp-backup»>/fail`; первый запуск,
    тест уведомления (`OFFSITE_KIND=test` → уведомление пришло), пробное восстановление из внешней копии
    (`restore-drill.sh`); **ежедневное расписание** — cron root (одна строка; пинг успеха только после `OK`
    задания, URL проверки healthchecks «miniapp-backup» с периодом 1 сутки и grace 2 ч — в `/root/.hc-miniapp-backup`, 0600):
-   `17 3 * * * L=/var/log/proqnozai-miniapp-backup.log; /root/backup-job.sh >> $L 2>&1 && curl -fsS -m 10 -o /dev/null "$(cat /root/.hc-miniapp-backup)" && echo "$(date -u +\%FT\%TZ) PING OK" >> $L`
+   `17 3 * * * L=/var/log/proqnozai-miniapp-backup.log; /opt/sporbot/backup-job.sh >> $L 2>&1 && curl -fsS -m 10 -o /dev/null "$(cat /root/.hc-miniapp-backup)" && echo "$(date -u +\%FT\%TZ) PING OK" >> $L`
    Пропущенный или упавший запуск → пинга нет → healthchecks уведомляет по истечении grace; сбой внутри задания
    ещё и сразу шлёт `NOTIFY` (`…/fail`). **Проверка перед открытием:** после первого ночного запуска в логе есть
    `OK:` и `PING OK`, во внешнем приёмнике — новая копия, проверка «miniapp-backup» в healthchecks — up. Мониторинг: внешний uptime на `https://app.proqnozai.com/api/health`.
