@@ -1171,7 +1171,6 @@ def test_a_busy_refresh_still_shows_the_flag_and_a_stand_in_is_cached_briefly(ap
     import asyncio
 
     from miniapp.sports.crests import CrestStore
-    from miniapp.sports.routes import FALLBACK_CREST_CACHE
 
     calls = []
 
