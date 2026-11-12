@@ -20,18 +20,16 @@ TIER_RANK = {"individual": 0, "segment": 1, "general": 2}
 BUCKETS = 10_000
 
 
-def _no_segment(name: str, params: dict[str, int]) -> bool:
-    return False
-
-
 @dataclass(frozen=True)
 class Viewer:
     user_id: int
     lang: str
     country: str | None                 # ISO 3166-1 alpha-2 from the trusted edge, None = unknown
-    age_confirmed: bool = False
+    confirmed_age: int = 0              # the highest age the user confirmed for a partner's gate; 0 = none
     # Activity segments over the Mini App's own data; evaluated lazily, only for campaigns that need it.
-    segment: Callable[[str, dict[str, int]], bool] = field(default=_no_segment, compare=False)
+    # None (or a failing callback) = no data: a campaign whose condition needs a segment is not shown,
+    # whatever the tree says (a negated segment must not turn "unknown" into "everyone").
+    segment: Callable[[str, dict[str, int]], bool] | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -47,7 +45,7 @@ def order_key(c: Campaign) -> tuple[int, int, int, int]:
 def bucket(salt: str, user_id: int) -> int:
     """Stable bucket 0..9999 of a user within one experiment (the salt is fixed for the campaign's life)."""
     digest = hashlib.sha256(f"{salt}:{user_id}".encode()).digest()
-    return int.from_bytes(digest[:8], "big") % BUCKETS
+    return int.from_bytes(digest, "big") % BUCKETS
 
 
 def assign(c: Campaign, user_id: int) -> Variant | None:
@@ -70,14 +68,18 @@ def eligible(c: Campaign, viewer: Viewer, placement: str, now: int, audiences: d
         return False
     if c.lang_in and viewer.lang not in c.lang_in:
         return False
-    if viewer.country is None:
+    country = None if viewer.country in targeting.UNKNOWN_COUNTRIES else viewer.country
+    if country is None:
         if not c.allow_unknown_country:
             return False
-    elif viewer.country not in c.countries:
+    elif country not in c.countries:
         return False
-    if c.age_min > 0 and not viewer.age_confirmed:
+    if c.age_min > viewer.confirmed_age:
         return False
-    return targeting.matches(c.condition, viewer, audiences)
+    try:
+        return targeting.matches(c.condition, viewer, audiences)
+    except targeting.SegmentUnavailable:
+        return False
 
 
 def choose(policy: Policy | None, viewer: Viewer, placement: str, now: int) -> Choice | None:

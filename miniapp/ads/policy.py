@@ -40,6 +40,7 @@ TEXT_LIMITS = {"headline": 80, "body": 300, "extra": 120, "cta": 30}
 DISCLOSURE_LIMITS = {"advertiser": 120, "adId": 64, "ageLabel": 8}
 MAX_URL = 500
 MAX_HOSTS = 20
+MAX_AGE = 25
 _HOST = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f  ]")
 
@@ -76,7 +77,7 @@ def check_hosts(value: Any) -> list[str]:
 
 def check_countries(value: Any) -> list[str]:
     if not isinstance(value, list) or len(value) > 300 or not all(
-            isinstance(c, str) and targeting.COUNTRY.match(c) for c in value):
+            isinstance(c, str) and targeting.COUNTRY.match(c) and c not in targeting.UNKNOWN_COUNTRIES for c in value):
         raise PolicyError("invalid_countries")
     return sorted(set(value))
 
@@ -216,7 +217,7 @@ def _campaign(raw: Any, audiences: dict[str, frozenset[int]]) -> Campaign:
         priority=_int(raw.get("priority"), 0, 1000, "invalid_priority"), starts_at=starts, ends_at=ends,
         lang_in=tuple(sorted(set(langs))), placements=tuple(sorted(set(placements))),
         countries=tuple(check_countries(raw.get("countries"))), allow_unknown_country=allow_unknown,
-        age_min=_int(raw.get("ageMin"), 0, 25, "invalid_age"), partner_id=_int(raw.get("partnerId"), 1, 2**53,
+        age_min=_int(raw.get("ageMin"), 0, MAX_AGE, "invalid_age"), partner_id=_int(raw.get("partnerId"), 1, 2**53,
                                                                                  "invalid_partner"),
         hosts=hosts, disclosure=check_disclosure(raw.get("disclosure")), condition=condition,
         salt=experiment["salt"], control_pct=_int(experiment.get("controlPct"), 0, 50, "invalid_experiment"),

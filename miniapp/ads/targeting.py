@@ -20,6 +20,8 @@ MAX_LEAVES = 30
 MAX_IDS_PER_LEAF = 5000
 MAX_TG_ID = 2**53
 COUNTRY = re.compile(r"^[A-Z]{2}$")
+# Cloudflare's "unknown" (XX) and Tor (T1): never a real country, never allowed in a list.
+UNKNOWN_COUNTRIES = frozenset({"XX", "T1"})
 MB_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 # "mb" = every user with an MB id; "g:1,5" = the union of the members of groups 1 and 5.
 AUDIENCE_NAME = re.compile(r"^(g:[1-9][0-9]{0,9}(,[1-9][0-9]{0,9}){0,49}|mb)$")
@@ -42,6 +44,10 @@ _SNAPSHOT_LEAVES = frozenset({"geo_in", "geo_unknown", "user_in", "aud", "segmen
 
 class ConditionError(ValueError):
     """The condition is malformed; the message is a stable code for the API."""
+
+
+class SegmentUnavailable(Exception):
+    """The viewer's activity data cannot be evaluated: the campaign is not shown (default deny)."""
 
 
 def _ids(value: Any, allow_empty: bool = False) -> list[int]:
@@ -67,7 +73,10 @@ def _leaf(key: str, value: Any, stage: Stage) -> dict[str, Any]:
     if key not in allowed:
         raise ConditionError("invalid_condition")
     if key == "geo_in":
-        return {key: _strings(value, COUNTRY)}
+        countries = _strings(value, COUNTRY)
+        if UNKNOWN_COUNTRIES & set(countries):
+            raise ConditionError("invalid_condition")
+        return {key: countries}
     if key in ("geo_unknown", "mb_verified"):
         if value is not True:
             raise ConditionError("invalid_condition")
@@ -164,10 +173,11 @@ def matches(node: dict[str, Any] | None, viewer: Any, audiences: dict[str, froze
         return any(matches(child, viewer, audiences) for child in value)
     if key == "not":
         return not matches(value, viewer, audiences)
+    country = None if viewer.country in UNKNOWN_COUNTRIES else viewer.country
     if key == "geo_in":
-        return viewer.country is not None and viewer.country in value
+        return country is not None and country in value
     if key == "geo_unknown":
-        return viewer.country is None
+        return country is None
     if key == "user_in":
         return viewer.user_id in value
     if key == "aud":
@@ -175,5 +185,10 @@ def matches(node: dict[str, Any] | None, viewer: Any, audiences: dict[str, froze
     if key == "lang_in":
         return viewer.lang in value
     if key == "segment":
-        return bool(viewer.segment(value["name"], value["params"]))
+        if viewer.segment is None:
+            raise SegmentUnavailable()
+        try:
+            return bool(viewer.segment(value["name"], value["params"]))
+        except Exception as exc:  # noqa: BLE001 — any failure of the data source means "unknown", never "match"
+            raise SegmentUnavailable() from exc
     return False  # unreachable for a validated snapshot; an unknown leaf never widens the audience

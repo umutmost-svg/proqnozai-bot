@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from collections import Counter
 
+import hashlib
+
 import pytest
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -12,6 +14,7 @@ from miniapp.ads.engine import Viewer
 
 NOW = 1_800_000_000
 KEY = Ed25519PrivateKey.generate()
+BUCKET_42 = 8770  # fixed vector: SHA-256("experiment-salt-1:42") mod 10000
 DAY = 86400
 
 
@@ -32,7 +35,7 @@ def snapshot(*campaigns: dict, audiences: dict | None = None) -> policy.Policy:
 
 
 def viewer(**over) -> Viewer:
-    base = {"user_id": 101, "lang": "ru", "country": "AZ", "age_confirmed": False}
+    base = {"user_id": 101, "lang": "ru", "country": "AZ", "confirmed_age": 0, "segment": lambda name, params: False}
     base.update(over)
     return Viewer(**base)
 
@@ -53,7 +56,13 @@ def chosen(snap: policy.Policy, v: Viewer, placement: str = "quick_pick", now: i
     ({}, {"country": None}, None),                                      # unknown country: denied by default
     ({"allowUnknownCountry": True}, {"country": None}, 1),
     ({"ageMin": 18}, {}, None),                                         # age confirmation required
-    ({"ageMin": 18}, {"age_confirmed": True}, 1),
+    ({"ageMin": 18}, {"confirmed_age": 18}, 1),
+    ({"ageMin": 21}, {"confirmed_age": 18}, None),                      # an 18+ confirmation is not 21+
+    ({}, {"country": "XX"}, None),                                      # Cloudflare's "unknown" is unknown
+    ({"allowUnknownCountry": True}, {"country": "T1"}, 1),
+    ({"condition": {"not": {"segment": {"name": "new", "params": {"days": 7}}}}}, {"segment": None}, None),
+    ({"condition": {"not": {"segment": {"name": "new", "params": {"days": 7}}}}}, {"segment": lambda n, p: 1 / 0}, None),
+    ({"condition": {"not": {"segment": {"name": "new", "params": {"days": 7}}}}}, {}, 1),
     ({"condition": {"geo_in": ["TR"]}}, {}, None),
     ({"condition": {"not": {"geo_in": ["TR"]}}}, {}, 1),
     ({"condition": {"user_in": [101]}}, {}, 1),
@@ -105,6 +114,36 @@ def ab_campaign(control: int, weights: list[int]) -> dict:
     return campaign(1, experiment={"salt": "experiment-salt-1", "controlPct": control}, variants=[
         {"key": keys[i], "weight": w, "headline": keys[i], "body": "", "extra": "", "cta": "Go",
          "url": "https://p.example.com/"} for i, w in enumerate(weights)])
+
+
+def test_reserved_country_codes_are_never_allowed_in_lists():
+    with pytest.raises(policy.PolicyError):
+        snapshot(campaign(1, countries=["AZ", "XX"]))
+    from miniapp.ads import targeting
+    with pytest.raises(targeting.ConditionError):
+        targeting.validate({"geo_in": ["T1"]}, "editor")
+
+
+def test_bucket_is_the_full_sha256_modulo_10000():
+    assert engine.bucket("experiment-salt-1", 42) == BUCKET_42
+    assert engine.bucket("experiment-salt-1", 42) == int(hashlib.sha256(b"experiment-salt-1:42").hexdigest(), 16) % 10_000
+
+
+@pytest.mark.parametrize("b,expected", [(0, None), (1999, None), (2000, "A"), (5999, "A"), (6000, "B"), (9999, "B")])
+def test_interval_borders(monkeypatch, b, expected):
+    c = snapshot(ab_campaign(20, [50, 50])).campaigns[0]
+    monkeypatch.setattr(engine, "bucket", lambda salt, uid: b)
+    v = engine.assign(c, 1)
+    assert (v.key if v else None) == expected
+
+
+def test_control_group_never_falls_through_to_the_next_campaign(monkeypatch):
+    first = ab_campaign(30, [100])
+    first["priority"] = 10
+    snap = snapshot(first, campaign(2, priority=1))
+    monkeypatch.setattr(engine, "bucket", lambda salt, uid: 0)  # inside the first campaign's control interval
+    choice = engine.choose(snap, viewer(), "quick_pick", NOW)
+    assert choice.campaign.id == 1 and choice.variant is None
 
 
 def test_ab_split_follows_weights_and_control_group_sees_nothing():

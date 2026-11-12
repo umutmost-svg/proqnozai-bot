@@ -202,7 +202,7 @@ class AdsStore:
             "hosts": _check(policy.check_hosts, data.get("hosts")),
             "countries": _check(policy.check_countries, data.get("countries") or []),
             "allowUnknownCountry": allow_unknown,
-            "ageMin": _int_field(age, 0, 25, "invalid_age"),
+            "ageMin": _int_field(age, 0, policy.MAX_AGE, "invalid_age"),
             "disclosure": _check(policy.check_disclosure, data.get("disclosure")),
             "active": active,
         }
@@ -695,7 +695,20 @@ def load_signing_key(path: Path) -> Ed25519PrivateKey:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         raw = Ed25519PrivateKey.generate().private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            fh.write(raw.hex())
+        # Written completely and synced under a temporary name, then installed with link(): the final name
+        # never holds a partial key (a crash leaves only a stray temporary file), and of two processes
+        # creating it at once exactly one key wins; the other reads it.
+        tmp = path.with_name(f".{path.name}.{secrets.token_hex(8)}")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(raw.hex())
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                os.link(tmp, path)
+            except FileExistsError:
+                pass
+        finally:
+            os.unlink(tmp)
     return Ed25519PrivateKey.from_private_bytes(bytes.fromhex(path.read_text().strip()))

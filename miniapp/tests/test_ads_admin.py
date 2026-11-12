@@ -345,3 +345,56 @@ def test_snapshot_reader_rejects_unknown_audience_and_bad_schema():
     del unsigned["signature"]
     with pytest.raises(policy.PolicyError, match="bad_signature"):
         policy.parse(policy.canonical(unsigned), pk)
+
+
+def test_signing_key_creation_never_leaves_a_partial_key(tmp_path, monkeypatch):
+    import os
+
+    path = tmp_path / "admin" / "ads-signing.key"
+    real_link = os.link
+
+    def crash(*a, **k):
+        raise KeyboardInterrupt  # the process dies after writing the temporary file, before installing it
+    monkeypatch.setattr(os, "link", crash)
+    with pytest.raises(KeyboardInterrupt):
+        load_signing_key(path)
+    assert not path.exists() and not list(path.parent.iterdir())  # no final file, temporary one removed
+    monkeypatch.setattr(os, "link", real_link)
+    key = load_signing_key(path)  # the next start creates it normally
+    assert load_signing_key(path).public_key().public_bytes_raw() == key.public_key().public_bytes_raw()
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_file_write_failure_after_commit_is_repaired_later(ads_env, monkeypatch):
+    config, clock, client, accounts, secrets_, csrf, pid = ads_env
+    real = policy.write_atomic
+
+    def fail(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(policy, "write_atomic", fail)
+    result = publish(client, csrf, secrets_, clock).json()
+    assert result["fileWritten"] is False and accounts.events(action="ads.publish")  # committed
+    assert not config.ads_policy_file.exists()
+    monkeypatch.setattr(policy, "write_atomic", real)
+    assert client.get("/api/admin/ads/publication").json()["fileVersion"] == result["after"]["version"]
+
+
+def test_a_repair_waiting_for_the_lock_writes_the_latest_publication(ads_env):
+    import threading
+
+    from miniapp.admin_web.ads import AdsStore
+
+    config, clock, client, accounts, secrets_, csrf, pid = ads_env
+    first = publish(client, csrf, secrets_, clock).json()["after"]["version"]
+    stale = config.ads_policy_file.read_bytes()
+    second = publish(client, csrf, secrets_, clock, key="publish-key-2").json()["after"]["version"]
+    assert second > first
+    ads = AdsStore(accounts, config.ads_policy_file, config.ads_applied_file)
+    with ads._file_lock():
+        config.ads_policy_file.write_bytes(stale)  # e.g. another repairer that had read the old publication
+        waiting = threading.Thread(target=ads.ensure_published)
+        waiting.start()
+        waiting.join(0.2)
+        assert waiting.is_alive()  # blocked on the lock
+    waiting.join(5)
+    assert policy.parse(config.ads_policy_file.read_bytes(), pub(config)).version == second
