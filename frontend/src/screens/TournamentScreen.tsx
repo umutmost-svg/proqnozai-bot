@@ -33,7 +33,9 @@ export function groupByDay(events: readonly SportEvent[], timeZone: string): [Da
 
 /** The season is over: it has matches and none of them is still to be played or in play (by status, and
  *  the last one is before today). The provider's season dates alone are not trusted: they often miss. */
-export function seasonFinished(events: readonly SportEvent[], today: DayKey, timeZone: string): boolean {
+export function seasonFinished(events: readonly SportEvent[], today: DayKey, timeZone: string, pendingFixtures = 0): boolean {
+  // Knockout fixtures with teams not yet known are not listed as matches: they still keep the season open.
+  if (pendingFixtures > 0) return false;
   if (!events.length || events.some((e) => e.status === 'upcoming' || e.status === 'live')) return false;
   return events.every((e) => dayKeyOf(new Date(e.startsAt), timeZone) < today);
 }
@@ -194,7 +196,7 @@ export function TournamentScreen() {
         <Head
           tournament={tournament}
           season={calendar.status === 'success' ? (calendar.data?.season ?? null) : null}
-          finished={calendar.status === 'success' && seasonFinished(calendar.data?.events ?? [], f.today, timeZone)}
+          finished={calendar.status === 'success' && seasonFinished(calendar.data?.events ?? [], f.today, timeZone, calendar.data?.season?.pendingFixtures ?? 0)}
         />
       )}
       {(tournament || calendar.status !== 'success' || calendar.data) && (

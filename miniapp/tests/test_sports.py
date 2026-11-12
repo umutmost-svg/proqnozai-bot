@@ -1093,3 +1093,20 @@ def test_local_daily_budget_exhaustion_shows_in_coverage(clock: FakeClock) -> No
     assert run(service.events("football", start, end, None)).stale is True  # last good data, marked
     assert service.coverage()["sports"]["football"]["status"] == "unavailable"
     assert len(t.calls) == 1
+
+
+def test_a_calendar_reports_scheduled_fixtures_with_unknown_teams(clock: FakeClock) -> None:
+    # The TBD final is not a listed match, but the season it belongs to is not over (frontend label).
+    from miniapp.sports.football_data import FootballDataAdapter, Season
+    season = {"id": 1, "startDate": "2026-08-01", "endDate": "2026-11-01", "currentMatchday": None}
+    played = {"id": 11, "utcDate": "2026-11-01T18:00:00Z", "status": "FINISHED", "matchday": None, "stage": "SEMI_FINALS",
+              "competition": {"code": "PL"}, "season": season, "homeTeam": {"id": 1, "name": "A FC", "shortName": "A"},
+              "awayTeam": {"id": 2, "name": "B FC", "shortName": "B"},
+              "score": {"winner": "HOME_TEAM", "fullTime": {"home": 1, "away": 0}, "halfTime": {"home": 0, "away": 0}}}
+    tbd = {"id": 12, "utcDate": "2026-12-01T18:00:00Z", "status": "TIMED", "matchday": None, "stage": "FINAL",
+           "competition": {"code": "PL"}, "season": season, "homeTeam": {"id": None, "name": None},
+           "awayTeam": {"id": None, "name": None}, "score": {"winner": None, "fullTime": {"home": None, "away": None}}}
+    adapter = FootballDataAdapter(make_client(FakeTransport(), clock), ("PL",), clock)
+    events, got = adapter._season_payload("PL", {"competition": {"code": "PL"}, "resultSet": {"count": 2}, "matches": [played, tbd]})
+    assert [e.id for e in events] == ["fd:11"]
+    assert isinstance(got, Season) and got.pending_fixtures == 1 and got.to_json()["pendingFixtures"] == 1

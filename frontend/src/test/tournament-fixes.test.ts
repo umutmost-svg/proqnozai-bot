@@ -12,6 +12,8 @@ describe('season finished (provider season dates are not trusted)', () => {
     expect(seasonFinished([ev('2026-11-12T10:00:00Z', 'live')], '2026-11-12', 'Asia/Baku')).toBe(false);
     expect(seasonFinished([ev('2026-11-12T10:00:00Z', 'finished')], '2026-11-12', 'Asia/Baku')).toBe(false); // today still counts
     expect(seasonFinished([], '2026-11-12', 'Asia/Baku')).toBe(false);
+    // a cup whose last listed match was yesterday but a final with unknown teams is still scheduled
+    expect(seasonFinished([ev('2026-11-11T18:00:00Z', 'finished')], '2026-11-12', 'Asia/Baku', 1)).toBe(false);
   });
 });
 

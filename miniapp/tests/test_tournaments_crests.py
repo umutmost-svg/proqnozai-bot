@@ -205,7 +205,7 @@ def test_calendar_is_the_whole_season_in_one_request(clock: FakeClock) -> None:
     assert t.calls[0][0].endswith("/competitions/PL/matches")
     assert [e.id for e in result.events] == ["fd:1", "fd:2"]
     assert [e.to_json()["matchday"] for e in result.events] == [1, 24]
-    assert result.season.to_json() == {"startDate": "2026-08-21", "endDate": "2027-05-30", "currentMatchday": 21}
+    assert result.season.to_json() == {"startDate": "2026-08-21", "endDate": "2027-05-30", "currentMatchday": 21, "pendingFixtures": 0}
     assert service.tournament_json(result.tournament)["emblem"] == "/api/crests/competition/PL"
     assert service.crests.path("team", "57") == "/api/crests/team/57"
     # Cached and shared.
@@ -595,7 +595,7 @@ def test_missing_season_facts_stay_unknown(clock: FakeClock) -> None:
     service = make_service(t, clock)
     t.script = [t.ok(season_payload(match(1), season={"id": 1}))]
     assert run(service.calendar("football", "fd:PL")).season.to_json() == {
-        "startDate": None, "endDate": None, "currentMatchday": None}
+        "startDate": None, "endDate": None, "currentMatchday": None, "pendingFixtures": 0}
 
 
 def competitions_payload() -> dict:

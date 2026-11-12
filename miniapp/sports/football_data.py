@@ -8,6 +8,7 @@ and stay ``None`` / "unavailable".
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -434,9 +435,12 @@ class Season:
     start: str | None
     end: str | None
     current_matchday: int | None
+    # Scheduled fixtures whose teams are not known yet (not shown as matches): the season is not over.
+    pending_fixtures: int = 0
 
     def to_json(self) -> dict:
-        return {"startDate": self.start, "endDate": self.end, "currentMatchday": self.current_matchday}
+        return {"startDate": self.start, "endDate": self.end, "currentMatchday": self.current_matchday,
+                "pendingFixtures": self.pending_fixtures}
 
 
 def season_of(raw_matches: list) -> Season:
@@ -660,7 +664,7 @@ class FootballDataAdapter:
                 raise UpstreamError("bad_response")
             events[event.id] = event
         ordered = sorted(events.values(), key=lambda e: (e.starts_at, e.id))
-        return ordered, season_of(matches)
+        return ordered, dataclasses.replace(season_of(matches), pending_fixtures=len(open_ids))
 
     async def match(self, match_id: int) -> tuple[FootballEvent | None, float]:
         try:

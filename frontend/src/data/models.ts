@@ -40,7 +40,7 @@ export interface Tournament {
 export interface TournamentCalendar {
   tournament: Tournament;
   events: SportEvent[];
-  season: { startDate: string | null; endDate: string | null; currentMatchday: number | null } | null;
+  season: { startDate: string | null; endDate: string | null; currentMatchday: number | null; pendingFixtures?: number } | null;
 }
 
 export interface Competitor {

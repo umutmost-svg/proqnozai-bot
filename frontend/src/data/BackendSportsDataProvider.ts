@@ -141,7 +141,9 @@ function readSeason(v: unknown): TournamentCalendar['season'] | undefined {
   const round = v.currentMatchday;
   const currentMatchday = round === null ? null : int(round) !== null && (round as number) > 0 ? (round as number) : undefined;
   if (startDate === undefined || endDate === undefined || currentMatchday === undefined) return undefined;
-  return { startDate, endDate, currentMatchday };
+  // Optional (older backends omit it); a present but unreadable value is ignored, never trusted.
+  const pending = 'pendingFixtures' in v ? int(v.pendingFixtures) : null;
+  return pending !== null && pending > 0 ? { startDate, endDate, currentMatchday, pendingFixtures: pending } : { startDate, endDate, currentMatchday };
 }
 
 function readTeamHit(v: unknown): TeamHit | null {
