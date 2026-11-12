@@ -20,6 +20,7 @@ import os
 import secrets
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -562,16 +563,18 @@ class AdsStore:
     def _next_version(self, conn: sqlite3.Connection, now: int) -> int:
         last = conn.execute("SELECT MAX(version) FROM ad_publications").fetchone()[0] or 0
         on_file = policy.read_version(self.policy_file, self.public_key)
-        applied = self.applied_version() or 0
-        return max(now * 1000, last + 1, (on_file[0] if on_file else 0) + 1, applied + 1)
+        applied = self.applied_version(now) or 0
+        file_version = on_file[0] if on_file and policy.plausible_version(on_file[0], now) else 0
+        return max(now * 1000, last + 1, file_version + 1, applied + 1)
 
-    def applied_version(self) -> int | None:
-        """The version the Mini App last applied (its mark file), or None."""
+    def applied_version(self, now: float | None = None) -> int | None:
+        """The version the Mini App last applied (its mark file), or None — also for an implausible mark (far in
+        the future): the shared volume is not trusted to block publications, the emergency stop included."""
         try:
             value = int(self.applied_file.read_text().strip())
         except (OSError, ValueError):
             return None
-        return value if value > 0 else None
+        return value if policy.plausible_version(value, time.time() if now is None else now) else None
 
     def publish(self, actor: Admin, reason: str, key: str, code: str, now: int, pause_all: bool = False) -> dict:
         """Step-up + reason + idempotency. `pause_all` is the emergency stop: every active campaign is paused and

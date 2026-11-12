@@ -328,11 +328,11 @@ def write_atomic(path: Path, content: bytes, mode: int = 0o640) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
+        os.chmod(tmp, mode)  # before the sync: a crash never leaves a valid file with the wrong mode
         with os.fdopen(fd, "wb") as fh:
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
-        os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -340,11 +340,19 @@ def write_atomic(path: Path, content: bytes, mode: int = 0o640) -> None:
         except OSError:
             pass
         raise
-    try:  # the rename itself survives a power loss only once the directory entry is synced
-        dir_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
-    except OSError:
-        pass
+    # The rename survives a power loss only once the directory entry is synced; a failure here is a failed
+    # write (the caller reports it and the repair runs again), never a silent success.
+    dir_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
+# Versions are wall-clock milliseconds (admin: max(now·1000, …)). A mark or version further ahead than this is
+# not plausible: it is ignored, so a poisoned file on the shared volume cannot block every future publication.
+MAX_VERSION_AHEAD_MS = 86_400_000
+
+
+def plausible_version(value: int, now: float) -> bool:
+    return 0 < value <= int(now * 1000) + MAX_VERSION_AHEAD_MS

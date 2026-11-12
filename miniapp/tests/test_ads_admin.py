@@ -204,9 +204,9 @@ def test_publish_is_idempotent_and_versions_only_grow(ads_env):
     assert again["replayed"] is True and again["after"]["version"] == first["after"]["version"]
     assert publish(client, csrf, secrets_, clock, pauseAll=True).json()["error"] == "idempotency_key_reused"
     # The Mini App applied a version far ahead (e.g. admin.db restored from an old copy): the next one is above it.
-    config.ads_applied_file.write_text(str(first["after"]["version"] + 10**9))
+    config.ads_applied_file.write_text(str(first["after"]["version"] + 10**7))
     nxt = publish(client, csrf, secrets_, clock, key="publish-key-2").json()
-    assert nxt["after"]["version"] > first["after"]["version"] + 10**9
+    assert nxt["after"]["version"] > first["after"]["version"] + 10**7
 
 
 def test_emergency_stop_pauses_everything_and_publishes_empty(ads_env):
@@ -398,3 +398,13 @@ def test_a_repair_waiting_for_the_lock_writes_the_latest_publication(ads_env):
         assert waiting.is_alive()  # blocked on the lock
     waiting.join(5)
     assert policy.parse(config.ads_policy_file.read_bytes(), pub(config)).version == second
+
+
+def test_an_implausible_applied_mark_cannot_block_the_emergency_stop(ads_env):
+    config, clock, client, _, secrets_, csrf, pid = ads_env
+    cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()))).json()["id"]
+    post(client, f"/api/admin/ads/campaigns/{cid}/status", csrf, {"action": "activate"})
+    config.ads_applied_file.write_text(str(2**62))  # poisoned shared volume
+    stop = publish(client, csrf, secrets_, clock, pauseAll=True)
+    assert stop.status_code == 200, stop.text
+    assert policy.parse(config.ads_policy_file.read_bytes(), pub(config)).campaigns == ()
