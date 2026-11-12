@@ -199,6 +199,12 @@ class Store:
             ).fetchone()
         return User(*row) if row else None
 
+    def user_created_at(self, user_id: int) -> int | None:
+        """Registration time (ads activity segment "new"); read only, the schema is unchanged."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT created_at FROM users WHERE telegram_user_id = ?", (user_id,)).fetchone()
+        return int(row[0]) if row else None
+
     def set_language(self, user_id: int, lang: Lang) -> None:
         if lang not in SUPPORTED_LANGS:
             raise ValueError("unsupported language")

@@ -657,4 +657,9 @@ export const es: Dictionary = {
   'quick.tryWeek': 'Próximos 7 días',
   'quick.openCalendar': 'Calendario de partidos',
   'quick.demoText': 'En modo demo no se calculan las probabilidades del modelo.',
+  'ads.label': 'Publicidad de un socio',
+  'ads.ageGate.text': 'Las ofertas del socio son para usuarios a partir de {min} años.',
+  'ads.ageGate.confirm': 'Tengo {min} años o más',
+  'ads.gone': 'Esta oferta ya no está disponible',
+  'ads.adId': 'ID del anuncio: {id}',
 };

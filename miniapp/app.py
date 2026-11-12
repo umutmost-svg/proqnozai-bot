@@ -327,6 +327,25 @@ def create_app(
             return None  # blocked: an existing session stops working at once
         return found
 
+    # Ads telemetry (activity segments, exposures): exists only with MINIAPP_ADS_ENABLED=true. The ads package
+    # is imported only then: an image built without it keeps working with the flag off.
+    telemetry: Any = None
+    if settings.ads_enabled:
+        from miniapp.ads.telemetry import Telemetry, telemetry_path
+
+        telemetry = Telemetry(telemetry_path(settings.db_path))
+        telemetry.init_schema()
+        telemetry.purge(now())
+
+    def note_activity(user_id: int, field: str = "requests") -> None:
+        """Neutral app activity for ads segments; never breaks the request it is attached to."""
+        if telemetry is None:
+            return
+        try:
+            telemetry.record_activity(user_id, now(), field)
+        except sqlite3.Error as exc:
+            logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
+
     def session_payload(user: User, token: str, session: Session) -> dict[str, Any]:
         return {
             "user": _public_user(user),
@@ -427,6 +446,7 @@ def create_app(
                 logger.info("auth.session_evicted user=%s count=%s", user.telegram_user_id, evicted)
             created = True
         logger.info("auth.session user=%s created=%s", user.telegram_user_id, created)
+        await run_in_threadpool(note_activity, user.telegram_user_id)
         response = JSONResponse({**session_payload(user, token, session), "created": created})
         set_session_cookie(response, token, session.expires_at)
         return response
@@ -449,6 +469,7 @@ def create_app(
         user = await run_in_threadpool(store.get_user, session.user_id)
         if user is None:
             raise ApiError(401, "unauthenticated")
+        await run_in_threadpool(note_activity, session.user_id)
         return JSONResponse(session_payload(user, token, session))
 
     @app.post("/api/me/language")
@@ -574,7 +595,35 @@ def create_app(
 
     register_sports_routes(app, sports, active_session,
                            ai_status=lambda: "connected" if ai.connected else "not_connected", odds=odds)
-    register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session)
+    register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session,
+                          on_pick=(lambda user_id, field: note_activity(user_id, field)) if telemetry else None)
+
+    if telemetry is not None:
+        from miniapp.ads.policy import load_public_key
+        from miniapp.ads.routes import register_ads_routes
+        from miniapp.ads.service import PolicyReader, Tokens, policy_paths
+
+        async def ads_write_check(request: Request) -> tuple[str, Session]:
+            require_origin(request)
+            active = await active_session(request)
+            if active is None:
+                raise ApiError(401, "unauthenticated")
+            if not csrf.verify(active[0], request.headers.get(CSRF_HEADER)):
+                raise ApiError(403, "csrf_failed")
+            return active
+
+        async def ads_read_json(request: Request, keys: set[str]) -> dict:
+            return await _read_json_object(request, 1024, keys)
+
+        policy_file, applied_file = policy_paths(settings.db_path)
+        register_ads_routes(
+            app, reader=PolicyReader(policy_file, applied_file,
+                                     load_public_key(settings.ads_policy_public_key or ""), clock),
+            telemetry=telemetry,
+            tokens=Tokens(settings.csrf_key_material), store=store, session_check=active_session,
+            write_check=ads_write_check, read_json=ads_read_json,
+            # CF-IPCountry is trusted only when every request must come through the edge (secret checked above).
+            trust_country=settings.edge_secret is not None, now=now)
 
     @app.get("/api/ai/analysis")
     async def ai_analysis_cached(request: Request) -> JSONResponse:

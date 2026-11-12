@@ -657,4 +657,9 @@ export const ptBR: Dictionary = {
   'quick.tryWeek': 'Próximos 7 dias',
   'quick.openCalendar': 'Calendário de jogos',
   'quick.demoText': 'No modo demo, as probabilidades do modelo não são calculadas.',
+  'ads.label': 'Publicidade de parceiro',
+  'ads.ageGate.text': 'As ofertas do parceiro são para usuários a partir de {min} anos.',
+  'ads.ageGate.confirm': 'Tenho {min} anos ou mais',
+  'ads.gone': 'Esta oferta não está mais disponível',
+  'ads.adId': 'ID do anúncio: {id}',
 };

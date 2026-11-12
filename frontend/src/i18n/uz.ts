@@ -657,4 +657,9 @@ export const uz: Dictionary = {
   'quick.tryWeek': 'Yaqin 7 kun',
   'quick.openCalendar': 'O‘yinlar taqvimi',
   'quick.demoText': 'Demo rejimida model ehtimollari hisoblanmaydi.',
+  'ads.label': 'Hamkor reklamasi',
+  'ads.ageGate.text': 'Hamkor takliflari {min} yosh va undan katta foydalanuvchilar uchun.',
+  'ads.ageGate.confirm': 'Men {min} yoshdaman yoki kattaman',
+  'ads.gone': 'Bu taklif endi mavjud emas',
+  'ads.adId': 'Reklama ID: {id}',
 };

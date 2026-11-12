@@ -33,6 +33,8 @@ export interface TelegramAdapter {
   initData(): string | null;
   /** Opens a t.me link: inside Telegram via the client (iOS, Android, Web), else a new tab. */
   openTelegramLink(url: string): void;
+  /** Opens an external https link (a partner offer) in the Telegram in-app browser, else a new tab. */
+  openLink(url: string): void;
   /** Unverified display hints from initDataUnsafe. */
   userFirstName(): string | null;
   languageCode(): string | null;
@@ -57,6 +59,7 @@ export interface TelegramWebApp {
   close?: () => void;
   expand?: () => void;
   openTelegramLink?: (url: string) => void;
+  openLink?: (url: string) => void;
   onEvent?: (event: string, handler: () => void) => void;
   offEvent?: (event: string, handler: () => void) => void;
   BackButton?: {
@@ -124,6 +127,11 @@ export function createTelegramAdapter(webApp: TelegramWebApp | undefined): Teleg
     openTelegramLink: (url: string) => {
       if (!/^https:\/\/t\.me\//.test(url)) return; // only Telegram links, never arbitrary URLs
       if (app?.openTelegramLink) app.openTelegramLink(url);
+      else window.open(url, '_blank', 'noopener,noreferrer');
+    },
+    openLink: (url: string) => {
+      if (!/^https:\/\//.test(url)) return; // https only: never javascript:, data: or a plain http link
+      if (app?.openLink) app.openLink(url);
       else window.open(url, '_blank', 'noopener,noreferrer');
     },
     userFirstName: () => app?.initDataUnsafe?.user?.first_name?.trim() || null,
