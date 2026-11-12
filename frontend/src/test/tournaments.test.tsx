@@ -157,6 +157,15 @@ describe('tournament calendar', () => {
     expect(screen.queryByTestId('calendar-events')).toBeNull();
   });
 
+  it('reads the count of scheduled fixtures with unknown teams; a malformed one makes the answer broken', async () => {
+    const body = (pending: unknown) => ({ ...calendarBody(), season: { ...calendarBody().season, pendingFixtures: pending } });
+    expect((await backend(ok(body(2))).data.getTournamentCalendar('fd:SA'))!.season!.pendingFixtures).toBe(2);
+    expect((await backend(ok(calendarBody())).data.getTournamentCalendar('fd:SA'))!.season!.pendingFixtures).toBeUndefined();
+    for (const bad of ['1', -1, 1.5, null]) {
+      await expect(backend(ok(body(bad))).data.getTournamentCalendar('fd:SA')).rejects.toMatchObject({ reason: 'bad_response' });
+    }
+  });
+
   it('rejects a calendar of another tournament or with foreign matches', async () => {
     const other = backend(ok({ ...calendarBody(), tournament: PL }));
     await expect(other.data.getTournamentCalendar('fd:SA')).rejects.toMatchObject({ reason: 'bad_response' });
