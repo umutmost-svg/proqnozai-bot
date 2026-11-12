@@ -60,6 +60,7 @@ export const az: Dictionary = {
   'calendar.days': 'Oyun günləri',
   'calendar.round': 'Tur {round}',
   'calendar.currentRound': 'Cari tur: {round}',
+  'calendar.seasonFinished': '{season} mövsümü başa çatıb',
   'calendar.loadingTitle': 'Təqvim yüklənir',
   'calendar.loadingText': 'Mövsümün matçlarını alırıq…',
   'calendar.errorTitle': 'Təqvimi yükləmək alınmadı',

@@ -4,6 +4,7 @@ import { AppShell } from '../components/AppShell';
 import { EventCard } from '../components/EventCard';
 import { Header } from '../components/Header';
 import { Logo } from '../components/Logo';
+import { scrollChipIntoStrip } from '../components/scrollStrip';
 import { areaName, initialOfName } from '../data/present';
 import { DataFootnote } from '../components/SourceNote';
 import { SourceErrorState, useBusyRetry } from '../components/BusyRetry';
@@ -16,7 +17,7 @@ import { listOf } from '../i18n';
 import { formatDayMonth } from '../i18n/format';
 import { useFilters, useServices, useSettings } from '../state/contexts';
 import { dayKeyOf, parseDayKey, weekdayOf, type DayKey } from '../time/zoned';
-import { StandingsTab } from './Standings';
+import { seasonLabel, StandingsTab } from './Standings';
 import s from './TournamentScreen.module.css';
 import tabs from './EventScreen.module.css';
 
@@ -28,6 +29,13 @@ export function groupByDay(events: readonly SportEvent[], timeZone: string): [Da
     days.set(day, [...(days.get(day) ?? []), event]);
   }
   return [...days.entries()].sort(([a], [b]) => a.localeCompare(b));
+}
+
+/** The season is over: it has matches and none of them is still to be played or in play (by status, and
+ *  the last one is before today). The provider's season dates alone are not trusted: they often miss. */
+export function seasonFinished(events: readonly SportEvent[], today: DayKey, timeZone: string): boolean {
+  if (!events.length || events.some((e) => e.status === 'upcoming' || e.status === 'live')) return false;
+  return events.every((e) => dayKeyOf(new Date(e.startsAt), timeZone) < today);
 }
 
 /** The first match day from today on; after the season, its last day. */
@@ -42,10 +50,7 @@ function DayStrip({ days, value, onChange }: { days: readonly DayKey[]; value: D
   const months = listOf(t, 'date.monthsShort');
   const selectedRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    selectedRef.current?.scrollIntoView?.({
-      block: 'nearest',
-      inline: 'center',
-    });
+    scrollChipIntoStrip(selectedRef.current, 'center');
   }, [value]);
   return (
     <div className={filters.strip} role="group" aria-label={t('calendar.days')} data-testid="calendar-days">
@@ -75,7 +80,7 @@ function DayStrip({ days, value, onChange }: { days: readonly DayKey[]; value: D
   );
 }
 
-function Head({ tournament, season }: { tournament: Tournament; season: TournamentCalendar['season'] }) {
+function Head({ tournament, season, finished }: { tournament: Tournament; season: TournamentCalendar['season']; finished: boolean }) {
   const { t } = useSettings();
   return (
       <section className={s.head} data-testid="tournament-head">
@@ -95,8 +100,12 @@ function Head({ tournament, season }: { tournament: Tournament; season: Tourname
         <div className={s.headCopy}>
           <h2 className={s.name}>{tournament.name}</h2>
           {tournament.area && <p className={s.meta}>{areaName(t, tournament.area)}</p>}
-          {season?.currentMatchday != null && (
-            <p className={s.meta}>{t('calendar.currentRound', { round: season.currentMatchday })}</p>
+          {/* The provider's "current" season may have ended long ago (cups, qualifiers): then no "current
+              matchday", but the season it is, so its dates are never taken for this season's. */}
+          {finished && seasonLabel(season) ? (
+            <p className={s.meta} data-testid="season-finished">{t('calendar.seasonFinished', { season: seasonLabel(season)! })}</p>
+          ) : (
+            season?.currentMatchday != null && <p className={s.meta}>{t('calendar.currentRound', { round: season.currentMatchday })}</p>
           )}
         </div>
       </section>
@@ -143,7 +152,7 @@ type TabName = 'matches' | 'table';
 export function TournamentScreen() {
   const { id = '' } = useParams();
   const { data } = useServices();
-  const { t } = useSettings();
+  const { t, timeZone } = useSettings();
   const f = useFilters();
   const [params, setParams] = useSearchParams();
   // The tab lives in the URL: coming back from a team or a match restores it.
@@ -181,7 +190,13 @@ export function TournamentScreen() {
   return (
     <AppShell scrollKey={`/tournament/${id}?${tab}`} restoreReady={calendar.status !== 'loading'}>
       <Header variant="screen" title={title} backTo="/" />
-      {tournament && <Head tournament={tournament} season={calendar.status === 'success' ? (calendar.data?.season ?? null) : null} />}
+      {tournament && (
+        <Head
+          tournament={tournament}
+          season={calendar.status === 'success' ? (calendar.data?.season ?? null) : null}
+          finished={calendar.status === 'success' && seasonFinished(calendar.data?.events ?? [], f.today, timeZone)}
+        />
+      )}
       {(tournament || calendar.status !== 'success' || calendar.data) && (
         <div className={tabs.tabs} role="tablist" aria-label={t('tournament.tabs')} data-testid="tournament-tabs">
           {(['matches', 'table'] as const).map((name) => (

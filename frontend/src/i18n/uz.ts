@@ -58,6 +58,7 @@ export const uz: Dictionary = {
   'calendar.days': 'Oʻyin kunlari',
   'calendar.round': '{round}-tur',
   'calendar.currentRound': 'Joriy tur: {round}',
+  'calendar.seasonFinished': '{season} mavsumi yakunlangan',
   'calendar.loadingTitle': 'Taqvim yuklanmoqda',
   'calendar.loadingText': 'Mavsum oʻyinlari olinmoqda…',
   'calendar.errorTitle': 'Taqvimni yuklab boʻlmadi',

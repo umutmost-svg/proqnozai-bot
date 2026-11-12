@@ -39,14 +39,17 @@ export function AppShell({ children, scrollKey, restoreReady = true, atmosphere 
 
   return (
     <div className={s.app}>
-      <div className={s.wash} aria-hidden="true">
-        <img src={washSrc} alt="" width={590} height={680} />
-      </div>
-      {atmosphere && (
-        <div className={s.atmosphere} aria-hidden="true">
-          <img src={atmosphereSrc} alt="" width={520} height={450} />
+      {/* Decoration lives in its own clipping box: it can never widen .app's scrollable area. */}
+      <div className={s.decor} aria-hidden="true" data-testid="app-decor">
+        <div className={s.wash}>
+          <img src={washSrc} alt="" width={590} height={680} />
         </div>
-      )}
+        {atmosphere && (
+          <div className={s.atmosphere}>
+            <img src={atmosphereSrc} alt="" width={520} height={450} />
+          </div>
+        )}
+      </div>
       <main ref={scrollRef} className={s.scroll} data-testid="scroll-viewport">
         <div className={s.content} style={gap ? { gap } : undefined}>
           {children}

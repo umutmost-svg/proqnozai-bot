@@ -58,6 +58,7 @@ export const tr: Dictionary = {
   'calendar.days': 'Maç günleri',
   'calendar.round': '{round}. hafta',
   'calendar.currentRound': 'Güncel hafta: {round}',
+  'calendar.seasonFinished': '{season} sezonu sona erdi',
   'calendar.loadingTitle': 'Fikstür yükleniyor',
   'calendar.loadingText': 'Sezonun maçları alınıyor…',
   'calendar.errorTitle': 'Fikstür yüklenemedi',

@@ -13,6 +13,15 @@
   padding-right: var(--safe-right);
 }
 
+/* Clipping box for the decoration: same size as .app, so .app never gets content wider than itself
+   (an overflow: hidden container is still scrollable by script — that moved the whole page sideways). */
+.decor {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 .wash,
 .atmosphere {
   position: absolute;

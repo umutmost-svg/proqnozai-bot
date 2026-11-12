@@ -236,8 +236,7 @@ class SportsService:
         code = tournament.id.removeprefix(f"{football_data.ID_PREFIX}:")
         if self.football is not None:
             if code in self.football.emblems:
-                self.crests.learn("competition", code, self.football.emblems[code],
-                                  fallback=self.football.emblem_fallbacks.get(code))
+                self.crests.learn("competition", code, self.football.emblems[code])
             else:
                 self.crests.forget("competition", code)  # withdrawn by the provider
         return tournament.to_json(emblem=self.crests.path("competition", code))

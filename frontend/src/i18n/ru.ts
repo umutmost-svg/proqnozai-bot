@@ -56,6 +56,7 @@ export const ru = {
   'calendar.days': 'Дни матчей',
   'calendar.round': 'Тур {round}',
   'calendar.currentRound': 'Текущий тур: {round}',
+  'calendar.seasonFinished': 'Сезон {season} завершён',
   'calendar.loadingTitle': 'Загружаем календарь',
   'calendar.loadingText': 'Получаем матчи сезона…',
   'calendar.errorTitle': 'Не удалось загрузить календарь',

@@ -58,6 +58,7 @@ export const es: Dictionary = {
   'calendar.days': 'Días de partido',
   'calendar.round': 'Jornada {round}',
   'calendar.currentRound': 'Jornada actual: {round}',
+  'calendar.seasonFinished': 'Temporada {season} finalizada',
   'calendar.loadingTitle': 'Cargando el calendario',
   'calendar.loadingText': 'Obteniendo los partidos de la temporada…',
   'calendar.errorTitle': 'No se pudo cargar el calendario',

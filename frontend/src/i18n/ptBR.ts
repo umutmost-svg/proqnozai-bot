@@ -58,6 +58,7 @@ export const ptBR: Dictionary = {
   'calendar.days': 'Dias de jogos',
   'calendar.round': '{round}ª rodada',
   'calendar.currentRound': 'Rodada atual: {round}',
+  'calendar.seasonFinished': 'Temporada {season} encerrada',
   'calendar.loadingTitle': 'Carregando o calendário',
   'calendar.loadingText': 'Buscando os jogos da temporada…',
   'calendar.errorTitle': 'Não foi possível carregar o calendário',

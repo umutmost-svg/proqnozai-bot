@@ -1016,7 +1016,8 @@ def test_svg_crest_is_served_as_svg_with_a_no_script_policy(api, clock: FakeCloc
     assert "script" not in SVG_CSP
 
 
-def test_competition_without_an_emblem_shows_its_country_flag():
+def test_competition_without_an_emblem_never_gets_a_country_flag():
+    # Owner, 2026-11-12: a flag is not an emblem — no emblem means the neutral fallback (initials).
     from miniapp.sports.football_data import FootballDataAdapter, all_codes
 
     class Client:
@@ -1028,7 +1029,7 @@ def test_competition_without_an_emblem_shows_its_country_flag():
             ]}, None
 
     found, _ = asyncio.run(FootballDataAdapter(Client(), all_codes(), lambda: 1.8e9).competition_emblems())
-    assert found["TSL"].endswith("/803.svg") and found["PL"].endswith("/PL.png") and "CSL" not in found
+    assert found == {"PL": "https://crests.football-data.org/PL.png"}
 
 
 
@@ -1095,7 +1096,7 @@ def test_a_competition_emblem_that_cannot_be_shown_falls_back_to_the_country_fla
     assert asyncio.run(store.image("competition", "FAC")) == PNG and len(images.calls) == 2  # cached
 
 
-def test_the_competition_list_keeps_the_flag_as_the_emblems_fallback(clock: FakeClock) -> None:
+def test_the_competition_list_gives_only_own_emblems(clock: FakeClock) -> None:
     import asyncio
 
     from miniapp.sports.football_data import FootballDataAdapter
@@ -1107,8 +1108,8 @@ def test_the_competition_list_keeps_the_flag_as_the_emblems_fallback(clock: Fake
         {"code": "PL", "emblem": "https://crests.football-data.org/PL.png", "area": {"flag": "https://crests.football-data.org/770.svg"}},
         {"code": "PD", "emblem": None, "area": {"flag": "https://crests.football-data.org/760.svg"}}]})]
     asyncio.run(adapter.competition_emblems())
-    assert adapter.emblems == {"PL": "https://crests.football-data.org/PL.png", "PD": "https://crests.football-data.org/760.svg"}
-    assert adapter.emblem_fallbacks == {"PL": "https://crests.football-data.org/770.svg"}
+    assert adapter.emblems == {"PL": "https://crests.football-data.org/PL.png"}  # PD: no emblem, no flag
+    assert not hasattr(adapter, "emblem_fallbacks")
 
 
 def test_a_passing_emblem_failure_never_leaves_the_flag_for_good():

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CalendarSheet } from './CalendarSheet';
+import { scrollChipIntoStrip } from './scrollStrip';
 import { useFilters, useServices, useSettings } from '../state/contexts';
 import todayIcon from '../assets/figma/icon-today.svg';
 import { listOf } from '../i18n';
@@ -30,7 +31,7 @@ export function DateStrip({ today, value, onChange }: { today: DayKey; value: Da
   const month = months[parseDayKey(value).month - 1];
 
   useEffect(() => {
-    selectedRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    scrollChipIntoStrip(selectedRef.current, 'nearest');
   }, [value]);
 
   return (

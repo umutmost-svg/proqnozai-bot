@@ -86,7 +86,7 @@ describe('a busy data source', () => {
     await waitFor(() => expect(calls(fetchImpl, '/standings')).toBe(3));
     await new Promise((r) => setTimeout(r, 1600));
     expect(calls(fetchImpl, '/standings')).toBe(3);
-  });
+  }, 15_000); // waits up to 5 s inside: the test itself needs more than the default 5 s
 
   it('a long wait is only told, never waited out automatically', async () => {
     const { fetchImpl, data } = backend({ standings: () => busy(120) });
