@@ -5,7 +5,7 @@
 # Dokploy admin or root deliberately builds elsewhere (an app's domain, another container's labels, a raw service
 # IP) — whoever can do that already controls the panel and the server.
 #   setup, once, right after the verified edit:   sha256sum /etc/dokploy/traefik/dynamic/dokploy.yml > /root/.dokploy-route.sha256
-#   root cron:                                    17 * * * * sh /root/dokploy-bypass-check.sh
+#   root cron:                                    17 * * * * sh /opt/proqnozai-ops/dokploy-bypass-check.sh
 # Fails (alert) on ANY of:
 #   1) dokploy.yml differs from the approved, verified copy (exact SHA-256) — any rewrite by Dokploy (domain in
 #      Settings -> Web Server, the config editor, an upgrade) or by hand needs a human look, whatever it says;

@@ -3,6 +3,11 @@
 Подготовлено 2026-11-12. **Ничего не выполнено.** Найден второй публичный путь к панели (через Traefik :80, раздел 1) — закрывается шагом 2a. Каждый шаг с пометкой **[владелец]** или **[сервер]** — по
 отдельному разрешению; firewall — только после успешной проверки нового доступа и отдельного разрешения.
 
+> **Обновление 2026-11-12 (вечер):** туннель `cloudflared` уже работает, Access на `admin.proqnozai.com`
+> отвечает; :3000 и обход через :80 по-прежнему открыты. Исполняемые шаги закрытия (скрипты, проверки, откат),
+> бэкапы, мониторинг и учения — `docs/ops/infra-hardening.md`. Скрипты на сервере — в `/opt/proqnozai-ops/`
+> (а не в `/root/`, как ниже в исходном плане); шаг 2a выполняет `deploy/ops/dokploy-route-lockdown.sh`.
+
 ## 1. Аудит (2026-11-12, только чтение)
 
 | Что | Факт |
@@ -116,10 +121,10 @@
    - **[владелец]** бесплатный аккаунт healthchecks.io → check `dokploy-bypass`, период 1 ч, grace 1 ч,
      уведомления на e-mail и/или Telegram владельца; URL пинга (`https://hc-ping.com/<uuid>`) — не секрет уровня
      ключа, но в репозиторий и чат не публикуется; на сервер — в `/root/.hc-dokploy-bypass` (0600).
-   - скрипт `deploy/ops/dokploy-bypass-check.sh` → `/root/dokploy-bypass-check.sh` (0700, root). Сразу после
+   - скрипт `deploy/ops/dokploy-bypass-check.sh` → `/opt/proqnozai-ops/dokploy-bypass-check.sh` (0700, root). Сразу после
      проверенной правки зафиксировать одобренную версию файла:
      `sha256sum /etc/dokploy/traefik/dynamic/dokploy.yml > /root/.dokploy-route.sha256` (0600); cron root:
-     `17 * * * * sh /root/dokploy-bypass-check.sh`. Тревога, если **хоть одно**: (1) `dokploy.yml` отличается от
+     `/etc/cron.d/proqnozai-ops` (`deploy/ops/proqnozai-ops.cron`). Тревога, если **хоть одно**: (1) `dokploy.yml` отличается от
      одобренной версии (точный SHA-256 — любая перезапись Dokploy: домен в Web Server, редактор конфига,
      обновление; разбор человеком, что бы там ни было, в т. ч. правила с `||`); (2) другой файл в `dynamic`
      называет бэкенд Dokploy (`dokploy-service-app`, `dokploy:3000`, без учёта регистра); (3) у сервиса `dokploy` появились метки Traefik
@@ -137,7 +142,7 @@
      доступ к панели и серверу. Защита от этого — сам доступ: Access, 2FA Dokploy, SSH только по ключу.
    - **Тест уведомления (обязательно):** `curl -fsS "$(cat /root/.hc-dokploy-bypass)/fail"` → владелец получил
      уведомление; затем `curl -fsS "$(cat /root/.hc-dokploy-bypass)"` → статус снова up.
-   - Плюс ручной прогон `sh /root/dokploy-bypass-check.sh` после любого изменения настроек или обновления Dokploy;
+   - Плюс ручной прогон `sh /opt/proqnozai-ops/dokploy-bypass-check.sh` после любого изменения настроек или обновления Dokploy;
      при `OPEN` — повторить шаг 2a.
    Тот же сервис подходит как канал `NOTIFY` для бэкапов (`production.md`, шаг 8).
 3. **[владелец] Public hostname** туннеля: `admin.proqnozai.com` → Service `HTTP` `127.0.0.1:3000`.

@@ -157,5 +157,10 @@ https://admin.proqnozai.com ──> Cloudflare Access ──> тот же тун
   Остаётся: письменное подтверждение провайдера по п. 2.3 (рекомендация до открытия всем, не технический блокер).
 - **Коэффициенты в Mini App:** требуют включить экспорт из бота (новые переменные бота и его перевыкладка;
   у бота `start-first` — сначала `stop-first`). Рекомендация — после запуска, отдельным окном.
-- **Внешние бэкапы Mini App — блокер открытия всем:** нужен приёмник (`OFFSITE`): например Backblaze B2
-  (бесплатно до 10 ГБ) или DigitalOcean Spaces, и вторая проверка healthchecks «miniapp-backup» для `NOTIFY`.
+- **Внешние бэкапы Mini App — блокер открытия всем.** Решение без нового платного сервиса подготовлено:
+  `docs/ops/infra-hardening.md` §3 — Mac владельца дважды в сутки забирает обе БД Mini App **и** БД бота по
+  отдельному SSH-ключу с forced command (`deploy/ops/backup-export.sh`), шифрует на лету, проверяет расшифровкой и
+  `integrity_check`, хранит 30 дней; healthchecks «miniapp-backup» и «bot-backup» пингует Mac. Этим заменяется
+  `OFFSITE`/`backup-job.sh`/cron из шага B8 (серверный `backup-job.sh` не нужен); гейт B8 «внешняя копия +
+  пробное восстановление» = первая успешная выгрузка + `restore-drill-local.sh miniapp` с образом релиза → PASS
+  (§5). Нужно от владельца: пароль в Keychain (+ копия вне Mac), ключ SSH, проверки healthchecks (§3, §4).

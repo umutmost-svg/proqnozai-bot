@@ -1,0 +1,14 @@
+# Re-applies the DOCKER-USER block of Dokploy :3000 after every boot and every Docker restart
+# (iptables rules are not persistent). Install: docs/ops/infra-hardening.md, section 1.
+[Unit]
+Description=ProqnozAI: block outside access to Dokploy :3000 (DOCKER-USER)
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /opt/proqnozai-ops/docker-user-3000.sh apply
+
+[Install]
+WantedBy=docker.service

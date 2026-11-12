@@ -1,0 +1,6 @@
+# /etc/cron.d/proqnozai-ops (root:root 0644) — docs/ops/infra-hardening.md, section 4.
+# The scripts print only on a problem; healthchecks.io gets every result (URL files /root/.hc-*, 0600).
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+17 * * * *   root  sh /opt/proqnozai-ops/dokploy-bypass-check.sh >> /var/log/proqnozai-monitor.log 2>&1
+*/5 * * * *  root  sh /opt/proqnozai-ops/host-monitor.sh >> /var/log/proqnozai-monitor.log 2>&1

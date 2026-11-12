@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Owner's Mac: pulls both databases twice a day (docs/ops/infra-hardening.md, section 3).
+     Replace OWNER with the macOS user name, copy to ~/Library/LaunchAgents/ (0644) and load with
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.proqnozai.backup-pull.plist
+     A run missed while the Mac slept starts at wake-up; a Mac switched off sends no ping and healthchecks alerts. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.proqnozai.backup-pull</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/python3</string>
+    <string>/Users/OWNER/proqnozai-ops/pull_backups.py</string>
+    <string>pull</string>
+    <string>all</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>5</integer><key>Minute</key><integer>40</integer></dict>
+    <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>40</integer></dict>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>StandardOutPath</key><string>/Users/OWNER/Library/Logs/proqnozai-backup.log</string>
+  <key>StandardErrorPath</key><string>/Users/OWNER/Library/Logs/proqnozai-backup.log</string>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+</dict>
+</plist>
