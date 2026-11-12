@@ -366,6 +366,79 @@ class Store:
                 "burned_launches": count("SELECT COUNT(*) FROM consumed_init_data WHERE expires_at >= ?", now),
             }
 
+    # ---- operator reads (admin panel): no tokens or hashes ever leave these methods ----
+
+    _USER_SORTS = {"id": "u.telegram_user_id", "created": "u.created_at", "login": "u.last_login_at",
+                   "username": "u.username COLLATE NOCASE", "sessions": "active_sessions"}
+
+    def list_users(self, now: int, *, query: str = "", sort: str = "created", descending: bool = True,
+                   limit: int = 50, offset: int = 0, created_since: int | None = None,
+                   login_since: int | None = None, login_before: int | None = None,
+                   lang: str | None = None) -> tuple[int, list[dict]]:
+        """A page of users with their active session count; the total matches the filters."""
+        where, args = ["1 = 1"], []
+        if query:
+            q = query.strip().lstrip("@")
+            if q.isdigit():
+                where.append("(u.telegram_user_id = ? OR u.username LIKE ? ESCAPE '\\')")
+                args += [int(q), _like(q)]
+            else:
+                where.append("(u.username LIKE ? ESCAPE '\\' OR u.first_name LIKE ? ESCAPE '\\' "
+                             "OR u.last_name LIKE ? ESCAPE '\\')")
+                args += [_like(q)] * 3
+        if created_since is not None:
+            where.append("u.created_at >= ?")
+            args.append(created_since)
+        if login_since is not None:
+            where.append("u.last_login_at >= ?")
+            args.append(login_since)
+        if login_before is not None:
+            where.append("u.last_login_at < ?")
+            args.append(login_before)
+        if lang:
+            where.append("u.lang = ?")
+            args.append(lang)
+        order = self._USER_SORTS.get(sort, self._USER_SORTS["created"])
+        direction = "DESC" if descending else "ASC"
+        sql_where = " AND ".join(where)
+        with self._connect() as conn:
+            total = int(conn.execute(f"SELECT COUNT(*) FROM users u WHERE {sql_where}", args).fetchone()[0])
+            rows = conn.execute(
+                "SELECT u.telegram_user_id, u.username, u.first_name, u.last_name, u.lang, u.created_at, "
+                "u.last_login_at, (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.telegram_user_id "
+                "AND s.revoked_at IS NULL AND s.expires_at > ?) AS active_sessions "
+                f"FROM users u WHERE {sql_where} ORDER BY {order} {direction}, u.telegram_user_id {direction} "
+                "LIMIT ? OFFSET ?", (now, *args, limit, offset)).fetchall()
+        return total, [_user_row(r) for r in rows]
+
+    def user_profile(self, user_id: int, now: int) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT u.telegram_user_id, u.username, u.first_name, u.last_name, u.lang, u.created_at, "
+                "u.last_login_at, (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.telegram_user_id "
+                "AND s.revoked_at IS NULL AND s.expires_at > ?) FROM users u WHERE u.telegram_user_id = ?",
+                (now, user_id)).fetchone()
+            if row is None:
+                return None
+            sessions = conn.execute(
+                "SELECT created_at, expires_at, revoked_at FROM sessions WHERE user_id = ? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 50", (user_id,)).fetchall()
+        profile = _user_row(row)
+        profile["sessions"] = [{
+            "createdAt": c, "expiresAt": e, "revokedAt": r,
+            "state": "revoked" if r is not None else ("expired" if e <= now else "active"),
+        } for c, e, r in sessions]
+        return profile
+
+    def user_counts(self, now: int, since: int) -> dict[str, int]:
+        with self._connect() as conn:
+            total, new, logged_in = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(created_at >= ?), 0), COALESCE(SUM(last_login_at >= ?), 0) "
+                "FROM users", (since, since)).fetchone()
+            active = conn.execute("SELECT COUNT(DISTINCT user_id) FROM sessions WHERE revoked_at IS NULL "
+                                  "AND expires_at > ?", (now,)).fetchone()[0]
+        return {"total": int(total), "new": int(new), "loggedIn": int(logged_in), "withActiveSession": int(active)}
+
     def backup(self, destination: Path) -> None:
         """Consistent online copy (SQLite backup API) into a new file."""
         if destination.exists():
@@ -464,3 +537,13 @@ class Store:
         cutoff = now - SESSION_RETENTION_S
         conn.execute("DELETE FROM sessions WHERE expires_at < ? OR revoked_at < ?", (cutoff, cutoff))
         conn.execute("DELETE FROM consumed_init_data WHERE expires_at < ?", (now,))
+
+
+def _like(text: str) -> str:
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _user_row(r: tuple) -> dict:
+    return {"id": r[0], "username": r[1], "firstName": r[2], "lastName": r[3], "lang": r[4], "createdAt": r[5],
+            "lastLoginAt": r[6], "activeSessions": int(r[7])}
