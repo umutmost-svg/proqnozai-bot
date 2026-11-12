@@ -103,10 +103,12 @@ https://admin.proqnozai.com ──> Cloudflare Access ──> тот же тун
 8. [я] бэкапы Mini App: `backup-job.sh` с **`SVC=proqnozai-miniapp`**, `OFFSITE_KIND`/`OFFSITE` (приёмник —
    блокер, см. ниже), `NOTIFY` = `curl -fsS -m 10 <URL проверки healthchecks «miniapp-backup»>/fail`; первый запуск,
    тест уведомления (`OFFSITE_KIND=test` → уведомление пришло), пробное восстановление из внешней копии
-   (`restore-drill.sh`); **ежедневное расписание** — cron root `17 3 * * * /root/backup-job.sh >> /var/log/proqnozai-miniapp-backup.log 2>&1`
-   и его проверка: после первого ночного запуска в логе `OK:` и новая копия во внешнем приёмнике; отсутствие
-   ежедневной копии → healthchecks (добавить в конец задания пинг успешной проверки «miniapp-backup» с периодом
-   1 сутки — так пропущенный запуск тоже даёт уведомление). Мониторинг: внешний uptime на `https://app.proqnozai.com/api/health`.
+   (`restore-drill.sh`); **ежедневное расписание** — cron root (одна строка; пинг успеха только после `OK`
+   задания, URL проверки healthchecks «miniapp-backup» с периодом 1 сутки и grace 2 ч — в `/root/.hc-miniapp-backup`, 0600):
+   `17 3 * * * L=/var/log/proqnozai-miniapp-backup.log; /root/backup-job.sh >> $L 2>&1 && curl -fsS -m 10 -o /dev/null "$(cat /root/.hc-miniapp-backup)" && echo "$(date -u +\%FT\%TZ) PING OK" >> $L`
+   Пропущенный или упавший запуск → пинга нет → healthchecks уведомляет по истечении grace; сбой внутри задания
+   ещё и сразу шлёт `NOTIFY` (`…/fail`). **Проверка перед открытием:** после первого ночного запуска в логе есть
+   `OK:` и `PING OK`, во внешнем приёмнике — новая копия, проверка «miniapp-backup» в healthchecks — up. Мониторинг: внешний uptime на `https://app.proqnozai.com/api/health`.
    **Наблюдение закрытого режима ≥ 24 ч** (ошибки, память, CPU, бот) — до шага C.
    До шага 8 в Mini App только данные владельца и перенесённые из копии бота (восстанавливаются повтором
    миграции); поэтому бэкапы — гейт открытия всем, а не входа владельца.
@@ -114,8 +116,9 @@ https://admin.proqnozai.com ──> Cloudflare Access ──> тот же тун
 **C. Открытие всем** (отдельное разрешение, после GO; гейты: B1–B8, бэкап с внешней копией и пробным
 восстановлением, наблюдение ≥ 24 ч, отдельный ключ football-data, ежедневный бэкап по расписанию отработал): свежая копия бота → финальная дельта
 пользователей **и `--blocked-out` из той же копии → `MINIAPP_BLOCKED_USER_IDS`** (после открытия, пока бот
-работает: блокировка в дашборде бота **не** переносится сама — заблокировать в Mini App = добавить id в
-`MINIAPP_BLOCKED_USER_IDS` и Redeploy; сессии сразу перестают действовать) → убрать
+работает: блокировка и разблокировка в дашборде бота **не** переносятся сами — заблокировать в Mini App = добавить id в
+`MINIAPP_BLOCKED_USER_IDS`, разблокировать = убрать его оттуда; в обоих случаях Redeploy Mini App; сессии
+заблокированного сразу перестают действовать) → убрать
 `MINIAPP_ALLOWED_USER_IDS` → Redeploy → smoke (проверить, что заблокированные из списка не входят) → BotFather
 (Main Mini App + Menu Button) → объявление порциями.
 
