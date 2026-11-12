@@ -260,3 +260,35 @@ def test_killed_pull_leftovers_removed_even_when_keychain_fails(env, monkeypatch
     assert pb.cmd_pull(cfg, ["bot"]) == 1
     assert list(work.iterdir()) == [] and list(base.iterdir()) == []
     assert "Keychain" in pings[-1][2]
+
+
+def test_verify_and_extract_require_a_matching_manifest(env, tmp_path):
+    cfg, _, _ = env
+    assert pb.cmd_pull(cfg, ["bot"]) == 0
+    archive = next((cfg.backup_dir / "bot").glob("*.tar.enc"))
+    man = archive.with_name(archive.name.replace(".tar.enc", ".manifest.json"))
+    data = json.loads(man.read_text())
+    name = next(iter(data["files"]))
+    data["files"][name]["tables"]["users"] += 1          # a wrong row count in an otherwise valid manifest
+    man.write_text(json.dumps(data))
+    assert pb.cmd_verify(cfg, archive) == 1
+    assert pb.cmd_extract(cfg, archive, tmp_path / "d1") == 1 and not (tmp_path / "d1").exists()
+    man.unlink()                                        # no manifest at all
+    assert pb.cmd_verify(cfg, archive) == 1
+
+
+def test_interrupted_extract_leaves_no_plaintext(env, tmp_path, monkeypatch):
+    cfg, _, _ = env
+    assert pb.cmd_pull(cfg, ["bot"]) == 0
+    archive = next((cfg.backup_dir / "bot").glob("*.tar.enc"))
+    real = pb.check_db
+
+    def interrupted(path, required):
+        real(path, required)
+        raise SystemExit(143)                           # what the SIGTERM handler raises mid-way
+
+    monkeypatch.setattr(pb, "check_db", interrupted)
+    dest = tmp_path / "d"
+    with pytest.raises(SystemExit):
+        pb.cmd_extract(cfg, archive, dest)
+    assert not dest.exists()

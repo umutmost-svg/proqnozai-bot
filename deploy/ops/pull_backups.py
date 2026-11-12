@@ -392,24 +392,35 @@ def _kind_of(archive: Path) -> str:
     return m.group(1)
 
 
-def _recorded_sha(archive: Path) -> str | None:
+def _manifest(archive: Path) -> dict:
+    """The archive's manifest (required) after checking the ciphertext against it."""
     man = archive.with_name(archive.name.replace(".tar.enc", ".manifest.json"))
-    if not man.exists():
-        return None
+    if not man.is_file():
+        raise BackupError(f"no manifest {man.name} next to the archive")
     data = json.loads(man.read_text())
     if data.get("ciphertext_sha256") != sha256_file(archive):
         raise BackupError("archive does not match its manifest (ciphertext SHA-256)")
-    return data.get("plaintext_tar_sha256")
+    if not data.get("plaintext_tar_sha256") or not isinstance(data.get("files"), dict):
+        raise BackupError("manifest is incomplete")
+    return data
+
+
+def _check_against(manifest: dict, files: dict) -> None:
+    """Every decrypted database must equal its manifest entry: name, size, SHA-256, integrity, row counts."""
+    if files != manifest["files"]:
+        raise BackupError("decrypted databases differ from the manifest (files, hashes or row counts)")
 
 
 def cmd_verify(cfg: Config, archive: Path) -> int:
     try:
         kind = _kind_of(archive)
-        expect = _recorded_sha(archive)
+        man = _manifest(archive)
         sweep_stale(cfg)
         work = _private_dir(cfg.backup_dir / ".work")
         with tempfile.TemporaryDirectory(dir=work, prefix="verify-") as tmp:
-            _, files = decrypt_and_check(cfg, passphrase(cfg), kind, archive, Path(tmp), expect_sha=expect)
+            _, files = decrypt_and_check(cfg, passphrase(cfg), kind, archive, Path(tmp),
+                                         expect_sha=man["plaintext_tar_sha256"])
+        _check_against(man, files)
     except (BackupError, OSError, subprocess.SubprocessError, sqlite3.Error, tarfile.TarError, ValueError) as exc:
         print(f"FAIL: {archive.name}: {exc}")
         return 1
@@ -421,18 +432,21 @@ def cmd_verify(cfg: Config, archive: Path) -> int:
 
 def cmd_extract(cfg: Config, archive: Path, dest: Path) -> int:
     """For drills: verified databases into `dest` (must not exist; created 0700). The caller deletes it."""
-    created = False
+    created = done = False
     try:
         kind = _kind_of(archive)
-        expect = _recorded_sha(archive)
+        man = _manifest(archive)
         dest.mkdir(mode=0o700)
         created = True
-        decrypt_and_check(cfg, passphrase(cfg), kind, archive, dest, expect_sha=expect)
+        _, files = decrypt_and_check(cfg, passphrase(cfg), kind, archive, dest, expect_sha=man["plaintext_tar_sha256"])
+        _check_against(man, files)
+        done = True
     except (BackupError, OSError, subprocess.SubprocessError, sqlite3.Error, tarfile.TarError, ValueError) as exc:
-        if created:
-            shutil.rmtree(dest, ignore_errors=True)   # no half-checked plaintext stays behind
         print(f"FAIL: {archive.name}: {exc}")
         return 1
+    finally:
+        if created and not done:   # any unsuccessful exit, also SIGTERM/SIGHUP/Ctrl-C: no partial plaintext stays
+            shutil.rmtree(dest, ignore_errors=True)
     print(f"extracted to {dest / 'x'}")
     return 0
 
