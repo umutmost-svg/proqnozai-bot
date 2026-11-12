@@ -62,6 +62,8 @@ def chosen(snap: policy.Policy, v: Viewer, placement: str = "quick_pick", now: i
     ({"allowUnknownCountry": True}, {"country": "T1"}, 1),
     ({"condition": {"not": {"segment": {"name": "new", "params": {"days": 7}}}}}, {"segment": None}, None),
     ({"condition": {"not": {"segment": {"name": "new", "params": {"days": 7}}}}}, {"segment": lambda n, p: 1 / 0}, None),
+    ({"condition": {"not": {"segment": {"name": "new", "params": {"days": 7}}}}}, {"segment": lambda n, p: None}, None),
+    ({"condition": {"segment": {"name": "new", "params": {"days": 7}}}}, {"segment": lambda n, p: 1}, None),
     ({"condition": {"not": {"segment": {"name": "new", "params": {"days": 7}}}}}, {}, 1),
     ({"condition": {"geo_in": ["TR"]}}, {}, None),
     ({"condition": {"not": {"geo_in": ["TR"]}}}, {}, 1),

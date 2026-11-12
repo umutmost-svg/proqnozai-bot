@@ -693,7 +693,9 @@ def load_signing_key(path: Path) -> Ed25519PrivateKey:
     """The admin's snapshot signing key: created once (0600, in the admin-only directory), never logged or
     returned by the API; only its public half is shown (to configure MINIAPP_ADS_POLICY_PUBLIC_KEY)."""
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not path.parent.exists():
+            path.parent.mkdir(parents=True, mode=0o700)
+            _sync_dir(path.parent.parent)
         raw = Ed25519PrivateKey.generate().private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
         # Written completely and synced under a temporary name, then installed with link(): the final name
         # never holds a partial key (a crash leaves only a stray temporary file), and of two processes
@@ -711,4 +713,13 @@ def load_signing_key(path: Path) -> Ed25519PrivateKey:
                 pass
         finally:
             os.unlink(tmp)
+        _sync_dir(path.parent)  # the new name survives a power loss (else a restart would mint another key)
     return Ed25519PrivateKey.from_private_bytes(bytes.fromhex(path.read_text().strip()))
+
+
+def _sync_dir(directory: Path) -> None:
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)

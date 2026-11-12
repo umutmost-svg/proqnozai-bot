@@ -188,7 +188,10 @@ def matches(node: dict[str, Any] | None, viewer: Any, audiences: dict[str, froze
         if viewer.segment is None:
             raise SegmentUnavailable()
         try:
-            return bool(viewer.segment(value["name"], value["params"]))
+            result = viewer.segment(value["name"], value["params"])
         except Exception as exc:  # noqa: BLE001 — any failure of the data source means "unknown", never "match"
             raise SegmentUnavailable() from exc
+        if not isinstance(result, bool):  # None or anything else is "unknown", not False
+            raise SegmentUnavailable()
+        return result
     return False  # unreachable for a validated snapshot; an unknown leaf never widens the audience
