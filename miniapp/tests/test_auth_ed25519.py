@@ -109,3 +109,11 @@ def test_a_burned_launch_stays_burned_across_a_mode_switch(tmp_path, first) -> N
     clock.advance(5)
     b = TestClient(create_app(apps[second], clock=clock), base_url="http://127.0.0.1:8000")  # same database
     assert login(b, launch).json() == {"error": "init_data_reused"}
+
+
+def test_production_never_uses_the_telegram_test_server(tmp_path) -> None:
+    base = dict(bot_token="", db_path=tmp_path / "m.db", trusted_origins=frozenset({ORIGIN}),
+                initdata_mode="ed25519", bot_id=TEST_BOT_ID, csrf_secret=CSRF_SECRET, telegram_env="test")
+    assert Settings(**(base | {"environment": "development"})).telegram_env == "test"
+    with pytest.raises(SettingsError, match="not allowed in production"):
+        Settings(**(base | {"environment": "production", "edge_secret": "e" * 40}))

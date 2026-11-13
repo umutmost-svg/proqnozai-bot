@@ -58,12 +58,12 @@ def test_without_a_list_everyone_with_a_valid_launch_signs_in(tmp_path) -> None:
     assert login(c, make_init_data_ed25519({"id": OTHER, "first_name": "X"}, auth_date=int(NOW))).status_code == 200
 
 
-@pytest.mark.parametrize("raw,ok", [("4242", True), ("4242, 777", True), ("", None), ("abc", False), ("0", False),
-                                    ("-5", False)])
+@pytest.mark.parametrize("raw,ok", [("4242", True), ("4242, 777", True), (None, None), ("", False), ("  ", False),
+                                    (" , ", False), ("abc", False), ("0", False), ("-5", False)])
 def test_allowed_ids_from_env(tmp_path, raw, ok) -> None:
     env = {"MINIAPP_INITDATA_MODE": "ed25519", "MINIAPP_BOT_ID": str(TEST_BOT_ID), "MINIAPP_CSRF_SECRET": "c" * 40,
            "MINIAPP_DB_PATH": str(tmp_path / "m.db"), "MINIAPP_TRUSTED_ORIGINS": ORIGIN, "MINIAPP_ENV": "development",
-           "MINIAPP_ALLOWED_USER_IDS": raw}
+           **({} if raw is None else {"MINIAPP_ALLOWED_USER_IDS": raw})}
     if ok is False:
         with pytest.raises(SettingsError):
             Settings.from_env(env)
@@ -135,3 +135,21 @@ def test_blocked_ids_from_env(tmp_path, raw, ok) -> None:
             Settings.from_env(env)
         return
     assert Settings.from_env(env).blocked_user_ids == frozenset(int(x) for x in raw.split(",") if x)
+
+
+@pytest.mark.parametrize("allowed,mode", [(frozenset({OWNER}), "allowlist(1)"), (None, "public")])
+def test_access_mode_is_logged_at_startup(tmp_path, caplog, allowed, mode) -> None:
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="miniapp"):
+        create_app(settings(tmp_path, allowed), clock=FakeClock())
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("startup access_mode="))
+    assert line == f"startup access_mode={mode} blocked=0"
+    assert str(OWNER) not in caplog.text          # counts only, never the ids
+
+
+def test_blocked_ids_may_be_empty(tmp_path) -> None:
+    env = {"MINIAPP_INITDATA_MODE": "ed25519", "MINIAPP_BOT_ID": str(TEST_BOT_ID), "MINIAPP_CSRF_SECRET": "c" * 40,
+           "MINIAPP_DB_PATH": str(tmp_path / "m.db"), "MINIAPP_TRUSTED_ORIGINS": ORIGIN, "MINIAPP_ENV": "development",
+           "MINIAPP_BLOCKED_USER_IDS": ""}
+    assert Settings.from_env(env).blocked_user_ids == frozenset()

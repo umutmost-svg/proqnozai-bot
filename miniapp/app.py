@@ -179,6 +179,8 @@ def create_app(
     store = store or Store(settings.db_path)
     store.init_schema()
     store.purge_expired(int(clock()))
+    logger.info("startup access_mode=%s blocked=%s", "public" if settings.allowed_user_ids is None
+                else f"allowlist({len(settings.allowed_user_ids)})", len(settings.blocked_user_ids))
     csrf = CsrfTokens(settings.csrf_key_material)
 
     def verify_launch(init_data: str):

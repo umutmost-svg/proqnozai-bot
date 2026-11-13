@@ -60,9 +60,14 @@ def is_bot_database_path(path: Path) -> bool:
     return any(name.casefold().startswith("bot.db") for name in names)
 
 
-def _user_ids(raw: str | None, name: str = "MINIAPP_ALLOWED_USER_IDS") -> frozenset[int] | None:
+def _user_ids(raw: str | None, name: str = "MINIAPP_ALLOWED_USER_IDS",
+              allow_empty: bool = False) -> frozenset[int] | None:
     if raw is None:
         return None
+    if not raw.strip() and not allow_empty:
+        # Set but empty (a bad paste in the panel) must not silently mean "everyone": opening the app is an
+        # explicit act — removing the variable.
+        raise SettingsError(f"{name} is set but empty: list user ids, or remove the variable to open the app")
     try:
         return frozenset(int(x) for x in raw.split(",") if x.strip())
     except ValueError:
@@ -173,6 +178,9 @@ class Settings:
             raise SettingsError("initdata_mode must be hmac or ed25519")
         if self.telegram_env not in TELEGRAM_ENVS:
             raise SettingsError("telegram_env must be production or test")
+        if self.environment == "production" and self.telegram_env != "production":
+            # Test-server accounts have their own id space: they must never sign in as production users.
+            raise SettingsError("telegram_env=test is not allowed in production")
         if self.bot_id is not None and not 0 < self.bot_id < 2**53:
             raise SettingsError("bot_id must be a positive integer")
         if self.csrf_secret is not None and (
@@ -350,6 +358,7 @@ class Settings:
             bot_id=integer("MINIAPP_BOT_ID", 0) or None,
             telegram_env=(optional("MINIAPP_TELEGRAM_ENV") or "production").lower(),  # type: ignore[arg-type]
             csrf_secret=optional("MINIAPP_CSRF_SECRET"),
-            allowed_user_ids=_user_ids(optional("MINIAPP_ALLOWED_USER_IDS")),
-            blocked_user_ids=_user_ids(optional("MINIAPP_BLOCKED_USER_IDS"), "MINIAPP_BLOCKED_USER_IDS") or frozenset(),
+            allowed_user_ids=_user_ids(env.get("MINIAPP_ALLOWED_USER_IDS")),
+            blocked_user_ids=_user_ids(optional("MINIAPP_BLOCKED_USER_IDS"), "MINIAPP_BLOCKED_USER_IDS",
+                                       allow_empty=True) or frozenset(),
         )
