@@ -2,6 +2,7 @@
 # Restore DRILL from the encrypted off-server archives, on the owner's Mac with Docker (docs/ops/infra-hardening.md,
 # section 5). Nothing touches the production server.
 #   sh restore-drill-local.sh bot|miniapp [archive.tar.enc]     (default: the newest archive of that kind)
+#   sh restore-drill-local.sh sweep                              (only remove leftovers of killed drills)
 # Steps: decrypt + verify into a private temp dir (pull_backups.py extract: manifest SHA-256, tar layout,
 # integrity_check, expected tables) -> a NEW labelled Docker volume -> the databases copied in by an offline
 # container (--network none) -> integrity_check, expected tables and row counts read back from the volume by
@@ -24,12 +25,7 @@ BACKUP_PY=${BACKUP_PY:-$M/backup.py}
 CHECK_IMAGE=${CHECK_IMAGE:-python:3.13.18-slim@sha256:09a17cad02668ae61ece136b4fd36ac3849e14f670ebedb637ea3e15580525bc}
 
 fail() { echo "FAIL: $1"; exit 1; }
-case $KIND in bot|miniapp) ;; *) echo "usage: sh restore-drill-local.sh bot|miniapp [archive.tar.enc]"; exit 2;; esac
-A=${2:-$(ls -1 "$BACKUP_DIR/$KIND"/"$KIND"-*.tar.enc 2>/dev/null | sort | tail -1)}
-[ -n "$A" ] && [ -f "$A" ] || fail "no $KIND archive found in $BACKUP_DIR/$KIND"
-MAN=$(printf '%s\n' "$A" | sed 's/\.tar\.enc$/.manifest.json/')
-[ -f "$MAN" ] || fail "no manifest next to $A"
-docker info >/dev/null 2>&1 || fail "Docker is not running"
+case $KIND in bot|miniapp|sweep) ;; *) echo "usage: sh restore-drill-local.sh bot|miniapp [archive.tar.enc] | sweep"; exit 2;; esac
 
 # Leftovers of drills killed by SIGKILL / power loss (their trap never ran): every container and volume labelled
 # proqnozai.drill=<token> whose work dir .work/drill.<suffix> is gone or untouched for 6 h (pull_backups.py deletes
@@ -56,6 +52,19 @@ sweep_orphans() {
   done
   return "$bad"
 }
+# `sweep` only removes such leftovers (pull_backups.py runs it on every scheduled pull, so a killed drill's
+# decrypted volume cannot wait for the next monthly drill). Docker not running: nothing to reach, retried next pull.
+if [ "$KIND" = sweep ]; then
+  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || { echo "drill sweep skipped: Docker is not running"; exit 0; }
+  sweep_orphans || fail "leftovers of an earlier drill could not be removed"
+  exit 0
+fi
+A=${2:-$(ls -1 "$BACKUP_DIR/$KIND"/"$KIND"-*.tar.enc 2>/dev/null | sort | tail -1)}
+[ -n "$A" ] && [ -f "$A" ] || fail "no $KIND archive found in $BACKUP_DIR/$KIND"
+MAN=$(printf '%s\n' "$A" | sed 's/\.tar\.enc$/.manifest.json/')
+[ -f "$MAN" ] || fail "no manifest next to $A"
+docker info >/dev/null 2>&1 || fail "Docker is not running"
+
 sweep_orphans || fail "leftovers of an earlier drill could not be removed"
 
 W=""; TOKEN=""; VOL=""

@@ -6,6 +6,9 @@
 #   check    prerequisites only (containers found, helper files present, no leftovers); prints "ready"
 #   miniapp  both Mini App databases (deploy/miniapp/backup.py inside the container, as the app user)
 #   bot      the bot database (deploy/migration/bot_db_backup.py inside the bot container)
+# Root cron only (never through the SSH key): `backup-export.sh sweep` hourly removes leftovers of a killed run, so
+# a plaintext copy cannot outlive a Mac that stopped pulling; a running export holds the lock -> quiet exit 0.
+# host-monitor.sh alerts when an inflight record stays older than 90 minutes (cleanup keeps failing).
 # Each copy is made with the SQLite backup API while the app keeps running, integrity-checked in the container,
 # streamed to stdout as a tar (stdout carries NOTHING else) and REMOVED from the volume again — also on failure.
 # Leftovers of a killed run: BEFORE a helper runs, the names already present in its backup place are saved in
@@ -30,10 +33,11 @@ die() { log "FAIL: $*"; exit 1; }
 trap '' PIPE                     # a dropped connection must still run the cleanup below, not kill the shell
 trap 'exit 130' INT TERM HUP     # dash runs no EXIT trap on a signal: turn it into an exit
 
-case $what in check|miniapp|bot) ;; *) die "unknown request (expected: check | miniapp | bot)" ;; esac
+case $what in check|miniapp|bot) ;; sweep) [ -z "${SSH_ORIGINAL_COMMAND:-}" ] || die "sweep is local only" ;;
+  *) die "unknown request (expected: check | miniapp | bot)" ;; esac
 mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR" || die "state dir"
 exec 9>"$LOCK" || die "lock file"
-flock -n 9 || die "another export is running"
+if ! flock -n 9; then [ "$what" = sweep ] && exit 0; die "another export is running"; fi
 
 # Exactly one running container (healthy, for the Mini App). Two bot tasks during a start-first update: refuse.
 one() {
@@ -90,6 +94,7 @@ settle() {
 }
 
 for k in miniapp bot; do settle "$k" || die "leftover $k copies could not be removed (see above)"; done
+[ "$what" = sweep ] && exit 0
 
 KIND=""
 cleanup() {

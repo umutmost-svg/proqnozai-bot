@@ -5,7 +5,9 @@
 #   host            /root/.hc-host            disk use of / <= DISK_MAX_PCT, MemAvailable >= MEM_MIN_MB,
 #                                             cloudflared running with >= 1 edge connection, every Swarm service n/n
 #                                             and every EXPECT_SERVICES present, and — once the unit file of
-#                                             proqnozai-docker-user.service is installed — unit enabled + :3000 block
+#                                             proqnozai-docker-user.service is installed — unit enabled + :3000 block,
+#                                             and no backup-export inflight record older than 90 min (a plaintext
+#                                             copy the hourly sweep could not remove)
 #   miniapp-health  /root/.hc-miniapp-health  GET /api/health through Traefik on loopback (Host APP_HOST) is ok
 # All well -> ping (with a short summary as body); otherwise -> /fail with the reasons + syslog tag proqnozai-monitor.
 # A dead server, cron or network sends nothing: healthchecks alerts after the grace time.
@@ -20,6 +22,7 @@ OPS=${OPS_DIR:-/opt/proqnozai-ops}
 HC_HOST=${HC_HOST_FILE:-/root/.hc-host}
 HC_APP=${HC_APP_FILE:-/root/.hc-miniapp-health}
 UNIT=${UNIT_FILE:-/etc/systemd/system/proqnozai-docker-user.service}
+STATE_DIR=${STATE_DIR:-/var/lib/proqnozai-ops}
 # Swarm services that must exist (exact name, or the name followed by Dokploy's "-<suffix>").
 EXPECT_SERVICES=${EXPECT_SERVICES:-dokploy dokploy-postgres proqnozai-proqnozaibot proqnozai-httpworkerrailwayinternal8888 proqnozai-miniapp}
 
@@ -71,6 +74,8 @@ if [ -f "$UNIT" ]; then
   systemctl is-enabled --quiet proqnozai-docker-user.service 2>/dev/null || add "proqnozai-docker-user.service not enabled"
   sh "$OPS/docker-user-3000.sh" status >/dev/null 2>&1 || add ":3000 DOCKER-USER block missing"
 fi
+stuck=$(find "$STATE_DIR" -maxdepth 1 -name 'inflight-*' ! -name '*.tmp' -mmin +90 2>/dev/null | sed 's#.*/inflight-##' | tr '\n' ' ')
+[ -z "$stuck" ] || add "backup copies not cleaned: ${stuck% }"
 report host "$HC_HOST" "$r" "disk=${disk}% mem=${mem}MB cf_conns=${conns:-0}"
 
 # --- miniapp-health ---

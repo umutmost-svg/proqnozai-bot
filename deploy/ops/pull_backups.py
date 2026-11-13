@@ -55,6 +55,7 @@ CIPHER = ["-aes-256-cbc", "-pbkdf2", "-iter", "300000", "-md", "sha256"]
 CIPHER_DESC = "openssl enc aes-256-cbc pbkdf2 iter=300000 md=sha256 salt"
 MIRROR_MARKER = ".proqnozai-backup-mirror"
 KINDS = ("bot", "miniapp")
+DRILL_SCRIPT = Path(__file__).resolve().parent / "restore-drill-local.sh"
 DIR_RE = re.compile(r"\d{8}T\d{6}Z(-\d+)?")   # backup.py's directory name inside the Mini App volume
 ARCHIVE_RE = re.compile(r"(bot|miniapp)-(\d{8}T\d{6}Z)\.tar\.enc")
 # Expected tar layout per kind and the tables each database must have (a restored file without them is not ours).
@@ -220,7 +221,7 @@ def pull_one(cfg: Config, kind: str, pw: bytes, now: datetime | None = None) -> 
     if final.exists() or manifest.exists():
         raise BackupError(f"{final.name} already exists")
     partial = base / f".{final.name}.partial"
-    ssh = enc = None
+    ssh = enc = watchdog = None
     try:
         # stderr of both children goes to unnamed temp files: a chatty child can never block on a full pipe.
         ssh_log, enc_log = tempfile.TemporaryFile(dir=work), tempfile.TemporaryFile(dir=work)
@@ -233,14 +234,23 @@ def pull_one(cfg: Config, kind: str, pw: bytes, now: datetime | None = None) -> 
         watchdog = threading.Timer(int(cfg["SSH_TIMEOUT"]), ssh.kill)   # a hung server end never hangs launchd
         watchdog.start()
         enc = _openssl(cfg, pw, ["-salt", "-out", str(partial)], stdin=subprocess.PIPE, stderr=enc_log)
-        h, size = hashlib.sha256(), 0
+        h, size, broken = hashlib.sha256(), 0, False
         try:
             for chunk in iter(lambda: ssh.stdout.read(CHUNK), b""):
                 h.update(chunk)
                 size += len(chunk)
-                enc.stdin.write(chunk)
+                try:
+                    enc.stdin.write(chunk)
+                except BrokenPipeError:      # openssl died: reported below as an encrypt failure
+                    broken = True
+                    break
         finally:
-            enc.stdin.close()
+            try:
+                enc.stdin.close()
+            except BrokenPipeError:
+                broken = True
+            if broken and ssh.poll() is None:
+                ssh.kill()                   # nobody reads the stream any more: never wait for the watchdog
             ssh_rc = ssh.wait()
             watchdog.cancel()
         enc_rc = enc.wait(timeout=120)
@@ -270,6 +280,8 @@ def pull_one(cfg: Config, kind: str, pw: bytes, now: datetime | None = None) -> 
         os.rename(partial, final)
         os.rename(man_tmp, manifest)
     finally:
+        if watchdog is not None:
+            watchdog.cancel()
         for proc in (ssh, enc):
             if proc is not None and proc.poll() is None:
                 proc.kill()
@@ -367,9 +379,29 @@ def sweep_stale(cfg: Config) -> None:
             print(f"warning: cannot remove stale {p.name}: {exc}", file=sys.stderr)
 
 
+def sweep_drills(cfg: Config) -> str:
+    """Removes Docker leftovers (decrypted volumes, containers) of killed restore drills through
+    `restore-drill-local.sh sweep` next to this file. Returns "" or the reason it failed."""
+    script = DRILL_SCRIPT
+    if not script.is_file():
+        return ""                                   # drills are not installed on this Mac
+    try:
+        r = subprocess.run(["/bin/sh", str(script), "sweep"], env={**os.environ, "BACKUP_DIR": str(cfg.backup_dir)},
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"drill sweep: {type(exc).__name__}"
+    lines = (r.stdout + r.stderr).strip().splitlines()
+    if r.returncode != 0:
+        return f"drill leftovers not removed: {(lines[-1] if lines else f'exit {r.returncode}')[:160]}"
+    for line in lines:
+        print(f"drill sweep: {line}")
+    return ""
+
+
 def cmd_pull(cfg: Config, kinds: list[str]) -> int:
     rc = 0
     sweep_stale(cfg)
+    drill_err = sweep_drills(cfg)               # reported through every kind's check: it holds plaintext
     for kind in kinds:
         ts = datetime.now(UTC).strftime("%FT%TZ")
         try:
@@ -386,6 +418,11 @@ def cmd_pull(cfg: Config, kinds: list[str]) -> int:
             rc = 1
             continue
         print(f"{ts} {kind} OK: {summary}")
+        if drill_err:
+            print(f"{ts} {kind} FAIL: {drill_err}")
+            hc_ping(cfg, kind, False, f"{summary}; {drill_err}")
+            rc = 1
+            continue
         hc_ping(cfg, kind, True, summary)
     return rc
 

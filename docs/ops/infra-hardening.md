@@ -63,8 +63,9 @@ systemctl daemon-reload && systemctl enable --now proqnozai-docker-user.service 
 → `RESULT: isolated`; `https://admin.proqnozai.com` → Access → Dokploy работает; счётчик
 `iptables -L DOCKER-USER -v -n` растёт при внешних попытках; бот/дашборд/`/r/` — как до (их порты не задеты).
 Откат (мгновенный): `systemctl disable --now proqnozai-docker-user.service; rm /etc/systemd/system/proqnozai-docker-user.service; systemctl daemon-reload; sh /opt/proqnozai-ops/docker-user-3000.sh remove`.
-Пока файл юнита установлен, `host-monitor.sh` (раздел 4) каждые 5 минут требует: юнит включён **и** правило на
-месте — иначе тревога `host`. Удаление файла юнита (только при откате) снимает это требование.
+Пока файл юнита установлен, `host-monitor.sh` (раздел 4) каждые 5 минут требует: юнит включён **и** DROP-правила
+стоят **первыми** в `DOCKER-USER` (правило, вставленное выше, например ACCEPT, их обошло бы) — иначе тревога `host`.
+Повторный `apply` возвращает их наверх без незащищённого момента (сначала новые копии сверху, потом удаление нижних). Удаление файла юнита (только при откате) снимает это требование.
 
 **1b. [владелец, отдельное разрешение] DigitalOcean Cloud Firewall** `proqnozai-prod-fw` — таблица правил,
 порядок, гейт «ни один уже применённый firewall не разрешает 3000» и проверки — `dokploy-admin-access.md`
@@ -111,7 +112,7 @@ Dokploy** — ручной прогон `sh /opt/proqnozai-ops/dokploy-route-loc
 launchd на Mac (05:40 и 17:40 местного) ── ssh, отдельный ключ с forced command ──> backup-export.sh (root)
    │                                                        ├─ miniapp: backup.py в контейнере (SQLite backup API, integrity_check)
    │                                                        └─ bot:     bot_db_backup.py в контейнере бота (онлайн, без остановки)
-   │   <── tar-поток по SSH; копия на сервере сразу удаляется (и при сбое; «осиротевшая» — в следующем запуске)
+   │   <── tar-поток по SSH; копия на сервере сразу удаляется (и при сбое; «осиротевшая» — ежечасным `sweep` из cron)
    ├─ openssl enc AES-256-CBC + PBKDF2 (300 000) «на лету», пароль из Keychain по pipe — открытый текст не пишется на диск
    ├─ проверка архива: расшифровка во временный 0700-каталог → SHA-256 потока, состав tar, integrity_check,
    │  обязательные таблицы (бот: users; Mini App: users, sessions / ai_forecasts) → каталог удаляется
@@ -213,7 +214,8 @@ URL пинга каждой проверки (`https://hc-ping.com/<uuid>`) кл
 `host-monitor.sh` (`host`): диск `/` ≤ 85 %, `MemAvailable` ≥ 400 МБ (swap нет — это порог до OOM), контейнер
 `cloudflared` запущен и `/ready` показывает ≥ 1 соединение, все сервисы Swarm `n/n` и ни один из ожидаемых
 (`dokploy`, `dokploy-postgres`, бот, дашборд, Mini App — `EXPECT_SERVICES`) не пропал, а после 1a — юнит включён
-и правило `DOCKER-USER` на месте. `miniapp-health`: `GET /api/health` через Traefik на loopback (`Host: app.proqnozai.com`).
+и DROP-правила первые в `DOCKER-USER`; нет записи `inflight-*` в `/var/lib/proqnozai-ops` старше 90 мин (копию
+прерванной выгрузки не смог убрать ежечасный `backup-export.sh sweep` из того же cron-файла). `miniapp-health`: `GET /api/health` через Traefik на loopback (`Host: app.proqnozai.com`).
 При сбое — `/fail` с причинами в теле (видны в healthchecks) и запись в syslog (`proqnozai-monitor`); пороги —
 переменные `DISK_MAX_PCT`, `MEM_MIN_MB`. Сервер/сеть/cron умерли → пингов нет → тревога по grace.
 Снаружи через Cloudflare (DNS, Access, туннель целиком) это не видит — по желанию владельца бесплатный внешний
@@ -243,8 +245,9 @@ MINIAPP_IMAGE=proqnozai-miniapp:<коммит в проде> sh ~/proqnozai-ops/
 Расшифрованные данные живут только во временных каталогах под `~/.proqnozai-backups/auto/.work/`; при
 SIGTERM/SIGHUP они удаляются сразу, после SIGKILL/сбоя питания — следующим `pull`/`verify` (старше 6 ч; рабочий
 каталог выгрузки своего вида — в начале каждой выгрузки, ещё до обращения к Keychain). Тома и контейнеры учений,
-оставшиеся после SIGKILL (метка `proqnozai.drill`, рабочего каталога нет или ему > 6 ч), удаляет следующий запуск
-учений.
+оставшиеся после SIGKILL (метка `proqnozai.drill`, рабочего каталога нет или ему > 6 ч), удаляет каждая плановая
+выгрузка (`restore-drill-local.sh sweep`, 2×/сутки; не удалось — проверки `bot-backup` и `miniapp-backup` уходят в
+`/fail` с причиной; Docker не запущен — пропуск до следующей выгрузки) и следующий запуск учений.
 
 Что делает: свежий архив → расшифровка и проверки (`pull_backups.py extract`) во временный 0700-каталог → **новый**
 том Docker с меткой этого запуска → копирование баз в него офлайн-контейнером → `integrity_check`, таблицы и

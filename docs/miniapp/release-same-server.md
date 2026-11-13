@@ -104,7 +104,7 @@ https://admin.proqnozai.com ──> Cloudflare Access ──> тот же тун
    `{"type":"default"}`. [владелец] меню-кнопка только для своего чата (`setChatMenuButton` с `chat_id` владельца — выполняю я из
    контейнера бота, токен не покидает контейнер) → вход на iOS, Android, Desktop, macOS, Web K, Web A; [я]
    проверяю по логам `auth.session … created=True` и отсутствие `auth.rejected` по подписи.
-8. [я] бэкапы Mini App: скрипты в `/opt/sporbot/` (`backup.py` 0644, `backup-job.sh` 0700, `notify-hc.sh` 0700, `restore-drill.sh` 0700 — `install -m` с этими правами; сверка
+8. **Заменён** `docs/ops/infra-hardening.md` §3 (см. «Внешние бэкапы» ниже) — шаг ниже **не выполнять**, оставлен как история. [я] бэкапы Mini App: скрипты в `/opt/sporbot/` (`backup.py` 0644, `backup-job.sh` 0700, `notify-hc.sh` 0700, `restore-drill.sh` 0700 — `install -m` с этими правами; сверка
    `sha256sum` с репозиторием), `backup-job.sh` с **`SVC=proqnozai-miniapp`**, `OFFSITE_KIND`/`OFFSITE` (приёмник —
    блокер, см. ниже), `NOTIFY=/opt/sporbot/notify-hc.sh` (ниже); первый запуск,
    тест уведомления (`OFFSITE_KIND=test` → уведомление пришло), пробное восстановление из внешней копии
@@ -117,7 +117,7 @@ https://admin.proqnozai.com ──> Cloudflare Access ──> тот же тун
    «miniapp-backup» с причиной сбоя в теле; проверено локально в той форме, как его вызывает `backup-job.sh` —
    `$NOTIFY "<причина>"`). В приёмнике заранее создать
    файл-метку `.sporbot-offsite` (без неё задание ничего не пишет и не чистит — защита чужих данных).
-   `17 3 * * * L=/var/log/proqnozai-miniapp-backup.log; set -a; . /opt/sporbot/backup.env; set +a; /opt/sporbot/backup-job.sh >> $L 2>&1 && curl -fsS -m 10 -o /dev/null "$(cat /root/.hc-miniapp-backup)" && echo "$(date -u +\%FT\%TZ) PING OK" >> $L`
+   `17 3 * * * L=/var/log/proqnozai-miniapp-backup.log; set -a; . /opt/sporbot/backup.env; set +a; /opt/sporbot/backup-job.sh >> $L 2>&1 && printf 'url = "\%s"\n' "$(cat /root/.hc-miniapp-backup)" | curl -fsS -m 10 -o /dev/null -K - && echo "$(date -u +\%FT\%TZ) PING OK" >> $L`
    Пропущенный или упавший запуск → пинга нет → healthchecks уведомляет по истечении grace; сбой внутри задания
    ещё и сразу шлёт `NOTIFY` (`…/fail`). **Проверка перед открытием:** после первого ночного запуска в логе есть
    `OK:` и `PING OK`, во внешнем приёмнике — новая копия, проверка «miniapp-backup» в healthchecks — up. Мониторинг: внешний uptime на `https://app.proqnozai.com/api/health`.

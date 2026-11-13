@@ -71,6 +71,7 @@ def env(tmp_path, monkeypatch):
     fake_ssh.chmod(0o700)
     pings: list[tuple[str, bool, str]] = []
     monkeypatch.setattr(pb, "passphrase", lambda cfg: b"x" * 32)
+    monkeypatch.setattr(pb, "DRILL_SCRIPT", tmp_path / "no-drill.sh")   # never the real Docker of this machine
     monkeypatch.setattr(pb, "hc_ping", lambda cfg, kind, ok, body: pings.append((kind, ok, body)))
     cfg = pb.load_config({
         "PROQNOZAI_BACKUP_CONFIG": str(tmp_path / "none.env"), "SSH_BIN": str(fake_ssh), "OPENSSL": OPENSSL,
@@ -332,3 +333,41 @@ def test_verify_without_manifest_still_sweeps_stale_plaintext(env, tmp_path):
     bogus.write_bytes(b"x")
     assert pb.cmd_verify(cfg, bogus) == 1
     assert not old.exists()
+
+
+def test_drill_leftovers_fail_every_kind_check(env, monkeypatch, tmp_path):
+    cfg, _, pings = env
+    script = tmp_path / "drill.sh"
+    script.write_text('[ "$1" = sweep ] && [ -n "$BACKUP_DIR" ] || exit 9\necho "cannot remove orphan drill volume v1"\nexit 1\n')
+    monkeypatch.setattr(pb, "DRILL_SCRIPT", script)
+    assert pb.cmd_pull(cfg, ["bot", "miniapp"]) == 1
+    assert [(k, ok) for k, ok, _ in pings] == [("bot", False), ("miniapp", False)]
+    assert all("cannot remove orphan drill volume v1" in body for _, _, body in pings)
+    assert len(list((cfg.backup_dir / "bot").glob("*.tar.enc"))) == 1     # the backup itself still succeeded
+
+
+def test_successful_drill_sweep_keeps_checks_green(env, monkeypatch, tmp_path):
+    cfg, _, pings = env
+    script = tmp_path / "drill.sh"
+    script.write_text('echo "removed orphan drill volume v1"\n')
+    monkeypatch.setattr(pb, "DRILL_SCRIPT", script)
+    assert pb.cmd_pull(cfg, ["bot"]) == 0 and pings[-1][1] is True
+
+
+def test_encrypt_failure_mid_stream_does_not_wait_for_the_watchdog(env, monkeypatch):
+    cfg, fx, pings = env
+    big = fx / "bot.tar"
+    big.write_bytes(big.read_bytes() + os.urandom(8 << 20))          # more than a pipe buffer
+    real = pb._openssl
+
+    def dying(cfg_, pw, args, **kw):
+        if "-salt" in args:
+            args = ["-salt", "-out", "/nonexistent-dir/x"]               # openssl fails at once
+        return real(cfg_, pw, args, **kw)
+
+    monkeypatch.setattr(pb, "_openssl", dying)
+    cfg.values["SSH_TIMEOUT"] = "60"
+    t0 = pb.time.time()
+    assert pb.cmd_pull(cfg, ["bot"]) == 1
+    assert pb.time.time() - t0 < 30
+    assert "encrypt failed" in pings[-1][2]
