@@ -65,11 +65,18 @@ function CampaignsPage() {
   const list = useLoad<{ items: Campaign[]; partners: Partner[]; publication: Publication }>('/api/admin/ads/campaigns');
   const [dialog, setDialog] = useState<null | 'publish' | 'stop'>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [writeFailed, setWriteFailed] = useState<number | null>(null);
   const publish = async (input: { reason: string; code: string; idempotencyKey: string }, pauseAll: boolean) => {
     const r = await adsApi.publish({ ...input, pauseAll });
     setDialog(null);
     const skipped = r.after.skipped.length ? `, пропущено: ${r.after.skipped.map((s) => `#${s.id} (${s.code})`).join(', ')}` : '';
-    setToast(`Опубликована версия ${r.after.version}: кампаний ${r.after.campaigns.length}${skipped}`);
+    if (r.fileWritten) {
+      setWriteFailed(null);
+      setToast(`Опубликована версия ${r.after.version}: кампаний ${r.after.campaigns.length}${skipped}`);
+    } else {
+      // Committed in admin.db, but the snapshot file was not written: the Mini App still serves the previous one.
+      setWriteFailed(r.after.version);
+    }
     list.reload();
   };
   const pub = list.data?.publication;
@@ -81,9 +88,19 @@ function CampaignsPage() {
         <button type="button" className="btn danger" onClick={() => setDialog('stop')}>Остановить всё</button>
       </>
     )}>
+      {writeFailed !== null && (
+        <div className="banner warn" role="alert" data-testid="ads-write-failed">
+          <strong>Версия {writeFailed} сохранена, но файл снимка не записан — Mini App всё ещё показывает прежнюю рекламу.</strong>{' '}
+          Админка повторит запись при следующем открытии этой страницы; проверьте строку «на диске» ниже.
+          <button type="button" className="btn link" onClick={list.reload}>Проверить снова</button>
+        </div>
+      )}
       {pub && (
-        <div className={`banner ${pub.unpublishedChanges ? 'warn' : ''}`} role="status" data-testid="ads-publication">
+        <div className={`banner ${pub.unpublishedChanges || (pub.latest && pub.fileVersion !== pub.latest.version) ? 'warn' : ''}`} role="status" data-testid="ads-publication">
           {pub.latest ? `Опубликована версия ${pub.latest.version} (${utc(pub.latest.publishedAt)}), кампаний: ${pub.latest.campaigns}. ` : 'Ещё ничего не опубликовано. '}
+          {pub.latest && (pub.fileVersion === pub.latest.version
+            ? 'Файл снимка на диске совпадает. '
+            : <strong>На диске версия {pub.fileVersion ?? '—'}, не {pub.latest.version}: запись ещё не удалась. </strong>)}
           {pub.appliedVersion !== null ? `Mini App применил версию ${pub.appliedVersion}. ` : 'Mini App снимок ещё не применял. '}
           {pub.unpublishedChanges && <strong>Есть неопубликованные изменения — пользователи их не видят до публикации.</strong>}
         </div>

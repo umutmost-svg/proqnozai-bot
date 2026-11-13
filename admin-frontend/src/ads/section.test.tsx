@@ -22,7 +22,7 @@ function SignedIn({ children }: { children: ReactNode }) {
   return useAuth().state.status === 'signed-in' ? <>{children}</> : null;
 }
 
-function mount(role: 'owner' | 'admin' | 'analyst', path: string) {
+function mount(role: 'owner' | 'admin' | 'analyst', path: string, opts: { written?: boolean } = {}) {
   const calls: Call[] = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
     const method = init.method ?? 'GET';
@@ -30,7 +30,7 @@ function mount(role: 'owner' | 'admin' | 'analyst', path: string) {
     let data: unknown = {};
     if (url === '/api/admin/auth/me') data = { admin: { id: 1, email: 'o@x.test', role }, csrf: 'c', pilot: { dataset: 'real', demoTelemetry: false } };
     else if (url === '/api/admin/ads/campaigns') data = { items: [CAMPAIGN], partners: [], publication: { latest: null, fileVersion: null, appliedVersion: null, unpublishedChanges: true, publicKey: 'k' } };
-    else if (url === '/api/admin/ads/publish') data = { after: { version: 9, campaigns: [7], skipped: [] }, fileWritten: true };
+    else if (url === '/api/admin/ads/publish') data = { after: { version: 9, campaigns: [7], skipped: [] }, fileWritten: opts.written ?? true };
     else if (url.startsWith('/api/admin/ads/analytics')) data = REPORT;
     return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }));
@@ -85,5 +85,17 @@ describe('ads section mounted at /ads/*', () => {
     await screen.findByRole('option', { name: '#7 Осень' });
     await userEvent.selectOptions(await screen.findByLabelText('Кампания'), '7');
     expect(await screen.findByLabelText(/ID MB из отчёта/)).toBeInTheDocument();
+  });
+
+  it('a stop committed without its snapshot file says the Mini App still shows the old ads', async () => {
+    mount('owner', '/ads', { written: false });
+    await screen.findByTestId('ads-campaigns');
+    await userEvent.click(screen.getByRole('button', { name: 'Остановить всё' }));
+    const dialog = screen.getByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText('Причина'), 'стоп');
+    await userEvent.type(within(dialog).getByLabelText('Код двухфакторной аутентификации'), '123456');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Остановить' }));
+    expect(await screen.findByTestId('ads-write-failed')).toHaveTextContent('файл снимка не записан');
+    expect(screen.queryByText(/^Опубликована версия 9/)).toBeNull();
   });
 });
