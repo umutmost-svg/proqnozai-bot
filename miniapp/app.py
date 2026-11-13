@@ -33,7 +33,7 @@ from miniapp.quick.service import QuickService
 from miniapp.sports.client import UpstreamError
 from miniapp.sports.routes import register_sports_routes
 from miniapp.sports.service import SportsService, build_service
-from miniapp.store import SUPPORTED_LANGS, BurnWindow, InitDataConsumedError, Session, Store, User
+from miniapp.store import SUPPORTED_LANGS, BurnWindow, InitDataConsumedError, Session, Store, User, referral_code
 from miniapp.telegram_auth import TELEGRAM_PUBLIC_KEYS, InitDataError, ed25519_shadow_status, validate_init_data
 
 logger = logging.getLogger("miniapp")
@@ -437,7 +437,8 @@ def create_app(
             logger.warning("auth.rate_limited user=%s", verified.user.id)
             raise ApiError(429, "rate_limited", {"Retry-After": str(int(retry_after + 0.999))})
 
-        user = await run_in_threadpool(store.upsert_user, verified.user, ts)
+        referral = referral_code(verified.start_param) if settings.referrals_enabled else None
+        user = await run_in_threadpool(store.upsert_user, verified.user, ts, referral)
 
         existing = await current_session(request)
         if existing is not None and existing[1].user_id == user.telegram_user_id:
@@ -671,6 +672,7 @@ def create_app(
             return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503)
         if result is None:
             raise ApiError(404, "not_found")
+        await run_in_threadpool(note_activity, active[1].user_id, "ai_opened")  # telemetry only (off: no-op)
         return JSONResponse(result.to_json())
 
     @app.post("/api/ai/analysis")
@@ -697,6 +699,7 @@ def create_app(
             return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503)
         if result is None:
             raise ApiError(404, "not_found")
+        await run_in_threadpool(note_activity, session.user_id, "ai_created")  # delivered analysis (off: no-op)
         return JSONResponse(result.to_json())
 
     static = StaticFiles(directory=settings.static_dir, html=True) if settings.static_dir is not None else None

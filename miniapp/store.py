@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS consumed_init_data (
     init_hash   TEXT PRIMARY KEY,
     expires_at  INTEGER NOT NULL
 );
+-- Referral code of the user's FIRST Mini App start (`startapp=ref_<code>`, MINIAPP_REFERRALS_ENABLED); written
+-- once in the same transaction that creates the user, never updated. No foreign key: a restore replaces users.
+CREATE TABLE IF NOT EXISTS user_attribution (
+    user_id    INTEGER PRIMARY KEY,
+    code       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
 -- Paid AI calls per UTC day (per user and in total): survives restarts.
 CREATE TABLE IF NOT EXISTS ai_usage (
     day      TEXT NOT NULL,
@@ -62,7 +69,14 @@ CREATE TABLE IF NOT EXISTS ai_usage (
 _USER_COLUMNS = ("telegram_user_id, first_name, last_name, username, language_code, lang, lang_source, "
                  "created_at, last_login_at")
 _SESSION_COLUMNS = "token_hash, user_id, created_at, expires_at, revoked_at, init_hash"
-_OWN_TABLES = frozenset({"users", "sessions", "consumed_init_data", "ai_usage", "sqlite_sequence"})
+_OWN_TABLES = frozenset({"users", "sessions", "consumed_init_data", "ai_usage", "user_attribution", "sqlite_sequence"})
+_REFERRAL = re.compile(r"^ref_([a-z0-9]{3,24})$")
+
+
+def referral_code(start_param: str | None) -> str | None:
+    """`ref_<code>` (lowercase letters and digits, 3..24) -> code; anything else -> None."""
+    match = _REFERRAL.match(start_param or "")
+    return match.group(1) if match else None
 
 
 class ForeignDatabaseError(RuntimeError):
@@ -163,13 +177,16 @@ class Store:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
 
-    def upsert_user(self, tg: TelegramUser, now: int) -> User:
+    def upsert_user(self, tg: TelegramUser, now: int, referral: str | None = None) -> User:
         """Atomic insert-or-update keyed by the verified Telegram id.
 
         Profile fields follow Telegram on every login; `lang` follows Telegram's
-        language_code only until the user picks a language explicitly.
+        language_code only until the user picks a language explicitly. `referral` (a code
+        from referral_code) is kept only when this call creates the user.
         """
         with self._write() as conn:
+            existed = referral is not None and conn.execute(
+                "SELECT 1 FROM users WHERE telegram_user_id = ?", (tg.id,)).fetchone() is not None
             conn.execute(
                 """
                 INSERT INTO users (telegram_user_id, first_name, last_name, username, language_code,
@@ -186,6 +203,9 @@ class Store:
                 (tg.id, tg.first_name, tg.last_name, tg.username, tg.language_code,
                  lang_from_telegram(tg.language_code), now, now),
             )
+            if referral is not None and not existed:
+                conn.execute("INSERT OR IGNORE INTO user_attribution (user_id, code, created_at) VALUES (?, ?, ?)",
+                             (tg.id, referral, now))
         user = self.get_user(tg.id)
         assert user is not None
         return user
@@ -417,6 +437,15 @@ class Store:
                 "LIMIT ? OFFSET ?", (now, *args, limit, offset)).fetchall()
         return total, [_user_row(r) for r in rows]
 
+    def attributions(self) -> dict[int, dict]:
+        """Referral codes of first Mini App starts (admin panel; read only). A database the Mini App has not opened
+        since this table was added has none: empty, not an error."""
+        with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_attribution'").fetchone() is None:
+                return {}
+            return {int(u): {"code": c, "at": int(a)} for u, c, a in conn.execute(
+                "SELECT user_id, code, created_at FROM user_attribution")}
+
     def users_by_ids(self, user_ids: list[int], now: int) -> list[dict]:
         """Rows like list_users for the given ids (batched IN queries; unknown ids are skipped)."""
         out: list[dict] = []
@@ -494,6 +523,7 @@ class Store:
         if not {"users", "sessions", "consumed_init_data"} <= tables or tables - _OWN_TABLES:
             raise ForeignDatabaseError("the restore source is not a Mini App database")
         has_ai_usage = "ai_usage" in tables  # backups made before M3.2 have no AI ledger
+        has_attribution = "user_attribution" in tables
         with self._connect() as conn:
             conn.execute("ATTACH DATABASE ? AS src", (source_uri,))
             try:
@@ -512,6 +542,10 @@ class Store:
                         "SELECT init_hash, expires_at FROM src.consumed_init_data WHERE true "
                         "ON CONFLICT(init_hash) DO UPDATE SET expires_at = MAX(expires_at, excluded.expires_at)"
                     )
+                    conn.execute("DELETE FROM user_attribution")
+                    if has_attribution:
+                        conn.execute("INSERT INTO user_attribution (user_id, code, created_at) "
+                                     "SELECT user_id, code, created_at FROM src.user_attribution")
                     if has_ai_usage:
                         # Merged like the burn ledger: a restore never gives back spent AI calls.
                         conn.execute(

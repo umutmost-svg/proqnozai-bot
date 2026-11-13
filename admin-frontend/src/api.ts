@@ -88,6 +88,10 @@ const MESSAGES: Record<string, string> = {
   invalid_message: 'Введите текст сообщения.',
   invalid_note: 'Введите текст заметки.',
   invalid_tag: 'Тег — от 1 до 32 символов.',
+  invalid_name: 'Введите название (до 80 символов).',
+  invalid_channel: 'Выберите канал.',
+  invalid_code_format: 'Код: латиница в нижнем регистре и цифры, 3–24 символа.',
+  code_taken: 'Такой код уже используется.',
   internal: 'Внутренняя ошибка сервера.',
 };
 
@@ -173,10 +177,20 @@ export type Rules = Partial<{
   registered_within_days: number; active_within_days: number; inactive_for_days: number; lang_in: string[];
   tag_has: string; tag_not: string; has_active_session: boolean; blocked: boolean;
 }>;
+export interface Source { channel: 'bot' | 'miniapp'; code: string; at: number; linkId: number | null; name: string | null }
+export interface ReferralStats { starts: number; botStarts: number; miniappStarts: number; inMiniApp: number; active7d: number; converted: number | null }
+export interface ReferralLink {
+  id: number; code: string; name: string; channel: 'bot' | 'miniapp'; archivedAt: number | null; createdAt: number;
+  by: string | null; param: string; url: string | null; stats: ReferralStats;
+}
+export interface ReferralsPage {
+  items: ReferralLink[]; funnel: { starts: number; inMiniApp: number; active7d: number; converted: number | null };
+  unknownCodes: { code: string; stats: ReferralStats }[]; telemetry: boolean; names: { bot: string | null; miniapp: string | null };
+}
 export interface Geo { country: string | null; source: 'edge' | 'lang' | null }
 export interface CrmUserRow extends UserRow {
   tags: string[]; credits: { balance: number; unlimitedUntil: number | null }; blocked: boolean; mbId: string | null;
-  lastSeenAt?: number | null; forecasts?: number | null; activeDays30?: number | null; geo?: Geo;
+  lastSeenAt?: number | null; forecasts?: number | null; activeDays30?: number | null; geo?: Geo; source?: Source | null;
 }
 export interface Segment { id: number; name: string; rules: Rules; updatedAt: number; size?: number }
 export interface TagCount { tag: string; users: number }
@@ -200,7 +214,7 @@ export interface CrmProfile extends UserProfile {
   blocked: { reason: string; at: number } | null;
   mbId: string | null;
   timeline: TimelineItem[];
-  lastSeenAt?: number | null; forecasts?: number | null; geo?: Geo;
+  lastSeenAt?: number | null; forecasts?: number | null; geo?: Geo; source?: Source | null;
   activity?: {
     collected: boolean;
     summary: { lastSeenAt: number | null; forecasts: number; aiCreated: number; aiOpened: number; requests: number;

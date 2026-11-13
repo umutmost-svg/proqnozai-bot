@@ -115,7 +115,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         credits = crm.credits_of(ids, ctx.now())
         blocked = crm.blocked()
         mb = crm.mb_ids(ids)
+        sources = ctx.sources(ids)
         for r in rows:
+            r["source"] = sources.get(r["id"])
             r["mbId"] = mb.get(r["id"])
             r["tags"] = tags.get(r["id"], [])
             r["credits"] = credits.get(r["id"], {"balance": 0, "unlimitedUntil": None})
@@ -176,6 +178,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         rows = audience(rules, query)
         if query:  # the search also finds an MB id
             rows += mb_owners(query, rules, {r["id"] for r in rows})
+        if ref := q.get("ref", "")[:24]:  # users acquired through one referral code (the link's drill-down)
+            src = ctx.sources([r["id"] for r in rows])
+            rows = [r for r in rows if (src.get(r["id"]) or {}).get("code") == ref]
         key = _USER_SORT.get(q.get("sort", "created"), "createdAt")
         if key in ("lastSeenAt", "forecasts"):  # telemetry-backed sorts need the activity of every matching row
             with_activity(rows, with_geo=False)
@@ -204,6 +209,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         profile["lastSeenAt"] = max(profile["lastLoginAt"] or 0, (activity or {}).get("lastSeenAt") or 0) or None
         profile["forecasts"] = activity["forecasts"] if activity else None
         profile["geo"] = geo(profile, insights.edge_countries([user_id]) if collected else {})
+        profile["source"] = ctx.sources([user_id]).get(user_id)
         profile["activity"] = {"collected": collected, "summary": activity,
                                "daily": insights.daily(user_id, t) if activity else []}
         delivered = outbox.status_by_keys([f"msg:{m['id']}" for m in info["messages"]])

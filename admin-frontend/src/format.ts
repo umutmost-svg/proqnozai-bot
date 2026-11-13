@@ -54,3 +54,9 @@ export function geoLabel(geo: { country: string | null; source: string | null } 
   const name = COUNTRY_NAMES[geo.country] ?? geo.country;
   return geo.source === 'lang' ? `${name} · по языку` : name;
 }
+
+/** "Инстаграм · бот": the referral link of the user's first start, or "—" (organic / unknown). */
+export function sourceLabel(src: { channel: string; code: string; name: string | null } | null | undefined): string {
+  if (!src) return '—';
+  return `${src.name ?? `ref_${src.code}`} · ${src.channel === 'bot' ? 'бот' : 'Mini App'}`;
+}

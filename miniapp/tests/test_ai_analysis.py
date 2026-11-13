@@ -1012,3 +1012,26 @@ def test_a_stored_answer_is_read_directly_even_while_a_paid_load_of_its_key_runs
 
     run(scenario())
     assert len(model.calls) == 1
+
+
+def test_delivered_and_opened_analyses_are_counted_in_telemetry(tmp_path, clock: FakeClock) -> None:
+    """With telemetry on (ads flag), a delivered analysis counts as ai_created and a cached read as ai_opened:
+    the admin's forecasts/conversion figures include AI requests."""
+    import sqlite3
+
+    from miniapp.ads.telemetry import telemetry_path
+    from miniapp.tests.signing import TEST_ED25519_PUBLIC_HEX
+
+    t = FakeTransport()
+    settings = base_settings(tmp_path, football_data_key=KEY, ads_enabled=True,
+                             ads_policy_public_key=TEST_ED25519_PUBLIC_HEX)
+    sports = build_service(settings, clock=clock, transport=t)
+    sports.football.client._sleep = no_sleep
+    ai = build_ai_service(settings, sports, clock=clock, client=FakeModel(), forecaster=FakeForecaster())
+    client = TestClient(create_app(settings, clock=clock, sports=sports, ai=ai), base_url="http://127.0.0.1:8000")
+    csrf = login(client, fresh(clock)).json()["session"]["csrf_token"]
+    t.script = [t.ok(match(7)), t.ok(arsenal_form()), t.ok(chelsea_form()), t.ok(standings())]
+    assert post(client, {"event_id": "fd:7"}, csrf).status_code == 200
+    assert client.get("/api/ai/analysis", params={"event_id": "fd:7"}).status_code == 200
+    with sqlite3.connect(telemetry_path(settings.db_path)) as conn:
+        assert conn.execute("SELECT SUM(ai_created), SUM(ai_opened) FROM user_activity").fetchone() == (1, 1)

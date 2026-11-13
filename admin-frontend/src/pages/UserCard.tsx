@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, errorText, type CrmProfile } from '../api';
-import { geoLabel, num, userName, utc, utcDay } from '../format';
+import { geoLabel, num, sourceLabel, userName, utc, utcDay } from '../format';
 import { can, useLoad, useMe, usePrefs } from '../state';
 import { Avatar, Bars, Card, DangerDialog, Empty, ErrorBox, Loading, Status, Tag, tagTone, Toast, Topbar } from '../ui';
 import { CreditsDialog, TagDialog } from './dialogs';
@@ -74,6 +74,7 @@ function UserCard({ id }: { id: string }) {
             <div className="stat"><div className="k">Последняя активность</div><div className="v">{utc(data.lastSeenAt ?? data.lastLoginAt)}</div></div>
             <div className="stat"><div className="k">Прогнозов</div><div className="v">{data.activity?.summary ? num(data.activity.summary.forecasts) : '—'}</div></div>
             <div className="stat"><div className="k">Страна</div><div className="v">{geoLabel(data.geo)}</div></div>
+            <div className="stat"><div className="k">Источник</div><div className="v">{sourceLabel(data.source)}</div></div>
             <div className="stat"><div className="k">Активных сессий</div><div className="v">{active}</div></div>
             <div className="stat"><div className="k">Кредиты</div><div className="v" style={{ color: 'var(--demo)' }}>{data.credits.unlimitedUntil ? '∞ безлимит' : num(data.credits.balance)}</div></div>
             <div className="stat"><div className="k">Сообщений от нас</div><div className="v">{data.messages.length}</div></div>

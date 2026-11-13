@@ -163,6 +163,9 @@ class Settings:
     ads_policy_public_key: str | None = None
     # Same kind of key for access-policy.json (users blocked in the admin panel). Unset: only the env list applies.
     access_policy_public_key: str | None = None
+    # Referral links (`startapp=ref_<code>`): the code of a user's FIRST Mini App start is kept in miniapp.db
+    # (user_attribution) for the admin panel. Off: the parameter is ignored and nothing is written.
+    referrals_enabled: bool = False
 
     @property
     def csrf_key_material(self) -> str:
@@ -370,4 +373,5 @@ class Settings:
             ads_enabled=boolean("MINIAPP_ADS_ENABLED", False),
             ads_policy_public_key=optional("MINIAPP_ADS_POLICY_PUBLIC_KEY"),
             access_policy_public_key=optional("MINIAPP_ACCESS_POLICY_PUBLIC_KEY"),
+            referrals_enabled=boolean("MINIAPP_REFERRALS_ENABLED", False),
         )

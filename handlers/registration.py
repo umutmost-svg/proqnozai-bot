@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 from telegram import (Update, ReplyKeyboardRemove, InlineKeyboardButton,
                       InlineKeyboardMarkup)
@@ -11,13 +12,17 @@ from db import (db_ensure, db_get, db_set, db_lang, db_is_reg, db_get_tz, con,
 from translations import (T, tr, LANG_NAMES, OB_SPORTS, OB_EXP, sport_label,
                           exp_label)
 from handlers.utils import main_menu, lang_kb, ob_kb
+import bot_crm
 
 logger = logging.getLogger(__name__)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user; uid = user.id
-    db_ensure(uid, user.username or "", user.language_code)
+    created = db_ensure(uid, user.username or "", user.language_code)
+    if created and bot_crm.BOT_REFERRALS_ENABLED and context.args:
+        # Attribution only for the start that created the user (atomic INSERT OR IGNORE in bot.db).
+        bot_crm.note_start(uid, context.args, True, int(time.time()))
     if db_is_reg(uid):
         # Clear any stale onboarding step (e.g. abandoned sport picker) so a
         # registered user is never left frozen by the reg_step guard.

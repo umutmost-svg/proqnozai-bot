@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, type CrmUsersPage } from '../api';
-import { geoLabel, num, userName, utc, utcDay } from '../format';
+import { geoLabel, num, sourceLabel, userName, utc, utcDay } from '../format';
 import { can, useLoad, useMe } from '../state';
 import { Avatar, Empty, ErrorBox, Loading, PageHead, Pager, SortHeader, Tag, tagTone, Toast, useSort } from '../ui';
 import { CreditsDialog, TagDialog } from './dialogs';
@@ -18,6 +18,7 @@ export function Users() {
   const tag = params.get('tag') ?? '';
   const segment = params.get('segment') ?? '';
   const lang = params.get('lang') ?? '';
+  const ref = params.get('ref') ?? '';
   const page = Number(params.get('page') ?? '1') || 1;
   const { sort, onSort } = useSort(params.get('sort') ?? 'created', params.get('order') !== 'asc');
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -46,13 +47,13 @@ export function Users() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sort]);
 
-  const qs = new URLSearchParams({ q: params.get('q') ?? '', chip, tag, segment, lang, page: String(page), size: '15',
+  const qs = new URLSearchParams({ q: params.get('q') ?? '', chip, tag, segment, lang, ref, page: String(page), size: '15',
     sort: sort.field, order: sort.desc ? 'desc' : 'asc' });
   const { data, error, loading, reload } = useLoad<CrmUsersPage>(`/api/admin/users?${qs}`);
   const listKey = qs.toString();
   const [selectedIn, setSelectedIn] = useState(listKey);
   if (selectedIn !== listKey) { setSelectedIn(listKey); setSelected(new Set()); }
-  const filtered = Boolean(params.get('q') || chip || tag || segment || lang);
+  const filtered = Boolean(params.get('q') || chip || tag || segment || lang || ref);
   const toggle = (id: number) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const allOnPage = data ? data.items.length > 0 && data.items.every((u) => selected.has(u.id)) : false;
   const audienceRules = () => {
@@ -71,8 +72,8 @@ export function Users() {
     <>
       <PageHead title="Пользователи" subtitle={`${num(data?.counts.total)} человек · карточки, теги, сегменты и массовые действия`}
         actions={<>
-          <button type="button" className="btn" onClick={() => navigate(`/segments?draft=${encodeURIComponent(JSON.stringify(audienceRules()))}`)} disabled={!filtered || !manage}>Сохранить как сегмент</button>
-          <button type="button" className="btn primary" onClick={() => navigate(`/broadcasts/new?rules=${encodeURIComponent(JSON.stringify(audienceRules()))}`)} disabled={!manage}>Рассылка по фильтру</button>
+          <button type="button" className="btn" onClick={() => navigate(`/segments?draft=${encodeURIComponent(JSON.stringify(audienceRules()))}`)} disabled={!filtered || !manage || Boolean(ref)} title={ref ? 'Фильтр по ссылке нельзя сохранить в сегмент' : undefined}>Сохранить как сегмент</button>
+          <button type="button" className="btn primary" onClick={() => navigate(`/broadcasts/new?rules=${encodeURIComponent(JSON.stringify(audienceRules()))}`)} disabled={!manage || Boolean(ref)} title={ref ? 'Фильтр по ссылке не переносится в рассылку' : undefined}>Рассылка по фильтру</button>
         </>} />
       <div className="chips" role="group" aria-label="Быстрые сегменты">
         {CHIPS.map(([key, label]) => (
@@ -98,6 +99,7 @@ export function Users() {
           <option value="">Теги: любые</option>
           {data?.tags.map((t) => <option key={t.tag} value={t.tag}>{t.tag} ({t.users})</option>)}
         </select>
+        {ref && <span className="tag accent">Ссылка: ref_{ref}</span>}
         {filtered && <button type="button" className="btn link" onClick={() => { setQuery(''); setParams({}, { replace: true }); }}>Сбросить фильтры</button>}
       </div>
       {data && data.telemetry === false && (
@@ -128,6 +130,7 @@ export function Users() {
                 <SortHeader label="Последняя активность" field="seen" sort={sort} onSort={onSort} />
                 <SortHeader label="Прогнозы" field="forecasts" sort={sort} onSort={onSort} className="num" />
                 <th>Страна</th>
+                <th>Источник</th>
                 <SortHeader label="Сессии" field="sessions" sort={sort} onSort={onSort} className="num" />
                 <th>Кредиты</th>
                 <th>Теги</th>
@@ -149,6 +152,7 @@ export function Users() {
                   <td>{utc(u.lastSeenAt ?? u.lastLoginAt)}</td>
                   <td className="num">{u.forecasts ?? '—'}</td>
                   <td>{geoLabel(u.geo)}</td>
+                  <td>{sourceLabel(u.source)}</td>
                   <td className="num">{u.activeSessions}</td>
                   <td style={{ color: 'var(--demo)', fontWeight: 600 }}>{u.credits.unlimitedUntil ? '∞' : num(u.credits.balance)}</td>
                   <td><div className="tags">{u.tags.map((t) => <Tag key={t} tone={tagTone(t)}>{t}</Tag>)}</div></td>

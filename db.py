@@ -292,11 +292,13 @@ def detect_lang(tg_lang: str | None) -> str:
     return mapping.get(tg_lang.lower()[:2], DEFAULT_LANG)
 
 
-def db_ensure(uid, uname, tg_lang=None):
+def db_ensure(uid, uname, tg_lang=None) -> bool:
+    """Creates the user row if missing; True only for the call that created it (atomic first-start signal)."""
     lang = detect_lang(tg_lang)
     tz = _LANG_TZ.get(lang, 0)
-    _run("INSERT OR IGNORE INTO users (user_id,username,lang,tz_offset) VALUES (?,?,?,?)",
-         (uid, uname, lang, tz))
+    with con() as c:
+        return c.execute("INSERT OR IGNORE INTO users (user_id,username,lang,tz_offset) VALUES (?,?,?,?)",
+                         (uid, uname, lang, tz)).rowcount > 0
 
 
 def db_get_tz(uid) -> int:

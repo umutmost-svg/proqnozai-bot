@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,11 +25,23 @@ class ConfigError(ValueError):
     pass
 
 
+def _public_name(value: str | None, name: str) -> str | None:
+    value = (value or "").strip().lstrip("@")
+    if not value:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_]{3,64}", value):
+        raise ConfigError(f"{name}: letters, digits and _ only")
+    return value
+
+
 @dataclass(frozen=True)
 class AdminWebConfig:
     data_dir: Path
     port: int
     static_dir: Path | None
+    # Public names for building referral links (optional; without them the panel shows the start parameter only).
+    bot_username: str | None = None
+    miniapp_short_name: str | None = None
 
     @property
     def miniapp_db(self) -> Path:
@@ -46,6 +59,11 @@ class AdminWebConfig:
     def outbox_db(self) -> Path:
         """admin -> bot message queue: the admin writes jobs, the existing bot sends them (§10)."""
         return self.data_dir / "bot-outbox.db"
+
+    @property
+    def bot_crm_db(self) -> Path:
+        """bot -> admin file (referral starts, user inquiries), shared with the bot (bot_crm.py)."""
+        return self.data_dir / "bot-crm.db"
 
     @property
     def access_policy_file(self) -> Path:
@@ -112,6 +130,8 @@ class AdminWebConfig:
             data_dir=Path(env.get("ADMIN_PILOT_DIR") or DEFAULT_DIR).expanduser(),
             port=int(env.get("ADMIN_WEB_PORT", DEFAULT_PORT)),
             static_dir=Path(static) if static else (default_static if default_static.is_dir() else None),
+            bot_username=_public_name(env.get("ADMIN_BOT_USERNAME"), "ADMIN_BOT_USERNAME"),
+            miniapp_short_name=_public_name(env.get("ADMIN_MINIAPP_SHORT_NAME"), "ADMIN_MINIAPP_SHORT_NAME"),
         )
         config.validate()
         return config

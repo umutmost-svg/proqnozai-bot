@@ -189,6 +189,8 @@ def can(role: str, permission: str) -> bool:
         "manage_ads": ("owner", "admin"),
         "publish_ads": ("owner", "admin"),
         "manage_partners": ("owner",),
+        # Referral links: create and archive (owner, admin); per-link stats are aggregates (analysts too).
+        "manage_referrals": ("owner", "admin"),
     }
     return role in allowed[permission]
 

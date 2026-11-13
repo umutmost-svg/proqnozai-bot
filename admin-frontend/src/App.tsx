@@ -7,6 +7,7 @@ import { SettingsAdmins, SettingsFeatures, SettingsJournal } from './pages/Setti
 import { AiCosts, SportsApi, System } from './pages/Telemetry';
 import { UserCardRoute } from './pages/UserCard';
 import { Users } from './pages/Users';
+import { Referrals } from './pages/Referrals';
 import { AuthProvider, PrefsProvider, useAuth } from './state';
 import { Empty, Layout, Loading, PageHead } from './ui';
 
@@ -34,6 +35,7 @@ function Gate() {
         <Route path="settings/admins" element={<SettingsAdmins />} />
         <Route path="settings/journal" element={<SettingsJournal />} />
         <Route path="credits" element={<Credits />} />
+        <Route path="referrals" element={<Referrals />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
