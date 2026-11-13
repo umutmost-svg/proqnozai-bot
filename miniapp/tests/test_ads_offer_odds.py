@@ -354,3 +354,28 @@ def test_offer_prices_come_from_the_real_odds_store(clock: FakeClock):
     assert asyncio.run(lookup("fd:404", "2")) is None                   # an unknown match
     clock.advance(MAX_AGE_S)                                            # stale prices are never shown
     assert asyncio.run(lookup(event.id, "2")) is None
+
+
+def test_a_token_rechecks_the_price_of_the_market_it_was_issued_for(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    publish(tmp_path, campaign(oddsMode="required"))
+    c, csrf = env.user()
+    env.pick(c, market="X2")
+    env.prices.book[("fd:1", "X2")] = 1.6
+    old = env.offer(c).json()["offer"]
+    assert old["odds"]["market"] == "X2"
+    env.pick(c, market="1")                               # a later recommendation of the same match
+    env.prices.book[("fd:1", "1")] = 2.4
+    del env.prices.book[("fd:1", "X2")]                   # the price the old card showed is gone
+    assert post(c, "/api/ads/impression", csrf, {"impressionToken": old["impressionToken"]}).json()["counted"] is False
+    assert post(c, "/api/ads/click", csrf, {"impressionToken": old["impressionToken"]}).status_code == 410
+    new = env.offer(c).json()["offer"]
+    assert new["odds"]["market"] == "1"
+    assert post(c, "/api/ads/click", csrf, {"impressionToken": new["impressionToken"]}).status_code == 200
+
+
+def test_look_alike_digits_and_a_macro_in_the_fragment_are_refused():
+    with pytest.raises(policy.PolicyError, match="odds_in_text"):
+        policy.check_ad_text("кэф １．８５", "headline", 80)
+    with pytest.raises(policy.PolicyError):
+        policy.check_url("https://p.example.com/x#id={click_id}", ["p.example.com"])

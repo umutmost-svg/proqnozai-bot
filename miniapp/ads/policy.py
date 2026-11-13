@@ -15,6 +15,7 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -78,7 +79,8 @@ def check_text(value: Any, field: str, limit: int, required: bool = True, multil
 def check_ad_text(value: Any, field: str, limit: int, required: bool = True, multiline: bool = False) -> str:
     """An advertiser's text: check_text plus no price-like numbers (an offer never states odds itself)."""
     text = check_text(value, field, limit, required, multiline)
-    if _ODDS_IN_TEXT.search(text):
+    # NFKC folds look-alike digits and separators (fullwidth "１．８５", superscripts) into the plain ones first.
+    if _ODDS_IN_TEXT.search(unicodedata.normalize("NFKC", text)):
         raise PolicyError("odds_in_text")
     return text
 
@@ -114,6 +116,8 @@ def check_url(value: Any, hosts: list[str] | tuple[str, ...]) -> str:
         _check_plain_url(value.replace(CLICK_MACRO, "c" * 32), hosts)
         if urlsplit(value).hostname != urlsplit(value.replace(CLICK_MACRO, "c" * 32)).hostname:
             raise PolicyError("invalid_url")  # the macro may not touch the host
+        if CLICK_MACRO in urlsplit(value).fragment:
+            raise PolicyError("invalid_url")  # a fragment never reaches the partner: its postback could not match
         return value
     return _check_plain_url(value, hosts)
 

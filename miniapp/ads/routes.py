@@ -111,7 +111,19 @@ def register_ads_routes(
             return picked, market, None
         return picked, market, found if isinstance(found, dict) and found.get("market") == market else None
 
-    def offer_sync(user_id: int, country: str | None, placement: str, event_key: str, odds: dict | None) -> dict:
+    async def token_price(t: Token) -> dict | None:
+        """The verified price NOW of the market the token's offer was issued for (not a later recommendation)."""
+        if t.market is None or odds_for is None:
+            return None
+        try:
+            found = await odds_for(t.event_key, t.market)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("event=ads_odds_failed type=%s", type(exc).__name__)
+            return None
+        return found if isinstance(found, dict) and found.get("market") == t.market else None
+
+    def offer_sync(user_id: int, country: str | None, placement: str, event_key: str, market: str | None,
+                   odds: dict | None) -> dict:
         ts = now()
         safe(lambda: telemetry.maybe_purge(ts), None, "purge")
         user = store.get_user(user_id)
@@ -136,7 +148,7 @@ def register_ads_routes(
                                             viewer_class(user_id, ts)), False, "control")
             return {"offer": None}
         variant = choice.variant
-        token = tokens.issue(Token(user_id, c.id, variant.key, event_key, placement, day_of(ts)))
+        token = tokens.issue(Token(user_id, c.id, variant.key, event_key, placement, day_of(ts), market))
         return {"offer": {
             "id": c.id, "variant": variant.key, "headline": variant.headline, "body": variant.body,
             "extra": variant.extra, "cta": variant.cta,
@@ -160,10 +172,10 @@ def register_ads_routes(
         country = country_from(request.headers.get(COUNTRY_HEADER), trust_country)
         user_id = active[1].user_id
         # Only for a match the server itself recommended to this user in this placement.
-        picked, _, odds = await price(user_id, placement, event_key)
+        picked, market, odds = await price(user_id, placement, event_key)
         if not picked:
             return JSONResponse({"offer": None})
-        return JSONResponse(await run_in_threadpool(offer_sync, user_id, country, placement, event_key, odds))
+        return JSONResponse(await run_in_threadpool(offer_sync, user_id, country, placement, event_key, market, odds))
 
     def current_variant(t: Token, country: str | None, has_odds: bool,
                         fresh: bool = False) -> tuple[policy.Campaign, policy.Variant] | None:
@@ -203,7 +215,7 @@ def register_ads_routes(
         if isinstance(t, JSONResponse):
             return t
         country = country_from(request.headers.get(COUNTRY_HEADER), trust_country)
-        _, _, odds = await price(t.user_id, t.placement, t.event_key)
+        odds = await token_price(t)
 
         def record() -> bool:
             found = current_variant(t, country, odds is not None)
@@ -224,7 +236,7 @@ def register_ads_routes(
         if isinstance(t, JSONResponse):
             return t
         country = country_from(request.headers.get(COUNTRY_HEADER), trust_country)
-        _, _, odds = await price(t.user_id, t.placement, t.event_key)
+        odds = await token_price(t)
 
         def record() -> str | None:
             # The newest snapshot on disk, not a cached one.

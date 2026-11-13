@@ -128,6 +128,7 @@ class Token:
     event_key: str
     placement: str
     day: str
+    market: str | None = None  # the market recommended when the offer was issued: its price is the one re-checked
 
 
 class TokenError(ValueError):
@@ -135,14 +136,15 @@ class TokenError(ValueError):
 
 
 class Tokens:
-    """Impression token = payload + HMAC(user, campaign, variant, event, placement, day): binds an offer to the
-    user it was chosen for; another user's token, a forged or an old one is refused."""
+    """Impression token = payload + HMAC(user, campaign, variant, event, placement, day, market): binds an offer to
+    the user it was chosen for and the market whose price it showed; another user's token, a forged or an old one is
+    refused."""
 
     def __init__(self, key_material: str) -> None:
         self._key = hashlib.sha256(("ads-impression-token:" + key_material).encode()).digest()
 
     def issue(self, t: Token) -> str:
-        payload = json.dumps([t.user_id, t.campaign_id, t.variant, t.event_key, t.placement, t.day],
+        payload = json.dumps([t.user_id, t.campaign_id, t.variant, t.event_key, t.placement, t.day, t.market],
                              separators=(",", ":")).encode()
         body = base64.urlsafe_b64encode(payload).rstrip(b"=")
         sig = base64.urlsafe_b64encode(hmac.new(self._key, body, hashlib.sha256).digest()).rstrip(b"=")
@@ -156,14 +158,17 @@ class Tokens:
         if not hmac.compare_digest(sig, expected):
             raise TokenError("bad_token")
         try:
-            uid, cid, variant, event_key, placement, day = json.loads(base64.urlsafe_b64decode(body + b"=" * (-len(body) % 4)))
+            uid, cid, variant, event_key, placement, day, market = json.loads(
+                base64.urlsafe_b64decode(body + b"=" * (-len(body) % 4)))
         except (ValueError, TypeError):
             raise TokenError("bad_token") from None
         if uid != user_id:
             raise TokenError("bad_token")
         if day not in {day_of(now - d * DAY) for d in range(TOKEN_DAYS)}:
             raise TokenError("token_expired")
-        return Token(uid, cid, variant, event_key, placement, day)
+        if market is not None and not isinstance(market, str):
+            raise TokenError("bad_token")
+        return Token(uid, cid, variant, event_key, placement, day, market)
 
 
 def country_from(header: str | None, trusted: bool) -> str | None:
