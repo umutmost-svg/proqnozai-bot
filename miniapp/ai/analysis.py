@@ -117,10 +117,11 @@ Return:
 
 Odds, when given, are context only: nothing here is a claim of value, profit or certainty."""
 
-# The goal model has no estimate for this match (too little history): verified facts only.
+# The goal model has no estimate for this match (too little history, or an implausible fit): verified facts only.
 BASIS_PROMPT = """You describe one upcoming football match for the ProqnozAI app from verified
-data only. The app's goal model has too little history for this match, so there is NO
-model estimate and NO recommended market. You do not estimate, change or restate any
+data only. The app's goal model gives no estimate for this match (too little history,
+or a fit outside its supported range — "goalModel.reason"), so there is NO model
+estimate and NO recommended market. You do not estimate, change or restate any
 number, and you write no free text.
 
 Use ONLY the facts in the JSON you are given: the fixture; each team's most recent

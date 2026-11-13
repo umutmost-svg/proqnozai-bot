@@ -299,6 +299,7 @@ export const en: Dictionary = {
   'ai.outsider': 'Underdog',
   'ai.closeOdds': 'The teams’ chances are close — there is no favourite.',
   'ai.colourNote': 'Green is the favourite of the two teams in the model’s estimate, red the underdog, orange the draw.',
+  'ai.colourNoteMarket': 'Green is the favourite of the two teams by the market odds, red the underdog, orange the draw.',
   'ai.n.wins': '{n} win|{n} wins',
   'ai.n.draws': '{n} draw|{n} draws',
   'ai.n.losses': '{n} defeat|{n} defeats',

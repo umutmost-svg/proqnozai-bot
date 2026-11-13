@@ -299,6 +299,7 @@ export const ptBR: Dictionary = {
   'ai.outsider': 'Azarão',
   'ai.closeOdds': 'As chances dos times são parecidas — não há favorito.',
   'ai.colourNote': 'Verde é o favorito entre os dois times na estimativa do modelo, vermelho o azarão, laranja o empate.',
+  'ai.colourNoteMarket': 'Verde é o favorito entre os dois times pelas odds do mercado, vermelho o azarão, laranja o empate.',
   'ai.n.wins': '{n} vitória|{n} vitórias',
   'ai.n.draws': '{n} empate|{n} empates',
   'ai.n.losses': '{n} derrota|{n} derrotas',

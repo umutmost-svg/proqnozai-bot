@@ -114,6 +114,7 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
           values={analysis.probabilities}
           sport={analysis.sport}
           badge={basisOnly ? t('ai.marketEstimate') : undefined}
+          colourNote={basisOnly ? t('ai.colourNoteMarket') : undefined}
         />
       )}
       {real && basis && analysis.pick && (

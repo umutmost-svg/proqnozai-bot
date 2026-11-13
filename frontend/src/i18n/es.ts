@@ -299,6 +299,7 @@ export const es: Dictionary = {
   'ai.outsider': 'No favorito',
   'ai.closeOdds': 'Las opciones de los equipos están igualadas: no hay favorito.',
   'ai.colourNote': 'Verde es el favorito de los dos equipos según la estimación del modelo, rojo el no favorito, naranja el empate.',
+  'ai.colourNoteMarket': 'Verde es el favorito de los dos equipos según las cuotas del mercado, rojo el no favorito, naranja el empate.',
   'ai.n.wins': '{n} victoria|{n} victorias',
   'ai.n.draws': '{n} empate|{n} empates',
   'ai.n.losses': '{n} derrota|{n} derrotas',

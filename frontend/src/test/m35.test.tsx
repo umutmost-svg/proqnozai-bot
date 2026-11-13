@@ -471,6 +471,9 @@ describe('PARTIAL without the goal model', () => {
     await screen.findByTestId('ai-result');
     expect(screen.getByTestId('ai-probabilities-title')).toHaveTextContent(dictionaries[lang]['ai.probabilitiesEstimated']);
     expect(screen.getByTestId('ai-limited')).toHaveTextContent(dictionaries[lang]['ai.marketEstimate']);
+    // The figures are the market's: never attributed to the goal model.
+    expect(screen.getByTestId('ai-colour-note')).toHaveTextContent(dictionaries[lang]['ai.colourNoteMarket']);
+    expect(screen.getByTestId('ai-result')).not.toHaveTextContent(dictionaries[lang]['ai.colourNote']);
     expect(screen.getAllByTestId('ai-outcome')).toHaveLength(3);
     expect(document.body.textContent).not.toMatch(/ai\.[a-zA-Z]/);
   });

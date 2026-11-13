@@ -301,6 +301,7 @@ export const az: Dictionary = {
   'ai.outsider': 'Autsayder',
   'ai.closeOdds': 'Komandaların şansları yaxındır — favorit yoxdur.',
   'ai.colourNote': 'Yaşıl — modelin qiymətləndirməsinə görə iki komandadan favorit, qırmızı — autsayder, narıncı — heç-heçə.',
+  'ai.colourNoteMarket': 'Yaşıl — bazar əmsallarına görə iki komandadan favorit, qırmızı — autsayder, narıncı — heç-heçə.',
   'ai.n.wins': '{n} qələbə',
   'ai.n.draws': '{n} heç-heçə',
   'ai.n.losses': '{n} məğlubiyyət',

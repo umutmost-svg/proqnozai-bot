@@ -299,6 +299,7 @@ export const uz: Dictionary = {
   'ai.outsider': 'Autsayder',
   'ai.closeOdds': 'Jamoalarning imkoniyatlari yaqin — favorit yoʻq.',
   'ai.colourNote': 'Yashil — model bahosiga koʻra ikki jamoadan favorit, qizil — autsayder, toʻq sariq — durang.',
+  'ai.colourNoteMarket': 'Yashil — bozor koeffitsiyentlariga koʻra ikki jamoadan favorit, qizil — autsayder, toʻq sariq — durang.',
   'ai.n.wins': '{n} gʻalaba',
   'ai.n.draws': '{n} durang',
   'ai.n.losses': '{n} magʻlubiyat',

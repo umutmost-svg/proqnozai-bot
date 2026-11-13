@@ -299,6 +299,7 @@ export const tr: Dictionary = {
   'ai.outsider': 'Sürpriz adayı',
   'ai.closeOdds': 'Takımların şansı birbirine yakın — favori yok.',
   'ai.colourNote': 'Yeşil, modelin tahminine göre iki takımdan favori olanı; kırmızı sürpriz adayını; turuncu beraberliği gösterir.',
+  'ai.colourNoteMarket': 'Yeşil, piyasa oranlarına göre iki takımdan favori olanı; kırmızı sürpriz adayını; turuncu beraberliği gösterir.',
   'ai.n.wins': '{n} galibiyet',
   'ai.n.draws': '{n} beraberlik',
   'ai.n.losses': '{n} mağlubiyet',
