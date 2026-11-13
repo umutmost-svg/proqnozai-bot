@@ -68,9 +68,17 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
   // A real analysis without the goal model (cups, qualifiers, small samples): no pick, no model
   // figures; its probabilities, when present, are the market's — labelled as an estimate.
   const basisOnly = real && !forecast && analysis.kind === 'partial' && !analysis.pick;
-  const title = !real ? t('ai.probabilities') : basisOnly ? t('ai.probabilitiesEstimated') : t('ai.probabilitiesReal');
+  // Every PARTIAL marks its probabilities as an estimate (CLAUDE.md, LLM output).
+  const title = !real
+    ? t('ai.probabilities')
+    : analysis.kind === 'partial'
+      ? t('ai.probabilitiesEstimated')
+      : t('ai.probabilitiesReal');
   const live = usePricesLive(real ? analysis.market?.expires : undefined);
   const prices = real && live ? analysis.market : undefined;
+  // The market's estimate disappears with the prices it was computed from.
+  const estimateLive = usePricesLive(analysis.estimateExpires);
+  const showProbabilities = analysis.probabilities.length > 0 && (!analysis.estimateExpires || estimateLive);
   const tournament = data.getTournament(event.tournamentId);
   const generated = analysis.generatedAt && (
     <p className={s.snapshot}>
@@ -99,7 +107,7 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
           </ul>
         </section>
       )}
-      {analysis.probabilities.length > 0 && (
+      {showProbabilities && (
         <ProbabilityBlock
           title={title}
           labels={labels}

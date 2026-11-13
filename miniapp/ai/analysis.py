@@ -40,7 +40,7 @@ from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast, Unava
 from miniapp.forecast.history import ForecastHistory, ForecastRecord
 from miniapp.forecast.markets import KEYS as MARKET_KEYS
 from miniapp.forecast.version import MODEL_VERSION
-from miniapp.odds.store import OddsStore
+from miniapp.odds.store import MatchOdds, OddsStore
 from miniapp.odds.value import book_json, compare, market_1x2_percent, market_book
 from miniapp.sports import football_data
 from miniapp.sports.cache import Cached, SportsCache
@@ -181,6 +181,9 @@ class AnalysisResult:
     # Current odds against the model (miniapp/odds/value.py), attached when served, never
     # part of the language model's cached answer: prices move, the explanation does not.
     market: dict | None = None
+    # A PARTIAL without the goal model whose probabilities are the market's: when those prices
+    # stop being current ({"fetchedAt", "validFor"}); the client hides the estimate after that.
+    estimate_from: dict | None = None
 
     def to_json(self) -> dict:
         return {
@@ -198,6 +201,7 @@ class AnalysisResult:
             "forecast": self.forecast,
             "alternatives": list(self.alternatives),
             "market": self.market,
+            "estimateFrom": self.estimate_from,
         }
 
 
@@ -322,8 +326,9 @@ class AiService:
         event, tournament, home, away, forecast = found
         basis = {"home": home.to_json(), "away": away.to_json()}
         has_form = has_verified_form(home, away)
-        book = self._book(event)
-        readiness = forecast_readiness(has_odds=bool(book), has_verified_data=has_form)
+        odds = self._lookup(event)
+        readiness = forecast_readiness(has_odds=odds is not None and bool(market_book(odds.book)),
+                                       has_verified_data=has_form)
         if readiness == "insufficient":
             return AnalysisResult(event.id, "insufficient", ("no_verified_form", "no_odds_source"), basis=basis)
         fixture = {"home": home.name, "away": away.name, "competition": tournament.name if tournament else None,
@@ -332,7 +337,7 @@ class AiService:
             # Too little history for the goal model: a PARTIAL analysis of the verified form, the
             # table rows and the current market — never the model's numbers, never a pick.
             return await self._basis_analysis(event, home, away, basis, fixture, forecast.reason, has_form,
-                                              user_id, create)
+                                              user_id, create, odds)
         figures = forecast.to_json()
         shown = forecast.display
         probabilities = {"home": shown["1"], "draw": shown["X"], "away": shown["2"]}
@@ -405,7 +410,7 @@ class AiService:
 
     async def _basis_analysis(self, event: FootballEvent, home: TeamSummary, away: TeamSummary, basis: dict,
                               fixture: dict, model_reason: str, has_form: bool, user_id: int,
-                              create: bool) -> AnalysisResult:
+                              create: bool, odds: MatchOdds | None) -> AnalysisResult:
         """PARTIAL without the goal model: the language model picks which verified facts (form,
         goals, table rows) describe the match; probabilities, when shown, are the market's 1X2 with
         the margin removed, computed here when served and always labelled as an estimate.
@@ -415,8 +420,9 @@ class AiService:
         if not has_form:
             # Odds alone: nothing verified about the teams to explain, so no language-model call
             # (and no charge) — the market's estimate and the table rows are shown as they are.
+            # The same lookup that made it PARTIAL: never "neither form nor odds" by a race.
             result = AnalysisResult(event.id, "partial", (), self._iso(), None, basis=basis, estimated=True)
-            return self._with_market_estimate(result, event, model_reason, has_form)
+            return self._with_market_estimate(result, odds, model_reason, has_form)
         allowed = tuple(f for f in FACTORS
                         if f in FORM_FACTORS
                         or (f.endswith("_table") and (home if f.startswith("home") else away).table_position is not None))
@@ -446,7 +452,7 @@ class AiService:
                                    estimated=True), self._until_kickoff(event))
 
         result = await self._obtain(event, key, user_id, create, load)
-        return self._with_market_estimate(result, event, model_reason, has_form)
+        return self._with_market_estimate(result, self._lookup(event), model_reason, has_form)
 
     async def _complete(self, client: ModelClient, system: str, facts: dict) -> Completion:
         request = f"Facts (JSON):\n{json.dumps(facts, ensure_ascii=False, sort_keys=True)}"
@@ -459,15 +465,14 @@ class AiService:
     def _until_kickoff(self, event: FootballEvent) -> float:
         return max(60.0, parse_instant(event.starts_at).timestamp() - self._clock())
 
-    def _book(self, event: FootballEvent) -> dict[str, tuple[float, float, float]]:
-        """The match's current checked prices (fresh, strictly matched, before kickoff), else {}."""
-        found = self.odds.lookup(event) if self.odds is not None else None
-        return market_book(found.book) if found is not None else {}
+    def _lookup(self, event: FootballEvent) -> MatchOdds | None:
+        """The match's current prices (fresh, strictly matched, before kickoff), else None."""
+        return self.odds.lookup(event) if self.odds is not None else None
 
     def _with_market_facts(self, facts: dict, event: FootballEvent) -> dict:
         """The prompt's facts plus, only when the odds store holds a current line, its prices and
         their margin-free probabilities (computed here, never by the model). Not part of any key."""
-        found = self.odds.lookup(event) if self.odds is not None else None
+        found = self._lookup(event)
         quotes = book_json(found.book) if found is not None else []
         return {**facts, "market": quotes} if quotes else facts
 
@@ -563,7 +568,7 @@ class AiService:
         line exists; with them AND verified form the analysis has every input it can have (READY)."""
         if self.odds is None or result.pick is None or result.kind not in ("ready", "partial"):
             return result
-        found = self.odds.lookup(event)
+        found = self._lookup(event)
         if found is None:
             return result
         quotes = compare(found.book, forecast.exact)
@@ -575,18 +580,19 @@ class AiService:
             return replace(result, kind="ready", reasons=(), estimated=False, market=market)
         return replace(result, kind="partial", reasons=("no_verified_form",), estimated=True, market=market)
 
-    def _with_market_estimate(self, result: AnalysisResult, event: FootballEvent, model_reason: str,
+    def _with_market_estimate(self, result: AnalysisResult, found: MatchOdds | None, model_reason: str,
                               has_form: bool) -> AnalysisResult:
         """A PARTIAL without the goal model as served now: the market's margin-free 1X2 (when a
         fresh line has one) as estimated probabilities, and why the analysis is partial."""
         if result.kind != "partial":
             return result  # e.g. "not_upcoming": kickoff passed meanwhile
-        found = self.odds.lookup(event) if self.odds is not None else None
         priced = found is not None and bool(market_book(found.book))
         estimate = market_1x2_percent(found.book) if found is not None else None
         reasons = (f"model_{model_reason}", *(() if has_form else ("no_verified_form",)),
                    *(() if priced else ("no_odds_source",)))
-        return replace(result, reasons=reasons, probabilities=estimate, estimated=True)
+        valid = ({"fetchedAt": _iso_ts(found.fetched_at), "validFor": int(found.valid_for)}
+                 if estimate is not None and found is not None else None)
+        return replace(result, reasons=reasons, probabilities=estimate, estimated=True, estimate_from=valid)
 
     async def _evidence(self, event_id: str):
         event, tournament = await self.sports.event(event_id)

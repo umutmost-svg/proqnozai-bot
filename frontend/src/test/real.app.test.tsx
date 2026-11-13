@@ -164,7 +164,7 @@ describe('real mode', () => {
     // The card only opens the AI screen; this mock answers the read with a made analysis.
     await user.click(await screen.findByRole('button', { name: 'Открыть AI-разбор' }));
     const result = await screen.findByTestId('ai-result');
-    expect(screen.getByTestId('ai-probabilities-title')).not.toHaveTextContent('Оценка');
+    expect(screen.getByTestId('ai-probabilities-title')).toHaveTextContent('Оценка вероятностей'); // PARTIAL
     expect(result).toHaveTextContent('52%');
     const factors = screen.getByTestId('ai-factors');
     expect(factors).toHaveTextContent('За последние 5 матчей у Arsenal FC: 4 победы, 1 ничья и 0 поражений (13 очков).');

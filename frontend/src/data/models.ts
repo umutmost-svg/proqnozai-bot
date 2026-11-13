@@ -337,6 +337,8 @@ export interface AiAnalysis {
   alternatives?: readonly MarketChance[];
   /** Current prices of this match against the model; absent without a fresh matched line. */
   market?: MarketPrices;
+  /** PARTIAL without the goal model: when its market-derived probabilities stop being current. */
+  estimateExpires?: PriceDeadline;
 }
 
 /**

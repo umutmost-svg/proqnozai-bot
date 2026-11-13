@@ -1100,7 +1100,9 @@ function readAnalysisV3(b: Json, eventId: string, sport: Sport, sent: PriceDeadl
     return { eventId, sport, kind: 'insufficient', probabilities: [], reasons: known, generatedAt: null, basis };
   }
   if ((b.kind !== 'partial' && b.kind !== 'ready') || !basis) return null;
-  if (b.kind === 'partial' && b.forecast === null) return readBasisAnalysis(b, eventId, sport, known, basis);
+  if (b.kind === 'partial' && b.forecast === null) return readBasisAnalysis(b, eventId, sport, known, basis, sent);
+  // Only the model-less PARTIAL carries an estimate validity.
+  if (b.estimateFrom !== null && b.estimateFrom !== undefined) return null;
   const forecast = readForecast(b.forecast);
   const generatedAt = validInstant(b.generatedAt);
   if (!forecast || !generatedAt) return null;
@@ -1178,6 +1180,7 @@ function readBasisAnalysis(
   sport: Sport,
   known: InsufficientReason[],
   basis: { home: TeamBasis; away: TeamBasis },
+  sent: PriceDeadline,
 ): AiAnalysis | null {
   if (b.pick !== null || (b.market !== null && b.market !== undefined) || b.estimated !== true) return null;
   if (!Array.isArray(b.alternatives) || b.alternatives.length) return null;
@@ -1188,9 +1191,16 @@ function readBasisAnalysis(
   const generatedAt = validInstant(b.generatedAt);
   if (!generatedAt) return null;
   let probabilities: number[] = [];
-  if (b.probabilities !== null) {
-    // The market's estimate exists only with prices.
-    if (!isObj(b.probabilities) || known.includes('noOddsSource')) return null;
+  let estimateExpires: PriceDeadline | undefined;
+  if (b.probabilities === null) {
+    if (b.estimateFrom !== null && b.estimateFrom !== undefined) return null;
+  } else {
+    // The market's estimate exists only with current prices, and expires with them.
+    if (!isObj(b.probabilities) || known.includes('noOddsSource') || !isObj(b.estimateFrom)) return null;
+    const fetchedAt = str(b.estimateFrom.fetchedAt);
+    const expires = priceDeadline(b.estimateFrom.validFor, sent);
+    if (!fetchedAt || !ZONED_INSTANT.test(fetchedAt) || !expires) return null;
+    estimateExpires = expires;
     const p = b.probabilities;
     const values = [int(p.home), int(p.draw), int(p.away)];
     if (values.some((n) => n === null || n > 100)) return null;
@@ -1214,6 +1224,7 @@ function readBasisAnalysis(
     basis,
     estimated: true,
     alternatives: [],
+    ...(estimateExpires ? { estimateExpires } : {}),
   };
 }
 

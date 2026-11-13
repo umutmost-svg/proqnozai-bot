@@ -210,6 +210,7 @@ describe('the model against the market', () => {
     ['no validity', v3({ ...READY_OVER, market: { ...PRICES, validFor: undefined } })],
     ['an expired validity', v3({ ...READY_OVER, market: { ...PRICES, validFor: 0 } })],
     ['a validity beyond the longest the server gives', v3({ ...READY_OVER, market: { ...PRICES, validFor: 901 } })],
+    ['an estimate validity on a goal-model analysis', v3({ estimateFrom: { fetchedAt: '2026-11-08T05:58:00Z', validFor: 840 } })],
   ])('rejects %s', async (_, body) => {
     await expect(aiBackend(body).requestAnalysis('fd:4')).rejects.toThrow();
   });
@@ -413,7 +414,8 @@ function basisOnly(over: Over = {}) {
     ...over,
   };
 }
-const MARKET_ESTIMATE = { reasons: ['model_team_history'], probabilities: { home: 21, draw: 25, away: 54 } };
+const MARKET_ESTIMATE = { reasons: ['model_team_history'], probabilities: { home: 21, draw: 25, away: 54 },
+  estimateFrom: { fetchedAt: '2026-11-08T05:58:00Z', validFor: 840 } };
 
 describe('PARTIAL without the goal model', () => {
   const read = async (body: unknown) => aiBackend(body).requestAnalysis('fd:4');
@@ -443,6 +445,9 @@ describe('PARTIAL without the goal model', () => {
     ['one factor', basisOnly({ factors: ['away_form'] })],
     ['factors without verified form', basisOnly({ ...MARKET_ESTIMATE, reasons: ['model_team_history', 'no_verified_form'] })],
     ['prices against a model', basisOnly({ ...MARKET_ESTIMATE, market: PRICES })],
+    ['a market estimate without its validity', basisOnly({ ...MARKET_ESTIMATE, estimateFrom: null })],
+    ['a market estimate already expired', basisOnly({ ...MARKET_ESTIMATE, estimateFrom: { fetchedAt: '2026-11-08T05:58:00Z', validFor: 0 } })],
+    ['a validity without an estimate', basisOnly({ estimateFrom: MARKET_ESTIMATE.estimateFrom })],
     ['alternatives', basisOnly({ alternatives: [{ market: 'X2', probability: 70 }] })],
     ['free text', basisOnly({ summary: 'Liverpool will win' })],
   ])('rejects %s', async (_name, body) => {
@@ -468,6 +473,28 @@ describe('PARTIAL without the goal model', () => {
     expect(screen.getByTestId('ai-limited')).toHaveTextContent(dictionaries[lang]['ai.marketEstimate']);
     expect(screen.getAllByTestId('ai-outcome')).toHaveLength(3);
     expect(document.body.textContent).not.toMatch(/ai\.[a-zA-Z]/);
+  });
+
+  it('the market estimate disappears when its prices expire', async () => {
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(basisOnly(MARKET_ESTIMATE)) });
+    await screen.findByTestId('ai-result');
+    const mono = performance.now() + 841_000;
+    const wall = Date.now() + 841_000;
+    vi.spyOn(performance, 'now').mockReturnValue(mono);
+    vi.spyOn(Date, 'now').mockReturnValue(wall);
+    try {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await waitFor(() => expect(screen.queryByTestId('ai-result')).toBeNull());
+      expect(screen.getByTestId('ai-basis-only')).toBeInTheDocument();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('a goal-model analysis without odds is labelled as an estimate too', async () => {
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3()) });
+    await screen.findByTestId('ai-result');
+    expect(screen.getByTestId('ai-probabilities-title')).toHaveTextContent('Оценка вероятностей');
   });
 
   it('a goal-model analysis with prices but without verified form stays PARTIAL', async () => {

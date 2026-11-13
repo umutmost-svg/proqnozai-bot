@@ -14,7 +14,7 @@ from miniapp.odds.value import book_json, market_1x2_percent
 from miniapp.tests.conftest import FakeClock
 from miniapp.tests.forecast_fakes import FakeForecaster
 from miniapp.tests.test_ai_analysis import FakeModel, answer, make_ai
-from miniapp.tests.test_odds import ingest, line
+from miniapp.tests.test_odds import ingest, iso, line
 from miniapp.tests.test_sports import run
 
 UNAVAILABLE = ["small_sample", "team_history", "extreme_rates"]
@@ -45,7 +45,7 @@ def test_model_unavailable_with_verified_form_is_a_partial_ai_analysis(tmp_path,
     assert result.reasons == (f"model_{reason}", "no_odds_source")
     # No model numbers and no odds: nothing to show as a probability, no pick, nothing invented.
     assert result.probabilities is None and result.pick is None and result.forecast is None
-    assert result.alternatives == () and result.market is None
+    assert result.alternatives == () and result.market is None and result.estimate_from is None
     assert result.factors == ("home_form", "away_table") and result.basis["home"]["form"] == "WWDWW"
     system, _, _ = model.calls[0]
     assert system == BASIS_PROMPT
@@ -124,6 +124,9 @@ def test_model_unavailable_with_odds_shows_the_markets_estimate_computed_in_pyth
     assert result.probabilities == market_1x2_percent(book) and sum(result.probabilities.values()) == 100
     assert result.kind == "partial" and result.estimated is True and result.reasons == ("model_small_sample",)
     assert result.pick is None and result.forecast is None
+    # The estimate expires with its prices (the client hides it then).
+    found = store.lookup(ai_event(ai))
+    assert result.to_json()["estimateFrom"] == {"fetchedAt": iso(found.fetched_at), "validFor": int(found.valid_for)}
     facts = facts_of(model)
     assert facts["market"] == book_json(book)  # the real odds go in as data
 
