@@ -223,11 +223,18 @@ class Telemetry:
     # ---- ads --------------------------------------------------------------------------------
 
     def exposure(self, kind: str, user_id: int, campaign_id: int, variant: str, placement: str, event_key: str,
-                 country: str | None, now: int, segment: str | None = None) -> bool:
-        """An impression or a control exposure; False if this one was already counted today."""
+                 country: str | None, now: int, segment: str | None = None, caps: tuple[int, int] = (0, 0)) -> bool:
+        """An impression or a control exposure; False if this one was already counted today, or if it would
+        exceed the campaign's frequency caps (per day, in all; 0 = none). The cap is checked inside the same
+        write transaction as the insert, so concurrent impressions of different matches cannot both pass it."""
         if kind not in ("impression", "control"):
             raise ValueError(kind)
         with self._write() as conn:
+            per_day, total = caps
+            if kind == "impression" and (per_day or total):
+                today, in_all = self._counts(conn, user_id, campaign_id, event_key, now)
+                if (per_day and today >= per_day) or (total and in_all >= total):
+                    return False
             return conn.execute(
                 "INSERT OR IGNORE INTO ad_events (at, day, user_id, campaign_id, variant, placement, event_key, country, "
                 "kind, segment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -259,9 +266,13 @@ class Telemetry:
         """Impressions of this campaign for the user on OTHER matches: (today, in all) — frequency caps. The match
         on screen does not count against itself (its impression is recorded once a day anyway)."""
         with self._connect() as conn:
-            today, total = conn.execute(
-                "SELECT COALESCE(SUM(day = ?), 0), COUNT(*) FROM ad_events WHERE user_id = ? AND kind = 'impression' "
-                "AND campaign_id = ? AND event_key != ?", (day_of(now), user_id, campaign_id, event_key)).fetchone()
+            return self._counts(conn, user_id, campaign_id, event_key, now)
+
+    @staticmethod
+    def _counts(conn: sqlite3.Connection, user_id: int, campaign_id: int, event_key: str, now: int) -> tuple[int, int]:
+        today, total = conn.execute(
+            "SELECT COALESCE(SUM(day = ?), 0), COUNT(*) FROM ad_events WHERE user_id = ? AND kind = 'impression' "
+            "AND campaign_id = ? AND event_key != ?", (day_of(now), user_id, campaign_id, event_key)).fetchone()
         return int(today), int(total)
 
     # ---- partner conversions --------------------------------------------------------------------

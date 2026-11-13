@@ -110,3 +110,15 @@ def test_analytics_by_segment_with_partner_conversions_and_long_periods(ads_env)
     csv_text = client.get(f"/api/admin/ads/analytics.csv?days=365&campaign={cid}").text
     assert "partner_conversions" in csv_text.splitlines()[0]
     assert client.get("/api/admin/ads/analytics?days=500").json()["error"] == "bad_period"
+
+
+def test_query_token_permission_is_a_partner_setting(ads_env):
+    config, clock, client, _, secrets_, csrf, pid = ads_env
+    from miniapp.tests.test_ads_admin import partner_body
+    assert post(client, "/api/admin/ads/partners", csrf, {**partner_body(), "id": pid,
+                                                          "postbackQueryToken": True}).status_code == 200
+    post(client, f"/api/admin/ads/partners/{pid}/postback-token", csrf, {})
+    assert publish(client, csrf, secrets_, clock).status_code == 200
+    assert policy.parse(config.ads_policy_file.read_bytes(), pub(config)).query_token_partners == frozenset({pid})
+    assert post(client, "/api/admin/ads/partners", csrf, {**partner_body(), "id": pid,
+                                                          "postbackQueryToken": "yes"}).status_code == 400

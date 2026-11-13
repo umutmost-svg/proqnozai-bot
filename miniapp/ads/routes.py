@@ -41,6 +41,8 @@ POSTBACK_EVENT = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
 POSTBACK_TOKEN = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 CLICK_ID = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 MAX_POSTBACKS_PER_MINUTE = 600  # authenticated postbacks per process; forged ones never count
+MAX_POSTBACK_ATTEMPTS_PER_MINUTE = 3000  # every postback request, before any work (bounds forged traffic)
+POSTBACK_TOKEN_HEADER = "x-postback-token"
 
 # (event id, market) -> {"market", "odds", "fetchedAt", "validFor"} from the verified odds store, or None.
 OddsLookup = Callable[[str, str], Awaitable[dict | None]]
@@ -200,12 +202,14 @@ def register_ads_routes(
         _, _, odds = await price(t.user_id, t.placement, t.event_key)
 
         def record() -> bool:
-            if current_variant(t, country, odds is not None) is None:
+            found = current_variant(t, country, odds is not None)
+            if found is None:
                 return False
+            c = found[0]
             ts = now()
             return safe(lambda: telemetry.exposure("impression", t.user_id, t.campaign_id, t.variant, t.placement,
-                                                   t.event_key, country, ts, viewer_class(t.user_id, ts)),
-                        False, "impression")
+                                                   t.event_key, country, ts, viewer_class(t.user_id, ts),
+                                                   (c.cap_per_day, c.cap_total)), False, "impression")
         counted = await run_in_threadpool(record)
         return JSONResponse({"ok": True, "counted": counted})
 
@@ -250,30 +254,46 @@ def register_ads_routes(
         return JSONResponse({"ok": True})
 
     accepted: deque[float] = deque()
+    attempts: deque[float] = deque()
+
+    def admit(window: deque[float], limit: int, ts: float) -> bool:
+        while window and ts - window[0] >= 60:
+            window.popleft()
+        if len(window) >= limit:
+            return False
+        window.append(ts)
+        return True
 
     @app.get("/api/ads/postback")
     async def postback(request: Request) -> JSONResponse:
         """A partner's server reports a conversion of one of our clicks. Authenticated by the partner's own token
-        (only its SHA-256 is in the signed snapshot); idempotent by (partner, txn). No session, no cookie."""
+        (only its SHA-256 is in the signed snapshot) in the X-Postback-Token header; in the query string only for a
+        partner the owner allowed it for (its platform cannot send headers — the edge must redact that parameter
+        from its logs). Idempotent by (partner, txn). No session, no cookie."""
+        if not admit(attempts, MAX_POSTBACK_ATTEMPTS_PER_MINUTE, now()):
+            return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "60"})
         params = request.query_params
-        if (not {"partner", "token", "click_id", "txn"} <= set(params) <= {"partner", "token", "click_id", "txn", "event"}
+        allowed = {"partner", "click_id", "txn", "event", "token"}
+        if (not {"partner", "click_id", "txn"} <= set(params) <= allowed
                 or any(len(params.getlist(k)) > 1 for k in params)):
             return _error(400, "bad_request")
-        partner, token, click_id, txn = params["partner"], params["token"], params["click_id"], params["txn"]
+        partner, click_id, txn = params["partner"], params["click_id"], params["txn"]
+        header_token, query_token = request.headers.get(POSTBACK_TOKEN_HEADER), params.get("token")
+        token = header_token if header_token is not None else query_token
         event = params.get("event", "conversion")
-        if (not partner.isdigit() or len(partner) > 15 or not POSTBACK_TOKEN.match(token) or not CLICK_ID.match(click_id)
-                or not POSTBACK_TXN.match(txn) or not POSTBACK_EVENT.match(event)):
+        if (not partner.isdigit() or len(partner) > 15 or token is None or not POSTBACK_TOKEN.match(token)
+                or not CLICK_ID.match(click_id) or not POSTBACK_TXN.match(txn) or not POSTBACK_EVENT.match(event)
+                or (header_token is not None and query_token is not None)):
             return _error(400, "bad_request")
         current = await run_in_threadpool(reader.current, True)
         expected = (current.postback_hashes or {}).get(int(partner)) if current is not None else None
         if expected is None or not hmac.compare_digest(postback_token_hash(token), expected):
             return _error(403, "forbidden")
+        if header_token is None and int(partner) not in current.query_token_partners:
+            return _error(403, "token_in_query_not_allowed")
         ts = now()
-        while accepted and ts - accepted[0] >= 60:
-            accepted.popleft()
-        if len(accepted) >= MAX_POSTBACKS_PER_MINUTE:
+        if not admit(accepted, MAX_POSTBACKS_PER_MINUTE, ts):
             return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "60"})
-        accepted.append(ts)
         try:
             status = await run_in_threadpool(telemetry.record_conversion, int(partner), txn, click_id, event, ts)
         except sqlite3.Error as exc:

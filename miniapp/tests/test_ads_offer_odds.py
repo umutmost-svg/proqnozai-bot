@@ -182,17 +182,27 @@ def test_click_id_goes_into_the_link_and_the_postback_counts_once(tmp_path, monk
     click_id = parse_qs(urlsplit(link).query)["sub"][0]
     assert link.startswith("https://p.example.com/promo?sub=") and "{" not in link
     edge = TestClient(env.app, base_url="http://127.0.0.1:8000", headers={"X-Edge-Auth": EDGE})
-    q = {"partner": "1", "token": PB_TOKEN, "click_id": click_id, "txn": "dep-1", "event": "first_deposit"}
-    assert edge.get("/api/ads/postback", params=q).json() == {"status": "accepted"}
-    assert edge.get("/api/ads/postback", params=q).json() == {"status": "duplicate"}
-    assert edge.get("/api/ads/postback", params={**q, "token": "x" * 40}).status_code == 403
-    assert edge.get("/api/ads/postback", params={**q, "partner": "2"}).status_code == 403   # no token for it
-    assert edge.get("/api/ads/postback", params={**q, "txn": "dep-2", "click_id": "z" * 24}).json() == {
+    q = {"partner": "1", "click_id": click_id, "txn": "dep-1", "event": "first_deposit"}
+    auth = {"X-Postback-Token": PB_TOKEN}
+    assert edge.get("/api/ads/postback", params=q, headers=auth).json() == {"status": "accepted"}
+    assert edge.get("/api/ads/postback", params=q, headers=auth).json() == {"status": "duplicate"}
+    assert edge.get("/api/ads/postback", params=q, headers={"X-Postback-Token": "x" * 40}).status_code == 403
+    assert edge.get("/api/ads/postback", params={**q, "partner": "2"}, headers=auth).status_code == 403  # no token
+    assert edge.get("/api/ads/postback", params={**q, "txn": "dep-2", "click_id": "z" * 24}, headers=auth).json() == {
         "status": "unknown_click"}
-    assert edge.get("/api/ads/postback", params={**q, "txn": "bad txn"}).status_code == 400
+    assert edge.get("/api/ads/postback", params={**q, "txn": "bad txn"}, headers=auth).status_code == 400
+    assert edge.get("/api/ads/postback", params=q).status_code == 400                       # no token at all
+    # The token in the query string only for a partner allowed to (its platform cannot send headers).
+    in_query = {**q, "txn": "dep-3", "token": PB_TOKEN}
+    assert edge.get("/api/ads/postback", params=in_query).json()["error"] == "token_in_query_not_allowed"
+    assert edge.get("/api/ads/postback", params=in_query, headers=auth).status_code == 400  # both: ambiguous
+    publish(tmp_path, campaign(variants=variants), version=11,
+            extra={"partners": {"1": {"postbackSha256": postback_token_hash(PB_TOKEN), "queryToken": True}}})
+    env.clock.advance(31)
+    assert edge.get("/api/ads/postback", params=in_query).json() == {"status": "accepted"}
     with env.db() as conn:
         rows = conn.execute("SELECT partner_id, txn_id, event, user_id, campaign_id, variant FROM ad_postbacks").fetchall()
-    assert rows == [(1, "dep-1", "first_deposit", USER, 1, "A")]
+    assert rows == [(1, "dep-1", "first_deposit", USER, 1, "A"), (1, "dep-3", "first_deposit", USER, 1, "A")]
 
 
 def test_odds_in_texts_and_bad_macros_are_rejected():
@@ -289,3 +299,45 @@ def test_partner_api_hook_uses_the_same_idempotent_path(tmp_path):
     assert t.postback_totals(day_of(NOW)) == [{"campaignId": 7, "variant": "B", "event": "registration", "count": 1,
                                                "users": 1}]
     assert t.record_conversion(3, "late", "k" * 24, "conversion", NOW + 31 * DAY) == "unknown_click"  # too old
+
+
+def test_concurrent_impressions_cannot_both_pass_a_cap(tmp_path):
+    t = Telemetry(tmp_path / "t.db")
+    t.init_schema()
+    assert t.exposure("impression", 1, 7, "A", "quick_pick", "fd:1", "AZ", NOW, None, (1, 0)) is True
+    # An offer for fd:2 was issued before fd:1's impression landed: the insert itself enforces the cap.
+    assert t.exposure("impression", 1, 7, "A", "quick_pick", "fd:2", "AZ", NOW, None, (1, 0)) is False
+    assert t.exposure("impression", 1, 7, "A", "quick_pick", "fd:3", "AZ", NOW + DAY, None, (0, 1)) is False
+    assert t.exposure("impression", 1, 7, "A", "quick_pick", "fd:2", "AZ", NOW + DAY, None, (1, 2)) is True
+
+
+def test_an_older_snapshot_with_a_price_in_a_text_drops_only_that_campaign():
+    priced = campaign(2, variants=[{"key": "A", "weight": 100, "headline": "Ставка 2.5 AZN", "body": "", "extra": "",
+                                    "cta": "Go", "url": "https://p.example.com/x"}])
+    body = {"schema": 1, "version": 1, "generatedAt": NOW, "campaigns": [campaign(), priced], "audiences": {}}
+    parsed = policy.parse(policy.canonical(policy.sign(body, KEY)), KEY.public_key())
+    assert [c.id for c in parsed.campaigns] == [1]
+
+
+def test_offer_prices_come_from_the_real_odds_store(clock: FakeClock):
+    import asyncio
+
+    from miniapp.odds.store import MAX_AGE_S, OddsStore
+    from miniapp.tests.test_odds import _event, line
+    from miniapp.tests.test_odds import ingest as push
+
+    store = OddsStore(clock)
+    push(store, clock, line())
+    event = _event("TIMED")
+
+    async def event_of(event_id):
+        return (event if event_id == event.id else None), None
+
+    lookup = odds_source.make_odds_lookup(event_of, store)
+    found = asyncio.run(lookup(event.id, "2"))
+    assert found["market"] == "2" and found["odds"] == 4.5 and 0 < found["validFor"] <= MAX_AGE_S
+    assert found["fetchedAt"].endswith("Z")
+    assert asyncio.run(lookup(event.id, "H1-0.5")) is None              # a market the store does not price
+    assert asyncio.run(lookup("fd:404", "2")) is None                   # an unknown match
+    clock.advance(MAX_AGE_S)                                            # stale prices are never shown
+    assert asyncio.run(lookup(event.id, "2")) is None
