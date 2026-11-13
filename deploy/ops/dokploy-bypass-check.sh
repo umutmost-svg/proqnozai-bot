@@ -53,7 +53,9 @@ hc_curl() {  # $1 url, $2.. extra curl args
 }
 u=$(cat "$HC_FILE" 2>/dev/null) || u=""
 if [ -z "$reason" ]; then
-  [ -n "$u" ] && hc_curl "$u"
+  # Closed, but without a delivered ping nobody would hear about a later reopening: not a success.
+  [ -n "$u" ] || { echo "closed, but no healthchecks URL in $HC_FILE: monitoring not configured"; exit 1; }
+  hc_curl "$u" || { echo "closed, but the healthchecks ping failed"; exit 1; }
   exit 0
 fi
 logger -t dokploy-bypass "OPEN: $reason" 2>/dev/null

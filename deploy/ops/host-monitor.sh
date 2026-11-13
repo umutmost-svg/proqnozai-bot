@@ -35,14 +35,14 @@ hc_curl() {  # $1 url, $2.. extra curl args
 ping_hc() {  # $1 url file, $2 ok|fail, $3 body
   u=$(cat "$1" 2>/dev/null) || { echo "$(date -u +%FT%TZ) no healthchecks URL in $1"; return 1; }
   case $2 in ok) suffix="";; *) suffix="/fail";; esac
-  hc_curl "$u$suffix" --data-raw "$3" || echo "$(date -u +%FT%TZ) healthchecks ping failed ($1)"
+  hc_curl "$u$suffix" --data-raw "$3" || { echo "$(date -u +%FT%TZ) healthchecks ping failed ($1)"; return 1; }
 }
 
 report() {  # $1 name, $2 url file, $3 reasons ("" = ok), $4 summary
-  if [ -z "$3" ]; then ping_hc "$2" ok "$4"; return 0; fi
+  if [ -z "$3" ]; then ping_hc "$2" ok "$4"; return; fi
   logger -t proqnozai-monitor "$1 FAIL: $3" 2>/dev/null
   echo "$(date -u +%FT%TZ) $1 FAIL: $3"
-  ping_hc "$2" fail "$3 | $4"
+  ping_hc "$2" fail "$3 | $4"; return 1
 }
 
 # --- host ---
@@ -76,9 +76,11 @@ if [ -f "$UNIT" ]; then
 fi
 stuck=$(find "$STATE_DIR" -maxdepth 1 -name 'inflight-*' ! -name '*.tmp' -mmin +90 2>/dev/null | sed 's#.*/inflight-##' | tr '\n' ' ')
 [ -z "$stuck" ] || add "backup copies not cleaned: ${stuck% }"
-report host "$HC_HOST" "$r" "disk=${disk}% mem=${mem}MB cf_conns=${conns:-0}"
+report host "$HC_HOST" "$r" "disk=${disk}% mem=${mem}MB cf_conns=${conns:-0}"; rc_host=$?
 
 # --- miniapp-health ---
 body=$(curl -s -m 10 -H "Host: $APP_HOST" http://127.0.0.1/api/health 2>/dev/null)
 case $body in *'"status":"ok"'*) a="";; *) a="/api/health not ok via Traefik loopback";; esac
-report miniapp-health "$HC_APP" "$a" "host=$APP_HOST"
+report miniapp-health "$HC_APP" "$a" "host=$APP_HOST"; rc_app=$?
+# Exit status covers both checks (and a missing URL file / failed ping): a manual run shows any problem.
+[ "$rc_host" = 0 ] && [ "$rc_app" = 0 ]
