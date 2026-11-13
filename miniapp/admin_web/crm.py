@@ -18,7 +18,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Any
 
-from miniapp.admin_web.accounts import ActionError, Admin, AdminStore, reason_digest
+from miniapp.admin_web.accounts import REASON_OF_E, ActionError, Admin, AdminStore, reason_digest
 from miniapp.admin_web.ads import bump_revision as bump_ads_revision
 
 _SCHEMA = """
@@ -114,6 +114,16 @@ CREATE TABLE IF NOT EXISTS crm_broadcast_recipients (
     user_id      INTEGER NOT NULL,
     PRIMARY KEY (broadcast_id, user_id)
 );
+-- MB id changes with the values (editable CRM data, read_personal only); the immutable journal keeps only the fact.
+CREATE TABLE IF NOT EXISTS crm_mb_id_history (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    old_mb_id  TEXT,
+    new_mb_id  TEXT,
+    created_at INTEGER NOT NULL,
+    admin_id   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS crm_mb_id_history_user ON crm_mb_id_history(user_id);
 CREATE TABLE IF NOT EXISTS crm_blocks (
     user_id    INTEGER PRIMARY KEY,
     reason     TEXT NOT NULL,
@@ -225,6 +235,21 @@ class CrmStore:
             return {int(r[0]) for r in conn.execute(
                 "SELECT user_id FROM crm_external_ids WHERE instr(lower(mb_id), lower(?)) > 0", (fragment,))}
 
+    def mb_id_history(self, user_id: int) -> list[dict]:
+        with self.accounts._connect() as conn:
+            return [{"old": r[0], "new": r[1], "at": r[2], "by": r[3]} for r in conn.execute(
+                "SELECT h.old_mb_id, h.new_mb_id, h.created_at, u.email FROM crm_mb_id_history h LEFT JOIN admin_users u "
+                "ON u.id = h.admin_id WHERE h.user_id = ? ORDER BY h.id DESC LIMIT 50", (user_id,))]
+
+    def block_history(self, user_id: int) -> list[dict]:
+        """Blocks and unblocks of one user from the journal (reasons are erasable, read through REASON_OF_E)."""
+        with self.accounts._connect() as conn:
+            return [{"blocked": bool(json.loads(r[0] or "{}").get("blocked")), "at": r[1], "by": r[2], "reason": r[3]}
+                    for r in conn.execute(
+                        "SELECT e.after_json, e.at, u.email, " + REASON_OF_E + " FROM admin_events e LEFT JOIN admin_users u "
+                        "ON u.id = e.admin_id WHERE e.action = 'user.block' AND e.kind IN ('requested', 'done') "
+                        "AND e.target_type = 'user' AND e.target_id = ? ORDER BY e.id DESC LIMIT 50", (str(user_id),))]
+
     def tag_events(self, user_id: int) -> list[dict]:
         with self.accounts._connect() as conn:
             return [{"tag": r[0], "action": r[1], "at": r[2], "by": r[3]} for r in conn.execute(
@@ -275,6 +300,8 @@ class CrmStore:
             "credits": {**account, "enabled": False},
             "blocked": {"reason": block[0], "at": block[1]} if block else None,
             "mbId": self.mb_ids([user_id]).get(user_id),
+            "mbIdHistory": self.mb_id_history(user_id),
+            "blockHistory": self.block_history(user_id),
         }
 
     def segments(self) -> list[dict]:
@@ -353,7 +380,8 @@ class CrmStore:
             raise ActionError("invalid_mb_id")
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "manage_users")
-            had = conn.execute("SELECT 1 FROM crm_external_ids WHERE user_id = ?", (user_id,)).fetchone() is not None
+            prev = conn.execute("SELECT mb_id FROM crm_external_ids WHERE user_id = ?", (user_id,)).fetchone()
+            had = prev is not None
             if mb_id:
                 owner = conn.execute("SELECT user_id FROM crm_external_ids WHERE mb_id = ? COLLATE NOCASE",
                                      (mb_id,)).fetchone()
@@ -364,6 +392,9 @@ class CrmStore:
                              "admin_id = excluded.admin_id", (user_id, mb_id, now, actor.id))
             else:
                 conn.execute("DELETE FROM crm_external_ids WHERE user_id = ?", (user_id,))
+            if (prev[0] if prev else None) != (mb_id or None):
+                conn.execute("INSERT INTO crm_mb_id_history (user_id, old_mb_id, new_mb_id, created_at, admin_id) "
+                             "VALUES (?, ?, ?, ?, ?)", (user_id, prev[0] if prev else None, mb_id or None, now, actor.id))
             bump_ads_revision(conn)  # MB holders feed the ads audiences: the snapshot is out of date
             self.accounts._event(conn, now, actor.id, "user.mb_id", "user", str(user_id),
                                  {"set": had}, {"set": bool(mb_id)}, None, None, "done")

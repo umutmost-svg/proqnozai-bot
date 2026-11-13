@@ -417,6 +417,20 @@ class Store:
                 "LIMIT ? OFFSET ?", (now, *args, limit, offset)).fetchall()
         return total, [_user_row(r) for r in rows]
 
+    def users_by_ids(self, user_ids: list[int], now: int) -> list[dict]:
+        """Rows like list_users for the given ids (batched IN queries; unknown ids are skipped)."""
+        out: list[dict] = []
+        ids = sorted(set(user_ids))
+        with self._connect() as conn:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                out += [_user_row(r) for r in conn.execute(
+                    "SELECT u.telegram_user_id, u.username, u.first_name, u.last_name, u.lang, u.created_at, "
+                    "u.last_login_at, (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.telegram_user_id "
+                    "AND s.revoked_at IS NULL AND s.expires_at > ?) FROM users u "
+                    f"WHERE u.telegram_user_id IN ({','.join('?' * len(chunk))})", (now, *chunk))]
+        return out
+
     def user_profile(self, user_id: int, now: int) -> dict | None:
         with self._connect() as conn:
             row = conn.execute(

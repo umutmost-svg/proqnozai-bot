@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, type CrmUsersPage } from '../api';
-import { num, userName, utc, utcDay } from '../format';
+import { geoLabel, num, userName, utc, utcDay } from '../format';
 import { can, useLoad, useMe } from '../state';
 import { Avatar, Empty, ErrorBox, Loading, PageHead, Pager, SortHeader, Tag, tagTone, Toast, useSort } from '../ui';
 import { CreditsDialog, TagDialog } from './dialogs';
 
-const CHIPS: [string, string][] = [['', 'Все'], ['new', 'Новые 7д'], ['active', 'Активные 7д'], ['inactive', 'Уходящие 14д+']];
+const CHIPS: [string, string][] = [['', 'Все'], ['new', 'Новые 7д'], ['active', 'Активные 7д'], ['inactive', 'Уходящие 14д+'], ['blocked', 'Заблокированные']];
 const LANGS = ['ru', 'az', 'en', 'tr', 'uz', 'pt-BR', 'es'];
 
 export function Users() {
@@ -60,6 +60,7 @@ export function Users() {
     if (chip === 'new') rules.registered_within_days = 7;
     if (chip === 'active') rules.active_within_days = 7;
     if (chip === 'inactive') rules.inactive_for_days = 14;
+    if (chip === 'blocked') rules.blocked = true;
     if (tag) rules.tag_has = tag;
     if (lang) rules.lang_in = [lang];
     const seg = data?.segments.find((s) => String(s.id) === segment);
@@ -99,6 +100,9 @@ export function Users() {
         </select>
         {filtered && <button type="button" className="btn link" onClick={() => { setQuery(''); setParams({}, { replace: true }); }}>Сбросить фильтры</button>}
       </div>
+      {data && data.telemetry === false && (
+        <p className="small muted" style={{ margin: '0 0 12px' }}>Активность и прогнозы считаются по телеметрии Mini App — она пока не ведётся, поэтому в колонках «—». Страна — только по языку интерфейса.</p>
+      )}
       {selected.size > 0 && (
         <div className="bulk" role="region" aria-label="Массовые действия">
           <span className="count">Выбрано: {selected.size}</span>
@@ -121,7 +125,9 @@ export function Users() {
                 <SortHeader label="Telegram ID" field="id" sort={sort} onSort={onSort} />
                 <th>Язык</th>
                 <SortHeader label="Регистрация" field="created" sort={sort} onSort={onSort} />
-                <SortHeader label="Последний вход" field="login" sort={sort} onSort={onSort} />
+                <SortHeader label="Последняя активность" field="seen" sort={sort} onSort={onSort} />
+                <SortHeader label="Прогнозы" field="forecasts" sort={sort} onSort={onSort} className="num" />
+                <th>Страна</th>
                 <SortHeader label="Сессии" field="sessions" sort={sort} onSort={onSort} className="num" />
                 <th>Кредиты</th>
                 <th>Теги</th>
@@ -140,7 +146,9 @@ export function Users() {
                   <td className="mono">{u.id}</td>
                   <td>{u.lang}</td>
                   <td>{utcDay(u.createdAt)}</td>
-                  <td>{utc(u.lastLoginAt)}</td>
+                  <td>{utc(u.lastSeenAt ?? u.lastLoginAt)}</td>
+                  <td className="num">{u.forecasts ?? '—'}</td>
+                  <td>{geoLabel(u.geo)}</td>
                   <td className="num">{u.activeSessions}</td>
                   <td style={{ color: 'var(--demo)', fontWeight: 600 }}>{u.credits.unlimitedUntil ? '∞' : num(u.credits.balance)}</td>
                   <td><div className="tags">{u.tags.map((t) => <Tag key={t} tone={tagTone(t)}>{t}</Tag>)}</div></td>

@@ -1,9 +1,9 @@
 import { useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, errorText, type CrmProfile } from '../api';
-import { num, userName, utc, utcDay } from '../format';
+import { geoLabel, num, userName, utc, utcDay } from '../format';
 import { can, useLoad, useMe, usePrefs } from '../state';
-import { Avatar, Card, DangerDialog, Empty, ErrorBox, Loading, Status, Tag, tagTone, Toast, Topbar } from '../ui';
+import { Avatar, Bars, Card, DangerDialog, Empty, ErrorBox, Loading, Status, Tag, tagTone, Toast, Topbar } from '../ui';
 import { CreditsDialog, TagDialog } from './dialogs';
 
 /** Keyed by the id: moving to another user remounts the card, so no data or open dialog carries over. */
@@ -12,7 +12,7 @@ export function UserCardRoute() {
   return <UserCard key={id} id={id ?? ''} />;
 }
 
-const TABS = ['Хронология', 'Сообщения', 'Кредиты', 'Сессии', 'Заметки'] as const;
+const TABS = ['Хронология', 'Активность', 'Сообщения', 'Кредиты', 'Сессии', 'Заметки'] as const;
 const DOT: Record<string, string> = { registered: '★', login: '→', message: '✉', credits: '∞', note: 'З', admin: '#', ai: 'AI' };
 const MSG_STATUS: Record<string, string> = { not_sent_pilot: 'не отправлено (пилот)', queued: 'в очереди', sent: 'отправлено', failed: 'ошибка' };
 
@@ -71,11 +71,13 @@ function UserCard({ id }: { id: string }) {
             </div>
           </section>
           <div className="stats-strip">
-            <div className="stat"><div className="k">Последний вход</div><div className="v">{utc(data.lastLoginAt)}</div></div>
+            <div className="stat"><div className="k">Последняя активность</div><div className="v">{utc(data.lastSeenAt ?? data.lastLoginAt)}</div></div>
+            <div className="stat"><div className="k">Прогнозов</div><div className="v">{data.activity?.summary ? num(data.activity.summary.forecasts) : '—'}</div></div>
+            <div className="stat"><div className="k">Страна</div><div className="v">{geoLabel(data.geo)}</div></div>
             <div className="stat"><div className="k">Активных сессий</div><div className="v">{active}</div></div>
             <div className="stat"><div className="k">Кредиты</div><div className="v" style={{ color: 'var(--demo)' }}>{data.credits.unlimitedUntil ? '∞ безлимит' : num(data.credits.balance)}</div></div>
             <div className="stat"><div className="k">Сообщений от нас</div><div className="v">{data.messages.length}</div></div>
-            <div className="stat"><div className="k">AI-разборов</div><div className="v">{data.aiCalls ? data.aiCalls.length : '—'}</div></div>
+            <div className="stat"><div className="k">AI-разборов</div><div className="v">{data.activity?.summary ? num(data.activity.summary.aiCreated) : data.aiCalls ? data.aiCalls.length : '—'}</div></div>
             <div className="stat"><div className="k">Заметок</div><div className="v">{data.notes.length}</div></div>
           </div>
           <div className="grid card-3">
@@ -98,6 +100,19 @@ function UserCard({ id }: { id: string }) {
                     ))}
                   </div>
                 ))}
+                {tab === 'Активность' && (!data.activity?.collected ? <Empty title="Активность не собирается">Телеметрия Mini App выключена: последняя активность — по последнему входу.</Empty>
+                  : !data.activity.summary ? <Empty title="Активности пока не было" /> : (
+                    <>
+                      <div className="kv-row"><span>Первая активность</span><b>{utc(data.activity.summary.firstSeenAt)}</b></div>
+                      <div className="kv-row"><span>Активных дней за 30</span><b>{data.activity.summary.activeDays}</b></div>
+                      <div className="kv-row"><span>Прогнозов (быстрые, купоны, AI)</span><b>{num(data.activity.summary.forecasts)}</b></div>
+                      <div className="kv-row"><span>AI-разборов создано / открыто</span><b>{num(data.activity.summary.aiCreated)} / {num(data.activity.summary.aiOpened)}</b></div>
+                      <div className="kv-row"><span>Запросов к API</span><b>{num(data.activity.summary.requests)}</b></div>
+                      <h3 className="small muted" style={{ margin: '16px 0 8px' }}>Прогнозы по дням (UTC), 30 дней</h3>
+                      <Bars title="Прогнозы по дням" values={data.activity.daily.map((d) => d.forecasts)}
+                        labels={[data.activity.daily[0]?.day ?? '', data.activity.daily[data.activity.daily.length - 1]?.day ?? '']} format={(v) => String(v)} />
+                    </>
+                  ))}
                 {tab === 'Сообщения' && (data.messages.length === 0 ? <Empty title="Сообщений пользователю не было" /> : data.messages.map((m) => (
                   <div className="bubble-box" key={m.id}>{m.body}<div className="small muted" style={{ marginTop: 4 }}>{utc(m.at)} · {m.by} · {MSG_STATUS[m.status]}</div></div>
                 )))}
@@ -128,7 +143,7 @@ function UserCard({ id }: { id: string }) {
                 </div>
                 {formError && <div className="form-error" role="alert">{formError}</div>}
                 <div className="row" style={{ justifyContent: 'space-between' }}>
-                  <span className="small muted">Пилот: сохраняется, но не отправляется</span>
+                  <span className="small muted">Отправит бот через очередь (если очередь подключена)</span>
                   <button type="button" className="btn primary" disabled={!manage || busy || !message.trim()}
                     onClick={() => void act(() => api(`/api/admin/users/${data.id}/messages`, { method: 'POST', body: { body: message, idempotencyKey: messageKey } }), 'Сообщение поставлено в очередь бота', () => editMessage(''))}>Отправить</button>
                 </div>
@@ -175,6 +190,15 @@ function UserCard({ id }: { id: string }) {
                     <p className="small muted" style={{ marginBottom: 0 }}>Пустое значение удалит ID. В журнал попадает только факт изменения.</p>
                   </form>
                 )}
+                {(data.mbIdHistory ?? []).length > 0 && (
+                  <details style={{ marginTop: 10 }}>
+                    <summary className="small">История изменений ({data.mbIdHistory!.length})</summary>
+                    {data.mbIdHistory!.map((h, i) => (
+                      <div className="kv-row small" key={i}><span>{utc(h.at)} · {h.by ?? '—'}</span>
+                        <b className="mono">{h.old ?? '∅'} → {h.new ?? '∅'}</b></div>
+                    ))}
+                  </details>
+                )}
               </Card>
               <Card title="Доступ и безопасность">
                 <div className="kv-row"><span>Активных сессий</span><b>{active}</b></div>
@@ -183,7 +207,16 @@ function UserCard({ id }: { id: string }) {
                   <button type="button" className="btn" disabled={!manage || active === 0} onClick={() => setDialog('revoke')}>Отозвать сессии</button>
                   <button type="button" className={`btn ${data.blocked ? '' : 'danger'}`} disabled={!manage} onClick={() => setDialog('block')}>{data.blocked ? 'Разблокировать' : 'Заблокировать'}</button>
                 </div>
-                <p className="small muted" style={{ marginBottom: 0 }}>Опасные действия — с причиной и повторной 2FA. Блокировка в пилоте: флаг и выход со всех устройств.</p>
+                <p className="small muted" style={{ marginBottom: 0 }}>Опасные действия — с причиной и повторной 2FA. Блокировка закрывает доступ только к Mini App (выход со всех устройств), данные не удаляются; разблокировка обратима.</p>
+                {(data.blockHistory ?? []).length > 0 && (
+                  <details style={{ marginTop: 10 }}>
+                    <summary className="small">История блокировок ({data.blockHistory!.length})</summary>
+                    {data.blockHistory!.map((h, i) => (
+                      <div className="kv-row small" key={i}><span>{utc(h.at)} · {h.by ?? '—'}</span>
+                        <b>{h.blocked ? 'Заблокирован' : 'Разблокирован'}{h.reason ? ` · ${h.reason}` : ''}</b></div>
+                    ))}
+                  </details>
+                )}
               </Card>
             </div>
           </div>

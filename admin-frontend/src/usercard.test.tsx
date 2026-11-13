@@ -36,3 +36,25 @@ it('closes the revoke dialog and drops the old profile when the user id changes'
   expect(await screen.findByRole('heading', { name: /User 202/ })).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: /User 101/ })).not.toBeInTheDocument();
 });
+
+it('shows activity, country, MB id history and block history', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const body = url.startsWith('/api/admin/auth/me')
+      ? { admin: { id: 1, email: 'o@x', role: 'owner' }, csrf: 'c', pilot: { dataset: 'demo', demoTelemetry: true } }
+      : {
+        ...profile(303), lastSeenAt: 3, geo: { country: 'AZ', source: 'lang' },
+        activity: { collected: true, summary: { lastSeenAt: 3, forecasts: 7, aiCreated: 2, aiOpened: 3, requests: 9, activeDays: 4, firstSeenAt: 1 },
+          daily: [{ day: '2026-11-01', requests: 1, forecasts: 7, aiOpened: 0 }] },
+        mbIdHistory: [{ old: '111', new: '222', at: 5, by: 'a@x' }],
+        blockHistory: [{ blocked: false, at: 6, by: 'a@x', reason: 'ошибка' }],
+      };
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }));
+  window.history.pushState({}, '', '/users/303');
+  render(<App />);
+  expect(await screen.findByText('Азербайджан · по языку')).toBeInTheDocument();
+  expect(screen.getByText('111 → 222')).toBeInTheDocument();
+  expect(screen.getByText(/Разблокирован · ошибка/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('tab', { name: 'Активность' }));
+  expect(screen.getByText('2 / 3')).toBeInTheDocument();
+});

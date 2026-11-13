@@ -17,19 +17,22 @@ from miniapp.admin_web.access import AccessPublisher
 from miniapp.admin_web.outbox import Outbox
 from miniapp.admin_web.accounts import ActionError
 from miniapp.admin_web.crm import RULE_FIELDS, CrmStore, matches, validate_rules
+from miniapp.admin_web.insights import UserInsights, geo
 from miniapp.store import BurnWindow
 
+ACTIVITY_BULK = 500  # above this many rows the activity is read in one aggregate query over the whole table
 MAX_SCAN = 50_000  # pilot: audiences are evaluated in memory over at most this many users
 CHIPS = {"new": {"registered_within_days": 7}, "active": {"active_within_days": 7},
-         "inactive": {"inactive_for_days": 14}}
+         "inactive": {"inactive_for_days": 14}, "blocked": {"blocked": True}}
 _USER_SORT = {"id": "id", "created": "createdAt", "login": "lastLoginAt", "username": "username",
-              "sessions": "activeSessions"}
+              "sessions": "activeSessions", "seen": "lastSeenAt", "forecasts": "forecasts"}
 
 
 def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     crm = CrmStore(ctx.accounts)
     crm.init_schema()
     store = ctx.store
+    insights = UserInsights(ctx.telemetry_file)
 
     # Finish revocations left half-done by a crash (block / session revoke: the request is journalled, the Mini
     # App write may be missing). Revocation is idempotent; each request completes exactly once.
@@ -91,6 +94,21 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         if item["status"] == "scheduled" and not outbox.batch_counts(f"bc:{item['id']}"):
             queue_broadcast(item["id"])
 
+    def with_activity(rows: list[dict], with_geo: bool = True) -> list[dict]:
+        """Last seen (the later of the last Mini App login and the last telemetry activity), forecasts, GEO.
+        Large sets (a sort over the whole list) read the activity in ONE aggregate query; GEO only for a page."""
+        ids = [r["id"] for r in rows]
+        activity = insights.activity(None if len(ids) > ACTIVITY_BULK else ids, ctx.now())
+        edge = insights.edge_countries(ids) if with_geo else {}
+        for r in rows:
+            a = activity.get(r["id"])
+            r["lastSeenAt"] = max(r["lastLoginAt"] or 0, (a or {}).get("lastSeenAt") or 0) or None
+            r["forecasts"] = a["forecasts"] if a else None
+            r["activeDays30"] = a["activeDays"] if a else None
+            if with_geo:
+                r["geo"] = geo(r, edge)
+        return rows
+
     def decorate(rows: list[dict]) -> list[dict]:
         ids = [r["id"] for r in rows]
         tags = crm.tags_by_user(ids)
@@ -103,6 +121,18 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
             r["credits"] = credits.get(r["id"], {"balance": 0, "unlimitedUntil": None})
             r["blocked"] = r["id"] in blocked
         return rows
+
+    def mb_owners(query: str, rules: dict, known: set[int]) -> list[dict]:
+        """Users whose MB id matches (SQL on crm_external_ids) and who are not in the scanned list yet, batch-loaded
+        and filtered by the same rules before any paging: found even beyond the in-memory scan (MAX_SCAN)."""
+        missing = crm.users_by_mb(query) - known
+        if not missing:
+            return []
+        t = ctx.now()
+        tags = crm.tags_by_user(missing)
+        blocked = crm.blocked()
+        return [u for u in store.users_by_ids(sorted(missing), t)
+                if matches(u, rules, set(tags.get(u["id"], [])), u["id"] in blocked, t)]
 
     def rules_from_query(request: Request) -> dict:
         q = request.query_params
@@ -144,16 +174,20 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         query = q.get("q", "")[:64]
         rules = rules_from_query(request)
         rows = audience(rules, query)
-        by_mb = crm.users_by_mb(query) - {r["id"] for r in rows}
-        if by_mb:  # the search also finds an MB id
-            rows += [r for r in audience(rules) if r["id"] in by_mb]
+        if query:  # the search also finds an MB id
+            rows += mb_owners(query, rules, {r["id"] for r in rows})
         key = _USER_SORT.get(q.get("sort", "created"), "createdAt")
-        rows.sort(key=lambda r: (r[key] is None, r[key] or 0) if key != "username"
-                  else (r[key] is None, (r[key] or "").casefold()), reverse=q.get("order", "desc") != "asc")
+        if key in ("lastSeenAt", "forecasts"):  # telemetry-backed sorts need the activity of every matching row
+            with_activity(rows, with_geo=False)
+        present = [r for r in rows if r[key] is not None]
+        present.sort(key=lambda r: r[key].casefold() if key == "username" else r[key],
+                     reverse=q.get("order", "desc") != "asc")
+        rows = present + [r for r in rows if r[key] is None]  # unknown values last in both directions
         t = ctx.now()
         chip_counts = {name: len(audience(rules)) for name, rules in CHIPS.items()}
         return {"total": len(rows), "page": offset // size + 1, "size": size,
-                "items": decorate(rows[offset:offset + size]),
+                "items": decorate(with_activity(rows[offset:offset + size])),
+                "telemetry": insights.available(),
                 "counts": {**store.user_counts(t, t - 7 * 86400), "chips": chip_counts},
                 "tags": crm.all_tags(), "segments": crm.segments()}
 
@@ -165,6 +199,13 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         if profile is None:
             raise ActionError("not_found", 404)
         info = crm.user_crm(user_id, t)
+        collected = insights.available()
+        activity = insights.activity([user_id], t).get(user_id) if collected else None
+        profile["lastSeenAt"] = max(profile["lastLoginAt"] or 0, (activity or {}).get("lastSeenAt") or 0) or None
+        profile["forecasts"] = activity["forecasts"] if activity else None
+        profile["geo"] = geo(profile, insights.edge_countries([user_id]) if collected else {})
+        profile["activity"] = {"collected": collected, "summary": activity,
+                               "daily": insights.daily(user_id, t) if activity else []}
         delivered = outbox.status_by_keys([f"msg:{m['id']}" for m in info["messages"]])
         for m in info["messages"]:  # the bot's outcome (sent / failed / …) replaces the admin-side "queued"
             m["status"] = (delivered.get(f"msg:{m['id']}") or {}).get("status", m["status"])

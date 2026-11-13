@@ -42,3 +42,15 @@ export const PICKS: Record<string, string> = {
   '1': 'П1', X: 'Ничья', '2': 'П2', 'O2.5': 'ТБ 2.5', 'U2.5': 'ТМ 2.5', BTTS_Y: 'Обе забьют', BTTS_N: 'Обе не забьют',
   NO_BET: 'Без ставки',
 };
+
+const COUNTRY_NAMES: Record<string, string> = {
+  AZ: 'Азербайджан', TR: 'Турция', UZ: 'Узбекистан', BR: 'Бразилия', RU: 'Россия', KZ: 'Казахстан', DE: 'Германия',
+  GE: 'Грузия', UA: 'Украина', US: 'США', GB: 'Великобритания', ES: 'Испания',
+};
+
+/** "AZ · по языку": the country with where it came from (the edge's code, or a guess from the language). */
+export function geoLabel(geo: { country: string | null; source: string | null } | undefined): string {
+  if (!geo || !geo.country) return '—';
+  const name = COUNTRY_NAMES[geo.country] ?? geo.country;
+  return geo.source === 'lang' ? `${name} · по языку` : name;
+}

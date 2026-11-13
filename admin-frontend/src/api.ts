@@ -173,14 +173,16 @@ export type Rules = Partial<{
   registered_within_days: number; active_within_days: number; inactive_for_days: number; lang_in: string[];
   tag_has: string; tag_not: string; has_active_session: boolean; blocked: boolean;
 }>;
+export interface Geo { country: string | null; source: 'edge' | 'lang' | null }
 export interface CrmUserRow extends UserRow {
   tags: string[]; credits: { balance: number; unlimitedUntil: number | null }; blocked: boolean; mbId: string | null;
+  lastSeenAt?: number | null; forecasts?: number | null; activeDays30?: number | null; geo?: Geo;
 }
 export interface Segment { id: number; name: string; rules: Rules; updatedAt: number; size?: number }
 export interface TagCount { tag: string; users: number }
 export interface CrmUsersPage extends Page<CrmUserRow> {
   counts: { total: number; new: number; withActiveSession: number; chips: Record<string, number> };
-  tags: TagCount[]; segments: Segment[];
+  tags: TagCount[]; segments: Segment[]; telemetry?: boolean;
 }
 export interface TimelineItem {
   at: number; kind: string; title: string; detail: string | null; by?: string | null; status?: string; demo?: boolean;
@@ -198,6 +200,15 @@ export interface CrmProfile extends UserProfile {
   blocked: { reason: string; at: number } | null;
   mbId: string | null;
   timeline: TimelineItem[];
+  lastSeenAt?: number | null; forecasts?: number | null; geo?: Geo;
+  activity?: {
+    collected: boolean;
+    summary: { lastSeenAt: number | null; forecasts: number; aiCreated: number; aiOpened: number; requests: number;
+      activeDays: number; firstSeenAt: number | null } | null;
+    daily: { day: string; requests: number; forecasts: number; aiOpened: number }[];
+  };
+  mbIdHistory?: { old: string | null; new: string | null; at: number; by: string | null }[];
+  blockHistory?: { blocked: boolean; at: number; by: string | null; reason: string | null }[];
 }
 export interface Broadcast {
   id: number; name: string; rules: Rules; body: string; buttons: { text: string; url: string }[];
