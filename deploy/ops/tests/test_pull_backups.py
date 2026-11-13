@@ -72,7 +72,7 @@ def env(tmp_path, monkeypatch):
     pings: list[tuple[str, bool, str]] = []
     monkeypatch.setattr(pb, "passphrase", lambda cfg: b"x" * 32)
     monkeypatch.setattr(pb, "DRILL_SCRIPT", tmp_path / "no-drill.sh")   # never the real Docker of this machine
-    monkeypatch.setattr(pb, "hc_ping", lambda cfg, kind, ok, body: pings.append((kind, ok, body)))
+    monkeypatch.setattr(pb, "hc_ping", lambda cfg, kind, ok, body: pings.append((kind, ok, body)) or True)
     cfg = pb.load_config({
         "PROQNOZAI_BACKUP_CONFIG": str(tmp_path / "none.env"), "SSH_BIN": str(fake_ssh), "OPENSSL": OPENSSL,
         "BACKUP_DIR": str(tmp_path / "backups"), "HC_DIR": str(tmp_path / "hc"),
@@ -391,3 +391,30 @@ def test_stale_plaintext_that_cannot_be_removed_fails_pull_and_verify(env):
         stuck.chmod(0o700)
     assert pb.cmd_verify(cfg, archive) == 0              # removable again: the next run cleans and passes
     assert not stuck.exists()
+
+
+def test_backup_is_not_ok_without_a_delivered_ping(env, monkeypatch):
+    cfg, _, _ = env
+    monkeypatch.setattr(pb, "hc_ping", lambda cfg, kind, ok, body: False)   # no URL file / network down
+    assert pb.cmd_pull(cfg, ["bot"]) == 1
+    assert len(list((cfg.backup_dir / "bot").glob("*.tar.enc"))) == 1      # the archive itself is kept
+
+
+def test_failed_mirror_copy_leaves_no_partial_and_no_orphan_archive(env, tmp_path, monkeypatch):
+    cfg, _, pings = env
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    (mirror / pb.MIRROR_MARKER).write_text("")
+    cfg.values["MIRROR_DIR"] = str(mirror)
+    real = pb.shutil.copyfile
+    calls = {"n": 0}
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        real(src, dst)
+        if calls["n"] == 2:                            # the archive copy breaks after writing
+            raise OSError("disk full")
+
+    monkeypatch.setattr(pb.shutil, "copyfile", flaky)
+    assert pb.cmd_pull(cfg, ["bot"]) == 1
+    assert list((mirror / "bot").iterdir()) == []       # no .partial, no manifest without its archive

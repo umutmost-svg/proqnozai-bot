@@ -304,13 +304,21 @@ def mirror(cfg: Config, kind: str, archive: Path, manifest: Path) -> None:
         raise BackupError(f"mirror dir has no {MIRROR_MARKER} marker (not mounted / not dedicated)")
     dest = root / kind
     dest.mkdir(exist_ok=True)
-    for src in (archive, manifest):
-        tmp = dest / f".{src.name}.partial"
-        shutil.copyfile(src, tmp)
-        if sha256_file(tmp) != sha256_file(src):
-            tmp.unlink()
-            raise BackupError(f"mirror copy of {src.name} differs")
-        os.rename(tmp, dest / src.name)
+    for stale in dest.glob(".*.partial"):          # an earlier copy interrupted mid-way
+        stale.unlink()
+    tmps = {src: dest / f".{src.name}.partial" for src in (manifest, archive)}
+    try:
+        for src, tmp in tmps.items():
+            shutil.copyfile(src, tmp)
+            if sha256_file(tmp) != sha256_file(src):
+                raise BackupError(f"mirror copy of {src.name} differs")
+        # Both verified: manifest first, archive last — an archive in the mirror always has its manifest, and
+        # retention only ever counts archives.
+        for src, tmp in tmps.items():
+            os.rename(tmp, dest / src.name)
+    finally:
+        for tmp in tmps.values():
+            tmp.unlink(missing_ok=True)
     retention(dest, kind, int(cfg["KEEP_DAYS"]), int(cfg["MIN_KEEP"]))
 
 
@@ -331,21 +339,25 @@ def retention(directory: Path, kind: str, keep_days: int, min_keep: int, now: da
     return removed
 
 
-def hc_ping(cfg: Config, kind: str, ok: bool, body: str) -> None:
+def hc_ping(cfg: Config, kind: str, ok: bool, body: str) -> bool:
+    """True only when healthchecks.io got the ping. Without it a backup is not reported OK: nobody would hear
+    about the next failure either."""
     url_file = Path(cfg["HC_DIR"]).expanduser() / f"hc-{kind}-backup"
     try:
         url = url_file.read_text().strip()
     except OSError:
-        print(f"warning: no healthchecks URL file {url_file}", file=sys.stderr)
-        return
+        print(f"healthchecks: no URL file {url_file}", file=sys.stderr)
+        return False
     if not url.startswith("https://"):
-        print(f"warning: {url_file} does not hold an https URL", file=sys.stderr)
-        return
+        print(f"healthchecks: {url_file} does not hold an https URL", file=sys.stderr)
+        return False
     req = urllib.request.Request(url if ok else url + "/fail", data=body[:1000].encode(), method="POST")
     try:
         urllib.request.urlopen(req, timeout=10).close()
     except OSError as exc:
-        print(f"warning: healthchecks ping failed ({type(exc).__name__})", file=sys.stderr)
+        print(f"healthchecks: ping failed ({type(exc).__name__})", file=sys.stderr)
+        return False
+    return True
 
 
 def _lock(cfg: Config, kind: str):
@@ -431,7 +443,9 @@ def cmd_pull(cfg: Config, kinds: list[str]) -> int:
             hc_ping(cfg, kind, False, f"{summary}; {drill_err}")
             rc = 1
             continue
-        hc_ping(cfg, kind, True, summary)
+        if not hc_ping(cfg, kind, True, summary):
+            print(f"{ts} {kind} FAIL: backup made, but the healthchecks ping was not delivered (see above)")
+            rc = 1
     return rc
 
 
