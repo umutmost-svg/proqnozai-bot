@@ -662,4 +662,5 @@ export const tr: Dictionary = {
   'ads.ageGate.confirm': '{min} yaşında veya büyüğüm',
   'ads.gone': 'Bu teklif artık geçerli değil',
   'ads.adId': 'Reklam kimliği: {id}',
+  'ads.odds': 'Oran: {odds}',
 };

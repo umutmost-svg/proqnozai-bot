@@ -662,4 +662,5 @@ export const es: Dictionary = {
   'ads.ageGate.confirm': 'Tengo {min} años o más',
   'ads.gone': 'Esta oferta ya no está disponible',
   'ads.adId': 'ID del anuncio: {id}',
+  'ads.odds': 'Cuota: {odds}',
 };

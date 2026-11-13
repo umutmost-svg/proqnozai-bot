@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AdsApi, OfferAnswer, Placement } from '../data/ads';
 import { useServices, useSettings } from '../state/contexts';
+import { usePricesLive } from '../screens/ai/Market';
+import { decimal } from '../screens/ai/Model';
 import ui from './ui.module.css';
 import s from './PartnerOffer.module.css';
 
 /**
- * A partner's offer inside the recommended bet (docs/miniapp/ads-architecture.md §7). The outcome and the
- * price above it come from the model and the odds feed; this block only adds the partner's texts, its CTA
- * and the disclosure line. Texts are rendered as text (never HTML). Without an offer nothing is shown.
+ * A partner's offer inside the recommended bet — quick pick and the AI screen's card (docs/miniapp/
+ * ads-architecture.md §7). The outcome comes from the model; the price, when there is one, from the
+ * verified odds store for exactly that market (sent by the server, hidden once it expires). This block
+ * adds the partner's texts, its CTA and the ad marking. Texts are rendered as text (never HTML). Without
+ * an offer nothing is shown.
  */
 export function PartnerOffer({ placement, eventId }: { placement: Placement; eventId: string }) {
   const { ads } = useServices();
@@ -16,7 +20,7 @@ export function PartnerOffer({ placement, eventId }: { placement: Placement; eve
 }
 
 function OfferBlock({ ads, placement, eventId }: { ads: AdsApi; placement: Placement; eventId: string }) {
-  const { t } = useSettings();
+  const { t, settings } = useSettings();
   const { telegram } = useServices();
   const [answer, setAnswer] = useState<OfferAnswer>({ kind: 'none' });
   const [gone, setGone] = useState(false);
@@ -37,6 +41,7 @@ function OfferBlock({ ads, placement, eventId }: { ads: AdsApi; placement: Place
   }, [ads, placement, eventId, round]);
 
   const token = answer.kind === 'offer' ? answer.offer.impressionToken : null;
+  const priced = usePricesLive(answer.kind === 'offer' ? answer.offer.price?.expires : undefined);
   useEffect(() => {
     // Counted once per shown offer (the server also keeps one per user, campaign, variant, match and day).
     if (token && counted.current !== token) {
@@ -66,6 +71,8 @@ function OfferBlock({ ads, placement, eventId }: { ads: AdsApi; placement: Place
   }
 
   const { offer } = answer;
+  // A campaign shown only with a price disappears with it (the server also refuses its click then).
+  if (offer.oddsRequired && !priced) return null;
   const open = async () => {
     setBusy(true);
     const url = await ads.click(offer.impressionToken);
@@ -81,6 +88,11 @@ function OfferBlock({ ads, placement, eventId }: { ads: AdsApi; placement: Place
         {disclosure ? ` · ${disclosure}` : ''}
       </p>
       <p className={s.headline}>{offer.headline}</p>
+      {offer.price && priced && (
+        <p className={s.odds} data-testid="partner-odds">
+          {t('ads.odds', { odds: decimal(settings.lang, offer.price.odds) })}
+        </p>
+      )}
       {offer.body && <p className={s.body}>{offer.body}</p>}
       {offer.extra && <p className={s.extra}>{offer.extra}</p>}
       {gone ? (

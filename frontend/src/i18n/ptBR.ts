@@ -662,4 +662,5 @@ export const ptBR: Dictionary = {
   'ads.ageGate.confirm': 'Tenho {min} anos ou mais',
   'ads.gone': 'Esta oferta não está mais disponível',
   'ads.adId': 'ID do anúncio: {id}',
+  'ads.odds': 'Odd: {odds}',
 };

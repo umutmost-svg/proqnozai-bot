@@ -662,4 +662,5 @@ export const en: Dictionary = {
   'ads.ageGate.confirm': 'I am {min} or older',
   'ads.gone': 'This offer is no longer available',
   'ads.adId': 'Ad ID: {id}',
+  'ads.odds': 'Odds: {odds}',
 };

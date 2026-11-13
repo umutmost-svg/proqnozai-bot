@@ -664,4 +664,5 @@ export const az: Dictionary = {
   'ads.ageGate.confirm': 'Mənim {min} yaşım var',
   'ads.gone': 'Bu təklif artıq mövcud deyil',
   'ads.adId': 'Reklam ID: {id}',
+  'ads.odds': 'Əmsal: {odds}',
 };

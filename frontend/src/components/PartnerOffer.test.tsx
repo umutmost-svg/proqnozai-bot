@@ -22,9 +22,17 @@ const OFFER: OfferAnswer = {
     extra: 'Условия',
     cta: 'Забрать',
     disclosure: { advertiser: 'Partner LLC', adId: 'ERID-1', ageLabel: '18+' },
+    price: null,
+    oddsRequired: false,
     impressionToken: 'tok',
   },
 };
+
+function priced(required: boolean, validMs: number): OfferAnswer {
+  if (OFFER.kind !== 'offer') throw new Error('fixture');
+  const expires = { mono: performance.now() + validMs, wall: Date.now() + validMs };
+  return { kind: 'offer', offer: { ...OFFER.offer, price: { market: '1X', odds: 1.85, expires }, oddsRequired: required } };
+}
 
 function setup(ads: AdsApi | undefined) {
   const clock = fixedClock('2026-11-08T06:00:00Z');
@@ -91,6 +99,22 @@ describe('PartnerOffer', () => {
     await waitFor(() => expect(ads.impression).toHaveBeenCalledTimes(1));
     await userEvent.click(screen.getByTestId('partner-cta'));
     await waitFor(() => expect(openLink).toHaveBeenCalledWith('https://p.example.com/promo'));
+  });
+
+  it('shows the verified price while it is valid and never one of its own', async () => {
+    setup(fakeAds(OFFER));
+    await screen.findByTestId('partner-offer');
+    expect(screen.queryByTestId('partner-odds')).toBeNull();
+    setup(fakeAds(priced(false, 60_000)));
+    expect(await screen.findByTestId('partner-odds')).toHaveTextContent('Коэффициент: 1,85');
+  });
+
+  it('an offer that requires a price disappears once the price expires; an optional one stays without it', async () => {
+    setup(fakeAds(priced(true, -1)));
+    await waitFor(() => expect(screen.queryByTestId('partner-offer')).toBeNull());
+    setup(fakeAds(priced(false, -1)));
+    expect(await screen.findByTestId('partner-offer')).toBeInTheDocument();
+    expect(screen.queryByTestId('partner-odds')).toBeNull();
   });
 
   it('an offer that is gone says so instead of opening anything', async () => {

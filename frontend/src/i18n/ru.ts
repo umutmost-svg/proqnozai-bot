@@ -660,6 +660,7 @@ export const ru = {
   'ads.ageGate.confirm': 'Мне есть {min} лет',
   'ads.gone': 'Предложение больше недоступно',
   'ads.adId': 'ID рекламы: {id}',
+  'ads.odds': 'Коэффициент: {odds}',
 };
 
 export type Dictionary = Record<keyof typeof ru, string>;

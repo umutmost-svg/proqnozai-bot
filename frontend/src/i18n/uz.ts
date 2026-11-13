@@ -662,4 +662,5 @@ export const uz: Dictionary = {
   'ads.ageGate.confirm': 'Men {min} yoshdaman yoki kattaman',
   'ads.gone': 'Bu taklif endi mavjud emas',
   'ads.adId': 'Reklama ID: {id}',
+  'ads.odds': 'Koeffitsiyent: {odds}',
 };
