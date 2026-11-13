@@ -498,10 +498,18 @@ describe('PARTIAL without the goal model', () => {
   });
 
   it('a goal-model analysis with prices but without verified form stays PARTIAL', async () => {
-    const a = await read(v3({ kind: 'partial', reasons: ['no_verified_form'], market: PRICES }));
+    const noForm = {
+      kind: 'partial', reasons: ['no_verified_form'], market: PRICES, factors: ['away_rating', 'home_advantage'],
+      pick: { market: 'X2', reasons: ['away_stronger_rating'], probability: M.X2 },
+    };
+    const a = await read(v3(noForm));
     expect(a.kind).toBe('partial');
     expect(a.market?.quotes).toHaveLength(5);
-    await expect(read(v3({ kind: 'partial', reasons: [], market: PRICES }))).rejects.toMatchObject({ reason: 'bad_response' });
-    await expect(read(v3({ kind: 'partial', reasons: ['no_verified_form'] }))).rejects.toMatchObject({ reason: 'bad_response' });
+    await expect(read(v3({ ...noForm, reasons: [] }))).rejects.toMatchObject({ reason: 'bad_response' });
+    await expect(read(v3({ ...noForm, market: undefined }))).rejects.toMatchObject({ reason: 'bad_response' });
+    // Nothing read from the unverified form may be claimed.
+    await expect(read(v3({ ...noForm, factors: ['away_rating', 'away_form'] }))).rejects.toMatchObject({ reason: 'bad_response' });
+    await expect(read(v3({ ...noForm, pick: { market: 'X2', reasons: ['away_better_form'], probability: M.X2 } })))
+      .rejects.toMatchObject({ reason: 'bad_response' });
   });
 });

@@ -1119,6 +1119,11 @@ function readAnalysisV3(b: Json, eventId: string, sport: Sport, sent: PriceDeadl
   if (pickReasons.some((r) => r === undefined) || new Set(pickReasons).size !== pickReasons.length || pickReasons.length > 3) {
     return null;
   }
+  // Without verified form nothing read from that form may be claimed.
+  if (known.includes('noVerifiedForm')
+    && (factors.some((f) => FORM_FACTORS.has(f!)) || pickReasons.some((r) => FORM_REASONS.has(r!)))) {
+    return null;
+  }
   if (!Array.isArray(b.alternatives) || b.alternatives.length > 3) return null;
   const alternatives: MarketChance[] = [];
   for (const a of b.alternatives) {
@@ -1167,6 +1172,10 @@ function readAnalysisV3(b: Json, eventId: string, sport: Sport, sent: PriceDeadl
   };
 }
 
+const FORM_FACTORS: ReadonlySet<AiFactor> = new Set(['homeForm', 'awayForm', 'homeGoals', 'awayGoals']);
+const FORM_REASONS: ReadonlySet<PickReason> = new Set([
+  'homeBetterForm', 'awayBetterForm', 'homeMoreGoals', 'awayMoreGoals', 'homeFewerConceded', 'awayFewerConceded', 'evenlyMatched',
+]);
 const MODEL_MISSING: ReadonlySet<InsufficientReason> = new Set(['modelSmallSample', 'modelTeamHistory', 'modelExtremeRates']);
 
 /**
