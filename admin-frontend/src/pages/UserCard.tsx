@@ -123,7 +123,7 @@ function UserCard({ id }: { id: string }) {
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <span className="small muted">Пилот: сохраняется, но не отправляется</span>
                   <button type="button" className="btn primary" disabled={!manage || busy || !message.trim()}
-                    onClick={() => void act(() => api(`/api/admin/users/${data.id}/messages`, { method: 'POST', body: { body: message } }), 'Сообщение записано (в пилоте не отправляется)', () => setMessage(''))}>Отправить</button>
+                    onClick={() => void act(() => api(`/api/admin/users/${data.id}/messages`, { method: 'POST', body: { body: message, idempotencyKey: `msg-${crypto.randomUUID()}` } }), 'Сообщение поставлено в очередь бота', () => setMessage(''))}>Отправить</button>
                 </div>
               </Card>
               <Card title="Кредиты" action={<Tag tone="warning">выключены</Tag>}>

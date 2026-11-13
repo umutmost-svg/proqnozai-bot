@@ -52,11 +52,16 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     for pending in crm.unqueued_messages():  # finish messages left between the two steps by a crash
         queue_message(pending["adminId"], pending["userId"], pending["messageId"], pending["body"], pending["requestId"])
 
-    def queue_broadcast(item: dict, recipients: list[int]) -> int:
-        """Jobs of a scheduled broadcast (one per recipient, sent by the bot from `scheduledAt`). Idempotent."""
-        jobs = [(f"bc:{item['id']}:{uid}", uid, item["body"], item["buttons"]) for uid in recipients]
-        return outbox.enqueue(jobs, batch_id=f"bc:{item['id']}", not_before=item["scheduledAt"], admin_event_id=None,
-                              now=ctx.now())
+    def queue_broadcast(broadcast_id: int) -> int:
+        """Jobs of a scheduled broadcast: one per FROZEN recipient, sent by the bot from `scheduledAt`. Idempotent;
+        nothing is queued unless the broadcast is still scheduled (a cancelled one never gets new jobs)."""
+        item = next((b for b in crm.broadcasts() if b["id"] == broadcast_id), None)
+        if item is None or item["status"] != "scheduled":
+            return 0
+        jobs = [(f"bc:{broadcast_id}:{uid}", uid, item["body"], item["buttons"])
+                for uid in crm.frozen_recipients(broadcast_id)]
+        return outbox.enqueue(jobs, batch_id=f"bc:{broadcast_id}", not_before=item["scheduledAt"],
+                              admin_event_id=None, now=ctx.now())
 
     access = AccessPublisher(ctx.accounts, ctx.access_file)
     access.init_schema()
@@ -84,7 +89,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
 
     for item in crm.broadcasts():  # a schedule committed just before a crash: queue it now
         if item["status"] == "scheduled" and not outbox.batch_counts(f"bc:{item['id']}"):
-            queue_broadcast(item, [u["id"] for u in broadcast_audience(item["rules"])])
+            queue_broadcast(item["id"])
 
     def decorate(rows: list[dict]) -> list[dict]:
         ids = [r["id"] for r in rows]
@@ -243,8 +248,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         """Queued for the bot (admin -> bot outbox); the admin process never calls Telegram itself."""
         admin = ctx.admin_of(request, "manage_users")
         exists(user_id)
-        body = (await ctx.body(request)).get("body")
-        result = crm.send_message(admin, user_id, body, ctx.now(), request.state.request_id)
+        data = await ctx.body(request)
+        body = data.get("body")
+        result = crm.send_message(admin, user_id, body, data.get("idempotencyKey"), ctx.now(), request.state.request_id)
         queue_message(admin.id, user_id, result["id"], body.strip(), result["requestId"])
         return {"id": result["id"], "status": "queued"}
 
@@ -345,10 +351,11 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         if item is None:
             raise ActionError("not_found", 404)
         audience_ids = [u["id"] for u in broadcast_audience(item["rules"])]
-        result = ctx.step_up_guard(admin, lambda: crm.schedule_broadcast(admin, broadcast_id, at, len(audience_ids),
+        result = ctx.step_up_guard(admin, lambda: crm.schedule_broadcast(admin, broadcast_id, at, audience_ids,
                                                                          reason, key, code, ctx.now()))
-        # Also on a replay: a crash between the schedule and the queue is finished by the retry (keys are idempotent).
-        queue_broadcast({**item, "scheduledAt": at}, audience_ids)
+        # Also on a replay: a crash between the schedule and the queue is finished by the retry — with the frozen
+        # recipients only, and only while the broadcast is still scheduled.
+        queue_broadcast(broadcast_id)
         return result
 
     @app.post("/api/admin/broadcasts/{broadcast_id}/cancel")

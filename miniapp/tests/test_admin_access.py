@@ -129,9 +129,9 @@ def test_reader_refuses_a_replayed_older_file_after_a_restart(tmp_path):
 
     write(20, [5])
     assert AccessPolicy(path, policy.public_key_hex(key), clock).blocked() == {5}
-    write(19, [])
-    assert AccessPolicy(path, policy.public_key_hex(key), clock).blocked() == frozenset()  # nothing applied yet
-    assert AccessPolicy(path, policy.public_key_hex(key), clock)._version == 20  # the mark keeps the floor
-    write(20, [5])
-    restarted = AccessPolicy(path, policy.public_key_hex(key), clock)
-    assert restarted.blocked() == {5}
+    write(19, [])                                    # replayed older file, then a restart
+    assert AccessPolicy(path, policy.public_key_hex(key), clock).blocked() == {5}
+    path.unlink()                                    # deleted file, then a restart
+    assert AccessPolicy(path, policy.public_key_hex(key), clock).blocked() == {5}
+    write(21, [])                                    # a real unblock
+    assert AccessPolicy(path, policy.public_key_hex(key), clock).blocked() == frozenset()

@@ -4,15 +4,18 @@ The admin panel writes jobs (one recipient each, plain text); the bot — the on
 claims, sends and records the outcome here. This module is the whole contract on the bot side; wiring it
 into the bot's job queue (main.py, behind a flag that is off by default) is a separate step.
 
-Rules: a job is claimed atomically (queued -> sending), so two bot instances never send it twice; a job
-left in `sending` (crash) returns to the queue after STUCK_S, at most MAX_ATTEMPTS times; expired jobs are
-never sent late; users banned in the bot are skipped; texts are never logged. Retention: texts of finished
+Rules: a job is claimed atomically (queued -> sending) right before it is sent, with a claim token that fences
+its outcome, so two bot instances never send it twice. Delivery is AT MOST ONCE: a job left in `sending` past
+STUCK_S (the bot died mid-send, Telegram's outcome unknown) is marked `failed/interrupted`, never re-sent;
+explicit retryable outcomes (rate limit, network before sending) are retried up to MAX_ATTEMPTS. Expired jobs
+are never sent late; users banned in the bot are skipped; texts are never logged. Retention: texts of finished
 jobs are cleared after TEXT_RETENTION_DAYS, rows deleted after ROW_RETENTION_DAYS.
 """
 from __future__ import annotations
 
 import json
 import logging
+import secrets
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
@@ -46,6 +49,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     admin_event_id  INTEGER,
     created_at      INTEGER NOT NULL,
     claimed_at      INTEGER,
+    claim_token     TEXT,
     sent_at         INTEGER
 );
 CREATE INDEX IF NOT EXISTS jobs_due ON jobs(status, not_before);
@@ -61,6 +65,7 @@ class Job:
     text: str
     buttons: list[dict]
     attempts: int
+    token: str
 
 
 @dataclass(frozen=True)
@@ -107,47 +112,55 @@ class BotOutbox:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
 
-    def claim(self, now: int, limit: int = BATCH) -> list[Job]:
+    def claim(self, now: int) -> Job | None:
+        """The next due job, claimed for sending now (one at a time: a claim never waits behind other sends)."""
+        token = secrets.token_hex(16)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                # Outcome unknown (crashed mid-send): never re-sent — at most once.
+                conn.execute("UPDATE jobs SET status = 'failed', last_error_code = 'interrupted', claim_token = NULL "
+                             "WHERE status = 'sending' AND claimed_at <= ?", (now - STUCK_S,))
                 conn.execute("UPDATE jobs SET status = 'expired' WHERE status = 'queued' AND expires_at <= ?", (now,))
-                # Stuck in `sending` (the bot died mid-send): back to the queue, or failed after MAX_ATTEMPTS.
-                conn.execute("UPDATE jobs SET status = CASE WHEN attempts >= ? THEN 'failed' ELSE 'queued' END, "
-                             "last_error_code = 'stuck' WHERE status = 'sending' AND claimed_at <= ?",
-                             (MAX_ATTEMPTS, now - STUCK_S))
-                rows = conn.execute(
+                row = conn.execute(
                     "SELECT id, user_id, text, buttons_json, attempts FROM jobs WHERE status = 'queued' "
-                    "AND not_before <= ? AND (retry_at IS NULL OR retry_at <= ?) ORDER BY not_before, created_at "
-                    "LIMIT ?", (now, now, limit)).fetchall()
-                jobs = []
-                for job_id, user_id, text, buttons, attempts in rows:
-                    if conn.execute("UPDATE jobs SET status = 'sending', claimed_at = ?, attempts = attempts + 1 "
-                                    "WHERE id = ? AND status = 'queued'", (now, job_id)).rowcount:
-                        jobs.append(Job(job_id, user_id, text, json.loads(buttons), attempts + 1))
+                    "AND not_before <= ? AND expires_at > ? AND (retry_at IS NULL OR retry_at <= ?) "
+                    "ORDER BY not_before, created_at LIMIT 1", (now, now, now)).fetchone()
+                job = None
+                if row is not None and conn.execute(
+                        "UPDATE jobs SET status = 'sending', claimed_at = ?, claim_token = ?, attempts = attempts + 1 "
+                        "WHERE id = ? AND status = 'queued'", (now, token, row[0])).rowcount:
+                    job = Job(row[0], row[1], row[2], json.loads(row[3]), row[4] + 1, token)
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
                 raise
-        return jobs
+        return job
 
-    def finish(self, job: Job, outcome: Outcome, now: int) -> None:
+    def finish(self, job: Job, outcome: Outcome, now: int) -> bool:
+        """Records the outcome only for the claim that is still current (fenced by its token)."""
+        fence = "WHERE id = ? AND status = 'sending' AND claim_token = ?"
         with self._connect() as conn:
             if outcome.kind == "sent":
-                conn.execute("UPDATE jobs SET status = 'sent', sent_at = ?, last_error_code = NULL WHERE id = ? "
-                             "AND status = 'sending'", (now, job.id))
+                cur = conn.execute(f"UPDATE jobs SET status = 'sent', sent_at = ?, last_error_code = NULL, "
+                                   f"claim_token = NULL {fence}", (now, job.id, job.token))
             elif outcome.kind == "retry" and job.attempts < MAX_ATTEMPTS:
-                conn.execute("UPDATE jobs SET status = 'queued', retry_at = ?, last_error_code = ? WHERE id = ? "
-                             "AND status = 'sending'", (now + max(1, outcome.retry_after), outcome.code, job.id))
+                cur = conn.execute(f"UPDATE jobs SET status = 'queued', retry_at = ?, last_error_code = ?, "
+                                   f"claim_token = NULL {fence}",
+                                   (now + max(1, outcome.retry_after), outcome.code, job.id, job.token))
             else:
-                conn.execute("UPDATE jobs SET status = 'failed', last_error_code = ? WHERE id = ? AND status = 'sending'",
-                             (outcome.code or "error", job.id))
+                cur = conn.execute(f"UPDATE jobs SET status = 'failed', last_error_code = ?, claim_token = NULL {fence}",
+                                   (outcome.code or "error", job.id, job.token))
+        return cur.rowcount > 0
 
     async def run_once(self, send: Callable[[Job], Awaitable[Outcome]], now: Callable[[], int],
                        is_banned: Callable[[int], bool] = lambda user_id: False) -> dict[str, int]:
         """Claims due jobs and sends them through `send` (the bot's own sender). Returns counts by outcome."""
         counts: dict[str, int] = {}
-        for job in self.claim(now()):
+        for _ in range(BATCH):
+            job = self.claim(now())
+            if job is None:
+                break
             if is_banned(job.user_id):
                 outcome = Outcome("failed", "bot_ban")
             else:

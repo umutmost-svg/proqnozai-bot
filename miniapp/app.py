@@ -342,13 +342,12 @@ def create_app(
         from miniapp.ads.service import RecentPicks
         from miniapp.ads.telemetry import Telemetry, telemetry_path
 
-        picks = RecentPicks()
-        app.state.ads_picks = picks
-
         try:
             telemetry = Telemetry(telemetry_path(settings.db_path))
             telemetry.init_schema()
             telemetry.maybe_purge(now())
+            picks = RecentPicks(telemetry)
+            app.state.ads_picks = picks
         except (sqlite3.Error, OSError, RuntimeError) as exc:
             # Non-authoritative data must not stop the Mini App: without telemetry there are no ads (routes 404).
             logger.error("event=ads_telemetry_unavailable type=%s", type(exc).__name__)
@@ -615,7 +614,10 @@ def create_app(
                            ai_status=lambda: "connected" if ai.connected else "not_connected", odds=odds)
     def on_pick(user_id: int, field: str, event_ids: list[str]) -> None:
         note_activity(user_id, field)
-        picks.add(user_id, event_ids, now())
+        try:
+            picks.add(user_id, event_ids, now())
+        except sqlite3.Error as exc:  # no record = no offer for that match, never a failed pick
+            logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
 
     register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session,
                           on_pick=on_pick if telemetry else None)

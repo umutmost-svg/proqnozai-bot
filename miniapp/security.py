@@ -123,38 +123,37 @@ def parse_access_policy(raw: bytes, public_key: Ed25519PublicKey) -> tuple[int, 
 class AccessPolicy:
     """Users blocked in the admin panel, from the signed `access-policy.json` next to the Mini App database.
 
-    Re-read when the file changed (checked at most every ACCESS_RELOAD_S). A missing, unsigned, invalid or older
-    file keeps the last good list, so deleting or replaying a file cannot unblock anybody while the process
-    runs; MINIAPP_BLOCKED_USER_IDS applies independently. Blocking ends access only: no data is deleted."""
+    Re-read when the file changed (checked at most every ACCESS_RELOAD_S). The last applied snapshot is kept, as
+    signed bytes, in `access-policy.json.applied` and loaded (verified again) at start: a missing, unsigned,
+    invalid or older file — also after a restart — never replaces it, so deleting or replaying a file cannot
+    unblock anybody. MINIAPP_BLOCKED_USER_IDS applies independently. Blocking ends access only: nothing is deleted.
+    """
 
     def __init__(self, path: Path, public_key_hex: str, clock: Callable[[], float]) -> None:
         self.path = path
-        # The applied version survives restarts: an older (replayed) file is refused after a restart too.
-        self.mark = path.with_name(path.name + ".applied")
+        self.applied = path.with_name(path.name + ".applied")
         self.public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key_hex))
         self.clock = clock
         self._lock = threading.Lock()
-        self._version = self._read_mark()
+        self._version = 0
         self._blocked: frozenset[int] = frozenset()
+        try:
+            self._version, self._blocked = parse_access_policy(self.applied.read_bytes(), self.public_key)
+        except FileNotFoundError:
+            pass  # first start: nothing applied yet
+        except (OSError, AccessPolicyError) as exc:
+            # A damaged copy: start from the current file (the admin re-writes it); logged for the operator.
+            _logger.warning("event=access_applied_unreadable reason=%s", exc)
         self._stamp: tuple[int, int] | None = None
-        self._stamp_applied: tuple[int, int] | None = None
         self._checked_at: float | None = None
 
-    def _read_mark(self) -> int:
+    def _keep(self, raw: bytes) -> None:
+        tmp = self.applied.with_name(self.applied.name + ".tmp")
         try:
-            value = int(self.mark.read_text().strip())
-        except (OSError, ValueError):
-            return 0  # a lost mark accepts the current file (the only one the admin keeps writing)
-        # Versions are wall-clock milliseconds: a mark far in the future would refuse every real file.
-        return value if 0 < value <= int(self.clock() * 1000) + 86_400_000 else 0
-
-    def _write_mark(self, version: int) -> None:
-        tmp = self.mark.with_name(self.mark.name + ".tmp")
-        try:
-            tmp.write_text(str(version))
-            tmp.replace(self.mark)
+            tmp.write_bytes(raw)
+            tmp.replace(self.applied)
         except OSError as exc:
-            _logger.warning("event=access_mark_failed type=%s", type(exc).__name__)
+            _logger.warning("event=access_applied_write_failed type=%s", type(exc).__name__)
 
     def blocked(self) -> frozenset[int]:
         with self._lock:
@@ -167,10 +166,11 @@ class AccessPolicy:
                 stamp = (st.st_mtime_ns, st.st_size)
                 if stamp != self._stamp:
                     self._stamp = stamp
-                    version, blocked = parse_access_policy(self.path.read_bytes(), self.public_key)
-                    if version > self._version or (version == self._version and self._stamp_applied is None):
-                        self._version, self._blocked, self._stamp_applied = version, blocked, stamp
-                        self._write_mark(version)
+                    raw = self.path.read_bytes()
+                    version, blocked = parse_access_policy(raw, self.public_key)
+                    if version > self._version:
+                        self._version, self._blocked = version, blocked
+                        self._keep(raw)
                         _logger.info("event=access_policy_applied version=%s blocked=%s", version, len(blocked))
             except FileNotFoundError:
                 pass

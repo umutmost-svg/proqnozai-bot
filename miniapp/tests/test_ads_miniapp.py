@@ -399,3 +399,17 @@ def test_offers_only_for_matches_the_server_recommended(tmp_path):
     assert env.offer(other, event="fd:777", picked=False).json() == {"offer": None}  # another user's pick
     env.clock.advance(6 * 3600 + 1)
     assert env.offer(c, event="fd:777", picked=False).json() == {"offer": None}   # the pick expired
+
+
+def test_recommended_matches_are_shared_between_workers(tmp_path):
+    first = Env(tmp_path)
+    publish(tmp_path, campaign())
+    c, _ = first.user()
+    first.app.state.ads_picks.add(USER, ["fd:42"], first.clock.now)   # the pick was served by worker 1
+    second = Env(tmp_path)                                             # worker 2, same data directory
+    second.clock.now = first.clock.now
+    c2 = TestClient(second.app, base_url="http://127.0.0.1:8000", headers={"X-Edge-Auth": EDGE, "CF-IPCountry": "AZ"})
+    for k, v in c.cookies.items():
+        c2.cookies.set(k, v)
+    c2.uid = USER
+    assert second.offer(c2, event="fd:42", picked=False).json()["offer"]["id"] == 1

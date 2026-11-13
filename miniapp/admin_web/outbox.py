@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     admin_event_id  INTEGER,
     created_at      INTEGER NOT NULL,
     claimed_at      INTEGER,
+    claim_token     TEXT,
     sent_at         INTEGER
 );
 CREATE INDEX IF NOT EXISTS jobs_due ON jobs(status, not_before);

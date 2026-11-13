@@ -56,6 +56,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS ad_events_one_exposure
     ON ad_events(day, user_id, campaign_id, variant, event_key, kind) WHERE kind IN ('impression', 'control');
 CREATE INDEX IF NOT EXISTS ad_events_campaign ON ad_events(campaign_id, day);
 CREATE INDEX IF NOT EXISTS ad_events_user ON ad_events(user_id, kind, at);
+-- Matches the server recommended to the user (quick pick): offers are issued only for these, until `until`.
+CREATE TABLE IF NOT EXISTS recent_picks (
+    user_id   INTEGER NOT NULL,
+    event_key TEXT NOT NULL,
+    until     INTEGER NOT NULL,
+    PRIMARY KEY (user_id, event_key)
+);
 -- The user's own statement "I am N or older" for a partner's age gate (the highest N kept).
 CREATE TABLE IF NOT EXISTS age_confirmations (
     user_id      INTEGER PRIMARY KEY,
@@ -237,6 +244,17 @@ class Telemetry:
                 out.update({uid: variant for uid, variant in rows})
         return out
 
+    def add_picks(self, user_id: int, event_keys: list[str], until: int) -> None:
+        with self._write() as conn:
+            conn.executemany("INSERT INTO recent_picks (user_id, event_key, until) VALUES (?, ?, ?) "
+                             "ON CONFLICT(user_id, event_key) DO UPDATE SET until = MAX(until, excluded.until)",
+                             [(user_id, e, until) for e in event_keys])
+
+    def has_pick(self, user_id: int, event_key: str, now: int) -> bool:
+        with self._connect() as conn:
+            return conn.execute("SELECT 1 FROM recent_picks WHERE user_id = ? AND event_key = ? AND until > ?",
+                                (user_id, event_key, now)).fetchone() is not None
+
     def maybe_purge(self, now: int) -> None:
         """Retention while the process runs: at most once per UTC day (best effort, called on app traffic)."""
         today = day_of(now)
@@ -254,6 +272,7 @@ class Telemetry:
         with self._write() as conn:
             conn.execute("DELETE FROM ad_events WHERE day < ?", (events_before,))
             conn.execute("DELETE FROM user_activity WHERE day < ?", (activity_before,))
+            conn.execute("DELETE FROM recent_picks WHERE until <= ?", (now,))
 
 
 def days_back(now: int, days: int) -> str:

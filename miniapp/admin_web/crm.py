@@ -108,6 +108,12 @@ CREATE TABLE IF NOT EXISTS crm_external_ids (
     updated_at INTEGER NOT NULL,
     admin_id   INTEGER NOT NULL
 );
+-- Recipients frozen when a broadcast is scheduled: the queued jobs (and any retry) use exactly this list.
+CREATE TABLE IF NOT EXISTS crm_broadcast_recipients (
+    broadcast_id INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    PRIMARY KEY (broadcast_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS crm_blocks (
     user_id    INTEGER PRIMARY KEY,
     reason     TEXT NOT NULL,
@@ -185,6 +191,12 @@ class CrmStore:
     def init_schema(self) -> None:
         with self.accounts._connect() as conn:
             conn.executescript(_SCHEMA)
+            try:  # pilot databases created before the column existed (additive)
+                conn.execute("ALTER TABLE crm_messages ADD COLUMN idempotency_key TEXT")
+            except sqlite3.OperationalError:
+                pass
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS crm_messages_key ON crm_messages(idempotency_key) "
+                         "WHERE idempotency_key IS NOT NULL")
 
     # ---- reads -------------------------------------------------------------------------------
 
@@ -368,14 +380,29 @@ class CrmStore:
                                  {"noteId": note_id}, None, None, "done")
         return {"id": note_id}
 
-    def send_message(self, actor: Admin, user_id: int, body: str, now: int, request_id: str) -> dict:
+    def send_message(self, actor: Admin, user_id: int, body: str, key: str, now: int, request_id: str) -> dict:
         """Step 1 of 2: the message row and a `requested` event in one transaction. The caller then queues the job
-        for the bot (outbox, idempotent by `msg:<id>`) and records `completed` (unfinished ones: at startup)."""
+        for the bot (outbox, idempotent by `msg:<id>`) and records `completed` (unfinished ones: at startup).
+
+        `key` (the client's idempotency key) binds a retry to the same admin, user and text: a retry after a lost
+        response returns the same message (and its request) instead of a second Telegram message."""
         body = _text(body, "message", MAX_TEXT)
+        if not isinstance(key, str) or not 8 <= len(key) <= 80:
+            raise ActionError("idempotency_key_required")
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "manage_users")
-            msg_id = conn.execute("INSERT INTO crm_messages (user_id, body, status, created_at, admin_id) "
-                                  "VALUES (?, ?, 'queued', ?, ?)", (user_id, body, now, actor.id)).lastrowid
+            prior = conn.execute("SELECT id, admin_id, user_id, body FROM crm_messages WHERE idempotency_key = ?",
+                                 (key,)).fetchone()
+            if prior is not None:
+                if (prior[1], prior[2], prior[3]) != (actor.id, user_id, body):
+                    raise ActionError("idempotency_key_reused", 409)
+                req = conn.execute(
+                    "SELECT request_id FROM admin_events WHERE action = 'user.message' AND kind = 'requested' "
+                    "AND CAST(json_extract(after_json, '$.messageId') AS INTEGER) = ?", (prior[0],)).fetchone()
+                return {"id": prior[0], "status": "queued", "requestId": req[0], "replayed": True}
+            msg_id = conn.execute("INSERT INTO crm_messages (user_id, body, status, created_at, admin_id, "
+                                  "idempotency_key) VALUES (?, ?, 'queued', ?, ?, ?)",
+                                  (user_id, body, now, actor.id, key)).lastrowid
             # The journal keeps the message id, never its text.
             self.accounts._event(conn, now, actor.id, "user.message", "user", str(user_id), None,
                                  {"messageId": msg_id}, None, None, "requested", request_id)
@@ -388,6 +415,11 @@ class CrmStore:
                             (request_id,)).fetchone() is None:
                 self.accounts._event(conn, now, admin_id, "user.message", "user", str(user_id), None,
                                      {"messageId": msg_id, "queued": True}, None, None, "completed", request_id)
+
+    def frozen_recipients(self, broadcast_id: int) -> list[int]:
+        with self.accounts._connect() as conn:
+            return [r[0] for r in conn.execute("SELECT user_id FROM crm_broadcast_recipients WHERE broadcast_id = ? "
+                                               "ORDER BY user_id", (broadcast_id,))]
 
     def unqueued_messages(self) -> list[dict]:
         """Messages whose `requested` event has no `completed` one (a crash between the two steps)."""
@@ -453,8 +485,9 @@ class CrmStore:
 
     # ---- dangerous writes: step-up + reason + idempotency ------------------------------------
 
-    def schedule_broadcast(self, actor: Admin, broadcast_id: int, at: int, recipients: int, reason: str, key: str,
-                           code: str, now: int) -> dict:
+    def schedule_broadcast(self, actor: Admin, broadcast_id: int, at: int, recipients: list[int], reason: str,
+                           key: str, code: str, now: int) -> dict:
+        """The recipient list is frozen here (crm_broadcast_recipients), in the schedule's transaction."""
         with self.accounts._write() as conn:
             # A retry returns the recorded result even if the audience size changed since (only the time binds).
             if (prior := self.accounts._replayed(conn, key, actor.id, "broadcast.schedule", str(broadcast_id),
@@ -471,8 +504,10 @@ class CrmStore:
             if status[0] != "draft":
                 raise ActionError("not_a_draft", 409)
             conn.execute("UPDATE crm_broadcasts SET status = 'scheduled', scheduled_at = ?, recipients = ?, "
-                         "updated_at = ? WHERE id = ?", (at, recipients, now, broadcast_id))
-            after = {"scheduledAt": at, "recipients": recipients}
+                         "updated_at = ? WHERE id = ?", (at, len(recipients), now, broadcast_id))
+            conn.executemany("INSERT OR IGNORE INTO crm_broadcast_recipients (broadcast_id, user_id) VALUES (?, ?)",
+                             [(broadcast_id, uid) for uid in sorted(set(recipients))])
+            after = {"scheduledAt": at, "recipients": len(recipients)}
             event = self.accounts._event(conn, now, actor.id, "broadcast.schedule", "broadcast", str(broadcast_id),
                                          {"status": "draft"}, after, reason, key, "done")
         return {"eventId": event, "after": after, "replayed": False}

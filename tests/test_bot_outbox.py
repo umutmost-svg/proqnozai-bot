@@ -74,9 +74,12 @@ async def test_scheduled_cancelled_expired_and_stuck_jobs(tmp_path):
     async def ok(job):
         return Outcome("sent")
 
-    assert bot.claim(NOW) and statuses(tmp_path)["bc:2:11"][0] == "sending"  # claimed, then the bot "dies"
+    stale = bot.claim(NOW)
+    assert stale and statuses(tmp_path)["bc:2:11"][0] == "sending"  # claimed, then the bot "dies" mid-send
     assert await bot.run_once(ok, lambda: NOW + 60) == {}  # bc:1 not due yet, bc:2 still in flight
-    assert await bot.run_once(ok, lambda: NOW + bot_outbox.STUCK_S + 1) == {"sent": 1}  # stuck job requeued
+    assert await bot.run_once(ok, lambda: NOW + bot_outbox.STUCK_S + 1) == {}
+    assert statuses(tmp_path)["bc:2:11"] == ("failed", "interrupted")  # outcome unknown: never sent twice
+    assert bot.finish(stale, Outcome("sent"), NOW + 700) is False  # a late result of the old claim is fenced off
     assert admin.cancel_batch("bc:1") == 2
     assert await bot.run_once(ok, lambda: NOW + 3600) == {}
     admin.enqueue([("msg:9", 11, "late", [])], batch_id=None, not_before=NOW, admin_event_id=None, now=NOW)
@@ -109,3 +112,14 @@ def test_retention_clears_texts_then_rows(tmp_path):
         assert conn.execute("SELECT text FROM jobs").fetchone()[0] == ""
     bot.purge(NOW + 401 * 86400)
     assert statuses(tmp_path) == {}
+
+
+async def test_an_expired_job_is_never_claimed(tmp_path):
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("msg:1", 11, "x", [])], batch_id=None, not_before=NOW, admin_event_id=None, now=NOW)
+
+    async def ok(job):
+        return Outcome("sent")
+    assert bot.claim(NOW + admin_outbox.JOB_TTL_S) is None
+    assert statuses(tmp_path)["msg:1"][0] == "expired"
+    assert await bot.run_once(ok, lambda: NOW + admin_outbox.JOB_TTL_S + 10) == {}

@@ -39,14 +39,14 @@ def test_note_and_message_are_stored_and_the_message_queued_for_the_bot(env):
     _, clock, client, accounts, secrets_ = env
     csrf = login(client, clock, secrets_, "admin@x.test")
     post(client, f"/api/admin/users/{U1}/notes", csrf, {"body": "частный комментарий"})
-    msg = post(client, f"/api/admin/users/{U1}/messages", csrf, {"body": "Привет!"}).json()
+    msg = post(client, f"/api/admin/users/{U1}/messages", csrf, {"body": "Привет!", "idempotencyKey": "msg-key-0001"}).json()
     assert msg["status"] == "queued"
     card = client.get(f"/api/admin/users/{U1}").json()
     assert card["notes"][0]["body"] == "частный комментарий" and card["messages"][0]["status"] == "queued"
     assert any(e["kind"] == "message" for e in card["timeline"]) and card["credits"]["enabled"] is False
     dump = " ".join(str(e) for e in accounts.events())
     assert "частный комментарий" not in dump and "Привет!" not in dump  # texts never enter the journal
-    assert post(client, f"/api/admin/users/{U1}/messages", csrf, {"body": ""}).status_code == 400
+    assert post(client, f"/api/admin/users/{U1}/messages", csrf, {"body": "", "idempotencyKey": "msg-key-0002"}).status_code == 400
 
 
 def test_segments_validate_rules_and_count_audience(env):
