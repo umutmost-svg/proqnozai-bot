@@ -192,24 +192,28 @@ def test_click_id_goes_into_the_link_and_the_postback_counts_once(tmp_path, monk
         "status": "unknown_click"}
     assert edge.get("/api/ads/postback", params={**q, "txn": "bad txn"}, headers=auth).status_code == 400
     assert edge.get("/api/ads/postback", params=q).status_code == 400                       # no token at all
-    # The token in the query string only for a partner allowed to (its platform cannot send headers).
-    in_query = {**q, "txn": "dep-3", "token": PB_TOKEN}
-    assert edge.get("/api/ads/postback", params=in_query).json()["error"] == "token_in_query_not_allowed"
-    assert edge.get("/api/ads/postback", params=in_query, headers=auth).status_code == 400  # both: ambiguous
-    publish(tmp_path, campaign(variants=variants), version=11,
-            extra={"partners": {"1": {"postbackSha256": postback_token_hash(PB_TOKEN), "queryToken": True}}})
-    env.clock.advance(31)
-    assert edge.get("/api/ads/postback", params=in_query).json() == {"status": "accepted"}
+    # Never in a URL (proxy and access logs): refused before the token is even looked at.
+    assert edge.get("/api/ads/postback", params={**q, "token": PB_TOKEN}).json()["error"] == "token_in_url"
+    # A platform that cannot set headers POSTs the fields with the token in a form or JSON body.
+    form = {**q, "txn": "dep-3", "token": PB_TOKEN}
+    assert edge.post("/api/ads/postback", data=form).json() == {"status": "accepted"}
+    assert edge.post("/api/ads/postback", json={**form, "txn": "dep-4"}).json() == {"status": "accepted"}
+    assert edge.post("/api/ads/postback", json={**form, "txn": "dep-4"}).json() == {"status": "duplicate"}
+    assert edge.post("/api/ads/postback", json={**form, "partner": 1}).status_code == 400   # strings only
+    assert edge.post("/api/ads/postback", content=b"x", headers={"Content-Type": "text/plain"}).status_code == 415
+    assert edge.post("/api/ads/postback", data={**form, "pad": "x" * 3000}).status_code == 413
+    assert edge.post("/api/ads/postback", data={**form, "token": "y" * 40}).status_code == 403
     with env.db() as conn:
         rows = conn.execute("SELECT partner_id, txn_id, event, user_id, campaign_id, variant FROM ad_postbacks").fetchall()
-    assert rows == [(1, "dep-1", "first_deposit", USER, 1, "A"), (1, "dep-3", "first_deposit", USER, 1, "A")]
+    assert [r[1] for r in rows] == ["dep-1", "dep-3", "dep-4"] and rows[0] == (1, "dep-1", "first_deposit", USER, 1, "A")
 
 
 def test_odds_in_texts_and_bad_macros_are_rejected():
     with pytest.raises(policy.PolicyError, match="odds_in_text"):
         policy.check_ad_text("Коэффициент 1.85 только сегодня", "headline", 80)
-    with pytest.raises(policy.PolicyError, match="odds_in_text"):
-        policy.check_ad_text("кф 2,5", "body", 300)
+    for text in ("кф 2,5", "кэф 1.850", "odds 2·10", "معامل 1٫9"):
+        with pytest.raises(policy.PolicyError, match="odds_in_text"):
+            policy.check_ad_text(text, "body", 300)
     assert policy.check_ad_text("Бонус 100% до 500 AZN", "headline", 80)
     hosts = ["p.example.com"]
     assert policy.check_url("https://p.example.com/x?s={click_id}", hosts)
@@ -309,6 +313,15 @@ def test_concurrent_impressions_cannot_both_pass_a_cap(tmp_path):
     assert t.exposure("impression", 1, 7, "A", "quick_pick", "fd:2", "AZ", NOW, None, (1, 0)) is False
     assert t.exposure("impression", 1, 7, "A", "quick_pick", "fd:3", "AZ", NOW + DAY, None, (0, 1)) is False
     assert t.exposure("impression", 1, 7, "A", "quick_pick", "fd:2", "AZ", NOW + DAY, None, (1, 2)) is True
+
+
+def test_the_total_cap_counts_the_same_match_on_earlier_days(tmp_path):
+    t = Telemetry(tmp_path / "t.db")
+    t.init_schema()
+    assert t.exposure("impression", 1, 7, "A", "quick_pick", "fd:1", "AZ", NOW, None, (0, 1)) is True
+    assert t.impression_counts(1, 7, "fd:1", NOW) == (0, 0)          # the card on screen today stays visible
+    assert t.impression_counts(1, 7, "fd:1", NOW + DAY) == (0, 1)    # the same match tomorrow: counted
+    assert t.exposure("impression", 1, 7, "A", "quick_pick", "fd:1", "AZ", NOW + DAY, None, (0, 1)) is False
 
 
 def test_an_older_snapshot_with_a_price_in_a_text_drops_only_that_campaign():

@@ -40,8 +40,11 @@ function OfferBlock({ ads, placement, eventId }: { ads: AdsApi; placement: Place
     };
   }, [ads, placement, eventId, round]);
 
-  const token = answer.kind === 'offer' ? answer.offer.impressionToken : null;
   const priced = usePricesLive(answer.kind === 'offer' ? answer.offer.price?.expires : undefined);
+  // A campaign shown only with a price disappears with it (the server also refuses its click then); an offer that
+  // is not on screen is never counted as an impression (nor against the user's frequency cap).
+  const visible = answer.kind === 'offer' && (!answer.offer.oddsRequired || priced);
+  const token = visible ? answer.offer.impressionToken : null;
   useEffect(() => {
     // Counted once per shown offer (the server also keeps one per user, campaign, variant, match and day).
     if (token && counted.current !== token) {
@@ -71,8 +74,7 @@ function OfferBlock({ ads, placement, eventId }: { ads: AdsApi; placement: Place
   }
 
   const { offer } = answer;
-  // A campaign shown only with a price disappears with it (the server also refuses its click then).
-  if (offer.oddsRequired && !priced) return null;
+  if (!visible) return null;
   const open = async () => {
     setBusy(true);
     const url = await ads.click(offer.impressionToken);

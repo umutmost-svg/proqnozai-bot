@@ -109,9 +109,13 @@ describe('PartnerOffer', () => {
     expect(await screen.findByTestId('partner-odds')).toHaveTextContent('Коэффициент: 1,85');
   });
 
-  it('an offer that requires a price disappears once the price expires; an optional one stays without it', async () => {
-    setup(fakeAds(priced(true, -1)));
-    await waitFor(() => expect(screen.queryByTestId('partner-offer')).toBeNull());
+  it('an offer that requires a price disappears once the price expires and is never counted; an optional one stays', async () => {
+    const hidden = fakeAds(priced(true, -1));
+    setup(hidden);
+    await waitFor(() => expect(hidden.offer).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId('partner-offer')).toBeNull();
+    expect(hidden.impression).not.toHaveBeenCalled();
     setup(fakeAds(priced(false, -1)));
     expect(await screen.findByTestId('partner-offer')).toBeInTheDocument();
     expect(screen.queryByTestId('partner-odds')).toBeNull();

@@ -131,8 +131,6 @@ _MIGRATIONS = (
     "ALTER TABLE ad_campaigns ADD COLUMN cap_total INTEGER NOT NULL DEFAULT 0",
     # SHA-256 of the partner's postback token; the token itself is shown once and never stored.
     "ALTER TABLE ad_partners ADD COLUMN postback_sha256 TEXT",
-    # 1: the partner's platform cannot send a header, its postback carries the token in the query string.
-    "ALTER TABLE ad_partners ADD COLUMN postback_query_token INTEGER NOT NULL DEFAULT 0",
 )
 DEFAULT_DISPLAY = {"blockedCountries": [], "ageGate": False, "ageMin": 18}
 
@@ -236,11 +234,10 @@ class AdsStore:
     def _partner_row(r: tuple) -> dict:
         return {"id": r[0], "name": r[1], "hosts": json.loads(r[2]), "countries": json.loads(r[3]),
                 "allowUnknownCountry": bool(r[4]), "ageMin": r[5], "disclosure": json.loads(r[6]),
-                "active": bool(r[7]), "updatedAt": r[8], "postback": r[9] is not None,
-                "postbackQueryToken": bool(r[10])}
+                "active": bool(r[7]), "updatedAt": r[8], "postback": r[9] is not None}
 
     _PARTNER_COLS = ("id, name, url_hosts, allowed_countries, allow_unknown_country, age_min, disclosure_template, "
-                     "active, updated_at, postback_sha256, postback_query_token")
+                     "active, updated_at, postback_sha256")
 
     def partners(self) -> list[dict]:
         with self.accounts._connect() as conn:
@@ -252,8 +249,7 @@ class AdsStore:
         age = data.get("ageMin", 0)
         active = data.get("active", True)
         allow_unknown = data.get("allowUnknownCountry", False)
-        query_token = data.get("postbackQueryToken", False)
-        if not isinstance(active, bool) or not isinstance(allow_unknown, bool) or not isinstance(query_token, bool):
+        if not isinstance(active, bool) or not isinstance(allow_unknown, bool):
             raise ActionError("invalid_partner")
         return {
             "name": _check(policy.check_text, data.get("name"), "name", MAX_NAME),
@@ -263,15 +259,13 @@ class AdsStore:
             "ageMin": _int_field(age, 0, policy.MAX_AGE, "invalid_age"),
             "disclosure": _check(policy.check_disclosure, data.get("disclosure")),
             "active": active,
-            "postbackQueryToken": query_token,
         }
 
     def save_partner(self, actor: Admin, data: dict, now: int, partner_id: int | None = None) -> dict:
         """Owner only: a partner bounds every campaign of it (link hosts, countries, age), §3."""
         item = self._partner_input(data)
         values = (item["name"], _json(item["hosts"]), _json(item["countries"]), int(item["allowUnknownCountry"]),
-                  item["ageMin"], _json(item["disclosure"]), int(item["active"]), now, actor.id,
-                  int(item["postbackQueryToken"]))
+                  item["ageMin"], _json(item["disclosure"]), int(item["active"]), now, actor.id)
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "manage_partners")
             before = None
@@ -279,8 +273,8 @@ class AdsStore:
                 if partner_id is None:
                     partner_id = int(conn.execute(
                         "INSERT INTO ad_partners (name, url_hosts, allowed_countries, allow_unknown_country, age_min, "
-                        "disclosure_template, active, updated_at, admin_id, postback_query_token, created_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "disclosure_template, active, updated_at, admin_id, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (*values, now)).lastrowid)
                 else:
                     row = conn.execute(f"SELECT {self._PARTNER_COLS} FROM ad_partners WHERE id = ?",
@@ -290,8 +284,8 @@ class AdsStore:
                     before = {k: v for k, v in self._partner_row(row).items() if k not in ("id", "updatedAt", "postback")}
                     conn.execute(
                         "UPDATE ad_partners SET name = ?, url_hosts = ?, allowed_countries = ?, allow_unknown_country = ?, "
-                        "age_min = ?, disclosure_template = ?, active = ?, updated_at = ?, admin_id = ?, "
-                        "postback_query_token = ? WHERE id = ?",
+                        "age_min = ?, disclosure_template = ?, active = ?, updated_at = ?, admin_id = ? "
+                        "WHERE id = ?",
                         (*values, partner_id))
             except sqlite3.IntegrityError:
                 raise ActionError("name_taken", 409) from None
@@ -616,9 +610,8 @@ class AdsStore:
         display = {k: v for k, v in self._display(conn).items() if k != "updatedAt"}
         # Every active partner with a postback token, whether or not it has a campaign now: conversions of
         # earlier clicks keep arriving after a campaign ends.
-        postbacks = {str(pid): {"postbackSha256": digest, "queryToken": bool(in_query)} for pid, digest, in_query in
-                     conn.execute("SELECT id, postback_sha256, postback_query_token FROM ad_partners "
-                                  "WHERE active = 1 AND postback_sha256 IS NOT NULL")}
+        postbacks = {str(pid): {"postbackSha256": digest} for pid, digest in conn.execute(
+            "SELECT id, postback_sha256 FROM ad_partners WHERE active = 1 AND postback_sha256 IS NOT NULL")}
         body = {"schema": policy.SCHEMA, "version": version, "generatedAt": now, "campaigns": campaigns,
                 "audiences": {k: sorted(v) for k, v in sorted(audiences.items())}, "settings": display,
                 "partners": postbacks}

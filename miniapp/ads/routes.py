@@ -5,7 +5,8 @@ flag off these paths do not exist (404) and nothing about ads is read or written
 - POST /api/ads/impression {impressionToken}   -> one per (user, campaign, variant, event, day)
 - POST /api/ads/click {impressionToken}         -> {"url"} from the CURRENT snapshot; repeated taps within 10 s count once
 - POST /api/ads/age {"min": N}                  -> the user states "I am N or older" (the gate's own age)
-- GET  /api/ads/postback?partner=&token=&click_id=&txn=[&event=] -> a partner's conversion (server to server)
+- GET  /api/ads/postback?partner=&click_id=&txn=[&event=] + X-Postback-Token header, or POST the same fields with
+  `token` as a form/JSON body                   -> a partner's conversion (server to server)
 Every answer is personal: `Cache-Control: no-store` (the app guard) and no shared cache key.
 
 The price in an offer is never the campaign's: it is the verified odds store's current price of the market the
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import re
 import secrets
@@ -23,6 +25,7 @@ import sqlite3
 from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -43,6 +46,7 @@ CLICK_ID = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 MAX_POSTBACKS_PER_MINUTE = 600  # authenticated postbacks per process; forged ones never count
 MAX_POSTBACK_ATTEMPTS_PER_MINUTE = 3000  # every postback request, before any work (bounds forged traffic)
 POSTBACK_TOKEN_HEADER = "x-postback-token"
+MAX_POSTBACK_BODY = 2048
 
 # (event id, market) -> {"market", "odds", "fetchedAt", "validFor"} from the verified odds store, or None.
 OddsLookup = Callable[[str, str], Awaitable[dict | None]]
@@ -264,33 +268,72 @@ def register_ads_routes(
         window.append(ts)
         return True
 
-    @app.get("/api/ads/postback")
+    async def postback_fields(request: Request) -> dict[str, str] | JSONResponse:
+        """GET: fields in the query string, the token ONLY in the X-Postback-Token header. POST (for platforms that
+        cannot set headers): fields and the token in a form or JSON body. A token in a URL is refused: URLs end up in
+        proxy and access logs."""
+        if "token" in request.query_params:
+            return _error(400, "token_in_url")
+        if request.method == "GET":
+            params = request.query_params
+            if any(len(params.getlist(k)) > 1 for k in params):
+                return _error(400, "bad_request")
+            fields = dict(params)
+            header = request.headers.get(POSTBACK_TOKEN_HEADER)
+            if header is not None:
+                fields["token"] = header
+            return fields
+        declared = request.headers.get("content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) > MAX_POSTBACK_BODY):
+            return _error(413, "too_large")
+        body = bytearray()
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > MAX_POSTBACK_BODY:
+                return _error(413, "too_large")
+        kind = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        try:
+            if kind == "application/json":
+                data = json.loads(body)
+                if not isinstance(data, dict) or not all(isinstance(v, str) for v in data.values()):
+                    return _error(400, "bad_request")
+                fields = data
+            elif kind == "application/x-www-form-urlencoded":
+                pairs = parse_qsl(body.decode(), keep_blank_values=True, strict_parsing=bool(body))
+                if len({k for k, _ in pairs}) != len(pairs):
+                    return _error(400, "bad_request")
+                fields = dict(pairs)
+            else:
+                return _error(415, "unsupported_media_type")
+        except (ValueError, UnicodeDecodeError):
+            return _error(400, "bad_request")
+        header = request.headers.get(POSTBACK_TOKEN_HEADER)
+        if header is not None:
+            if "token" in fields:
+                return _error(400, "bad_request")
+            fields["token"] = header
+        return fields
+
+    @app.api_route("/api/ads/postback", methods=["GET", "POST"])
     async def postback(request: Request) -> JSONResponse:
         """A partner's server reports a conversion of one of our clicks. Authenticated by the partner's own token
-        (only its SHA-256 is in the signed snapshot) in the X-Postback-Token header; in the query string only for a
-        partner the owner allowed it for (its platform cannot send headers — the edge must redact that parameter
-        from its logs). Idempotent by (partner, txn). No session, no cookie."""
+        (only its SHA-256 is in the signed snapshot); idempotent by (partner, txn). No session, no cookie."""
         if not admit(attempts, MAX_POSTBACK_ATTEMPTS_PER_MINUTE, now()):
             return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "60"})
-        params = request.query_params
-        allowed = {"partner", "click_id", "txn", "event", "token"}
-        if (not {"partner", "click_id", "txn"} <= set(params) <= allowed
-                or any(len(params.getlist(k)) > 1 for k in params)):
+        fields = await postback_fields(request)
+        if isinstance(fields, JSONResponse):
+            return fields
+        if not {"partner", "click_id", "txn", "token"} <= set(fields) <= {"partner", "click_id", "txn", "event", "token"}:
             return _error(400, "bad_request")
-        partner, click_id, txn = params["partner"], params["click_id"], params["txn"]
-        header_token, query_token = request.headers.get(POSTBACK_TOKEN_HEADER), params.get("token")
-        token = header_token if header_token is not None else query_token
-        event = params.get("event", "conversion")
-        if (not partner.isdigit() or len(partner) > 15 or token is None or not POSTBACK_TOKEN.match(token)
-                or not CLICK_ID.match(click_id) or not POSTBACK_TXN.match(txn) or not POSTBACK_EVENT.match(event)
-                or (header_token is not None and query_token is not None)):
+        partner, click_id, txn, token = fields["partner"], fields["click_id"], fields["txn"], fields["token"]
+        event = fields.get("event", "conversion")
+        if (not partner.isdigit() or len(partner) > 15 or not POSTBACK_TOKEN.match(token)
+                or not CLICK_ID.match(click_id) or not POSTBACK_TXN.match(txn) or not POSTBACK_EVENT.match(event)):
             return _error(400, "bad_request")
         current = await run_in_threadpool(reader.current, True)
         expected = (current.postback_hashes or {}).get(int(partner)) if current is not None else None
         if expected is None or not hmac.compare_digest(postback_token_hash(token), expected):
             return _error(403, "forbidden")
-        if header_token is None and int(partner) not in current.query_token_partners:
-            return _error(403, "token_in_query_not_allowed")
         ts = now()
         if not admit(accepted, MAX_POSTBACKS_PER_MINUTE, ts):
             return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "60"})

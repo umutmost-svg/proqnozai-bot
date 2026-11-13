@@ -51,7 +51,7 @@ MAX_CAP_TOTAL = 1000
 CLICK_MACRO = "{click_id}"
 _CLICK_ID = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 # A price-like number in an advertiser's text ("1.85", "2,5"): prices come from the odds store only.
-_ODDS_IN_TEXT = re.compile(r"(?<![\d.,])\d{1,3}[.,]\d{1,2}(?![\d.,%])")
+_ODDS_IN_TEXT = re.compile(r"(?<![\d.,·٫])\d{1,3}[.,·٫]\d{1,3}(?![\d.,·٫%])")
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 _HOST = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f  ]")
@@ -227,8 +227,6 @@ class Policy:
     settings: DisplaySettings = DisplaySettings()
     # partner id -> SHA-256 (hex) of its postback token; partners without one cannot post conversions
     postback_hashes: dict[int, str] | None = None
-    # partners whose postback may carry the token in the query string (their platform cannot send a header)
-    query_token_partners: frozenset[int] = frozenset()
 
 
 def _campaign(raw: Any, audiences: dict[str, frozenset[int]]) -> Campaign:
@@ -309,26 +307,22 @@ def check_settings(value: Any) -> DisplaySettings:
                            age_gate=gate, age_min=_int(value.get("ageMin", 18), 1, MAX_AGE, "invalid_settings"))
 
 
-def _postback_partners(value: Any) -> tuple[dict[int, str], frozenset[int]]:
-    """{partner id: token SHA-256} and the partners allowed to send the token in the query string."""
+def _postback_hashes(value: Any) -> dict[int, str]:
+    """{partner id: SHA-256 of its postback token}."""
     if value is None:
-        return {}, frozenset()
+        return {}
     if not isinstance(value, dict) or len(value) > MAX_CAMPAIGNS:
         raise PolicyError("bad_partners")
     out: dict[int, str] = {}
-    query: set[int] = set()
     for key, entry in value.items():
         if (not isinstance(key, str) or not key.isdigit() or len(key) > 15 or not isinstance(entry, dict)
-                or "postbackSha256" not in entry or set(entry) - {"postbackSha256", "queryToken"}):
+                or set(entry) != {"postbackSha256"}):
             raise PolicyError("bad_partners")
-        digest, in_query = entry["postbackSha256"], entry.get("queryToken", False)
-        if not isinstance(digest, str) or not _SHA256_HEX.match(digest) or not isinstance(in_query, bool):
+        digest = entry["postbackSha256"]
+        if not isinstance(digest, str) or not _SHA256_HEX.match(digest):
             raise PolicyError("bad_partners")
-        pid = _int(int(key), 1, 2**53, "bad_partners")
-        out[pid] = digest
-        if in_query:
-            query.add(pid)
-    return out, frozenset(query)
+        out[_int(int(key), 1, 2**53, "bad_partners")] = digest
+    return out
 
 
 def apply_settings(c: Campaign, settings: DisplaySettings) -> Campaign:
@@ -435,9 +429,8 @@ def parse(raw: bytes, public_key: Ed25519PublicKey) -> Policy:
     parsed = tuple(kept)
     if len({c.id for c in parsed}) != len(parsed):
         raise PolicyError("bad_campaigns")
-    hashes, query_partners = _postback_partners(data.get("partners"))
     return Policy(version=version, generated_at=generated, campaigns=parsed, audiences=audiences, sha256=sha,
-                  settings=display, postback_hashes=hashes, query_token_partners=query_partners)
+                  settings=display, postback_hashes=_postback_hashes(data.get("partners")))
 
 
 def read_version(path: Path, public_key: Ed25519PublicKey) -> tuple[int, str] | None:

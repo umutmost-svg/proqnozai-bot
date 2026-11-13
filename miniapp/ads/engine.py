@@ -7,8 +7,8 @@ segment > general), priority descending, the later start first, the smaller id f
 eligible campaign wins; its A/B assignment may put the viewer into the control group — then nothing
 is shown (no fall-through, so the control group stays clean).
 
-Also eligible only: within the campaign's frequency caps (impressions of the viewer on OTHER matches today,
-and in all), and — for a campaign whose offer requires a price — when the verified odds store has a price of
+Also eligible only: within the campaign's frequency caps (impressions of the viewer today on other matches, and
+in all — today's impression of the match on screen excepted), and — for a campaign whose offer requires a price — when the verified odds store has a price of
 the recommended market right now. A capped or price-less campaign lets the next one through (it is not an
 experiment outcome).
 """
@@ -35,7 +35,7 @@ class Viewer:
     # None (or a failing callback) = no data: a campaign whose condition needs a segment is not shown,
     # whatever the tree says (a negated segment must not turn "unknown" into "everyone").
     segment: Callable[[str, dict[str, int]], bool] | None = field(default=None, compare=False)
-    # (campaign id, event key) -> (impressions today on other matches, impressions in all on other matches).
+    # (campaign id, event key) -> (impressions today on other matches, impressions in all but today's one of this match).
     # None (or a failing callback) = unknown: a capped campaign is not shown.
     exposures: Callable[[int, str], tuple[int, int]] | None = field(default=None, compare=False)
 

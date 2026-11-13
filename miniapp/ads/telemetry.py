@@ -263,16 +263,18 @@ class Telemetry:
         return True
 
     def impression_counts(self, user_id: int, campaign_id: int, event_key: str, now: int) -> tuple[int, int]:
-        """Impressions of this campaign for the user on OTHER matches: (today, in all) — frequency caps. The match
-        on screen does not count against itself (its impression is recorded once a day anyway)."""
+        """Impressions of this campaign for the user: (today on OTHER matches, in all but today's one of this
+        match) — frequency caps. Today's impression of the match on screen does not count against itself (the card
+        stays visible when reopened); the same match on an earlier day does count toward the total."""
         with self._connect() as conn:
             return self._counts(conn, user_id, campaign_id, event_key, now)
 
     @staticmethod
     def _counts(conn: sqlite3.Connection, user_id: int, campaign_id: int, event_key: str, now: int) -> tuple[int, int]:
         today, total = conn.execute(
-            "SELECT COALESCE(SUM(day = ?), 0), COUNT(*) FROM ad_events WHERE user_id = ? AND kind = 'impression' "
-            "AND campaign_id = ? AND event_key != ?", (day_of(now), user_id, campaign_id, event_key)).fetchone()
+            "SELECT COALESCE(SUM(day = ?1 AND event_key != ?4), 0), COALESCE(SUM(NOT (day = ?1 AND event_key = ?4)), 0) "
+            "FROM ad_events WHERE user_id = ?2 AND kind = 'impression' AND campaign_id = ?3",
+            (day_of(now), user_id, campaign_id, event_key)).fetchone()
         return int(today), int(total)
 
     # ---- partner conversions --------------------------------------------------------------------
