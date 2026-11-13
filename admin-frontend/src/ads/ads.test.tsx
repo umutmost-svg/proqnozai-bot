@@ -186,3 +186,18 @@ describe('ads analytics', () => {
     expect(screen.getByRole('status')).toHaveTextContent('не «ноль»');
   });
 });
+
+describe('partner editing', () => {
+  it('switching to another partner’s row edits that partner', async () => {
+    const other = { ...PARTNER, id: 5, name: 'Second' };
+    const calls = mockFetch((_url, method) => (method === 'POST' ? [200, { id: 5 }] : [200, { items: [PARTNER, other] }]));
+    render(<PartnersView owner />);
+    const edits = await screen.findAllByRole('button', { name: 'Изменить' });
+    await userEvent.click(edits[0]!);
+    expect(screen.getByLabelText('Название')).toHaveValue('Partner MB');
+    await userEvent.click(edits[1]!);
+    expect(screen.getByLabelText('Название')).toHaveValue('Second');
+    await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST')?.body).toMatchObject({ id: 5, name: 'Second' }));
+  });
+});

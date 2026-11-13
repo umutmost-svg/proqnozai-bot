@@ -379,3 +379,20 @@ def test_look_alike_digits_and_a_macro_in_the_fragment_are_refused():
         policy.check_ad_text("кэф １．８５", "headline", 80)
     with pytest.raises(policy.PolicyError):
         policy.check_url("https://p.example.com/x#id={click_id}", ["p.example.com"])
+
+
+def test_disclosure_fields_cannot_carry_a_price_and_links_fit_once_expanded():
+    with pytest.raises(policy.PolicyError, match="odds_in_text"):
+        policy.check_disclosure({"advertiser": "Odds 2.10 LLC"})
+    for bad in ({"ageLabel": "2.10"}, {"adId": "2.10"}, {"adId": "ERID 1"}):
+        with pytest.raises(policy.PolicyError, match="invalid_disclosure"):
+            policy.check_disclosure(bad)
+    assert policy.check_disclosure({"advertiser": "Partner LLC", "ageLabel": "18+", "adId": "2SDnjc7x-1"})["adId"]
+    hosts = ["p.example.com"]
+    base = "https://p.example.com/?s={click_id}&p="
+    with pytest.raises(policy.PolicyError):                    # 500 as typed, over 500 once the id is in place
+        policy.check_url(base + "x" * (policy.MAX_URL - len(base)), hosts)
+    with pytest.raises(policy.PolicyError):
+        policy.check_url("https://p.example.com/?a={click_id}&b={click_id}", hosts)
+    ok = policy.check_url(base + "x" * (policy.MAX_URL - len(base) - 60), hosts)
+    assert len(policy.render_url(ok, "k" * 64, hosts)) <= policy.MAX_URL

@@ -66,7 +66,7 @@ export function PartnersView({ owner }: { owner: boolean }) {
         </div>
       )}
       {owner && !editing && <button type="button" className="btn" onClick={() => setEditing({ ...BLANK_PARTNER })}>Добавить партнёра</button>}
-      {owner && editing && <PartnerForm initial={editing} onDone={() => { setEditing(null); list.reload(); }} onCancel={() => setEditing(null)} />}
+      {owner && editing && <PartnerForm key={editing.id ?? "new"} initial={editing} onDone={() => { setEditing(null); list.reload(); }} onCancel={() => setEditing(null)} />}
     </>
   );
 }

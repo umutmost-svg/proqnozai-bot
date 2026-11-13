@@ -54,6 +54,8 @@ _CLICK_ID = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 # A price-like number in an advertiser's text ("1.85", "2,5"): prices come from the odds store only.
 _ODDS_IN_TEXT = re.compile(r"(?<![\d.,·٫])\d{1,3}[.,·٫]\d{1,3}(?![\d.,·٫%])")
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+_AGE_LABEL = re.compile(r"^[0-9]{1,2}\+$")          # "18+"
+_AD_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")         # an ad registry id: no separators, so never a decimal
 _HOST = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f  ]")
 
@@ -113,7 +115,10 @@ def check_url(value: Any, hosts: list[str] | tuple[str, ...]) -> str:
         rest = value.replace(CLICK_MACRO, "")
         if "{" in rest or "}" in rest:
             raise PolicyError("invalid_url")
-        _check_plain_url(value.replace(CLICK_MACRO, "c" * 32), hosts)
+        if value.count(CLICK_MACRO) > 1:
+            raise PolicyError("invalid_url")
+        # Checked as it will leave: with the longest click id in place, within the same length limit.
+        _check_plain_url(value.replace(CLICK_MACRO, "c" * 64), hosts)
         if urlsplit(value).hostname != urlsplit(value.replace(CLICK_MACRO, "c" * 32)).hostname:
             raise PolicyError("invalid_url")  # the macro may not touch the host
         if CLICK_MACRO in urlsplit(value).fragment:
@@ -130,7 +135,7 @@ def render_url(template: str, click_id: str, hosts: list[str] | tuple[str, ...])
 
 
 def _check_plain_url(value: str, hosts: list[str] | tuple[str, ...]) -> str:
-    if len(value) > MAX_URL + 64:
+    if len(value) > MAX_URL:
         raise PolicyError("invalid_url")
     if _CONTROL.search(value) or "\\" in value or " " in value:
         raise PolicyError("invalid_url")
@@ -166,7 +171,14 @@ def check_disclosure(value: Any) -> dict[str, str]:
         value = {}
     if not isinstance(value, dict) or set(value) - set(DISCLOSURE_LIMITS):
         raise PolicyError("invalid_disclosure")
-    return {k: check_text(value.get(k), "disclosure", limit, required=False) for k, limit in DISCLOSURE_LIMITS.items()}
+    out = {k: check_text(value.get(k), "disclosure", limit, required=False) for k, limit in DISCLOSURE_LIMITS.items()}
+    # Every disclosure field is shown in the card next to the verified price: none may state a price itself.
+    check_ad_text(out["advertiser"], "disclosure", DISCLOSURE_LIMITS["advertiser"], required=False)
+    if out["ageLabel"] and not _AGE_LABEL.match(out["ageLabel"]):
+        raise PolicyError("invalid_disclosure")
+    if out["adId"] and not _AD_ID.match(out["adId"]):
+        raise PolicyError("invalid_disclosure")
+    return out
 
 
 def _int(value: Any, low: int, high: int, code: str) -> int:
