@@ -210,6 +210,9 @@ URL пинга каждой проверки (`https://hc-ping.com/<uuid>`) кл
 | `miniapp-health` | 5 мин | 15 мин | сервер, cron каждые 5 мин | `/root/.hc-miniapp-health` |
 | `bot-backup` | 12 ч | 12 ч | Mac, launchd 2×/сутки | `~/.config/proqnozai-backup/hc-bot-backup` |
 | `miniapp-backup` | 12 ч | 12 ч | Mac, launchd 2×/сутки | `~/.config/proqnozai-backup/hc-miniapp-backup` |
+| `offsite-backup` | 12 ч | 12 ч | Mac, launchd 06:20/18:20 (`offsite-backup.md`) | `~/.config/proqnozai-backup/hc-offsite-backup` |
+
+Пошаговая инструкция владельцу (аккаунт, 2FA, Telegram, передача URL без показа) — `healthchecks-owner.md`.
 
 Файл на сервере владелец создаёт сам, не показывая URL: `read -rs U; (umask 077; printf '%s' "$U" > /root/.hc-host); unset U`.
 
@@ -283,6 +286,7 @@ amd64 на Apple Silicon запускается через эмуляцию (м�
 | 4 аккаунт healthchecks.io, 5 проверок, URL в файлы | владелец | — |
 | 4 cron на сервере | я | да |
 | 5 учения на Mac | владелец или я на Mac | — |
+| Третья копия (B2), гейт удаления `bot-backup-20261113T080743Z.db` | владелец / я | `offsite-backup.md` |
 
 ## 7. Риски и границы
 

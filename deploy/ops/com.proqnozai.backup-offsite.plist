@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Owner's Mac: uploads the new encrypted archives to the off-site bucket and verifies them, 40 min after each pull (docs/ops/offsite-backup.md).
+     Replace OWNER with the macOS user name, copy to ~/Library/LaunchAgents/ (0644) and load with
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.proqnozai.backup-offsite.plist
+     A run missed while the Mac slept starts at wake-up; a Mac switched off sends no ping and healthchecks alerts. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.proqnozai.backup-offsite</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/python3</string>
+    <string>/Users/OWNER/proqnozai-ops/offsite_backup.py</string>
+    <string>sync</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>20</integer></dict>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>StandardOutPath</key><string>/Users/OWNER/Library/Logs/proqnozai-offsite.log</string>
+  <key>StandardErrorPath</key><string>/Users/OWNER/Library/Logs/proqnozai-offsite.log</string>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+</dict>
+</plist>
