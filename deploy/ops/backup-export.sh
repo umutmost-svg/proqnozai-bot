@@ -15,8 +15,11 @@
 # $STATE_DIR/inflight-<kind>. Whatever appears there afterwards and matches the helper's naming is this job's
 # copy (also a half-written one whose name was never printed) and is removed — at the end of this run, or at the
 # start of the next one if this run was killed. Pre-existing names (e.g. manual copies) are never touched, and
-# nothing outside the exact copy naming (never bot.db or miniapp.db) can match. A MANUAL copy made while an
-# export runs would look like the export's own: manual runs take the same lock (flock $LOCK ..., runbook §3).
+# nothing outside the exact copy naming (never bot.db or miniapp.db) can match.
+# MANUAL copies go only through `backup-export.sh manual-bot | manual-miniapp` (root on the server, never through the
+# key): under the same lock it first settles every leftover record of a killed export, so no record can later claim
+# the manual copy, then runs the helper and LEAVES the copy for the operator (path on stderr). A helper started any
+# other way could be taken for an export leftover.
 # Encryption happens on the Mac before anything touches its disk. Progress and errors go to stderr.
 set -u
 umask 077
@@ -33,7 +36,8 @@ die() { log "FAIL: $*"; exit 1; }
 trap '' PIPE                     # a dropped connection must still run the cleanup below, not kill the shell
 trap 'exit 130' INT TERM HUP     # dash runs no EXIT trap on a signal: turn it into an exit
 
-case $what in check|miniapp|bot) ;; sweep) [ -z "${SSH_ORIGINAL_COMMAND:-}" ] || die "sweep is local only" ;;
+case $what in check|miniapp|bot) ;;
+  sweep|manual-bot|manual-miniapp) [ -z "${SSH_ORIGINAL_COMMAND:-}" ] || die "$what is local only" ;;
   *) die "unknown request (expected: check | miniapp | bot)" ;; esac
 mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR" || die "state dir"
 exec 9>"$LOCK" || die "lock file"
@@ -154,4 +158,15 @@ case $what in
     printf '%s\n' "$out" | grep -qx 'integrity=ok' || die "integrity not ok"
     log "bot copy $name integrity ok; streaming"
     docker cp "$C:$D/$name" - || die "docker cp" ;;
+  manual-miniapp)   # every inflight record was settled above, under this lock: nothing can claim this copy
+    C=$(one "$MINIAPP" healthy) || die "no single healthy $MINIAPP container"
+    out=$(docker exec -i -u miniapp "$C" python - < "$OPS/backup.py" 2>&1) || die "backup.py: $(printf '%s' "$out" | tail -1)"
+    printf '%s\n' "$out" >&2
+    log "manual copy left in the Mini App volume: copy it off, then delete it by hand" ;;
+  manual-bot)
+    C=$(one "$BOT" running) || die "no single running $BOT container"
+    out=$(docker exec -i -e MAX_SECONDS=300 "$C" python - < "$OPS/bot_db_backup.py" 2>&1) \
+      || die "bot_db_backup.py: $(printf '%s' "$out" | tail -1)"
+    printf '%s\n' "$out" >&2
+    log "manual copy left in the bot volume: copy it off, then delete it by hand" ;;
 esac

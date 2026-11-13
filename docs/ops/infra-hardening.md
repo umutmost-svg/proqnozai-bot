@@ -183,9 +183,11 @@ launchctl kickstart gui/$(id -u)/com.proqnozai.backup-pull && sleep 60 && tail ~
 → healthchecks прислал «bot backup failed: server export failed…».
 Откат: `launchctl bootout gui/$(id -u)/com.proqnozai.backup-pull`; удалить строку ключа из `authorized_keys` на сервере.
 
-**Ручные копии на сервере** (`bot_db_backup.py`, `backup.py` вне выгрузки) — только под тем же замком, иначе
-выгрузка, идущая в ту же секунду, может принять новую ручную копию за свою и удалить её:
-`flock /run/proqnozai-backup-export.lock docker exec -i <бот> python - < /opt/proqnozai-ops/bot_db_backup.py`.
+**Ручные копии на сервере** — только `sh /opt/proqnozai-ops/backup-export.sh manual-bot` (или `manual-miniapp`),
+root на сервере; через ключ выгрузки не работает. Под замком выгрузки он сначала доводит до конца уборку
+прерванных выгрузок (иначе их запись могла бы принять новую ручную копию за свою и удалить), затем делает копию
+и **оставляет** её (путь — в выводе); скопировать с сервера и удалить вручную. Запуск `bot_db_backup.py`/`backup.py`
+другим способом — нельзя.
 
 **[разрешение] Уборка старых копий в томе бота** — ровно четырёх файлов, найденных 2026-11-12 (сначала
 `docker exec <бот> ls -l /app/data` и сверка списка): `docker exec <бот> rm -f /app/data/bot-backup-20261111T214312Z.db
@@ -263,7 +265,9 @@ amd64 на Apple Silicon запускается через эмуляцию (м�
 
 Настоящее восстановление в production (решение владельца, с потерей записанного после копии) — по
 `droplet-resize.md` «Откат → Данные бота» и `production.md` §7 «Восстановление из бэкапа»; исходный файл —
-`pull_backups.py extract <архив> <новый каталог>` → `x/…`, затем `scp` на сервер (0600) и удаление каталога.
+`pull_backups.py extract <архив> ~/.proqnozai-backups/auto/.work/restore-<дата>` → `x/…` (каталог обязан быть внутри
+`.work`: только там остатки убитого запуска убираются автоматически — через 6 ч), затем `scp` на сервер (0600) и
+удаление каталога.
 
 ## 6. Что нужно от владельца — сводка
 

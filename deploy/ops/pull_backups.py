@@ -437,15 +437,16 @@ def cmd_pull(cfg: Config, kinds: list[str]) -> int:
             hc_ping(cfg, kind, False, f"{kind} backup failed: {reason}")
             rc = 1
             continue
-        print(f"{ts} {kind} OK: {summary}")
+        # "OK" only when everything holds, the success ping included; otherwise the archive is named as made.
         if drill_err:
-            print(f"{ts} {kind} FAIL: {drill_err}")
+            print(f"{ts} {kind} FAIL: archive made ({summary}), but {drill_err}")
             hc_ping(cfg, kind, False, f"{summary}; {drill_err}")
             rc = 1
-            continue
-        if not hc_ping(cfg, kind, True, summary):
-            print(f"{ts} {kind} FAIL: backup made, but the healthchecks ping was not delivered (see above)")
+        elif not hc_ping(cfg, kind, True, summary):
+            print(f"{ts} {kind} FAIL: archive made ({summary}), but the healthchecks ping was not delivered")
             rc = 1
+        else:
+            print(f"{ts} {kind} OK: {summary}")
     return rc
 
 
@@ -496,11 +497,16 @@ def cmd_verify(cfg: Config, archive: Path) -> int:
 
 
 def cmd_extract(cfg: Config, archive: Path, dest: Path) -> int:
-    """For drills: verified databases into `dest` (must not exist; created 0700). The caller deletes it."""
+    """For drills and restores: verified databases into `dest` (must not exist; created 0700), which must lie
+    under BACKUP_DIR/.work — the only place sweep_stale() reaches, so even a SIGKILL-ed extract's plaintext is
+    removed (after 6 h). The caller deletes it when done."""
     created = done = False
     try:
         if err := sweep_stale(cfg):
             raise BackupError(err)
+        work = _private_dir(cfg.backup_dir / ".work").resolve()
+        if work not in dest.absolute().parent.resolve().parents and dest.absolute().parent.resolve() != work:
+            raise BackupError(f"destination must be inside {work}")
         kind = _kind_of(archive)
         man = _manifest(archive)
         dest.mkdir(mode=0o700)
@@ -513,7 +519,11 @@ def cmd_extract(cfg: Config, archive: Path, dest: Path) -> int:
         return 1
     finally:
         if created and not done:   # any unsuccessful exit, also SIGTERM/SIGHUP/Ctrl-C: no partial plaintext stays
-            shutil.rmtree(dest, ignore_errors=True)
+            try:
+                shutil.rmtree(dest)
+            except OSError as exc:
+                print(f"CLEANUP FAILED: {dest} still holds decrypted data ({type(exc).__name__}); "
+                      "the next pull/verify reports it until removed")
     print(f"extracted to {dest / 'x'}")
     return 0
 

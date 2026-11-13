@@ -157,11 +157,11 @@ def test_extract_gives_databases_and_cleans_up_on_failure(env, tmp_path):
     cfg, _, _ = env
     assert pb.cmd_pull(cfg, ["miniapp"]) == 0
     archive = next((cfg.backup_dir / "miniapp").glob("*.tar.enc"))
-    dest = tmp_path / "drill"
+    dest = cfg.backup_dir / ".work" / "drill"
     assert pb.cmd_extract(cfg, archive, dest) == 0
     assert sorted(p.name for p in (dest / "x" / STAMP).iterdir()) == ["miniapp.db", "miniapp.forecasts.db"]
     archive.write_bytes(archive.read_bytes()[:-64])          # truncated archive
-    dest2 = tmp_path / "drill2"
+    dest2 = cfg.backup_dir / ".work" / "drill2"
     assert pb.cmd_extract(cfg, archive, dest2) == 1
     assert not dest2.exists()
 
@@ -273,7 +273,8 @@ def test_verify_and_extract_require_a_matching_manifest(env, tmp_path):
     data["files"][name]["tables"]["users"] += 1          # a wrong row count in an otherwise valid manifest
     man.write_text(json.dumps(data))
     assert pb.cmd_verify(cfg, archive) == 1
-    assert pb.cmd_extract(cfg, archive, tmp_path / "d1") == 1 and not (tmp_path / "d1").exists()
+    d1 = cfg.backup_dir / ".work" / "d1"
+    assert pb.cmd_extract(cfg, archive, d1) == 1 and not d1.exists()
     man.unlink()                                        # no manifest at all
     assert pb.cmd_verify(cfg, archive) == 1
 
@@ -289,7 +290,7 @@ def test_interrupted_extract_leaves_no_plaintext(env, tmp_path, monkeypatch):
         raise SystemExit(143)                           # what the SIGTERM handler raises mid-way
 
     monkeypatch.setattr(pb, "check_db", interrupted)
-    dest = tmp_path / "d"
+    dest = cfg.backup_dir / ".work" / "d"
     with pytest.raises(SystemExit):
         pb.cmd_extract(cfg, archive, dest)
     assert not dest.exists()
@@ -418,3 +419,21 @@ def test_failed_mirror_copy_leaves_no_partial_and_no_orphan_archive(env, tmp_pat
     monkeypatch.setattr(pb.shutil, "copyfile", flaky)
     assert pb.cmd_pull(cfg, ["bot"]) == 1
     assert list((mirror / "bot").iterdir()) == []       # no .partial, no manifest without its archive
+
+
+def test_extract_refuses_a_destination_outside_the_swept_work_dir(env, tmp_path):
+    cfg, _, _ = env
+    assert pb.cmd_pull(cfg, ["bot"]) == 0
+    archive = next((cfg.backup_dir / "bot").glob("*.tar.enc"))
+    outside = tmp_path / "restore"
+    assert pb.cmd_extract(cfg, archive, outside) == 1 and not outside.exists()
+    inside = cfg.backup_dir / ".work" / "restore-x"
+    assert pb.cmd_extract(cfg, archive, inside) == 0 and (inside / "x").is_dir()
+
+
+def test_ok_line_only_after_a_delivered_ping(env, monkeypatch, capsys):
+    cfg, _, _ = env
+    monkeypatch.setattr(pb, "hc_ping", lambda cfg, kind, ok, body: False)
+    assert pb.cmd_pull(cfg, ["bot"]) == 1
+    out = capsys.readouterr().out
+    assert " OK:" not in out and "archive made" in out

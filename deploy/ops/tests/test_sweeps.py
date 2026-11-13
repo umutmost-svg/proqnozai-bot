@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+
+import pytest
 from pathlib import Path
 
 OPS = Path(__file__).resolve().parent.parent
@@ -135,8 +137,9 @@ def test_drill_record_of_a_running_drill_is_kept(tmp_path):
         live.wait()
 
 
-def test_export_sweep_is_refused_through_the_ssh_key(tmp_path):
-    env = {**os.environ, "SSH_ORIGINAL_COMMAND": "sweep", "STATE_DIR": str(tmp_path / "s"),
+@pytest.mark.parametrize("mode", ["sweep", "manual-bot", "manual-miniapp"])
+def test_export_local_modes_are_refused_through_the_ssh_key(tmp_path, mode):
+    env = {**os.environ, "SSH_ORIGINAL_COMMAND": mode, "STATE_DIR": str(tmp_path / "s"),
            "LOCK_FILE": str(tmp_path / "lock")}
     r = subprocess.run(["sh", str(OPS / "backup-export.sh")], env=env, capture_output=True, text=True)
     assert r.returncode == 1 and "local only" in r.stderr
