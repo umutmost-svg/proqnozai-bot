@@ -80,6 +80,8 @@ function CampaignsPage() {
     list.reload();
   };
   const pub = list.data?.publication;
+  // The status read repairs the file: once it is on disk the warning goes.
+  const stillFailed = writeFailed !== null && !(pub && pub.fileVersion !== null && pub.fileVersion >= writeFailed);
   return (
     <Page title="Реклама" subtitle="Кампании партнёров в «Рекомендуемой ставке» Mini App" actions={manage && (
       <>
@@ -88,7 +90,7 @@ function CampaignsPage() {
         <button type="button" className="btn danger" onClick={() => setDialog('stop')}>Остановить всё</button>
       </>
     )}>
-      {writeFailed !== null && (
+      {stillFailed && (
         <div className="banner warn" role="alert" data-testid="ads-write-failed">
           <strong>Версия {writeFailed} сохранена, но файл снимка не записан — Mini App всё ещё показывает прежнюю рекламу.</strong>{' '}
           Админка повторит запись при следующем открытии этой страницы; проверьте строку «на диске» ниже.

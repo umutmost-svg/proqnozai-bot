@@ -31,6 +31,8 @@ from miniapp.store import SUPPORTED_LANGS
 SCHEMA = 1
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_CAMPAIGNS = 200
+# Partners in admin.db (the admin refuses more), so every one with a postback token fits into any snapshot.
+MAX_PARTNERS = 1000
 MAX_AUDIENCE_IDS = 200_000  # all audience lists of one snapshot together
 
 Tier = Literal["individual", "segment", "general"]
@@ -327,7 +329,7 @@ def _postback_hashes(value: Any) -> dict[int, str]:
     """{partner id: SHA-256 of its postback token}."""
     if value is None:
         return {}
-    if not isinstance(value, dict) or len(value) > MAX_CAMPAIGNS:
+    if not isinstance(value, dict) or len(value) > MAX_PARTNERS:
         raise PolicyError("bad_partners")
     out: dict[int, str] = {}
     for key, entry in value.items():

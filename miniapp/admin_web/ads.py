@@ -271,6 +271,10 @@ class AdsStore:
             before = None
             try:
                 if partner_id is None:
+                    if conn.execute("SELECT COUNT(*) FROM ad_partners").fetchone()[0] >= policy.MAX_PARTNERS:
+                        # Bounded so the snapshot (postback hashes of every active partner) always validates —
+                        # an emergency stop must never fail on the partner list.
+                        raise ActionError("too_many_partners", 409)
                     partner_id = int(conn.execute(
                         "INSERT INTO ad_partners (name, url_hosts, allowed_countries, allow_unknown_country, age_min, "
                         "disclosure_template, active, updated_at, admin_id, created_at) "

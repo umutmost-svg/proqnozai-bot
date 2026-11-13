@@ -111,3 +111,15 @@ def test_analytics_by_segment_with_partner_conversions_and_long_periods(ads_env)
     assert "partner_conversions" in csv_text.splitlines()[0]
     assert client.get("/api/admin/ads/analytics?days=500").json()["error"] == "bad_period"
 
+
+
+def test_partner_count_is_bounded_so_every_snapshot_fits(ads_env, monkeypatch):
+    config, clock, client, _, secrets_, csrf, pid = ads_env
+    from miniapp.tests.test_ads_admin import partner_body
+    monkeypatch.setattr(policy, "MAX_PARTNERS", 2)
+    post(client, f"/api/admin/ads/partners/{pid}/postback-token", csrf, {})
+    second = post(client, "/api/admin/ads/partners", csrf, partner_body(name="Second")).json()["id"]
+    post(client, f"/api/admin/ads/partners/{second}/postback-token", csrf, {})
+    assert post(client, "/api/admin/ads/partners", csrf, partner_body(name="Third")).json()["error"] == "too_many_partners"
+    assert publish(client, csrf, secrets_, clock, pauseAll=True).status_code == 200    # the stop always publishes
+    assert len(policy.parse(config.ads_policy_file.read_bytes(), pub(config)).postback_hashes) == 2

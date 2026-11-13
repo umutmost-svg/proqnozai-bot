@@ -24,13 +24,23 @@ function SignedIn({ children }: { children: ReactNode }) {
 
 function mount(role: 'owner' | 'admin' | 'analyst', path: string, opts: { written?: boolean } = {}) {
   const calls: Call[] = [];
+  const disk = { version: null as number | null, publishes: 0 };
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
     const method = init.method ?? 'GET';
     calls.push({ url, method, body: init.body ? JSON.parse(String(init.body)) : undefined });
     let data: unknown = {};
     if (url === '/api/admin/auth/me') data = { admin: { id: 1, email: 'o@x.test', role }, csrf: 'c', pilot: { dataset: 'real', demoTelemetry: false } };
-    else if (url === '/api/admin/ads/campaigns') data = { items: [CAMPAIGN], partners: [], publication: { latest: null, fileVersion: null, appliedVersion: null, unpublishedChanges: true, publicKey: 'k' } };
-    else if (url === '/api/admin/ads/publish') data = { after: { version: 9, campaigns: [7], skipped: [] }, fileWritten: opts.written ?? true };
+    else if (url === '/api/admin/ads/campaigns') {
+      // The first status read after a failed write still finds the old file; the next one finds it repaired.
+      const latest = disk.publishes ? { version: 9, sha256: 's', campaigns: 0, publishedAt: 1_800_000_000 } : null;
+      data = { items: [CAMPAIGN], partners: [], publication: { latest, fileVersion: disk.version, appliedVersion: null, unpublishedChanges: !latest, publicKey: 'k' } };
+      if (disk.publishes) disk.version = 9;
+    }
+    else if (url === '/api/admin/ads/publish') {
+      disk.publishes += 1;
+      if (opts.written ?? true) disk.version = 9;
+    }
+    if (url === '/api/admin/ads/publish') data = { after: { version: 9, campaigns: [7], skipped: [] }, fileWritten: opts.written ?? true };
     else if (url.startsWith('/api/admin/ads/analytics')) data = REPORT;
     return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }));
@@ -96,6 +106,9 @@ describe('ads section mounted at /ads/*', () => {
     await userEvent.type(within(dialog).getByLabelText('Код двухфакторной аутентификации'), '123456');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Остановить' }));
     expect(await screen.findByTestId('ads-write-failed')).toHaveTextContent('файл снимка не записан');
-    expect(screen.queryByText(/^Опубликована версия 9/)).toBeNull();
+    expect(screen.getByTestId('ads-publication')).toHaveTextContent('На диске версия —, не 9');
+    await userEvent.click(screen.getByRole('button', { name: 'Проверить снова' }));
+    await waitFor(() => expect(screen.queryByTestId('ads-write-failed')).toBeNull());
+    expect(screen.getByTestId('ads-publication')).toHaveTextContent('совпадает');
   });
 });
