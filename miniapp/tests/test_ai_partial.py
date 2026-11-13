@@ -172,6 +172,23 @@ def test_odds_without_verified_form_but_with_the_model_keep_the_models_numbers(c
     assert "market" in facts
 
 
+def test_odds_only_partial_whose_line_disappears_during_the_call_is_insufficient(clock: FakeClock) -> None:
+    class LineGoneModel(FakeModel):
+        async def complete(self, system, user, schema):
+            ai.odds = OddsStore(clock)  # the line expires while the model answers
+            return await super().complete(system, user, schema)
+
+    model = LineGoneModel(answer("home_rating", "home_advantage"))
+    ai, _ = make_ai(clock, model, chelsea_games=2)
+    store = with_odds(ai, clock, line())
+    result = run(ai.analyse("fd:7", user_id=1))
+    assert result.kind == "insufficient" and result.reasons == ("no_verified_form", "no_odds_source")
+    assert result.probabilities is None and result.pick is None
+    ai.odds = store  # the line is back: the paid answer is served from the cache, no new call
+    again = run(ai.analyse("fd:7", user_id=1))
+    assert again.kind == "partial" and again.market is not None and len(model.calls) == 1
+
+
 def test_ready_needs_odds_and_verified_form_and_the_odds_reach_the_prompt(clock: FakeClock) -> None:
     model = FakeModel()
     ai, _ = make_ai(clock, model)

@@ -406,7 +406,12 @@ class AiService:
 
         result = await self._obtain(event, key, user_id, create, load,
                                     restore=restore, prefix=f"{MODEL_VERSION}:{event.id}:{digest}:")
-        return self._with_odds(result, event, forecast, has_form)
+        served = self._with_odds(result, event, forecast, has_form)
+        if not has_form and served.kind == "partial" and served.market is None:
+            # PARTIAL on the odds alone, and the line is gone (expired during the call or since):
+            # neither evidence remains. The cached answer stays for when a line returns.
+            return AnalysisResult(event.id, "insufficient", ("no_verified_form", "no_odds_source"), basis=basis)
+        return served
 
     async def _basis_analysis(self, event: FootballEvent, home: TeamSummary, away: TeamSummary, basis: dict,
                               fixture: dict, model_reason: str, has_form: bool, user_id: int,
