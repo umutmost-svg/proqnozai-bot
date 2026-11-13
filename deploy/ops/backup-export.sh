@@ -84,12 +84,23 @@ settle() {
   [ -f "$f" ] || return 0
   c=$(container_of "$1") || { log "cannot reach the $1 container to remove leftovers"; return 1; }
   now=$(list_copies "$1" "$c") || { log "cannot list $1 copies"; return 1; }
+  # Only names stamped within this export's own window count as its copies (start - 1 min .. start + 15 min; a
+  # helper gives up after 300 s). A copy stamped later — e.g. a manual one made after a killed export — is kept.
+  e=$(sed -n 's/^@\([0-9][0-9]*\)$/\1/p' "$f" | head -1)
+  [ -n "$e" ] || { log "$f has no start time: remove $1 leftovers by hand, then the file"; return 1; }
+  lo=$(date -u -d "@$((e - 60))" +%Y%m%dT%H%M%SZ) && hi=$(date -u -d "@$((e + 900))" +%Y%m%dT%H%M%SZ) \
+    || { log "date"; return 1; }
   ok=0
   for n in $now; do
     grep -Fqx "$n" "$f" && continue
+    s=$(printf '%s\n' "$n" | grep -Eo '[0-9]{8}T[0-9]{6}Z' | head -1)
+    if [ -z "$s" ] || [ "$(printf '%s\n%s\n' "$lo" "$s" | sort | head -1)" != "$lo" ] \
+       || [ "$(printf '%s\n%s\n' "$s" "$hi" | sort | tail -1)" != "$hi" ]; then
+      log "kept $1 copy $n: not stamped within this export's window (manual copy?)"; continue
+    fi
     if remove_copy "$1" "$c" "$n"; then log "removed $1 copy $n"; else log "CLEANUP FAILED: $1 copy $n"; ok=1; fi
   done
-  [ "$ok" = 0 ] && rm -f "$f"
+  if [ "$ok" = 0 ]; then rm -f "$f" || { log "CLEANUP FAILED: record $f"; ok=1; }; fi
   return "$ok"
 }
 
@@ -106,7 +117,8 @@ trap cleanup EXIT
 
 begin() {  # $1 kind, $2 container: snapshot existing names BEFORE the helper creates anything
   snap=$(list_copies "$1" "$2") || die "cannot list existing $1 copies"
-  printf '%s\n' "$snap" > "$STATE_DIR/inflight-$1.tmp" && mv -f "$STATE_DIR/inflight-$1.tmp" "$STATE_DIR/inflight-$1" \
+  start=$(date -u +%s) || die "date"
+  printf '@%s\n%s\n' "$start" "$snap" > "$STATE_DIR/inflight-$1.tmp" && mv -f "$STATE_DIR/inflight-$1.tmp" "$STATE_DIR/inflight-$1" \
     || die "state file"
   KIND=$1
 }

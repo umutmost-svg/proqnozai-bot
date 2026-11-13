@@ -371,3 +371,23 @@ def test_encrypt_failure_mid_stream_does_not_wait_for_the_watchdog(env, monkeypa
     assert pb.cmd_pull(cfg, ["bot"]) == 1
     assert pb.time.time() - t0 < 30
     assert "encrypt failed" in pings[-1][2]
+
+
+def test_stale_plaintext_that_cannot_be_removed_fails_pull_and_verify(env):
+    cfg, _, pings = env
+    stuck = cfg.backup_dir / ".work" / "verify-old"
+    stuck.mkdir(parents=True)
+    (stuck / "stream.tar").write_bytes(b"decrypted leftover")
+    past = pb.time.time() - pb.STALE_SECONDS - 60
+    os.utime(stuck, (past, past))
+    stuck.chmod(0o500)                                   # its file cannot be deleted
+    try:
+        assert pb.cmd_pull(cfg, ["bot"]) == 1
+        kind, ok, body = pings[-1]
+        assert (kind, ok) == ("bot", False) and "stale decrypted data not removed" in body
+        archive = next((cfg.backup_dir / "bot").glob("*.tar.enc"))
+        assert pb.cmd_verify(cfg, archive) == 1
+    finally:
+        stuck.chmod(0o700)
+    assert pb.cmd_verify(cfg, archive) == 0              # removable again: the next run cleans and passes
+    assert not stuck.exists()

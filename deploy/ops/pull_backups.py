@@ -362,21 +362,29 @@ def _lock(cfg: Config, kind: str):
 STALE_SECONDS = 6 * 3600   # a verify/drill work dir older than this belongs to a killed run (a drill takes minutes)
 
 
-def sweep_stale(cfg: Config) -> None:
+def sweep_stale(cfg: Config) -> str:
     """Removes decrypted leftovers of killed `verify`/`extract`/drill runs (SIGKILL, power loss) under .work.
-    Per-kind pull dirs are emptied by the pull itself under its lock."""
+    Per-kind pull dirs are emptied by the pull itself under its lock. Returns "" or why plaintext stays — a
+    failure is never just a warning: it fails the pull (both checks go to /fail) and verify/extract, run after
+    run, until the leftover is gone."""
     work = cfg.backup_dir / ".work"
     if not work.is_dir():
-        return
+        return ""
     cutoff = time.time() - STALE_SECONDS
-    for p in work.iterdir():
+    failed: list[str] = []
+    try:
+        entries = list(work.iterdir())
+    except OSError as exc:
+        return f"stale decrypted data not checked: {type(exc).__name__}"
+    for p in entries:
         if p.name in KINDS:
             continue
         try:
             if p.lstat().st_mtime < cutoff:
                 shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()
         except OSError as exc:
-            print(f"warning: cannot remove stale {p.name}: {exc}", file=sys.stderr)
+            failed.append(f"{p.name} ({type(exc).__name__})")
+    return f"stale decrypted data not removed: {', '.join(failed)[:160]}" if failed else ""
 
 
 def sweep_drills(cfg: Config) -> str:
@@ -400,8 +408,8 @@ def sweep_drills(cfg: Config) -> str:
 
 def cmd_pull(cfg: Config, kinds: list[str]) -> int:
     rc = 0
-    sweep_stale(cfg)
-    drill_err = sweep_drills(cfg)               # reported through every kind's check: it holds plaintext
+    # Plaintext left by killed runs is reported through every kind's check until it is gone.
+    drill_err = "; ".join(e for e in (sweep_stale(cfg), sweep_drills(cfg)) if e)
     for kind in kinds:
         ts = datetime.now(UTC).strftime("%FT%TZ")
         try:
@@ -455,7 +463,8 @@ def _check_against(manifest: dict, files: dict) -> None:
 
 def cmd_verify(cfg: Config, archive: Path) -> int:
     try:
-        sweep_stale(cfg)
+        if err := sweep_stale(cfg):
+            raise BackupError(err)
         kind = _kind_of(archive)
         man = _manifest(archive)
         work = _private_dir(cfg.backup_dir / ".work")
@@ -476,7 +485,8 @@ def cmd_extract(cfg: Config, archive: Path, dest: Path) -> int:
     """For drills: verified databases into `dest` (must not exist; created 0700). The caller deletes it."""
     created = done = False
     try:
-        sweep_stale(cfg)
+        if err := sweep_stale(cfg):
+            raise BackupError(err)
         kind = _kind_of(archive)
         man = _manifest(archive)
         dest.mkdir(mode=0o700)
