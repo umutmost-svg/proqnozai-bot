@@ -306,6 +306,9 @@ def mirror(cfg: Config, kind: str, archive: Path, manifest: Path) -> None:
     dest.mkdir(exist_ok=True)
     for stale in dest.glob(".*.partial"):          # an earlier copy interrupted mid-way
         stale.unlink()
+    for man in dest.glob(f"{kind}-*.manifest.json"):   # a publish killed between its two renames
+        if not man.with_name(man.name.replace(".manifest.json", ".tar.enc")).exists():
+            man.unlink()
     tmps = {src: dest / f".{src.name}.partial" for src in (manifest, archive)}
     try:
         for src, tmp in tmps.items():

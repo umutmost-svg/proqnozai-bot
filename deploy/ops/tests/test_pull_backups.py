@@ -437,3 +437,16 @@ def test_ok_line_only_after_a_delivered_ping(env, monkeypatch, capsys):
     assert pb.cmd_pull(cfg, ["bot"]) == 1
     out = capsys.readouterr().out
     assert " OK:" not in out and "archive made" in out
+
+
+def test_mirror_drops_a_manifest_orphaned_by_a_killed_publish(env, tmp_path):
+    cfg, _, _ = env
+    mirror = tmp_path / "mirror"
+    (mirror / "bot").mkdir(parents=True)
+    (mirror / pb.MIRROR_MARKER).write_text("")
+    orphan = mirror / "bot" / "bot-20260101T000000Z.manifest.json"   # its archive never got renamed in
+    orphan.write_text("{}")
+    cfg.values["MIRROR_DIR"] = str(mirror)
+    assert pb.cmd_pull(cfg, ["bot"]) == 0
+    assert not orphan.exists()
+    assert len(list((mirror / "bot").glob("*.tar.enc"))) == 1 == len(list((mirror / "bot").glob("*.manifest.json")))

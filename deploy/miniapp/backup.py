@@ -9,6 +9,8 @@ opens each copy read-only, runs integrity_check and prints table row counts: a r
 touching the live files. Copies stay on the same volume: copy them off the server as well.
 """
 import os
+import shutil
+import signal
 import sqlite3
 import sys
 from datetime import UTC, datetime
@@ -49,12 +51,22 @@ for n in range(100):  # two runs in one second: a suffix, never an overwrite
         continue
 else:
     sys.exit("no free backup directory name")
-for f in files:
-    if not f.exists():
-        print(f"{f.name}: not created yet (skipped)"); continue
-    src, dst = sqlite3.connect(f"file:{f}?mode=ro", uri=True), sqlite3.connect(target / f.name)
-    with dst:
-        src.backup(dst)
-    src.close(); dst.close()
-print(f"backup written to {target}")
-sys.exit(0 if verify(target) else 1)
+# A failed or interrupted copy is removed again: no half-written plaintext copy stays in the volume.
+signal.signal(signal.SIGTERM, lambda signum, _frame: sys.exit(128 + signum))
+signal.signal(signal.SIGHUP, lambda signum, _frame: sys.exit(128 + signum))
+ok = False
+try:
+    for f in files:
+        if not f.exists():
+            print(f"{f.name}: not created yet (skipped)"); continue
+        src, dst = sqlite3.connect(f"file:{f}?mode=ro", uri=True), sqlite3.connect(target / f.name)
+        with dst:
+            src.backup(dst)
+        src.close(); dst.close()
+    print(f"backup written to {target}")
+    ok = verify(target)
+finally:
+    if not ok:
+        shutil.rmtree(target, ignore_errors=True)
+        print(f"copy {target.name} failed and was removed" if not target.exists() else f"CLEANUP FAILED: {target}")
+sys.exit(0 if ok else 1)
