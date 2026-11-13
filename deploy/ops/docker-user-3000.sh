@@ -36,12 +36,16 @@ on_top() {  # $1 iptables|ip6tables
   for i in $IFACES; do $1 -C DOCKER-USER $(rule "$i") 2>/dev/null || return 1; done
 }
 
+# The DROPs only act if FORWARD sends packets to DOCKER-USER first (Docker sets this jump; it is not ours to edit).
+jump_first() { [ "$($1 -S FORWARD 2>/dev/null | sed -n 2p)" = "-A FORWARD -j DOCKER-USER" ]; }
+
 rc=0
 case ${1:-} in
   apply)
     for bin in iptables ip6tables; do
       # Docker creates the chain at start; creating it first is harmless (Docker then uses the existing chain).
       $bin -n -L DOCKER-USER >/dev/null 2>&1 || $bin -N DOCKER-USER || { echo "FAIL: $bin cannot create DOCKER-USER"; rc=1; continue; }
+      jump_first "$bin" || { echo "FAIL: $bin: DOCKER-USER is not the first FORWARD rule — the block would not apply"; rc=1; }
       if on_top "$bin"; then echo "present  $bin :$PORT ($IFACES)"; continue; fi
       # New copies go to the top first (no unprotected moment), then every lower tagged copy is deleted by number,
       # highest first so the remaining numbers stay valid.
@@ -66,8 +70,7 @@ case ${1:-} in
     done ;;
   status)
     for bin in iptables ip6tables; do
-      first=$($bin -S FORWARD 2>/dev/null | sed -n 2p)
-      [ "$first" = "-A FORWARD -j DOCKER-USER" ] || { echo "MISSING  $bin: DOCKER-USER is not the first FORWARD rule"; rc=1; }
+      jump_first "$bin" || { echo "MISSING  $bin: DOCKER-USER is not the first FORWARD rule"; rc=1; }
       if on_top "$bin"; then echo "ok       $bin :$PORT ($IFACES)"
       else echo "MISSING  $bin: the :$PORT DROPs are absent or not the first rules of DOCKER-USER"; rc=1; fi
     done ;;

@@ -94,6 +94,15 @@ def test_rule_inserted_above_the_drops_is_reported_and_repaired(ipt):
     assert run("status").returncode == 0
 
 
+def test_apply_fails_when_forward_does_not_jump_to_docker_user_first(ipt, tmp_path):
+    run, _, _ = ipt
+    for name in ("iptables", "ip6tables"):                    # something sits above Docker's jump
+        (tmp_path / f"{name}.json").write_text(json.dumps({"FORWARD": ["-i eth0 -j ACCEPT", "-j DOCKER-USER"]}))
+    r = run("apply")
+    assert r.returncode == 1 and "not the first FORWARD rule" in r.stdout
+    assert run("status").returncode == 1
+
+
 def test_remove_deletes_every_copy(ipt):
     run, rules, _ = ipt
     assert run("apply").returncode == 0

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import time
 from pathlib import Path
 
 OPS = Path(__file__).resolve().parent.parent
@@ -53,21 +52,36 @@ def _drill_sweep(env: dict) -> subprocess.CompletedProcess:
     return subprocess.run(["sh", str(OPS / "restore-drill-local.sh"), "sweep"], env=env, capture_output=True, text=True)
 
 
+def _live_drill_process() -> subprocess.Popen:
+    """A process whose command line names restore-drill-local.sh, like a running drill's shell."""
+    return subprocess.Popen(["sh", "-c", "sleep 60; :", "restore-drill-local.sh"])   # "; :" stops sh exec-ing sleep
+
+
+def _record(env: dict, token: str, pid: int) -> Path:
+    pending = Path(env["BACKUP_DIR"]) / ".drill-pending"
+    pending.mkdir(exist_ok=True)
+    (pending / token).write_text(f"{pid}\n")
+    return pending / token
+
+
 def test_drill_sweep_removes_dead_runs_and_keeps_a_live_one(tmp_path):
     env, sf = _drill_env(tmp_path, {
         "containers": {"c-dead": "drillDEAD01"},
-        "volumes": {"v-dead": "drillDEAD01", "v-stale": "drillOLD001", "v-live": "drillLIVE01"},
+        "volumes": {"v-dead": "drillDEAD01", "v-norecord": "drillOLD001", "v-live": "drillLIVE01"},
     })
-    work = Path(env["BACKUP_DIR"]) / ".work"
-    (work / "drill.LIVE01").mkdir()
-    stale = work / "drill.OLD001"
-    stale.mkdir()
-    past = time.time() - 7 * 3600
-    os.utime(stale, (past, past))
-    r = _drill_sweep(env)
-    assert r.returncode == 0, r.stdout
-    st = json.loads(sf.read_text())
-    assert st["containers"] == {} and list(st["volumes"]) == ["v-live"]
+    live = _live_drill_process()
+    try:
+        live_rec = _record(env, "drillLIVE01", live.pid)
+        dead_rec = _record(env, "drillDEAD01", 999999)             # no such process
+        (Path(env["BACKUP_DIR"]) / ".work" / "drill.DEAD01").mkdir()   # a fresh work dir proves nothing
+        r = _drill_sweep(env)
+        assert r.returncode == 0, r.stdout
+        st = json.loads(sf.read_text())
+        assert st["containers"] == {} and list(st["volumes"]) == ["v-live"]
+        assert live_rec.exists() and not dead_rec.exists()
+    finally:
+        live.kill()
+        live.wait()
 
 
 def test_drill_sweep_fails_when_a_leftover_stays(tmp_path):
@@ -84,9 +98,8 @@ def test_drill_sweep_skips_quietly_without_docker_when_no_drill_is_on_record(tmp
 
 def test_drill_sweep_fails_without_docker_while_a_killed_drill_is_on_record(tmp_path):
     env, sf = _drill_env(tmp_path, {"running": False, "containers": {}, "volumes": {"v-dead": "drillDEAD01"}})
-    pending = Path(env["BACKUP_DIR"]) / ".drill-pending"
-    pending.mkdir()
-    (pending / "drillDEAD01").write_text("")                 # its work dir is gone: the drill was killed
+    rec = _record(env, "drillDEAD01", 999999)
+    (Path(env["BACKUP_DIR"]) / ".work" / "drill.DEAD01").mkdir()   # fresh dir, but the process is gone
     r = _drill_sweep(env)
     assert r.returncode == 1 and "drillDEAD01" in r.stdout and "FAIL" in r.stdout
     # Docker back: the leftover is removed and only then the record goes.
@@ -95,17 +108,31 @@ def test_drill_sweep_fails_without_docker_while_a_killed_drill_is_on_record(tmp_
     sf.write_text(json.dumps(st))
     r = _drill_sweep(env)
     assert r.returncode == 0, r.stdout
-    assert json.loads(sf.read_text())["volumes"] == {} and not (pending / "drillDEAD01").exists()
+    assert json.loads(sf.read_text())["volumes"] == {} and not rec.exists()
 
 
-def test_drill_record_of_a_live_drill_is_kept(tmp_path):
+def test_drill_record_with_a_reused_pid_is_dead(tmp_path):
     env, _ = _drill_env(tmp_path, {"running": False, "containers": {}, "volumes": {}})
-    pending = Path(env["BACKUP_DIR"]) / ".drill-pending"
-    pending.mkdir()
-    (pending / "drillLIVE01").write_text("")
-    (Path(env["BACKUP_DIR"]) / ".work" / "drill.LIVE01").mkdir()
-    assert _drill_sweep(env).returncode == 0              # a running drill is not a leftover
-    assert (pending / "drillLIVE01").exists()
+    other = subprocess.Popen(["sleep", "60"])                     # alive, but not a drill
+    try:
+        _record(env, "drillREUSE1", other.pid)
+        r = _drill_sweep(env)
+        assert r.returncode == 1 and "drillREUSE1" in r.stdout
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_drill_record_of_a_running_drill_is_kept(tmp_path):
+    env, _ = _drill_env(tmp_path, {"running": False, "containers": {}, "volumes": {}})
+    live = _live_drill_process()
+    try:
+        rec = _record(env, "drillLIVE01", live.pid)
+        assert _drill_sweep(env).returncode == 0              # a running drill is not a leftover
+        assert rec.exists()
+    finally:
+        live.kill()
+        live.wait()
 
 
 def test_export_sweep_is_refused_through_the_ssh_key(tmp_path):

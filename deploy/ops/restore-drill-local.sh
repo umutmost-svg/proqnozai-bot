@@ -28,13 +28,15 @@ fail() { echo "FAIL: $1"; exit 1; }
 case $KIND in bot|miniapp|sweep) ;; *) echo "usage: sh restore-drill-local.sh bot|miniapp [archive.tar.enc] | sweep"; exit 2;; esac
 
 # Leftovers of drills killed by SIGKILL / power loss (their trap never ran): every container and volume labelled
-# proqnozai.drill=<token> whose work dir .work/drill.<suffix> is gone or untouched for 6 h (pull_backups.py deletes
-# such dirs) holds decrypted data of a dead run and is removed before this drill starts. A running drill keeps a
-# fresh work dir and is never touched. A leftover that cannot be removed = FAIL.
+# proqnozai.drill=<token> of a drill that is not provably running holds decrypted data of a dead run and is removed.
+# "Provably running" = its record ($PENDING/<token>, below) holds a PID that is a live restore-drill-local.sh
+# process right now. No record, a dead PID or a PID reused by another program = dead. A leftover that cannot be
+# removed = FAIL.
 alive() {  # $1 token "drillXXXXXX"
   case $1 in drill[A-Za-z0-9]*) ;; *) return 1;; esac
-  d="$BACKUP_DIR/.work/drill.${1#drill}"
-  [ -d "$d" ] && [ -n "$(find "$d" -maxdepth 0 -mmin -360 2>/dev/null)" ]
+  pid=$(cat "$PENDING/$1" 2>/dev/null) || return 1
+  case $pid in ''|*[!0-9]*) return 1;; esac
+  ps -p "$pid" -o command= 2>/dev/null | grep -q 'restore-drill-local\.sh'
 }
 sweep_orphans() {
   ids=$(docker ps -aq -f label=proqnozai.drill) || return 1
@@ -111,7 +113,7 @@ trap 'exit 130' INT TERM HUP
 mkdir -p "$BACKUP_DIR/.work" && chmod 700 "$BACKUP_DIR/.work" || fail "work dir"
 W=$(mktemp -d "$BACKUP_DIR/.work/drill.XXXXXX") || fail "mktemp"
 TOKEN=$(basename "$W" | tr -cd 'A-Za-z0-9')
-mkdir -p "$PENDING" && chmod 700 "$PENDING" && : > "$PENDING/$TOKEN" || fail "drill record"
+mkdir -p "$PENDING" && chmod 700 "$PENDING" && echo "$$" > "$PENDING/$TOKEN" || fail "drill record"
 "$PY" "$PULL" extract "$A" "$W/d" || fail "archive does not decrypt/verify"
 X="$W/d/x"
 
