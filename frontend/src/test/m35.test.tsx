@@ -431,6 +431,10 @@ describe('PARTIAL without the goal model', () => {
     // Odds without verified form: no explanation (no language-model answer), the market's estimate only.
     const oddsOnly = await read(basisOnly({ ...MARKET_ESTIMATE, reasons: ['model_team_history', 'no_verified_form'], factors: [] }));
     expect(oddsOnly.factors).toEqual([]);
+    // Odds without a 1X2 group (e.g. totals only): evidence, but no estimate to show.
+    const totalsOnly = await read(basisOnly({ reasons: ['model_small_sample', 'no_verified_form'], factors: [] }));
+    expect(totalsOnly.probabilities).toEqual([]);
+    expect(totalsOnly.estimateExpires).toBeUndefined();
   });
 
   it.each([

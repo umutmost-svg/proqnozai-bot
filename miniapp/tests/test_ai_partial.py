@@ -157,6 +157,16 @@ def test_odds_without_verified_form_or_model_are_partial_without_any_model_call(
     assert not model.calls and not ledger.used
 
 
+def test_odds_without_a_1x2_group_are_evidence_but_give_no_estimate(clock: FakeClock) -> None:
+    ledger, model = MemoryLedger(), FakeModel()
+    ai, _ = make_ai(clock, model, ledger=ledger, chelsea_games=2, forecaster=FakeForecaster(Unavailable("small_sample")))
+    with_odds(ai, clock, line(odds={"over25": 1.75, "under25": 2.10}))
+    result = run(ai.analyse("fd:7", user_id=1))
+    assert result.kind == "partial" and result.reasons == ("model_small_sample", "no_verified_form")
+    assert result.probabilities is None and result.estimate_from is None and result.factors == ()
+    assert not model.calls and not ledger.used
+
+
 def test_odds_without_verified_form_but_with_the_model_keep_the_models_numbers(clock: FakeClock) -> None:
     from miniapp.tests.test_ai_analysis import SHOWN
 
