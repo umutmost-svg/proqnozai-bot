@@ -43,6 +43,7 @@ COPY miniapp/ai/ miniapp/ai/
 COPY miniapp/forecast/ miniapp/forecast/
 COPY miniapp/quick/ miniapp/quick/
 COPY miniapp/odds/ miniapp/odds/
+COPY miniapp/ads/ miniapp/ads/
 COPY --from=frontend /build/frontend/dist /app/static
 COPY deploy/miniapp/entrypoint.sh /usr/local/bin/miniapp-entrypoint
 RUN chmod 0755 /usr/local/bin/miniapp-entrypoint && python -m compileall -q /app/miniapp

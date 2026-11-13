@@ -612,17 +612,28 @@ def create_app(
 
     register_sports_routes(app, sports, active_session,
                            ai_status=lambda: "connected" if ai.connected else "not_connected", odds=odds)
-    def on_pick(user_id: int, field: str, event_ids: list[str]) -> None:
+    def on_pick(user_id: int, field: str, legs: list[tuple[str, str | None]]) -> None:
         note_activity(user_id, field)
         try:
-            picks.add(user_id, event_ids, now())
+            picks.add(user_id, legs, now())
         except sqlite3.Error as exc:  # no record = no offer for that match, never a failed pick
+            logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
+
+    async def on_ai_pick(user_id: int, result: Any) -> None:
+        """The AI screen's recommended bet was shown to this user: an offer may sit inside it (ads only)."""
+        pick = getattr(result, "pick", None)
+        if picks is None or pick is None or pick.market == "NO_BET":
+            return
+        try:
+            await run_in_threadpool(picks.add, user_id, [(result.event_id, pick.market)], now(), "ai_pick")
+        except sqlite3.Error as exc:
             logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
 
     register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session,
                           on_pick=on_pick if telemetry else None)
 
     if telemetry is not None:
+        from miniapp.ads.odds_source import make_odds_lookup
         from miniapp.ads.policy import load_public_key
         from miniapp.ads.routes import register_ads_routes
         from miniapp.ads.service import PolicyReader, Tokens, policy_paths
@@ -647,7 +658,8 @@ def create_app(
             tokens=Tokens(settings.csrf_key_material), store=store, session_check=active_session,
             write_check=ads_write_check, read_json=ads_read_json,
             # CF-IPCountry is trusted only when every request must come through the edge (secret checked above).
-            trust_country=settings.edge_secret is not None, now=now, picks=picks)
+            trust_country=settings.edge_secret is not None, now=now, picks=picks,
+            odds_for=make_odds_lookup(sports.event, odds))
 
     @app.get("/api/ai/analysis")
     async def ai_analysis_cached(request: Request) -> JSONResponse:
@@ -671,6 +683,7 @@ def create_app(
             return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503)
         if result is None:
             raise ApiError(404, "not_found")
+        await on_ai_pick(active[1].user_id, result)
         return JSONResponse(result.to_json())
 
     @app.post("/api/ai/analysis")
@@ -697,6 +710,7 @@ def create_app(
             return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503)
         if result is None:
             raise ApiError(404, "not_found")
+        await on_ai_pick(session.user_id, result)
         return JSONResponse(result.to_json())
 
     static = StaticFiles(directory=settings.static_dir, html=True) if settings.static_dir is not None else None

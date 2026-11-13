@@ -31,28 +31,36 @@ logger = logging.getLogger("miniapp.ads")
 RELOAD_S = 30
 TOKEN_DAYS = 2  # a token from yesterday's offer still counts (the card may stay open over midnight)
 EVENT_KEY = re.compile(r"^[A-Za-z0-9:_.-]{1,40}$")
+MARKET_KEY = re.compile(r"^[A-Za-z0-9_.+-]{1,12}$")
 COUNTRY = re.compile(r"^[A-Z]{2}$")
 
 
 class RecentPicks:
-    """Matches the server itself recommended to a user (successful quick picks), for PICK_TTL_S. An offer, and so
-    an impression token, exists only for one of them: a client cannot invent event ids to inflate impressions.
-    Kept in telemetry.db, so every worker of the Mini App sees the same picks; an unreadable file = no offer."""
+    """Matches the server itself recommended to a user, per placement (a successful quick pick, an AI recommended
+    bet), with the recommended market, for PICK_TTL_S. An offer, and so an impression token, exists only for one of
+    them: a client cannot invent event ids to inflate impressions, and the offer's price is looked up for exactly
+    the market the server recommended. Kept in telemetry.db, so every worker sees the same picks; an unreadable
+    file = no offer."""
 
     PICK_TTL_S = 6 * 3600
 
     def __init__(self, telemetry: Telemetry) -> None:
         self.telemetry = telemetry
 
-    def add(self, user_id: int, event_ids: list[str], now: float) -> None:
-        self.telemetry.add_picks(user_id, [e for e in event_ids if EVENT_KEY.match(e)][:20],
-                                 int(now) + self.PICK_TTL_S)
+    def add(self, user_id: int, picks: list[tuple[str, str | None]], now: float, placement: str = "quick_pick") -> None:
+        if placement not in policy.PLACEMENTS:
+            raise ValueError(placement)
+        valid = [(e, m if isinstance(m, str) and MARKET_KEY.match(m) else None)
+                 for e, m in picks if isinstance(e, str) and EVENT_KEY.match(e)]
+        if valid:
+            self.telemetry.add_picks(user_id, placement, valid[:20], int(now) + self.PICK_TTL_S)
 
-    def has(self, user_id: int, event_id: str, now: float) -> bool:
+    def get(self, user_id: int, placement: str, event_id: str, now: float) -> tuple[bool, str | None]:
+        """(recommended, market) — (False, None) when not recommended or unreadable."""
         try:
-            return self.telemetry.has_pick(user_id, event_id, int(now))
+            return self.telemetry.pick(user_id, placement, event_id, int(now))
         except sqlite3.Error:
-            return False
+            return False, None
 
 
 class PolicyReader:
@@ -187,6 +195,16 @@ class Segments:
     def _since(self, days: int) -> list[dict]:
         start = days_back(self.now, days - 1)  # "within 7 days" = today and the 6 days before
         return [r for r in self._activity() if r["day"] >= start]
+
+    def viewer_class(self) -> str | None:
+        """The coarse class stored with each ad event for analytics by segment (SEGMENT_CLASSES): registered
+        within 7 days, else active on 3+ days of the last 7, else other. None when the data is unreadable."""
+        try:
+            if self("new", {"days": 7}):
+                return "new"
+            return "active" if self("active", {"days": 7, "min_visits": 3}) else "other"
+        except sqlite3.Error:
+            return None
 
     def __call__(self, name: str, params: dict[str, int]) -> bool:
         today = day_of(self.now)

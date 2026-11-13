@@ -6,6 +6,11 @@ present when the partner requires one, and the audience condition holds. Order: 
 segment > general), priority descending, the later start first, the smaller id first. The first
 eligible campaign wins; its A/B assignment may put the viewer into the control group — then nothing
 is shown (no fall-through, so the control group stays clean).
+
+Also eligible only: within the campaign's frequency caps (impressions of the viewer on OTHER matches today,
+and in all), and — for a campaign whose offer requires a price — when the verified odds store has a price of
+the recommended market right now. A capped or price-less campaign lets the next one through (it is not an
+experiment outcome).
 """
 from __future__ import annotations
 
@@ -30,6 +35,9 @@ class Viewer:
     # None (or a failing callback) = no data: a campaign whose condition needs a segment is not shown,
     # whatever the tree says (a negated segment must not turn "unknown" into "everyone").
     segment: Callable[[str, dict[str, int]], bool] | None = field(default=None, compare=False)
+    # (campaign id, event key) -> (impressions today on other matches, impressions in all on other matches).
+    # None (or a failing callback) = unknown: a capped campaign is not shown.
+    exposures: Callable[[int, str], tuple[int, int]] | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -63,8 +71,23 @@ def assign(c: Campaign, user_id: int) -> Variant | None:
     return c.variants[-1]  # unreachable: weights sum to 100
 
 
-def eligible(c: Campaign, viewer: Viewer, placement: str, now: int, audiences: dict[str, frozenset[int]]) -> bool:
+def within_caps(c: Campaign, viewer: Viewer, event_key: str) -> bool:
+    if not c.cap_per_day and not c.cap_total:
+        return True
+    if viewer.exposures is None:
+        return False
+    try:
+        today, total = viewer.exposures(c.id, event_key)
+    except Exception:  # noqa: BLE001 — unknown counts never lift a cap
+        return False
+    return (not c.cap_per_day or today < c.cap_per_day) and (not c.cap_total or total < c.cap_total)
+
+
+def eligible(c: Campaign, viewer: Viewer, placement: str, now: int, audiences: dict[str, frozenset[int]],
+             event_key: str = "", has_odds: bool = False) -> bool:
     if not c.starts_at <= now < c.ends_at or placement not in c.placements:
+        return False
+    if c.odds_mode == "required" and not has_odds:
         return False
     if c.lang_in and viewer.lang not in c.lang_in:
         return False
@@ -77,15 +100,18 @@ def eligible(c: Campaign, viewer: Viewer, placement: str, now: int, audiences: d
     if c.age_min > viewer.confirmed_age:
         return False
     try:
-        return targeting.matches(c.condition, viewer, audiences)
+        if not targeting.matches(c.condition, viewer, audiences):
+            return False
     except targeting.SegmentUnavailable:
         return False
+    return within_caps(c, viewer, event_key)  # last: the only check that reads the viewer's ad events
 
 
-def choose(policy: Policy | None, viewer: Viewer, placement: str, now: int) -> Choice | None:
+def choose(policy: Policy | None, viewer: Viewer, placement: str, now: int, event_key: str = "",
+           has_odds: bool = False) -> Choice | None:
     if policy is None:
         return None
     for c in sorted(policy.campaigns, key=order_key):
-        if eligible(c, viewer, placement, now, policy.audiences):
+        if eligible(c, viewer, placement, now, policy.audiences, event_key, has_odds):
             return Choice(c, assign(c, viewer.user_id))
     return None

@@ -20,6 +20,10 @@ SCHEMA_VERSION = 1
 DAY = 86400
 EVENTS_RETENTION_DAYS = 90
 ACTIVITY_RETENTION_DAYS = 400
+# Daily aggregates of ad events and partner conversions: 13 months of reports after the raw events are gone.
+AGGREGATE_RETENTION_DAYS = 400
+ATTRIBUTION_DAYS = 30  # a partner conversion counts for a click at most this old
+SEGMENT_CLASSES = ("new", "active", "other")  # coarse viewer class stored with each event (analytics only)
 CLICK_DEDUP_S = 10
 ACTIVITY_FIELDS = ("requests", "ai_opened", "ai_created", "quick_single_ok", "quick_coupon_ok", "quick_failed")
 
@@ -63,6 +67,57 @@ CREATE TABLE IF NOT EXISTS recent_picks (
     until     INTEGER NOT NULL,
     PRIMARY KEY (user_id, event_key)
 );
+-- Matches the server recommended to the user, per placement (quick pick, AI recommended bet), with the market
+-- it recommended (the offer's price is looked up for exactly that market). Replaces recent_picks.
+CREATE TABLE IF NOT EXISTS offer_picks (
+    user_id   INTEGER NOT NULL,
+    placement TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    market    TEXT,
+    until     INTEGER NOT NULL,
+    PRIMARY KEY (user_id, placement, event_key)
+);
+-- One row per click with its own id: the id goes into the partner link ({click_id}) and comes back in the
+-- partner's postback. No IP, no device data.
+CREATE TABLE IF NOT EXISTS ad_clicks (
+    click_id    TEXT PRIMARY KEY,
+    at          INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    campaign_id INTEGER NOT NULL,
+    variant     TEXT NOT NULL,
+    partner_id  INTEGER NOT NULL,
+    placement   TEXT NOT NULL,
+    event_key   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ad_clicks_at ON ad_clicks(at);
+-- Partner conversions (postback): one per (partner, partner's transaction id) — a repeated postback is a no-op.
+CREATE TABLE IF NOT EXISTS ad_postbacks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id  INTEGER NOT NULL,
+    txn_id      TEXT NOT NULL,
+    click_id    TEXT NOT NULL,
+    event       TEXT NOT NULL,
+    at          INTEGER NOT NULL,
+    day         TEXT NOT NULL,
+    user_id     INTEGER NOT NULL,
+    campaign_id INTEGER NOT NULL,
+    variant     TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT 'postback',
+    UNIQUE (partner_id, txn_id)
+);
+CREATE INDEX IF NOT EXISTS ad_postbacks_campaign ON ad_postbacks(campaign_id, day);
+-- Completed UTC days of ad_events, rolled up once (events by kind, variant, country and viewer class).
+CREATE TABLE IF NOT EXISTS ad_daily (
+    day         TEXT NOT NULL,
+    campaign_id INTEGER NOT NULL,
+    variant     TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    country     TEXT NOT NULL,
+    segment     TEXT NOT NULL,
+    events      INTEGER NOT NULL,
+    PRIMARY KEY (day, campaign_id, variant, kind, country, segment)
+);
+CREATE TABLE IF NOT EXISTS telemetry_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 -- The user's own statement "I am N or older" for a partner's age gate (the highest N kept).
 CREATE TABLE IF NOT EXISTS age_confirmations (
     user_id      INTEGER PRIMARY KEY,
@@ -70,6 +125,11 @@ CREATE TABLE IF NOT EXISTS age_confirmations (
     confirmed_at INTEGER NOT NULL
 );
 """
+
+
+_MIGRATIONS = (
+    "ALTER TABLE ad_events ADD COLUMN segment TEXT",  # viewer class (SEGMENT_CLASSES) when the event was recorded
+)
 
 
 class TelemetrySchemaError(RuntimeError):
@@ -120,6 +180,12 @@ class Telemetry:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
+            for ddl in _MIGRATIONS:  # additive: a column that is already there is fine
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc):
+                        raise
             row = conn.execute("SELECT version FROM schema_version").fetchone()
             if row is None:
                 conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
@@ -157,30 +223,65 @@ class Telemetry:
     # ---- ads --------------------------------------------------------------------------------
 
     def exposure(self, kind: str, user_id: int, campaign_id: int, variant: str, placement: str, event_key: str,
-                 country: str | None, now: int) -> bool:
+                 country: str | None, now: int, segment: str | None = None) -> bool:
         """An impression or a control exposure; False if this one was already counted today."""
         if kind not in ("impression", "control"):
             raise ValueError(kind)
         with self._write() as conn:
             return conn.execute(
                 "INSERT OR IGNORE INTO ad_events (at, day, user_id, campaign_id, variant, placement, event_key, country, "
-                "kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (now, day_of(now), user_id, campaign_id, variant, placement, event_key, country, kind)).rowcount > 0
+                "kind, segment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (now, day_of(now), user_id, campaign_id, variant, placement, event_key, country, kind,
+                 segment)).rowcount > 0
 
     def click(self, user_id: int, campaign_id: int, variant: str, placement: str, event_key: str,
-              country: str | None, now: int) -> bool:
-        """A click; repeated taps on the same offer within CLICK_DEDUP_S count once."""
+              country: str | None, now: int, segment: str | None = None, click_id: str | None = None,
+              partner_id: int | None = None) -> bool:
+        """A click; repeated taps on the same offer within CLICK_DEDUP_S count once. Every click with an id is
+        kept in ad_clicks (the partner link carries that id; its postback finds the click by it)."""
         with self._write() as conn:
+            if click_id is not None and partner_id is not None:
+                conn.execute("INSERT INTO ad_clicks (click_id, at, user_id, campaign_id, variant, partner_id, placement, "
+                             "event_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                             (click_id, now, user_id, campaign_id, variant, partner_id, placement, event_key))
             recent = conn.execute(
                 "SELECT 1 FROM ad_events WHERE user_id = ? AND kind = 'click' AND campaign_id = ? AND variant = ? "
                 "AND event_key = ? AND at > ?", (user_id, campaign_id, variant, event_key, now - CLICK_DEDUP_S)).fetchone()
             if recent is not None:
                 return False
             conn.execute(
-                "INSERT INTO ad_events (at, day, user_id, campaign_id, variant, placement, event_key, country, kind) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'click')",
-                (now, day_of(now), user_id, campaign_id, variant, placement, event_key, country))
+                "INSERT INTO ad_events (at, day, user_id, campaign_id, variant, placement, event_key, country, kind, "
+                "segment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'click', ?)",
+                (now, day_of(now), user_id, campaign_id, variant, placement, event_key, country, segment))
         return True
+
+    def impression_counts(self, user_id: int, campaign_id: int, event_key: str, now: int) -> tuple[int, int]:
+        """Impressions of this campaign for the user on OTHER matches: (today, in all) — frequency caps. The match
+        on screen does not count against itself (its impression is recorded once a day anyway)."""
+        with self._connect() as conn:
+            today, total = conn.execute(
+                "SELECT COALESCE(SUM(day = ?), 0), COUNT(*) FROM ad_events WHERE user_id = ? AND kind = 'impression' "
+                "AND campaign_id = ? AND event_key != ?", (day_of(now), user_id, campaign_id, event_key)).fetchone()
+        return int(today), int(total)
+
+    # ---- partner conversions --------------------------------------------------------------------
+
+    def record_conversion(self, partner_id: int, txn_id: str, click_id: str, event: str, now: int,
+                          source: str = "postback") -> str:
+        """A partner's conversion for one of our clicks. Idempotent by (partner, txn id). Returns accepted |
+        duplicate | unknown_click (no such click, another partner's click, or older than ATTRIBUTION_DAYS)."""
+        with self._write() as conn:
+            if conn.execute("SELECT 1 FROM ad_postbacks WHERE partner_id = ? AND txn_id = ?",
+                            (partner_id, txn_id)).fetchone() is not None:
+                return "duplicate"
+            click = conn.execute("SELECT user_id, campaign_id, variant, at FROM ad_clicks WHERE click_id = ? "
+                                 "AND partner_id = ?", (click_id, partner_id)).fetchone()
+            if click is None or click[3] < now - ATTRIBUTION_DAYS * DAY:
+                return "unknown_click"
+            conn.execute("INSERT INTO ad_postbacks (partner_id, txn_id, click_id, event, at, day, user_id, campaign_id, "
+                         "variant, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (partner_id, txn_id, click_id, event, now, day_of(now), click[0], click[1], click[2], source))
+        return "accepted"
 
     def clicks_since(self, user_id: int, since: int) -> int:
         with self._connect() as conn:
@@ -202,8 +303,10 @@ class Telemetry:
     # ---- analytics reads (the admin opens this file read-only) -------------------------------
 
     def ad_totals(self, since_day: str, group: str = "variant", campaign_id: int | None = None) -> list[dict]:
-        """Events, distinct users per (campaign, <group>, kind) from `since_day`; group: variant | day | country."""
-        column = {"variant": "variant", "day": "day", "country": "COALESCE(country, '')"}[group]
+        """Events, distinct users per (campaign, <group>, kind) from `since_day`; group: variant | day | country |
+        segment (the viewer class recorded with the event; '' for events from before it was recorded)."""
+        column = {"variant": "variant", "day": "day", "country": "COALESCE(country, '')",
+                  "segment": "COALESCE(segment, '')"}[group]
         where, args = "day >= ?", [since_day]
         if campaign_id is not None:
             where += " AND campaign_id = ?"
@@ -213,6 +316,50 @@ class Telemetry:
                 f"SELECT campaign_id, {column}, kind, COUNT(*), COUNT(DISTINCT user_id) FROM ad_events WHERE {where} "
                 f"GROUP BY campaign_id, {column}, kind ORDER BY campaign_id, {column}", args).fetchall()
         return [{"campaignId": r[0], "key": r[1], "kind": r[2], "events": r[3], "users": r[4]} for r in rows]
+
+    def daily_totals(self, since_day: str, group: str = "variant", campaign_id: int | None = None,
+                     until_day: str | None = None) -> list[dict]:
+        """Like ad_totals over the daily aggregates (13 months; completed days only). Events only: distinct users
+        cannot be added up across days."""
+        column = {"variant": "variant", "day": "day", "country": "country", "segment": "segment"}[group]
+        where, args = "day >= ?", [since_day]
+        if until_day is not None:
+            where += " AND day <= ?"
+            args.append(until_day)
+        if campaign_id is not None:
+            where += " AND campaign_id = ?"
+            args.append(campaign_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT campaign_id, {column}, kind, SUM(events) FROM ad_daily WHERE {where} "
+                f"GROUP BY campaign_id, {column}, kind ORDER BY campaign_id, {column}", args).fetchall()
+        return [{"campaignId": r[0], "key": r[1], "kind": r[2], "events": r[3], "users": None} for r in rows]
+
+    def long_totals(self, since_day: str, group: str = "variant", campaign_id: int | None = None) -> list[dict]:
+        """Event counts for periods longer than the raw retention: the daily aggregates up to the last rolled day,
+        the raw events after it (today, and any day the rollup has not reached yet). Events only."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT value FROM telemetry_meta WHERE key = 'rolled_until'").fetchone()
+        rolled = row[0] if row else None
+        rows = self.daily_totals(since_day, group, campaign_id, until_day=rolled) if rolled else []
+        rows += self.ad_totals(max(since_day, _next_day(rolled)) if rolled else since_day, group, campaign_id)
+        merged: dict[tuple, dict] = {}
+        for r in rows:
+            item = merged.setdefault((r["campaignId"], r["key"], r["kind"]), {**r, "events": 0, "users": None})
+            item["events"] += r["events"]
+        return sorted(merged.values(), key=lambda r: (r["campaignId"], str(r["key"]), r["kind"]))
+
+    def postback_totals(self, since_day: str, campaign_id: int | None = None) -> list[dict]:
+        """Partner conversions (postbacks and the partner API hook) per campaign, variant and event name."""
+        where, args = "day >= ?", [since_day]
+        if campaign_id is not None:
+            where += " AND campaign_id = ?"
+            args.append(campaign_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT campaign_id, variant, event, COUNT(*), COUNT(DISTINCT user_id) FROM ad_postbacks WHERE {where} "
+                "GROUP BY campaign_id, variant, event ORDER BY campaign_id, variant, event", args).fetchall()
+        return [{"campaignId": r[0], "variant": r[1], "event": r[2], "count": r[3], "users": r[4]} for r in rows]
 
     def engaged_clickers(self, since_day: str, campaign_id: int | None = None) -> dict[tuple[int, str], int]:
         """Distinct clickers per (campaign, variant) who also have an impression of that variant from `since_day`:
@@ -244,16 +391,41 @@ class Telemetry:
                 out.update({uid: variant for uid, variant in rows})
         return out
 
-    def add_picks(self, user_id: int, event_keys: list[str], until: int) -> None:
+    def add_picks(self, user_id: int, placement: str, picks: list[tuple[str, str | None]], until: int) -> None:
+        """(event key, market) the server recommended to the user in `placement`; the latest market wins."""
         with self._write() as conn:
-            conn.executemany("INSERT INTO recent_picks (user_id, event_key, until) VALUES (?, ?, ?) "
-                             "ON CONFLICT(user_id, event_key) DO UPDATE SET until = MAX(until, excluded.until)",
-                             [(user_id, e, until) for e in event_keys])
+            conn.executemany("INSERT INTO offer_picks (user_id, placement, event_key, market, until) VALUES (?, ?, ?, ?, ?) "
+                             "ON CONFLICT(user_id, placement, event_key) DO UPDATE SET market = excluded.market, "
+                             "until = MAX(until, excluded.until)",
+                             [(user_id, placement, e, m, until) for e, m in picks])
 
-    def has_pick(self, user_id: int, event_key: str, now: int) -> bool:
+    def pick(self, user_id: int, placement: str, event_key: str, now: int) -> tuple[bool, str | None]:
+        """(picked, market) of a live recommendation of this match to the user in `placement`."""
         with self._connect() as conn:
-            return conn.execute("SELECT 1 FROM recent_picks WHERE user_id = ? AND event_key = ? AND until > ?",
-                                (user_id, event_key, now)).fetchone() is not None
+            row = conn.execute("SELECT market FROM offer_picks WHERE user_id = ? AND placement = ? AND event_key = ? "
+                               "AND until > ?", (user_id, placement, event_key, now)).fetchone()
+        return (False, None) if row is None else (True, row[0])
+
+    def rollup(self, now: int) -> int:
+        """Rolls every completed UTC day of ad_events not rolled yet into ad_daily (once per day: the days are
+        complete, events are stamped with the time they are recorded). Returns the number of days rolled."""
+        today = day_of(now)
+        with self._write() as conn:
+            row = conn.execute("SELECT value FROM telemetry_meta WHERE key = 'rolled_until'").fetchone()
+            after = row[0] if row else ""
+            days = [r[0] for r in conn.execute("SELECT DISTINCT day FROM ad_events WHERE day > ? AND day < ? ORDER BY day",
+                                               (after, today))]
+            for day in days:
+                conn.execute(
+                    "INSERT OR REPLACE INTO ad_daily (day, campaign_id, variant, kind, country, segment, events) "
+                    "SELECT day, campaign_id, variant, kind, COALESCE(country, ''), COALESCE(segment, ''), COUNT(*) "
+                    "FROM ad_events WHERE day = ? GROUP BY day, campaign_id, variant, kind, COALESCE(country, ''), "
+                    "COALESCE(segment, '')", (day,))
+            last = days_back(now, 1)
+            if last > after:
+                conn.execute("INSERT INTO telemetry_meta (key, value) VALUES ('rolled_until', ?) ON CONFLICT(key) "
+                             "DO UPDATE SET value = excluded.value", (last,))
+        return len(days)
 
     def maybe_purge(self, now: int) -> None:
         """Retention while the process runs: at most once per UTC day (best effort, called on app traffic)."""
@@ -263,6 +435,7 @@ class Telemetry:
         # The day counts as done only after a successful purge; a failure (e.g. a lock) retries in an hour,
         # not on every request (each attempt can wait out the busy timeout).
         self._purge_retry_at = now + 3600
+        self.rollup(now)  # before the purge: no event leaves without its day in the aggregates
         self.purge(now)
         self._purged_day = today
 
@@ -273,6 +446,15 @@ class Telemetry:
             conn.execute("DELETE FROM ad_events WHERE day < ?", (events_before,))
             conn.execute("DELETE FROM user_activity WHERE day < ?", (activity_before,))
             conn.execute("DELETE FROM recent_picks WHERE until <= ?", (now,))
+            conn.execute("DELETE FROM offer_picks WHERE until <= ?", (now,))
+            conn.execute("DELETE FROM ad_clicks WHERE at < ?", (now - EVENTS_RETENTION_DAYS * DAY,))
+            aggregates_before = day_of(now - AGGREGATE_RETENTION_DAYS * DAY)
+            conn.execute("DELETE FROM ad_daily WHERE day < ?", (aggregates_before,))
+            conn.execute("DELETE FROM ad_postbacks WHERE day < ?", (aggregates_before,))
+
+
+def _next_day(day: str) -> str:
+    return (datetime.strptime(day, "%Y-%m-%d").date() + timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 def days_back(now: int, days: int) -> str:

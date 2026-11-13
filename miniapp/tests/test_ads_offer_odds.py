@@ -1,0 +1,291 @@
+"""Ads module, stage 6: verified odds in offers, the AI recommended-bet placement, frequency caps, global display
+settings, click ids, partner postbacks and the partner API hook, viewer classes and daily aggregates."""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
+from fastapi.testclient import TestClient
+
+from miniapp.ads import engine, odds_source, policy
+from miniapp.ads.partner_api import PartnerConversion, ingest
+from miniapp.ads.routes import postback_token_hash
+from miniapp.ads.telemetry import Telemetry, day_of, telemetry_path
+from miniapp.app import create_app
+from miniapp.tests.conftest import NOW, FakeClock, login
+from miniapp.tests.signing import make_init_data
+from miniapp.tests.test_ads_miniapp import DAY, EDGE, KEY, OTHER, USER, campaign, post, settings
+
+PB_TOKEN = "t" * 40
+
+
+def publish(tmp_path: Path, *campaigns: dict, version: int = 10, extra: dict | None = None) -> None:
+    body = {"schema": 1, "version": version, "generatedAt": NOW, "campaigns": list(campaigns), "audiences": {},
+            **(extra or {})}
+    policy.write_atomic(tmp_path / "ads-policy.json", policy.canonical(policy.sign(body, KEY)))
+
+
+class Prices:
+    """The verified odds store as the ads routes see it: (event, market) -> price, switchable per test."""
+
+    def __init__(self) -> None:
+        self.book: dict[tuple[str, str], float] = {}
+        self.calls: list[tuple[str, str]] = []
+
+    async def __call__(self, event_id: str, market: str) -> dict | None:
+        self.calls.append((event_id, market))
+        price = self.book.get((event_id, market))
+        if price is None:
+            return None
+        return {"market": market, "odds": price, "fetchedAt": "2027-01-15T08:00:00Z", "validFor": 600}
+
+
+class FakeAi:
+    connected = True
+
+    def __init__(self) -> None:
+        self.market = "1X"
+
+    async def analyse(self, event_id: str, user_id: int, create: bool = True):
+        pick = SimpleNamespace(market=self.market)
+        return SimpleNamespace(event_id=event_id, pick=pick, to_json=lambda: {"eventId": event_id, "pick": self.market})
+
+
+class Env:
+    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **over) -> None:
+        self.tmp = tmp_path
+        self.clock = FakeClock()
+        self.prices = Prices()
+        monkeypatch.setattr(odds_source, "make_odds_lookup", lambda event_of, odds: self.prices)
+        self.ai = FakeAi()
+        self.app = create_app(settings(tmp_path, **over), clock=self.clock, ai=self.ai)
+
+    def user(self, uid: int = USER, country: str | None = "AZ") -> tuple[TestClient, str]:
+        headers = {"X-Edge-Auth": EDGE}
+        if country:
+            headers["CF-IPCountry"] = country
+        c = TestClient(self.app, base_url="http://127.0.0.1:8000", headers=headers)
+        r = login(c, make_init_data({"id": uid, "first_name": "U", "language_code": "ru"}, auth_date=int(self.clock.now)))
+        assert r.status_code == 200, r.text
+        c.uid = uid  # type: ignore[attr-defined]
+        return c, r.json()["session"]["csrf_token"]
+
+    def pick(self, c: TestClient, event: str = "fd:1", market: str | None = "1", placement: str = "quick_pick"):
+        self.app.state.ads_picks.add(c.uid, [(event, market)], self.clock.now, placement)
+
+    def offer(self, c: TestClient, event: str = "fd:1", placement: str = "quick_pick"):
+        return c.get("/api/ads/offer", params={"placement": placement, "event_id": event})
+
+    def db(self) -> sqlite3.Connection:
+        return sqlite3.connect(telemetry_path(self.tmp / "miniapp.db"))
+
+
+def test_offer_price_comes_from_the_odds_store_for_the_recommended_market(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    publish(tmp_path, campaign())
+    c, _ = env.user()
+    env.pick(c, market="X2")
+    offer = env.offer(c).json()["offer"]
+    assert offer["odds"] is None and offer["oddsRequired"] is False       # optional: shown without a price
+    env.prices.book[("fd:1", "X2")] = 1.85
+    env.prices.book[("fd:1", "1")] = 9.99                                 # another market's price is never used
+    offer = env.offer(c).json()["offer"]
+    assert offer["odds"] == {"market": "X2", "odds": 1.85, "fetchedAt": "2027-01-15T08:00:00Z", "validFor": 600}
+    assert env.prices.calls[-1] == ("fd:1", "X2")
+
+
+def test_required_odds_hide_the_offer_and_refuse_the_click_without_a_price(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    publish(tmp_path, campaign(oddsMode="required"), campaign(2, priority=0, startsAt=NOW - 2 * DAY))
+    c, csrf = env.user()
+    env.pick(c)
+    assert env.offer(c).json()["offer"]["id"] == 2                        # no price: the next campaign
+    env.prices.book[("fd:1", "1")] = 2.1
+    offer = env.offer(c).json()["offer"]
+    assert offer["id"] == 1 and offer["oddsRequired"] is True and offer["odds"]["odds"] == 2.1
+    del env.prices.book[("fd:1", "1")]
+    r = post(c, "/api/ads/click", csrf, {"impressionToken": offer["impressionToken"]})
+    assert r.status_code == 410                                           # the price is gone: no click-through
+
+
+def test_a_market_without_a_price_or_no_market_means_no_price(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    publish(tmp_path, campaign(oddsMode="required"))
+    c, _ = env.user()
+    env.pick(c, market=None)
+    assert env.offer(c).json() == {"offer": None}
+    assert env.prices.calls == []                                         # nothing to look up without a market
+
+
+def test_ai_recommended_bet_is_a_placement_once_the_user_saw_it(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    publish(tmp_path, campaign(placements=["ai_pick"]))
+    c, _ = env.user()
+    assert env.offer(c, "fd:9", "ai_pick").json() == {"offer": None}     # the AI screen was not shown yet
+    assert c.get("/api/ai/analysis", params={"event_id": "fd:9"}).status_code == 200
+    env.prices.book[("fd:9", "1X")] = 1.4
+    offer = env.offer(c, "fd:9", "ai_pick").json()["offer"]
+    assert offer["id"] == 1 and offer["odds"]["market"] == "1X"
+    assert env.offer(c, "fd:9", "quick_pick").json() == {"offer": None}  # per placement
+    env.ai.market = "NO_BET"
+    assert c.get("/api/ai/analysis", params={"event_id": "fd:10"}).status_code == 200
+    assert env.offer(c, "fd:10", "ai_pick").json() == {"offer": None}    # no recommended bet, no offer
+
+
+def test_frequency_caps_count_other_matches(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    publish(tmp_path, campaign(caps={"perDay": 1, "total": 2}))
+    c, csrf = env.user()
+    for event in ("fd:1", "fd:2", "fd:3"):
+        env.pick(c, event)
+    token = env.offer(c, "fd:1").json()["offer"]["impressionToken"]
+    assert post(c, "/api/ads/impression", csrf, {"impressionToken": token}).json()["counted"] is True
+    assert env.offer(c, "fd:1").json()["offer"]["id"] == 1               # the same match stays visible
+    assert env.offer(c, "fd:2").json() == {"offer": None}                # a second match today: capped
+    env.clock.advance(DAY)
+    for event in ("fd:2", "fd:3"):
+        env.pick(c, event)
+    token = env.offer(c, "fd:2").json()["offer"]["impressionToken"]
+    assert post(c, "/api/ads/impression", csrf, {"impressionToken": token}).json()["counted"] is True
+    env.clock.advance(DAY)
+    env.pick(c, "fd:3")
+    assert env.offer(c, "fd:3").json() == {"offer": None}                # two in all: the total cap
+
+
+def test_global_settings_block_countries_and_gate_age(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    publish(tmp_path, campaign(countries=["AZ", "TR"]), extra={"settings": {"blockedCountries": ["TR"]}})
+    az, _ = env.user()
+    tr, _ = env.user(OTHER, country="TR")
+    env.pick(az)
+    env.pick(tr)
+    assert env.offer(az).json()["offer"]["id"] == 1
+    assert env.offer(tr).json() == {"offer": None}
+    publish(tmp_path, campaign(), version=11, extra={"settings": {"ageGate": True, "ageMin": 18}})
+    env.clock.advance(31)
+    assert env.offer(az).json() == {"offer": None, "ageGate": {"min": 18}}
+
+
+def test_click_id_goes_into_the_link_and_the_postback_counts_once(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    url = "https://p.example.com/promo?sub={click_id}"
+    variants = [{"key": "A", "weight": 100, "headline": "Бонус", "body": "", "extra": "", "cta": "Go", "url": url}]
+    publish(tmp_path, campaign(variants=variants),
+            extra={"partners": {"1": {"postbackSha256": postback_token_hash(PB_TOKEN)}}})
+    c, csrf = env.user()
+    env.pick(c)
+    token = env.offer(c).json()["offer"]["impressionToken"]
+    link = post(c, "/api/ads/click", csrf, {"impressionToken": token}).json()["url"]
+    click_id = parse_qs(urlsplit(link).query)["sub"][0]
+    assert link.startswith("https://p.example.com/promo?sub=") and "{" not in link
+    edge = TestClient(env.app, base_url="http://127.0.0.1:8000", headers={"X-Edge-Auth": EDGE})
+    q = {"partner": "1", "token": PB_TOKEN, "click_id": click_id, "txn": "dep-1", "event": "first_deposit"}
+    assert edge.get("/api/ads/postback", params=q).json() == {"status": "accepted"}
+    assert edge.get("/api/ads/postback", params=q).json() == {"status": "duplicate"}
+    assert edge.get("/api/ads/postback", params={**q, "token": "x" * 40}).status_code == 403
+    assert edge.get("/api/ads/postback", params={**q, "partner": "2"}).status_code == 403   # no token for it
+    assert edge.get("/api/ads/postback", params={**q, "txn": "dep-2", "click_id": "z" * 24}).json() == {
+        "status": "unknown_click"}
+    assert edge.get("/api/ads/postback", params={**q, "txn": "bad txn"}).status_code == 400
+    with env.db() as conn:
+        rows = conn.execute("SELECT partner_id, txn_id, event, user_id, campaign_id, variant FROM ad_postbacks").fetchall()
+    assert rows == [(1, "dep-1", "first_deposit", USER, 1, "A")]
+
+
+def test_odds_in_texts_and_bad_macros_are_rejected():
+    with pytest.raises(policy.PolicyError, match="odds_in_text"):
+        policy.check_ad_text("Коэффициент 1.85 только сегодня", "headline", 80)
+    with pytest.raises(policy.PolicyError, match="odds_in_text"):
+        policy.check_ad_text("кф 2,5", "body", 300)
+    assert policy.check_ad_text("Бонус 100% до 500 AZN", "headline", 80)
+    hosts = ["p.example.com"]
+    assert policy.check_url("https://p.example.com/x?s={click_id}", hosts)
+    for bad in ("https://p.example.com/x?s={user_id}", "https://{click_id}.p.example.com/", "https://p.example.com/{"):
+        with pytest.raises(policy.PolicyError):
+            policy.check_url(bad, hosts)
+    with pytest.raises(policy.PolicyError):
+        policy.render_url("https://p.example.com/x?s={click_id}", "short", hosts)
+
+
+def test_snapshot_fields_are_optional_and_validated():
+    body = {"schema": 1, "version": 1, "generatedAt": NOW, "campaigns": [campaign()], "audiences": {}}
+    parsed = policy.parse(policy.canonical(policy.sign(body, KEY)), KEY.public_key())
+    c = parsed.campaigns[0]
+    assert (c.odds_mode, c.cap_per_day, c.cap_total, parsed.postback_hashes) == ("optional", 0, 0, {})
+    for bad in ({"campaigns": [campaign(oddsMode="always")]}, {"campaigns": [campaign(caps={"perDay": -1})]},
+                {"settings": {"blockedCountries": ["XX"]}}, {"partners": {"1": {"postbackSha256": "nope"}}}):
+        with pytest.raises(policy.PolicyError):
+            policy.parse(policy.canonical(policy.sign({**body, **bad}, KEY)), KEY.public_key())
+
+
+def test_caps_without_counts_deny():
+    body = {"schema": 1, "version": 1, "generatedAt": NOW, "campaigns": [campaign(caps={"perDay": 1})]}
+    snap = policy.parse(policy.canonical(policy.sign({**body, "audiences": {}}, KEY)), KEY.public_key())
+    v = engine.Viewer(USER, "ru", "AZ", 0, lambda n, p: False)
+    assert engine.choose(snap, v, "quick_pick", NOW) is None
+    broken = engine.Viewer(USER, "ru", "AZ", 0, lambda n, p: False, lambda cid, ev: 1 / 0)
+    assert engine.choose(snap, broken, "quick_pick", NOW) is None
+    ok = engine.Viewer(USER, "ru", "AZ", 0, lambda n, p: False, lambda cid, ev: (0, 5))
+    assert engine.choose(snap, ok, "quick_pick", NOW).campaign.id == 1
+
+
+def test_events_carry_the_viewer_class_and_days_roll_up(tmp_path):
+    t = Telemetry(tmp_path / "t.db")
+    t.init_schema()
+    t.exposure("impression", 1, 7, "A", "quick_pick", "fd:1", "AZ", NOW, "new")
+    t.exposure("impression", 2, 7, "A", "quick_pick", "fd:1", None, NOW, "other")
+    t.click(1, 7, "A", "quick_pick", "fd:1", "AZ", NOW + 5, "new", "c" * 24, 3)
+    assert {r["key"]: r["events"] for r in t.ad_totals(day_of(NOW), "segment") if r["kind"] == "impression"} == {
+        "new": 1, "other": 1}
+    assert t.rollup(NOW) == 0                                             # today is not complete
+    assert t.rollup(NOW + DAY) == 1
+    assert t.rollup(NOW + DAY) == 0                                       # once per day
+    t.purge(NOW + 200 * DAY)                                              # raw events are gone after 90 days
+    assert t.ad_totals(day_of(NOW), "variant") == []
+    daily = {(r["key"], r["kind"]): r["events"] for r in t.daily_totals(day_of(NOW), "variant")}
+    assert daily == {("A", "impression"): 2, ("A", "click"): 1}
+    t.purge(NOW + 401 * DAY)
+    assert t.daily_totals(day_of(NOW), "variant") == []
+
+
+def test_telemetry_migrates_an_old_file_additively(tmp_path):
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript("CREATE TABLE ad_events (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, "
+                           "day TEXT NOT NULL, user_id INTEGER NOT NULL, campaign_id INTEGER NOT NULL, variant TEXT NOT "
+                           "NULL, placement TEXT NOT NULL, event_key TEXT NOT NULL, country TEXT, kind TEXT NOT NULL);"
+                           "INSERT INTO ad_events (at, day, user_id, campaign_id, variant, placement, event_key, kind) "
+                           "VALUES (1, '2027-01-01', 1, 1, 'A', 'quick_pick', 'fd:1', 'impression');")
+    t = Telemetry(path)
+    t.init_schema()
+    t.init_schema()                                                       # twice: the column is already there
+    assert t.ad_totals("2027-01-01", "segment")[0]["key"] == ""
+
+
+def test_partner_api_hook_uses_the_same_idempotent_path(tmp_path):
+    t = Telemetry(tmp_path / "t.db")
+    t.init_schema()
+    t.click(USER, 7, "B", "quick_pick", "fd:1", "AZ", NOW, "active", "k" * 24, 3)
+
+    class Source:
+        partner_id = 3
+
+        def fetch(self, since, until):
+            return [PartnerConversion("r-1", "k" * 24, "registration"), PartnerConversion("r-1", "k" * 24),
+                    PartnerConversion("bad id", "k" * 24), PartnerConversion("r-2", "q" * 24)]
+
+    class Down:
+        partner_id = 3
+
+        def fetch(self, since, until):
+            raise TimeoutError
+
+    assert ingest(Source(), t, NOW - DAY, NOW, NOW + 60) == {"accepted": 1, "duplicate": 1, "invalid": 1,
+                                                              "unknown_click": 1}
+    assert ingest(Down(), t, NOW - DAY, NOW, NOW + 60) == {"failed": 1}
+    assert t.postback_totals(day_of(NOW)) == [{"campaignId": 7, "variant": "B", "event": "registration", "count": 1,
+                                               "users": 1}]
+    assert t.record_conversion(3, "late", "k" * 24, "conversion", NOW + 31 * DAY) == "unknown_click"  # too old

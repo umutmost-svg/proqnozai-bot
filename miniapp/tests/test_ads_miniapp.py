@@ -67,8 +67,8 @@ class Env:
         return c, r.json()["session"]["csrf_token"]
 
     def offer(self, c: TestClient, event: str = "fd:1", placement: str = "quick_pick", picked: bool = True):
-        if picked and getattr(self.app.state, "ads_picks", None) is not None:
-            self.app.state.ads_picks.add(c.uid, [event], self.clock.now)  # the server recommended this match
+        if picked and placement in policy.PLACEMENTS and getattr(self.app.state, "ads_picks", None) is not None:
+            self.app.state.ads_picks.add(c.uid, [(event, "1")], self.clock.now, placement)  # the server recommended it
         return c.get("/api/ads/offer", params={"placement": placement, "event_id": event})
 
     def rows(self, kind: str) -> list[tuple]:
@@ -394,7 +394,7 @@ def test_offers_only_for_matches_the_server_recommended(tmp_path):
     c, _ = env.user()
     assert env.offer(c, event="fd:777", picked=False).json() == {"offer": None}   # invented id
     assert env.offer(c, event="fd:777").json()["offer"]["id"] == 1                  # after a real pick of it
-    assert env.offer(c, event="fd:777", placement="ai_pick").json() == {"offer": None}
+    assert env.offer(c, event="fd:777", placement="ai_pick", picked=False).json() == {"offer": None}  # other placement
     other, _ = env.user(OTHER)
     assert env.offer(other, event="fd:777", picked=False).json() == {"offer": None}  # another user's pick
     env.clock.advance(6 * 3600 + 1)
@@ -405,7 +405,7 @@ def test_recommended_matches_are_shared_between_workers(tmp_path):
     first = Env(tmp_path)
     publish(tmp_path, campaign())
     c, _ = first.user()
-    first.app.state.ads_picks.add(USER, ["fd:42"], first.clock.now)   # the pick was served by worker 1
+    first.app.state.ads_picks.add(USER, [("fd:42", "1")], first.clock.now)   # the pick was served by worker 1
     second = Env(tmp_path)                                             # worker 2, same data directory
     second.clock.now = first.clock.now
     c2 = TestClient(second.app, base_url="http://127.0.0.1:8000", headers={"X-Edge-Auth": EDGE, "CF-IPCountry": "AZ"})

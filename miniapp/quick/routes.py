@@ -20,9 +20,9 @@ MAX_TOURNAMENTS = 20
 
 
 def register_quick_routes(app: FastAPI, service: QuickService, current_session: SessionCheck,
-                          on_pick: Callable[[int, str, list[str]], None] | None = None) -> None:
-    """`on_pick(user_id, field, event_ids)`: optional hook for a successful pick (ads: activity counter and the
-    matches an offer may be shown for)."""
+                          on_pick: Callable[[int, str, list[tuple[str, str | None]]], None] | None = None) -> None:
+    """`on_pick(user_id, field, legs)`: optional hook for a successful pick with its (event id, market) legs (ads:
+    activity counter, and the matches and markets an offer may be shown — and priced — for)."""
     @app.get("/api/quick/pick")
     async def pick(request: Request) -> JSONResponse:
         active = await current_session(request)
@@ -55,7 +55,8 @@ def register_quick_routes(app: FastAPI, service: QuickService, current_session: 
             return _upstream(exc)
         body = answer.to_json()
         if on_pick is not None and body.get("status") == "ok":
-            events = [leg["event"]["id"] for leg in body.get("legs", []) if isinstance(leg.get("event"), dict)]
+            legs = [(leg["event"]["id"], leg.get("market")) for leg in body.get("legs", [])
+                    if isinstance(leg.get("event"), dict)]
             await run_in_threadpool(on_pick, session.user_id,
-                                    "quick_coupon_ok" if body.get("mode") == "coupon" else "quick_single_ok", events)
+                                    "quick_coupon_ok" if body.get("mode") == "coupon" else "quick_single_ok", legs)
         return JSONResponse(body)

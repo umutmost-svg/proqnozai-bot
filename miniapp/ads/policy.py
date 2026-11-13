@@ -15,7 +15,7 @@ import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -41,6 +41,18 @@ DISCLOSURE_LIMITS = {"advertiser": 120, "adId": 64, "ageLabel": 8}
 MAX_URL = 500
 MAX_HOSTS = 20
 MAX_AGE = 25
+# How an offer treats the price of the recommended market (always from the verified odds store, never
+# from the campaign): "optional" — shown with the price when there is one, without it otherwise;
+# "required" — not shown at all without a verified price.
+ODDS_MODES = ("optional", "required")
+MAX_CAP_PER_DAY = 100
+MAX_CAP_TOTAL = 1000
+# The only macro a partner link may carry: replaced on each click by that click's own id (postback key).
+CLICK_MACRO = "{click_id}"
+_CLICK_ID = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+# A price-like number in an advertiser's text ("1.85", "2,5"): prices come from the odds store only.
+_ODDS_IN_TEXT = re.compile(r"(?<![\d.,])\d{1,3}[.,]\d{1,2}(?![\d.,%])")
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 _HOST = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f  ]")
 
@@ -60,6 +72,14 @@ def check_text(value: Any, field: str, limit: int, required: bool = True, multil
     text = value.strip()
     if (required and not text) or len(text) > limit or _CONTROL.search(text.replace("\n", "") if multiline else text):
         raise PolicyError(f"invalid_{field}")
+    return text
+
+
+def check_ad_text(value: Any, field: str, limit: int, required: bool = True, multiline: bool = False) -> str:
+    """An advertiser's text: check_text plus no price-like numbers (an offer never states odds itself)."""
+    text = check_text(value, field, limit, required, multiline)
+    if _ODDS_IN_TEXT.search(text):
+        raise PolicyError("odds_in_text")
     return text
 
 
@@ -83,8 +103,30 @@ def check_countries(value: Any) -> list[str]:
 
 
 def check_url(value: Any, hosts: list[str] | tuple[str, ...]) -> str:
-    """https only, the exact host from the partner's list, no user info, no port, no control characters."""
+    """https only, the exact host from the partner's list, no user info, no port, no control characters.
+    The link may carry the {click_id} macro (outside the host); no other braces."""
     if not isinstance(value, str) or not 1 <= len(value) <= MAX_URL or value != value.strip():
+        raise PolicyError("invalid_url")
+    if "{" in value or "}" in value:
+        rest = value.replace(CLICK_MACRO, "")
+        if "{" in rest or "}" in rest:
+            raise PolicyError("invalid_url")
+        _check_plain_url(value.replace(CLICK_MACRO, "c" * 32), hosts)
+        if urlsplit(value).hostname != urlsplit(value.replace(CLICK_MACRO, "c" * 32)).hostname:
+            raise PolicyError("invalid_url")  # the macro may not touch the host
+        return value
+    return _check_plain_url(value, hosts)
+
+
+def render_url(template: str, click_id: str, hosts: list[str] | tuple[str, ...]) -> str:
+    """The partner link of one click: the macro replaced by the click id, checked once more as a plain link."""
+    if not _CLICK_ID.match(click_id):
+        raise PolicyError("invalid_click_id")
+    return _check_plain_url(template.replace(CLICK_MACRO, click_id), hosts)
+
+
+def _check_plain_url(value: str, hosts: list[str] | tuple[str, ...]) -> str:
+    if len(value) > MAX_URL + 64:
         raise PolicyError("invalid_url")
     if _CONTROL.search(value) or "\\" in value or " " in value:
         raise PolicyError("invalid_url")
@@ -162,6 +204,17 @@ class Campaign:
     salt: str
     control_pct: int
     variants: tuple[Variant, ...]
+    odds_mode: str = "optional"      # ODDS_MODES
+    cap_per_day: int = 0              # impressions per user per UTC day (other matches); 0: no cap
+    cap_total: int = 0                # impressions per user while events are kept (90 days); 0: no cap
+
+
+@dataclass(frozen=True)
+class DisplaySettings:
+    """Global display rules (ads-architecture.md §9), above every partner and campaign."""
+    blocked_countries: frozenset[str] = frozenset()   # never shown there, whatever a partner allows
+    age_gate: bool = False                            # every offer requires the viewer's own age statement
+    age_min: int = 18                                 # the age that statement must reach when age_gate is on
 
 
 @dataclass(frozen=True)
@@ -171,6 +224,9 @@ class Policy:
     campaigns: tuple[Campaign, ...]
     audiences: dict[str, frozenset[int]]
     sha256: str
+    settings: DisplaySettings = DisplaySettings()
+    # partner id -> SHA-256 (hex) of its postback token; partners without one cannot post conversions
+    postback_hashes: dict[int, str] | None = None
 
 
 def _campaign(raw: Any, audiences: dict[str, frozenset[int]]) -> Campaign:
@@ -181,10 +237,10 @@ def _campaign(raw: Any, audiences: dict[str, frozenset[int]]) -> Campaign:
     for v in check_variants(raw.get("variants")):
         variants.append(Variant(
             key=v["key"], weight=v["weight"],
-            headline=check_text(v.get("headline"), "headline", TEXT_LIMITS["headline"]),
-            body=check_text(v.get("body"), "body", TEXT_LIMITS["body"], required=False, multiline=True),
-            extra=check_text(v.get("extra"), "extra", TEXT_LIMITS["extra"], required=False),
-            cta=check_text(v.get("cta"), "cta", TEXT_LIMITS["cta"]),
+            headline=check_ad_text(v.get("headline"), "headline", TEXT_LIMITS["headline"]),
+            body=check_ad_text(v.get("body"), "body", TEXT_LIMITS["body"], required=False, multiline=True),
+            extra=check_ad_text(v.get("extra"), "extra", TEXT_LIMITS["extra"], required=False),
+            cta=check_ad_text(v.get("cta"), "cta", TEXT_LIMITS["cta"]),
             url=check_url(v.get("url"), hosts)))
     langs = raw.get("langIn")
     if not isinstance(langs, list) or not all(lang in SUPPORTED_LANGS for lang in langs):
@@ -212,6 +268,11 @@ def _campaign(raw: Any, audiences: dict[str, frozenset[int]]) -> Campaign:
     allow_unknown = raw.get("allowUnknownCountry")
     if not isinstance(allow_unknown, bool):
         raise PolicyError("invalid_countries")
+    # Fields added after schema 1 shipped: absent = the old behaviour (a newer file stays readable).
+    odds_mode = raw.get("oddsMode", "optional")
+    if odds_mode not in ODDS_MODES:
+        raise PolicyError("invalid_odds_mode")
+    caps = check_caps(raw.get("caps"))
     return Campaign(
         id=_int(raw.get("id"), 1, 2**53, "invalid_campaign"), tier=tier,
         priority=_int(raw.get("priority"), 0, 1000, "invalid_priority"), starts_at=starts, ends_at=ends,
@@ -221,7 +282,52 @@ def _campaign(raw: Any, audiences: dict[str, frozenset[int]]) -> Campaign:
                                                                                  "invalid_partner"),
         hosts=hosts, disclosure=check_disclosure(raw.get("disclosure")), condition=condition,
         salt=experiment["salt"], control_pct=_int(experiment.get("controlPct"), 0, 50, "invalid_experiment"),
-        variants=tuple(variants))
+        variants=tuple(variants), odds_mode=odds_mode, cap_per_day=caps["perDay"], cap_total=caps["total"])
+
+
+def check_caps(value: Any) -> dict[str, int]:
+    """Frequency caps {perDay, total}; absent or 0 = no cap."""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict) or set(value) - {"perDay", "total"}:
+        raise PolicyError("invalid_caps")
+    return {"perDay": _int(value.get("perDay", 0), 0, MAX_CAP_PER_DAY, "invalid_caps"),
+            "total": _int(value.get("total", 0), 0, MAX_CAP_TOTAL, "invalid_caps")}
+
+
+def check_settings(value: Any) -> DisplaySettings:
+    if value is None:
+        return DisplaySettings()
+    if not isinstance(value, dict) or set(value) - {"blockedCountries", "ageGate", "ageMin"}:
+        raise PolicyError("invalid_settings")
+    gate = value.get("ageGate", False)
+    if not isinstance(gate, bool):
+        raise PolicyError("invalid_settings")
+    return DisplaySettings(blocked_countries=frozenset(check_countries(value.get("blockedCountries", []))),
+                           age_gate=gate, age_min=_int(value.get("ageMin", 18), 1, MAX_AGE, "invalid_settings"))
+
+
+def _postback_hashes(value: Any) -> dict[int, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > MAX_CAMPAIGNS:
+        raise PolicyError("bad_partners")
+    out: dict[int, str] = {}
+    for key, entry in value.items():
+        if not isinstance(key, str) or not key.isdigit() or not isinstance(entry, dict) or set(entry) != {"postbackSha256"}:
+            raise PolicyError("bad_partners")
+        digest = entry["postbackSha256"]
+        if not isinstance(digest, str) or not _SHA256_HEX.match(digest):
+            raise PolicyError("bad_partners")
+        out[_int(int(key), 1, 2**53, "bad_partners")] = digest
+    return out
+
+
+def apply_settings(c: Campaign, settings: DisplaySettings) -> Campaign:
+    """The campaign as the global rules allow it: blocked countries removed, the age gate raised."""
+    countries = tuple(x for x in c.countries if x not in settings.blocked_countries)
+    age = max(c.age_min, settings.age_min) if settings.age_gate else c.age_min
+    return replace(c, countries=countries, age_min=age)
 
 
 def _audience_refs(node: dict[str, Any] | None) -> set[str]:
@@ -308,10 +414,12 @@ def parse(raw: bytes, public_key: Ed25519PublicKey) -> Policy:
     campaigns = data.get("campaigns")
     if not isinstance(campaigns, list) or len(campaigns) > MAX_CAMPAIGNS:
         raise PolicyError("bad_campaigns")
-    parsed = tuple(_campaign(c, audiences) for c in campaigns)
+    display = check_settings(data.get("settings"))
+    parsed = tuple(apply_settings(_campaign(c, audiences), display) for c in campaigns)
     if len({c.id for c in parsed}) != len(parsed):
         raise PolicyError("bad_campaigns")
-    return Policy(version=version, generated_at=generated, campaigns=parsed, audiences=audiences, sha256=sha)
+    return Policy(version=version, generated_at=generated, campaigns=parsed, audiences=audiences, sha256=sha,
+                  settings=display, postback_hashes=_postback_hashes(data.get("partners")))
 
 
 def read_version(path: Path, public_key: Ed25519PublicKey) -> tuple[int, str] | None:
