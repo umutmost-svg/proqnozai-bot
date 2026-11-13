@@ -4,7 +4,7 @@ import { ApiError, errorText, newIdempotencyKey } from './api';
 import { PERIOD_LABELS, useAuth, useMe, usePrefs, type Period } from './state';
 
 const NAV = [
-  ['/', 'Аналитика'], ['/users', 'Пользователи'], ['/dialogs', 'Диалоги'], ['/broadcasts', 'Рассылки'],
+  ['/', 'Аналитика'], ['/users', 'Пользователи'], ['/inquiries', 'Обращения'], ['/dialogs', 'Диалоги (демо)'], ['/broadcasts', 'Рассылки'],
   ['/segments', 'Сегменты'], ['/credits', 'Кредиты'], ['/referrals', 'Ссылки'],
 ] as const;
 const NAV_DATA = [['/forecasts', 'Прогнозы'], ['/ai', 'AI и расходы'], ['/sports-api', 'Спортивные API']] as const;

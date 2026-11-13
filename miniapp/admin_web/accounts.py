@@ -191,6 +191,9 @@ def can(role: str, permission: str) -> bool:
         "manage_partners": ("owner",),
         # Referral links: create and archive (owner, admin); per-link stats are aggregates (analysts too).
         "manage_referrals": ("owner", "admin"),
+        # Inquiries: reading them needs read_personal AND the explicit view_dialogs grant; the retention period of
+        # stored inquiries is an owner decision.
+        "manage_inquiry_settings": ("owner",),
     }
     return role in allowed[permission]
 

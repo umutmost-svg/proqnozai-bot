@@ -17,13 +17,14 @@ Same schema as miniapp/admin_web/bot_crm.py (whichever side starts first creates
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from config import BOT_CRM_DB, BOT_REFERRALS_ENABLED
+from config import BOT_CRM_DB, BOT_INQUIRIES_ENABLED, BOT_REFERRALS_ENABLED
 
 logger = logging.getLogger("bot_crm")
 
@@ -34,6 +35,9 @@ DEFAULT_RETENTION_DAYS = 90
 MIN_RETENTION_DAYS, MAX_RETENTION_DAYS = 1, 365
 PURGE_EVERY_S = 3600
 _CODE = re.compile(r"^[a-z0-9]{3,24}$")
+# Same statement on the admin side (miniapp/admin_web/bot_crm.py).
+PURGE_SQL = ("DELETE FROM inquiries WHERE at < ? OR at < ? - COALESCE((SELECT n.days FROM inquiry_notices n "
+             "WHERE n.user_id = inquiries.user_id), ?) * 86400")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS referral_starts (
@@ -50,9 +54,11 @@ CREATE TABLE IF NOT EXISTS inquiries (
 );
 CREATE INDEX IF NOT EXISTS inquiries_user ON inquiries(user_id, id);
 CREATE INDEX IF NOT EXISTS inquiries_at ON inquiries(at);
+-- `days`: the retention stated in the notice the user received; their messages are never kept longer.
 CREATE TABLE IF NOT EXISTS inquiry_notices (
     user_id INTEGER PRIMARY KEY,
-    at      INTEGER NOT NULL
+    at      INTEGER NOT NULL,
+    days    INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -77,6 +83,27 @@ def clamp_retention(value: object) -> int:
     return min(MAX_RETENTION_DAYS, max(MIN_RETENTION_DAYS, days))
 
 
+
+def secure_file(path: Path) -> None:
+    """The file holds users' messages: exactly 0660 (owner + the other process's group), never readable by other
+    local users. Tightened BEFORE it is opened for writing; fails closed when it cannot be made private."""
+    if path.exists() and not path.is_file():
+        raise IsADirectoryError(f"{path.name} is not a file")
+    if path.exists():
+        if os.stat(path).st_mode & 0o777 != 0o660:
+            try:
+                os.chmod(path, 0o660)
+            except PermissionError:  # owned by the other process: only its owner can change the mode
+                pass
+    else:
+        try:
+            os.close(os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o660))
+            os.chmod(path, 0o660)  # the umask may have dropped group write
+        except FileExistsError:  # the other process created it at the same moment: checked below
+            pass
+    if os.stat(path).st_mode & 0o007:
+        raise PermissionError(f"{path.name} is readable by other local users")
+
 class BotCrm:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -84,6 +111,8 @@ class BotCrm:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Read-write connection: the file's mode is checked (and tightened) before EVERY open."""
+        secure_file(self.path)
         conn = sqlite3.connect(self.path, timeout=5, isolation_level=None)
         try:
             conn.execute("PRAGMA busy_timeout=5000")
@@ -93,6 +122,7 @@ class BotCrm:
 
     def init_schema(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        secure_file(self.path)
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
@@ -111,9 +141,11 @@ class BotCrm:
         with self._connect() as conn:
             return conn.execute("SELECT 1 FROM inquiry_notices WHERE user_id = ?", (user_id,)).fetchone() is not None
 
-    def mark_notice(self, user_id: int, now: int) -> None:
+    def mark_notice(self, user_id: int, now: int, days: int) -> None:
+        """`days` is the retention the notice stated: that user's messages are never kept longer (purge)."""
         with self._connect() as conn:
-            conn.execute("INSERT OR IGNORE INTO inquiry_notices (user_id, at) VALUES (?, ?)", (user_id, now))
+            conn.execute("INSERT OR IGNORE INTO inquiry_notices (user_id, at, days) VALUES (?, ?, ?)",
+                         (user_id, now, days))
 
     def record_inquiry(self, user_id: int, text: str, now: int) -> bool:
         """Stores one message, only for a user who has been shown the notice. Returns True if stored."""
@@ -139,9 +171,10 @@ class BotCrm:
         return clamp_retention(row[0]) if row else DEFAULT_RETENTION_DAYS
 
     def purge(self, now: int) -> int:
-        cutoff = now - self.retention_days() * DAY
+        """Older than the current retention, or than the retention stated in the user's notice (the shorter)."""
+        days = self.retention_days()
         with self._connect() as conn:
-            return conn.execute("DELETE FROM inquiries WHERE at < ?", (cutoff,)).rowcount
+            return conn.execute(PURGE_SQL, (now - days * DAY, now, days)).rowcount
 
     def maybe_purge(self, now: int) -> None:
         if now < self._purge_at:
@@ -182,3 +215,6 @@ def note_start(user_id: int, args: list[str] | None, is_new: bool, now: int) -> 
         crm().record_start(user_id, code, now)
     except (sqlite3.Error, OSError) as exc:
         logger.warning("event=referral_start_failed type=%s", type(exc).__name__)
+
+
+__all__ = ["BOT_INQUIRIES_ENABLED", "BotCrm", "crm", "note_start", "referral_code"]

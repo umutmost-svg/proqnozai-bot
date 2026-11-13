@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
-from miniapp.admin_web import demo
+from miniapp.admin_web import demo, inquiry_routes
 from miniapp.ads.policy import public_key_hex as policy_public_key_hex
 from miniapp.admin_web.access import AccessPublisher
 from miniapp.admin_web.outbox import Outbox
@@ -507,4 +507,5 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         out["demo"] = demo.audience(days, ctx.today()) if ctx.demo_allowed(request) else None
         return out
 
+    inquiry_routes.register(app, ctx, crm, outbox.status_by_keys)
     return crm

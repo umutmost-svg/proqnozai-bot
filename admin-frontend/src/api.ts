@@ -92,6 +92,9 @@ const MESSAGES: Record<string, string> = {
   invalid_channel: 'Выберите канал.',
   invalid_code_format: 'Код: латиница в нижнем регистре и цифры, 3–24 символа.',
   code_taken: 'Такой код уже используется.',
+  retention_not_applied: 'Срок сохранён, но ещё не применён к файлу бота. Повторите — изменение применится.',
+  inquiries_unavailable: 'Файл обращений сейчас не читается. Повторите позже.',
+  dialogs_not_allowed: 'Нет права «Диалоги»: его выдаёт владелец.',
   internal: 'Внутренняя ошибка сервера.',
 };
 
@@ -186,6 +189,15 @@ export interface ReferralLink {
 export interface ReferralsPage {
   items: ReferralLink[]; funnel: { starts: number; inMiniApp: number; active7d: number; converted: number | null };
   unknownCodes: { code: string; stats: ReferralStats }[]; telemetry: boolean; names: { bot: string | null; miniapp: string | null };
+}
+export interface InquiriesPage {
+  collected: boolean; retentionDays: number;
+  items: { userId: number; count: number; lastAt: number; name: string | null; username: string | null; status: 'open' | 'closed' }[];
+}
+export interface InquiryThread {
+  userId: number; noticeAt: number | null; status: 'open' | 'closed'; truncated?: { inbound: boolean; outbound: boolean };
+  user: { firstName: string | null; lastName: string | null; username: string | null; lang: string } | null;
+  history: { id: string; from: 'user' | 'admin'; at: number; text: string; by?: string | null; status?: string }[];
 }
 export interface Geo { country: string | null; source: 'edge' | 'lang' | null }
 export interface CrmUserRow extends UserRow {

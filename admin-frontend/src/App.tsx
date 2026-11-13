@@ -8,6 +8,7 @@ import { AiCosts, SportsApi, System } from './pages/Telemetry';
 import { UserCardRoute } from './pages/UserCard';
 import { Users } from './pages/Users';
 import { Referrals } from './pages/Referrals';
+import { Inquiries } from './pages/Inquiries';
 import { AuthProvider, PrefsProvider, useAuth } from './state';
 import { Empty, Layout, Loading, PageHead } from './ui';
 
@@ -36,6 +37,7 @@ function Gate() {
         <Route path="settings/journal" element={<SettingsJournal />} />
         <Route path="credits" element={<Credits />} />
         <Route path="referrals" element={<Referrals />} />
+        <Route path="inquiries" element={<Inquiries />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
