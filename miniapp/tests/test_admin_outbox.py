@@ -90,3 +90,13 @@ def test_a_replayed_schedule_after_cancel_queues_nothing_new(env):
                                                       language_code="ru"), int(clock()))
     assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, schedule).json()["replayed"] is True
     assert len(jobs(config)) == frozen and {j[3] for j in jobs(config)} == {"cancelled"}
+
+
+def test_the_user_card_shows_the_bots_outcome(env):
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    msg = post(client, f"/api/admin/users/{U1}/messages", csrf, {"body": "Статус", "idempotencyKey": "msg-key-st"}).json()
+    with sqlite3.connect(config.outbox_db) as conn:
+        conn.execute("UPDATE jobs SET status = 'sent' WHERE idempotency_key = ?", (f"msg:{msg['id']}",))
+    card = client.get(f"/api/admin/users/{U1}").json()
+    assert next(m for m in card["messages"] if m["id"] == msg["id"])["status"] == "sent"

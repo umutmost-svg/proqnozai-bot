@@ -26,6 +26,13 @@ function UserCard({ id }: { id: string }) {
   const [dialog, setDialog] = useState<null | 'tag' | 'credits' | 'revoke' | 'block'>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [message, setMessage] = useState('');
+  // One idempotency key per draft: a resend after a lost answer reuses it (the server returns the same message);
+  // a new key only after success or when the text changes.
+  const [messageKey, setMessageKey] = useState(() => `msg-${crypto.randomUUID()}`);
+  const editMessage = (text: string) => {
+    setMessage(text);
+    setMessageKey(`msg-${crypto.randomUUID()}`);
+  };
   const [note, setNote] = useState('');
   const [mbEdit, setMbEdit] = useState<string | null>(null);
   const [mbError, setMbError] = useState<string | null>(null);
@@ -113,17 +120,17 @@ function UserCard({ id }: { id: string }) {
             <div>
               <Card title="Написать в Telegram" action={<Tag>от имени бота</Tag>}>
                 <textarea ref={composer} className="control" aria-label="Текст сообщения" placeholder="Текст сообщения…" maxLength={4000}
-                  value={message} onChange={(e) => setMessage(e.target.value)} disabled={!manage} />
+                  value={message} onChange={(e) => editMessage(e.target.value)} disabled={!manage} />
                 <div className="tags" style={{ margin: '10px 0' }}>
                   {['Здравствуйте! Мы уже разбираемся с проблемой 🙏', 'Спасибо, что пользуетесь SporBot! Для вас новый бонус.'].map((t) => (
-                    <button key={t} type="button" className="tag" style={{ cursor: 'pointer' }} onClick={() => setMessage(t)} disabled={!manage}>{t.slice(0, 22)}…</button>
+                    <button key={t} type="button" className="tag" style={{ cursor: 'pointer' }} onClick={() => editMessage(t)} disabled={!manage}>{t.slice(0, 22)}…</button>
                   ))}
                 </div>
                 {formError && <div className="form-error" role="alert">{formError}</div>}
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <span className="small muted">Пилот: сохраняется, но не отправляется</span>
                   <button type="button" className="btn primary" disabled={!manage || busy || !message.trim()}
-                    onClick={() => void act(() => api(`/api/admin/users/${data.id}/messages`, { method: 'POST', body: { body: message, idempotencyKey: `msg-${crypto.randomUUID()}` } }), 'Сообщение поставлено в очередь бота', () => setMessage(''))}>Отправить</button>
+                    onClick={() => void act(() => api(`/api/admin/users/${data.id}/messages`, { method: 'POST', body: { body: message, idempotencyKey: messageKey } }), 'Сообщение поставлено в очередь бота', () => editMessage(''))}>Отправить</button>
                 </div>
               </Card>
               <Card title="Кредиты" action={<Tag tone="warning">выключены</Tag>}>

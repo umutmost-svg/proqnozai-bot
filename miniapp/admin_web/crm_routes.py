@@ -165,6 +165,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         if profile is None:
             raise ActionError("not_found", 404)
         info = crm.user_crm(user_id, t)
+        delivered = outbox.status_by_keys([f"msg:{m['id']}" for m in info["messages"]])
+        for m in info["messages"]:  # the bot's outcome (sent / failed / …) replaces the admin-side "queued"
+            m["status"] = (delivered.get(f"msg:{m['id']}") or {}).get("status", m["status"])
         events = ctx.accounts.events(target=("user", str(user_id)), limit=100)
         ai_calls = ([c for c in demo.ai_calls(30, ctx.today()) if c["userId"] == user_id][:20]
                     if ctx.demo_allowed(request) else None)
@@ -254,6 +257,13 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         queue_message(admin.id, user_id, result["id"], body.strip(), result["requestId"])
         return {"id": result["id"], "status": "queued"}
 
+    def enforced(result: dict) -> dict:
+        """A block (or unblock) is recorded, but the Mini App follows it only once access-policy.json is written:
+        until then the request fails (503) and the same request (same idempotency key) is retried to publish."""
+        if not (result.get("access") or {}).get("fileWritten"):
+            raise ActionError("access_not_published", 503)
+        return result
+
     @app.post("/api/admin/users/{user_id}/block")
     async def block(user_id: int, request: Request) -> dict:
         admin = ctx.admin_of(request, "manage_users")
@@ -266,14 +276,15 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         rid = request.state.request_id
         step = ctx.step_up_guard(admin, lambda: crm.set_block(admin, user_id, flag, reason, key, code, ctx.now(), rid))
         if "requestId" not in step:
-            return {**step, "access": publish_access()}
+            return enforced({**step, "access": publish_access()})
         # No await between the checks above and this write (single pilot process). Sessions are revoked once per
         # request; a crash here is finished by the next retry or at startup (pending_requests).
         t = ctx.now()
         revoked = store.revoke_user_sessions(user_id, t, BurnWindow.for_policy(t, 300, 30))
         result = ctx.accounts.revoke_completed(admin, user_id, revoked, t, step["requestId"], action="user.block")
-        return {**result, "after": {"blocked": True, "revoked": result["after"]["revoked"]},
-                "revokedSessions": result["after"]["revoked"], "resumed": step["resumed"], "access": publish_access()}
+        return enforced({**result, "after": {"blocked": True, "revoked": result["after"]["revoked"]},
+                         "revokedSessions": result["after"]["revoked"], "resumed": step["resumed"],
+                         "access": publish_access()})
 
     @app.get("/api/admin/access/publication")
     async def access_status(request: Request) -> dict:

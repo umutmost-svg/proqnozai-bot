@@ -135,3 +135,18 @@ def test_reader_refuses_a_replayed_older_file_after_a_restart(tmp_path):
     assert AccessPolicy(path, policy.public_key_hex(key), clock).blocked() == {5}
     write(21, [])                                    # a real unblock
     assert AccessPolicy(path, policy.public_key_hex(key), clock).blocked() == frozenset()
+
+
+def test_a_block_that_could_not_be_published_is_reported_as_not_enforced(env, monkeypatch):
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+
+    def fail(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(policy, "write_atomic", fail)
+    r = block(client, csrf, secrets_, clock, U1, True, "block-key-1")
+    assert r.status_code == 503 and r.json()["error"] == "access_not_published"
+    monkeypatch.undo()
+    clock.t -= 30  # the same request again (same key): replayed and now published
+    r = block(client, csrf, secrets_, clock, U1, True, "block-key-1")
+    assert r.status_code == 200 and snapshot(config)[1] == {U1}
