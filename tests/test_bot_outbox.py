@@ -123,3 +123,17 @@ async def test_an_expired_job_is_never_claimed(tmp_path):
     assert bot.claim(NOW + admin_outbox.JOB_TTL_S) is None
     assert statuses(tmp_path)["msg:1"][0] == "expired"
     assert await bot.run_once(ok, lambda: NOW + admin_outbox.JOB_TTL_S + 10) == {}
+
+
+async def test_a_timeout_is_never_retried(tmp_path):
+    from telegram.error import NetworkError, TimedOut
+
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("msg:1", 11, "x", []), ("msg:2", 12, "x", [])], batch_id=None, not_before=NOW,
+                  admin_event_id=None, now=NOW)
+
+    async def lost(job):
+        raise TimedOut() if job.user_id == 11 else NetworkError("connection reset")
+
+    assert await bot.run_once(lost, lambda: NOW) == {"failed": 2}
+    assert statuses(tmp_path) == {"msg:1": ("failed", "unknown_outcome"), "msg:2": ("failed", "unknown_outcome")}

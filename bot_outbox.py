@@ -7,7 +7,8 @@ into the bot's job queue (main.py, behind a flag that is off by default) is a se
 Rules: a job is claimed atomically (queued -> sending) right before it is sent, with a claim token that fences
 its outcome, so two bot instances never send it twice. Delivery is AT MOST ONCE: a job left in `sending` past
 STUCK_S (the bot died mid-send, Telegram's outcome unknown) is marked `failed/interrupted`, never re-sent;
-explicit retryable outcomes (rate limit, network before sending) are retried up to MAX_ATTEMPTS. Expired jobs
+only Telegram's explicit "retry after" (the message was refused, not sent) is retried, up to MAX_ATTEMPTS;
+a timeout or network error is `failed/unknown_outcome`. Expired jobs
 are never sent late; users banned in the bot are skipped; texts are never logged. Retention: texts of finished
 jobs are cleared after TEXT_RETENTION_DAYS, rows deleted after ROW_RETENTION_DAYS.
 """
@@ -90,7 +91,8 @@ def classify(exc: BaseException) -> Outcome:
     if isinstance(exc, BadRequest):
         return Outcome("failed", "bad_request")
     if isinstance(exc, (TimedOut, NetworkError)):
-        return Outcome("retry", "network", 30)
+        # Telegram may have accepted the message before the answer was lost: unknown, so never re-sent.
+        return Outcome("failed", "unknown_outcome")
     return Outcome("failed", "error")
 
 
