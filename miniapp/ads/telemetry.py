@@ -83,6 +83,7 @@ class Telemetry:
         self.path = path
         self.read_only = read_only
         self._purged_day: str | None = None
+        self._purge_retry_at = 0
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -206,6 +207,22 @@ class Telemetry:
                 f"GROUP BY campaign_id, {column}, kind ORDER BY campaign_id, {column}", args).fetchall()
         return [{"campaignId": r[0], "key": r[1], "kind": r[2], "events": r[3], "users": r[4]} for r in rows]
 
+    def engaged_clickers(self, since_day: str, campaign_id: int | None = None) -> dict[tuple[int, str], int]:
+        """Distinct clickers per (campaign, variant) who also have an impression of that variant from `since_day`:
+        the numerator of the unique CTR. A click can outlive its impression (shown before the period, purged, or
+        the impression write failed), so raw clickers may exceed reach."""
+        where, args = "c.kind = 'click' AND c.day >= ?", [since_day, since_day]  # impression day, click day
+        if campaign_id is not None:
+            where += " AND c.campaign_id = ?"
+            args.append(campaign_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT c.campaign_id, c.variant, COUNT(DISTINCT c.user_id) FROM ad_events c WHERE EXISTS ("
+                "SELECT 1 FROM ad_events i WHERE i.kind = 'impression' AND i.day >= ? AND i.user_id = c.user_id "
+                f"AND i.campaign_id = c.campaign_id AND i.variant = c.variant) AND {where} "
+                "GROUP BY c.campaign_id, c.variant", args).fetchall()
+        return {(r[0], r[1]): r[2] for r in rows}
+
     def last_click_variants(self, campaign_id: int, user_ids: list[int], since: int) -> dict[int, str]:
         """The variant each user last clicked on for this campaign (attribution of a confirmed conversion)."""
         if not user_ids:
@@ -223,9 +240,13 @@ class Telemetry:
     def maybe_purge(self, now: int) -> None:
         """Retention while the process runs: at most once per UTC day (best effort, called on app traffic)."""
         today = day_of(now)
-        if self._purged_day != today:
-            self._purged_day = today
-            self.purge(now)
+        if self._purged_day == today or now < self._purge_retry_at:
+            return
+        # The day counts as done only after a successful purge; a failure (e.g. a lock) retries in an hour,
+        # not on every request (each attempt can wait out the busy timeout).
+        self._purge_retry_at = now + 3600
+        self.purge(now)
+        self._purged_day = today
 
     def purge(self, now: int) -> None:
         events_before = day_of(now - EVENTS_RETENTION_DAYS * DAY)

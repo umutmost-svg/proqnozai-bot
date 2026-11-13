@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS ad_conversions (
 """
 
 ATTRIBUTION_DAYS = 30
-MAX_REPORT = 5000
+# Fits the admin's 16 KiB request body limit (app.MAX_BODY) with the longest ids; bigger reports go in batches.
+MAX_REPORT = 400
 Z95 = 1.959964
 
 
@@ -57,13 +58,17 @@ class AdsAnalytics:
         with self.accounts._connect() as conn:
             conn.executescript(_SCHEMA)
 
-    def _totals(self, since_day: str, group: str, campaign_id: int | None) -> list[dict]:
+    def _read(self, state: dict[str, str], read: Any, empty: Any) -> Any:
+        """Telemetry is not authoritative: a missing file is "not collected", a busy/corrupt one "unavailable" —
+        never an error page, and never presented as zero activity."""
         if not self.telemetry.exists():
-            return []
+            state["source"] = state["source"].replace("telemetry", "not_collected")  # "unavailable" stays
+            return empty
         try:
-            return self.telemetry.ad_totals(since_day, group, campaign_id)
+            return read()
         except sqlite3.Error:
-            return []  # telemetry is not authoritative: a missing or busy file shows as "no data"
+            state["source"] = "unavailable"
+            return empty
 
     def _conversions(self, since: int, campaign_id: int | None) -> dict[tuple[int, str], int]:
         where, args = "confirmed_at >= ?", [since]
@@ -77,8 +82,14 @@ class AdsAnalytics:
 
     def report(self, now: int, days: int, campaign_id: int | None = None, names: dict[int, str] | None = None) -> dict:
         since_day = days_back(now, days - 1)
+        state = {"source": "telemetry"}
+
+        def totals(group: str) -> list[dict]:
+            return self._read(state, lambda: self.telemetry.ad_totals(since_day, group, campaign_id), [])
+
+        engaged = self._read(state, lambda: self.telemetry.engaged_clickers(since_day, campaign_id), {})
         variants: dict[tuple[int, str], dict[str, Any]] = {}
-        for row in self._totals(since_day, "variant", campaign_id):
+        for row in totals("variant"):
             item = variants.setdefault((row["campaignId"], row["key"]), {
                 "campaignId": row["campaignId"], "variant": row["key"], "impressions": 0, "reach": 0, "clicks": 0,
                 "clickers": 0, "control": 0, "conversions": 0})
@@ -96,22 +107,24 @@ class AdsAnalytics:
         rows = []
         for item in sorted(variants.values(), key=lambda v: (v["campaignId"], v["variant"])):
             item["ctr"] = round(item["clicks"] / item["impressions"], 6) if item["impressions"] else None
-            # Unique CTR (clickers / reach) with its 95 % interval: what the A/B comparison is read on.
-            item["uniqueCtr"] = round(item["clickers"] / item["reach"], 6) if item["reach"] else None
-            item["uniqueCtrCi"] = wilson(item["clickers"], item["reach"])
+            # Unique CTR with its 95 % interval: what the A/B comparison is read on. Only clickers who were shown
+            # the variant in the period count, so the proportion never exceeds 1 (raw clickers stay in "clickers").
+            shown = min(engaged.get((item["campaignId"], item["variant"]), 0), item["reach"])
+            item["uniqueCtr"] = round(shown / item["reach"], 6) if item["reach"] else None
+            item["uniqueCtrCi"] = wilson(shown, item["reach"])
             item["campaign"] = (names or {}).get(item["campaignId"])
             rows.append(item)
         by_day: dict[str, dict[str, int]] = {}
-        for row in self._totals(since_day, "day", campaign_id):
+        for row in totals("day"):
             day = by_day.setdefault(row["key"], {"impressions": 0, "clicks": 0, "control": 0})
             day[{"impression": "impressions", "click": "clicks", "control": "control"}[row["kind"]]] += row["events"]
         countries: dict[str, dict[str, int]] = {}
-        for row in self._totals(since_day, "country", campaign_id):
+        for row in totals("country"):
             c = countries.setdefault(row["key"] or "unknown", {"impressions": 0, "clicks": 0})
             if row["kind"] in ("impression", "click"):
                 c[row["kind"] + "s"] += row["events"]
         return {
-            "period": days, "source": "telemetry" if self.telemetry.exists() else "not_collected",
+            "period": days, "source": state["source"],
             "variants": rows,
             "days": [{"day": d, **v} for d, v in sorted(by_day.items())],
             "countries": [{"country": k, **v} for k, v in sorted(countries.items(), key=lambda kv: -kv[1]["impressions"])],
@@ -144,12 +157,14 @@ class AdsAnalytics:
                 chunk = wanted[start:start + 500]
                 users += [r[0] for r in conn.execute(
                     f"SELECT user_id FROM crm_external_ids WHERE lower(mb_id) IN ({','.join('?' * len(chunk))})", chunk)]
-        variants: dict[int, str] = {}
-        if self.telemetry.exists():
-            try:
-                variants = self.telemetry.last_click_variants(campaign_id, sorted(users), now - ATTRIBUTION_DAYS * DAY)
-            except sqlite3.Error:
-                variants = {}
+        # Without readable telemetry the attribution is unknown, not "no click": refuse before inserting, since a
+        # stored conversion is never re-attributed (one per campaign and user). The admin retries later.
+        if not self.telemetry.exists():
+            raise ActionError("telemetry_unavailable", 503)
+        try:
+            variants = self.telemetry.last_click_variants(campaign_id, sorted(users), now - ATTRIBUTION_DAYS * DAY)
+        except sqlite3.Error:
+            raise ActionError("telemetry_unavailable", 503) from None
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "manage_ads")
             added = sum(conn.execute(
