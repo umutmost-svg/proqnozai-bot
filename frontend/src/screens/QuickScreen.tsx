@@ -468,7 +468,7 @@ function Result({ answer, period, onWeek }: { answer: QuickAnswer; period: Quick
         {answer.legs.map((leg, i) => (
           <Leg key={leg.event.id} leg={leg} index={coupon ? i + 1 : null} priced={priced} />
         ))}
-        {!coupon && answer.legs.length === 1 && <PartnerOffer placement="quick_pick" eventId={answer.legs[0]!.event.id} />}
+        {!coupon && answer.legs.length === 1 && <PartnerOffer key={answer.legs[0]!.event.id} placement="quick_pick" eventId={answer.legs[0]!.event.id} />}
         {coupon && answer.combined !== null && (
           <div className={s.combined} data-testid="quick-combined">
             <p className={s.combinedValue}>

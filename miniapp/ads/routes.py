@@ -19,7 +19,8 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from miniapp.ads import engine, policy
-from miniapp.ads.service import EVENT_KEY, PolicyReader, Segments, Token, TokenError, Tokens, country_from
+from miniapp.ads.service import (EVENT_KEY, PolicyReader, RecentPicks, Segments, Token, TokenError, Tokens,
+                                 country_from)
 from miniapp.ads.telemetry import Telemetry, day_of
 
 logger = logging.getLogger("miniapp.ads")
@@ -43,6 +44,7 @@ def register_ads_routes(
     read_json: Callable[[Request, set[str]], Awaitable[dict]],
     trust_country: bool,
     now: Callable[[], int],
+    picks: RecentPicks,
 ) -> None:
     """`write_check` does Origin + session + CSRF and returns (token, session); `read_json` reads a strict JSON
     object with exactly the given keys."""
@@ -68,7 +70,8 @@ def register_ads_routes(
         ts = now()
         safe(lambda: telemetry.maybe_purge(ts), None, "purge")
         user = store.get_user(user_id)
-        if user is None:
+        # Only for a match the server recommended to this user (ai_pick: none yet — the AI card is not wired).
+        if user is None or placement != "quick_pick" or not picks.has(user_id, event_key, ts):
             return {"offer": None}
         current = reader.current()
         v, age_known = viewer(user_id, user.lang, country, ts)

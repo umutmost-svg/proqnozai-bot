@@ -218,7 +218,8 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
     @app.get("/api/admin/auth/me")
     async def me(request: Request) -> dict:
         admin = admin_of(request)
-        return {"admin": {"id": admin.id, "email": admin.email, "role": admin.role},
+        return {"admin": {"id": admin.id, "email": admin.email, "role": admin.role,
+                          "grants": accounts.grants_of(admin.id)},
                 "csrf": accounts.csrf_for(request.cookies[SESSION_COOKIE]),
                 "pilot": {"dataset": config.dataset(), "demoTelemetry": True}}
 
@@ -442,6 +443,15 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         return JSONResponse(step_up_guard(admin, lambda: accounts.update_admin(
             admin, target_id, str(role) if role else None, str(state) if state else None, reason, key, code, now())))
 
+    @app.post("/api/admin/admins/{target_id}/grants")
+    async def admins_grant(target_id: int, request: Request) -> Response:
+        admin = admin_of(request, "manage_admins")
+        data = await body(request)
+        reason, code, key = dangerous(data)
+        granted = data.get("granted")
+        return JSONResponse(step_up_guard(admin, lambda: accounts.set_grant(
+            admin, target_id, str(data.get("permission") or ""), granted, reason, key, code, now())))
+
     @app.get("/api/admin/events")
     async def events(request: Request) -> dict:
         admin_of(request)
@@ -466,7 +476,8 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
     ctx = SimpleNamespace(
         accounts=accounts, store=store, now=now, today=today, page=page, period=period, admin_of=admin_of,
         body=body, dangerous=dangerous, step_up_guard=step_up_guard, demo_allowed=demo_allowed, history=history,
-        tournament_name=tournament_name, dataset=config.dataset,
+        tournament_name=tournament_name, dataset=config.dataset, access_file=config.access_policy_file,
+        outbox_file=config.outbox_db,
         can_personal=lambda request: can(request.state.admin.role, "read_personal"))
     crm_routes.register(app, ctx)
     ads_routes.register(app, ctx, config.ads_policy_file, config.ads_applied_file,  # after CRM: MB ids live there

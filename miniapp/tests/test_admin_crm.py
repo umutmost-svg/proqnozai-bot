@@ -35,14 +35,14 @@ def test_tags_filter_users_and_are_journalled(env):
     assert actions.count("user.tag_add") == 2 and "user.tag_remove" in actions
 
 
-def test_note_and_message_are_stored_but_never_sent_in_the_pilot(env):
+def test_note_and_message_are_stored_and_the_message_queued_for_the_bot(env):
     _, clock, client, accounts, secrets_ = env
     csrf = login(client, clock, secrets_, "admin@x.test")
     post(client, f"/api/admin/users/{U1}/notes", csrf, {"body": "частный комментарий"})
     msg = post(client, f"/api/admin/users/{U1}/messages", csrf, {"body": "Привет!"}).json()
-    assert msg["status"] == "not_sent_pilot"
+    assert msg["status"] == "queued"
     card = client.get(f"/api/admin/users/{U1}").json()
-    assert card["notes"][0]["body"] == "частный комментарий" and card["messages"][0]["status"] == "not_sent_pilot"
+    assert card["notes"][0]["body"] == "частный комментарий" and card["messages"][0]["status"] == "queued"
     assert any(e["kind"] == "message" for e in card["timeline"]) and card["credits"]["enabled"] is False
     dump = " ".join(str(e) for e in accounts.events())
     assert "частный комментарий" not in dump and "Привет!" not in dump  # texts never enter the journal
@@ -138,8 +138,7 @@ def test_analytics_real_parts_and_demo_only_on_request(env):
     assert sum(d["new"] for d in day["newByDay"]) == day["newUsers"] and len(day["newByDay"]) == 2
     assert a["demo"] is None and a["real"]["leagues"]
     assert client.get("/api/admin/analytics?days=30&demo=1").json()["demo"]["source"] == "demo"
-    assert client.get("/api/admin/dialogs").json() == {"source": "not_collected"}
-    assert client.get("/api/admin/dialogs?demo=1").json()["source"] == "demo"
+    assert client.get("/api/admin/dialogs").json()["error"] == "dialogs_not_allowed"  # no explicit grant yet
 
 
 def test_group_credit_key_is_bound_to_the_whole_user_list(env):

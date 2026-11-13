@@ -161,6 +161,8 @@ class Settings:
     ads_enabled: bool = False
     # Public half (hex, 32 bytes) of the admin's Ed25519 key that signs ads-policy.json; required with ads on.
     ads_policy_public_key: str | None = None
+    # Same kind of key for access-policy.json (users blocked in the admin panel). Unset: only the env list applies.
+    access_policy_public_key: str | None = None
 
     @property
     def csrf_key_material(self) -> str:
@@ -275,6 +277,9 @@ class Settings:
             raise SettingsError("ai_daily_budget must be 1..100000")
         if self.ads_policy_public_key is not None and not re.fullmatch(r"[0-9a-f]{64}", self.ads_policy_public_key):
             raise SettingsError("ads_policy_public_key must be 64 lower-case hex characters (Ed25519 public key)")
+        if self.access_policy_public_key is not None and not re.fullmatch(r"[0-9a-f]{64}",
+                                                                        self.access_policy_public_key):
+            raise SettingsError("access_policy_public_key must be 64 lower-case hex characters (Ed25519 public key)")
         if self.ads_enabled and self.ads_policy_public_key is None:
             # Without the key no snapshot could ever be trusted: a forgotten key must stop the start.
             raise SettingsError("MINIAPP_ADS_ENABLED requires MINIAPP_ADS_POLICY_PUBLIC_KEY")
@@ -364,4 +369,5 @@ class Settings:
             blocked_user_ids=_user_ids(optional("MINIAPP_BLOCKED_USER_IDS"), "MINIAPP_BLOCKED_USER_IDS") or frozenset(),
             ads_enabled=boolean("MINIAPP_ADS_ENABLED", False),
             ads_policy_public_key=optional("MINIAPP_ADS_POLICY_PUBLIC_KEY"),
+            access_policy_public_key=optional("MINIAPP_ACCESS_POLICY_PUBLIC_KEY"),
         )

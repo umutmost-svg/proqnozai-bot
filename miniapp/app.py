@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 
-from miniapp.security import CsrfTokens, LoginRateLimiter, origin_allowed
+from miniapp.security import ACCESS_POLICY_FILE, AccessPolicy, CsrfTokens, LoginRateLimiter, origin_allowed
 from miniapp.settings import Settings
 from miniapp.ai.analysis import AI_ERROR_CODES, AiError, AiService, build_ai_service
 from miniapp.forecast.history import ForecastHistory, history_path
@@ -306,6 +306,13 @@ def create_app(
         )
         mark_partitioned(response)
 
+    # Users blocked in the admin panel (signed access-policy.json): no sign-in, sessions stop (≤ 30 s); data stays.
+    access = (AccessPolicy(settings.db_path.parent / ACCESS_POLICY_FILE, settings.access_policy_public_key, clock)
+              if settings.access_policy_public_key else None)
+
+    def is_blocked(user_id: int) -> bool:
+        return user_id in settings.blocked_user_ids or (access is not None and user_id in access.blocked())
+
     async def unrevoked_session(request: Request) -> tuple[str, Session] | None:
         """Session from the cookie that was not revoked, expired or not."""
         token = request.cookies.get(settings.cookie_name)
@@ -323,15 +330,20 @@ def create_app(
             return None
         if settings.allowed_user_ids is not None and found[1].user_id not in settings.allowed_user_ids:
             return None  # closed launch: a session of someone taken off the list stops working at once
-        if found[1].user_id in settings.blocked_user_ids:
+        if is_blocked(found[1].user_id):
             return None  # blocked: an existing session stops working at once
         return found
 
     # Ads telemetry (activity segments, exposures): exists only with MINIAPP_ADS_ENABLED=true. The ads package
     # is imported only then: an image built without it keeps working with the flag off.
     telemetry: Any = None
+    picks: Any = None
     if settings.ads_enabled:
+        from miniapp.ads.service import RecentPicks
         from miniapp.ads.telemetry import Telemetry, telemetry_path
+
+        picks = RecentPicks()
+        app.state.ads_picks = picks
 
         try:
             telemetry = Telemetry(telemetry_path(settings.db_path))
@@ -417,7 +429,7 @@ def create_app(
             # Closed launch: nothing about this user is stored (no user row, no session).
             logger.info("auth.rejected reason=not_allowed")
             raise ApiError(403, "not_allowed")
-        if verified.user.id in settings.blocked_user_ids:
+        if is_blocked(verified.user.id):
             # Same answer as the closed list; nothing about this user is stored.
             logger.info("auth.rejected reason=blocked")
             raise ApiError(403, "not_allowed")
@@ -601,8 +613,12 @@ def create_app(
 
     register_sports_routes(app, sports, active_session,
                            ai_status=lambda: "connected" if ai.connected else "not_connected", odds=odds)
+    def on_pick(user_id: int, field: str, event_ids: list[str]) -> None:
+        note_activity(user_id, field)
+        picks.add(user_id, event_ids, now())
+
     register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session,
-                          on_pick=(lambda user_id, field: note_activity(user_id, field)) if telemetry else None)
+                          on_pick=on_pick if telemetry else None)
 
     if telemetry is not None:
         from miniapp.ads.policy import load_public_key
@@ -629,7 +645,7 @@ def create_app(
             tokens=Tokens(settings.csrf_key_material), store=store, session_check=active_session,
             write_check=ads_write_check, read_json=ads_read_json,
             # CF-IPCountry is trusted only when every request must come through the edge (secret checked above).
-            trust_country=settings.edge_secret is not None, now=now)
+            trust_country=settings.edge_secret is not None, now=now, picks=picks)
 
     @app.get("/api/ai/analysis")
     async def ai_analysis_cached(request: Request) -> JSONResponse:

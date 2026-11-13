@@ -43,6 +43,16 @@ class AdminWebConfig:
         return self.data_dir / "admin" / "admin.db"
 
     @property
+    def outbox_db(self) -> Path:
+        """admin -> bot message queue: the admin writes jobs, the existing bot sends them (§10)."""
+        return self.data_dir / "bot-outbox.db"
+
+    @property
+    def access_policy_file(self) -> Path:
+        """Users blocked in the panel (Mini App access only), signed; read by the Mini App."""
+        return self.data_dir / "access-policy.json"
+
+    @property
     def telemetry_db(self) -> Path:
         """Mini App telemetry (activity, ad events): read-only for the admin (admin-dashboard.md §3)."""
         return self.data_dir / "miniapp.telemetry.db"

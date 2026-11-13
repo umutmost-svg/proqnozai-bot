@@ -33,6 +33,39 @@ EVENT_KEY = re.compile(r"^[A-Za-z0-9:_.-]{1,40}$")
 COUNTRY = re.compile(r"^[A-Z]{2}$")
 
 
+class RecentPicks:
+    """Matches the server itself recommended to a user (successful quick picks), for PICK_TTL_S. An offer, and so
+    an impression token, exists only for one of them: a client cannot invent event ids to inflate impressions.
+    In memory: after a restart offers resume with the user's next pick (fail closed)."""
+
+    PICK_TTL_S = 6 * 3600
+    MAX_USERS = 50_000
+    MAX_PER_USER = 20
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._picks: dict[int, dict[str, float]] = {}
+
+    def add(self, user_id: int, event_ids: list[str], now: float) -> None:
+        with self._lock:
+            if len(self._picks) >= self.MAX_USERS and user_id not in self._picks:
+                for uid in [u for u, p in self._picks.items() if max(p.values(), default=0) <= now]:
+                    del self._picks[uid]
+                if len(self._picks) >= self.MAX_USERS:
+                    self._picks.pop(next(iter(self._picks)))
+            mine = self._picks.setdefault(user_id, {})
+            for event_id in event_ids:
+                mine[event_id] = now + self.PICK_TTL_S
+            for stale in [e for e, until in mine.items() if until <= now]:
+                del mine[stale]
+            while len(mine) > self.MAX_PER_USER:
+                mine.pop(min(mine, key=mine.__getitem__))
+
+    def has(self, user_id: int, event_id: str, now: float) -> bool:
+        with self._lock:
+            return self._picks.get(user_id, {}).get(event_id, 0) > now
+
+
 class PolicyReader:
     def __init__(self, path: Path, applied_path: Path, public_key: Ed25519PublicKey,
                  clock: Callable[[], float]) -> None:

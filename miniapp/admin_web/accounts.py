@@ -97,6 +97,14 @@ CREATE TABLE IF NOT EXISTS admin_event_reasons (
 );
 -- One completion per request: concurrent retries cannot both record a result.
 CREATE UNIQUE INDEX IF NOT EXISTS admin_events_one_completion ON admin_events(request_id) WHERE kind = 'completed';
+-- Explicit per-admin permissions on top of the role (default deny), e.g. view_dialogs; granted by an owner.
+CREATE TABLE IF NOT EXISTS admin_grants (
+    admin_id   INTEGER NOT NULL REFERENCES admin_users(id),
+    permission TEXT NOT NULL,
+    granted_at INTEGER NOT NULL,
+    granted_by INTEGER NOT NULL,
+    PRIMARY KEY (admin_id, permission)
+);
 CREATE TRIGGER IF NOT EXISTS admin_events_no_update BEFORE UPDATE ON admin_events
 BEGIN SELECT RAISE(ABORT, 'admin events are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS admin_events_no_delete BEFORE DELETE ON admin_events
@@ -161,6 +169,11 @@ def verify_password(password: str, stored: str | None) -> bool:
     _, n, r, p, salt, expected = stored.split("$")
     derived = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p), dklen=32)
     return hmac.compare_digest(derived.hex(), expected)
+
+
+# Permissions that exist only as explicit grants (never implied by a role, the owner included), and the roles
+# that may hold them: reading users' conversations needs both the role and the grant.
+GRANTS: dict[str, tuple[str, ...]] = {"view_dialogs": ("owner", "admin")}
 
 
 def can(role: str, permission: str) -> bool:
@@ -432,6 +445,45 @@ class AdminStore:
             raise ActionError("idempotency_key_reused", 409)
         return {"eventId": event_id, "after": stored, "replayed": True}
 
+    # ---- grants (explicit permissions, default deny) ------------------------------------------
+
+    def has_grant(self, admin_id: int, permission: str) -> bool:
+        """True only with an explicit grant AND a role that may hold it, both read now (a demotion ends it)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT u.role, u.state FROM admin_grants g JOIN admin_users u ON u.id = g.admin_id "
+                "WHERE g.admin_id = ? AND g.permission = ?", (admin_id, permission)).fetchone()
+        return row is not None and row[1] == "active" and row[0] in GRANTS.get(permission, ())
+
+    def grants_of(self, admin_id: int) -> list[str]:
+        return [p for p in GRANTS if self.has_grant(admin_id, p)]
+
+    def set_grant(self, actor: Admin, target_id: int, permission: str, granted: bool, reason: str, key: str,
+                  code: str, now: int) -> dict:
+        """Owner only, step-up + reason + idempotency; journalled with the permission and the new state."""
+        if permission not in GRANTS or not isinstance(granted, bool):
+            raise ActionError("invalid_grant")
+        after = {"permission": permission, "granted": granted}
+        with self._write() as conn:
+            if (prior := self._replayed(conn, key, actor.id, "admin.grant", str(target_id), after, reason)) is not None:
+                return prior
+            self.step_up(conn, actor.id, code, now, "manage_admins")
+            row = conn.execute("SELECT role FROM admin_users WHERE id = ?", (target_id,)).fetchone()
+            if row is None:
+                raise ActionError("not_found", 404)
+            if granted and row[0] not in GRANTS[permission]:
+                raise ActionError("role_cannot_hold_grant", 409)
+            had = conn.execute("SELECT 1 FROM admin_grants WHERE admin_id = ? AND permission = ?",
+                               (target_id, permission)).fetchone() is not None
+            if granted:
+                conn.execute("INSERT OR IGNORE INTO admin_grants (admin_id, permission, granted_at, granted_by) "
+                             "VALUES (?, ?, ?, ?)", (target_id, permission, now, actor.id))
+            else:
+                conn.execute("DELETE FROM admin_grants WHERE admin_id = ? AND permission = ?", (target_id, permission))
+            event = self._event(conn, now, actor.id, "admin.grant", "admin", str(target_id),
+                                {"permission": permission, "granted": had}, after, reason, key, "done")
+        return {"eventId": event, "after": after, "replayed": False}
+
     # ---- admins ---------------------------------------------------------------------------
 
     def admins(self) -> list[dict]:
@@ -439,7 +491,7 @@ class AdminStore:
             rows = conn.execute("SELECT id, email, role, state, totp_secret IS NOT NULL, last_login_at, created_at "
                                 "FROM admin_users ORDER BY id").fetchall()
         return [{"id": r[0], "email": r[1], "role": r[2], "state": r[3], "twoFactor": bool(r[4]),
-                 "lastLoginAt": r[5], "createdAt": r[6]} for r in rows]
+                 "lastLoginAt": r[5], "createdAt": r[6], "grants": self.grants_of(r[0])} for r in rows]
 
     def invite_admin(self, actor: Admin, email: str, role: str, reason: str, key: str, code: str, now: int) -> dict:
         if role not in ROLES:

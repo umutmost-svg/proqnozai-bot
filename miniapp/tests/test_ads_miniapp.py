@@ -63,9 +63,12 @@ class Env:
         c = TestClient(self.app, base_url="http://127.0.0.1:8000", headers=headers)
         r = login(c, make_init_data({"id": uid, "first_name": "U", "language_code": lang}, auth_date=int(self.clock.now)))
         assert r.status_code == 200, r.text
+        c.uid = uid  # type: ignore[attr-defined]
         return c, r.json()["session"]["csrf_token"]
 
-    def offer(self, c: TestClient, event: str = "fd:1", placement: str = "quick_pick"):
+    def offer(self, c: TestClient, event: str = "fd:1", placement: str = "quick_pick", picked: bool = True):
+        if picked and getattr(self.app.state, "ads_picks", None) is not None:
+            self.app.state.ads_picks.add(c.uid, [event], self.clock.now)  # the server recommended this match
         return c.get("/api/ads/offer", params={"placement": placement, "event_id": event})
 
     def rows(self, kind: str) -> list[tuple]:
@@ -304,7 +307,7 @@ def test_a_successful_quick_pick_counts_as_activity():
 
     seen = []
     app = FastAPI()
-    register_quick_routes(app, Service(), session, on_pick=lambda uid, field: seen.append((uid, field)))
+    register_quick_routes(app, Service(), session, on_pick=lambda uid, field, events: seen.append((uid, field)))
     c = TestClient(app)
     params = {"mode": "single", "from": "2026-11-08T00:00:00Z", "to": "2026-11-09T00:00:00Z"}
     for _ in range(3):
@@ -383,3 +386,16 @@ def test_inactive_needs_an_earlier_visit(tmp_path):
     assert c.get("/api/me").status_code == 200       # back after 4 days
     env.clock.advance(31)
     assert env.offer(c).json()["offer"]["id"] == 1
+
+
+def test_offers_only_for_matches_the_server_recommended(tmp_path):
+    env = Env(tmp_path)
+    publish(tmp_path, campaign(placements=["quick_pick", "ai_pick"]))
+    c, _ = env.user()
+    assert env.offer(c, event="fd:777", picked=False).json() == {"offer": None}   # invented id
+    assert env.offer(c, event="fd:777").json()["offer"]["id"] == 1                  # after a real pick of it
+    assert env.offer(c, event="fd:777", placement="ai_pick").json() == {"offer": None}
+    other, _ = env.user(OTHER)
+    assert env.offer(other, event="fd:777", picked=False).json() == {"offer": None}  # another user's pick
+    env.clock.advance(6 * 3600 + 1)
+    assert env.offer(c, event="fd:777", picked=False).json() == {"offer": None}   # the pick expired

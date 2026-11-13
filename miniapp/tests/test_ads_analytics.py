@@ -109,6 +109,22 @@ def test_unreadable_telemetry_is_reported_as_unavailable_not_zero(ads_env):
     config.telemetry_db.write_bytes(b"not a database" * 100)
     report = client.get("/api/admin/ads/analytics?days=7").json()
     assert report["source"] == "unavailable" and report["days"] == []
+    assert client.get("/api/admin/ads/analytics.csv?days=7").text.strip().endswith(",unavailable")
+
+
+def test_failed_engaged_read_leaves_unique_ctr_unknown(ads_env, monkeypatch):
+    config, clock, client, _, _, csrf, pid = ads_env
+    cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()))).json()["id"]
+    seed(config, int(clock()), cid)
+
+    def locked(self, *a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(Telemetry, "engaged_clickers", locked)
+    report = client.get(f"/api/admin/ads/analytics?days=7&campaign={cid}").json()
+    a = next(v for v in report["variants"] if v["variant"] == "A")
+    assert report["source"] == "unavailable" and a["uniqueCtr"] is None and a["uniqueCtrCi"] is None
+    assert a["clicks"] == 2  # the totals that were read are still shown
 
 
 def test_conversions_are_refused_while_telemetry_is_unreadable_and_attributed_on_retry(ads_env):

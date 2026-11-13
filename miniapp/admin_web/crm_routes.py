@@ -12,6 +12,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from miniapp.admin_web import demo
+from miniapp.ads.policy import public_key_hex as policy_public_key_hex
+from miniapp.admin_web.access import AccessPublisher
+from miniapp.admin_web.outbox import Outbox
 from miniapp.admin_web.accounts import ActionError
 from miniapp.admin_web.crm import RULE_FIELDS, CrmStore, matches, validate_rules
 from miniapp.store import BurnWindow
@@ -38,6 +41,36 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
             ctx.accounts.complete_request(pending["action"], pending["adminId"], pending["targetId"], None, t,
                                           pending["requestId"])
 
+    outbox = Outbox(ctx.outbox_file)
+    outbox.init_schema()
+
+    def queue_message(admin_id: int | None, user_id: int, msg_id: int, body: str, request_id: str) -> None:
+        t = ctx.now()
+        outbox.enqueue([(f"msg:{msg_id}", user_id, body, [])], batch_id=None, not_before=t, admin_event_id=None, now=t)
+        crm.message_queued(admin_id, user_id, msg_id, request_id, t)
+
+    for pending in crm.unqueued_messages():  # finish messages left between the two steps by a crash
+        queue_message(pending["adminId"], pending["userId"], pending["messageId"], pending["body"], pending["requestId"])
+
+    def queue_broadcast(item: dict, recipients: list[int]) -> int:
+        """Jobs of a scheduled broadcast (one per recipient, sent by the bot from `scheduledAt`). Idempotent."""
+        jobs = [(f"bc:{item['id']}:{uid}", uid, item["body"], item["buttons"]) for uid in recipients]
+        return outbox.enqueue(jobs, batch_id=f"bc:{item['id']}", not_before=item["scheduledAt"], admin_event_id=None,
+                              now=ctx.now())
+
+    access = AccessPublisher(ctx.accounts, ctx.access_file)
+    access.init_schema()
+
+    def publish_access() -> dict | None:
+        """After any block change (and at startup): the Mini App's list follows crm_blocks; a failed file write is
+        repaired by the next call (status read, restart)."""
+        try:
+            return access.sync(ctx.now())
+        except OSError:
+            return None
+
+    publish_access()
+
     def audience(rules: dict, query: str = "") -> list[dict]:
         t = ctx.now()
         _, users = store.list_users(t, query=query, sort="created", descending=True, limit=MAX_SCAN)
@@ -48,6 +81,10 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     def broadcast_audience(rules: dict) -> list[dict]:
         """Recipients of a broadcast: blocked users are always excluded."""
         return audience({**rules, "blocked": False})  # always: a rule cannot opt blocked users into a broadcast
+
+    for item in crm.broadcasts():  # a schedule committed just before a crash: queue it now
+        if item["status"] == "scheduled" and not outbox.batch_counts(f"bc:{item['id']}"):
+            queue_broadcast(item, [u["id"] for u in broadcast_audience(item["rules"])])
 
     def decorate(rows: list[dict]) -> list[dict]:
         ids = [r["id"] for r in rows]
@@ -203,9 +240,13 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
 
     @app.post("/api/admin/users/{user_id}/messages")
     async def message(user_id: int, request: Request) -> dict:
+        """Queued for the bot (admin -> bot outbox); the admin process never calls Telegram itself."""
         admin = ctx.admin_of(request, "manage_users")
         exists(user_id)
-        return crm.send_message(admin, user_id, (await ctx.body(request)).get("body"), ctx.now())
+        body = (await ctx.body(request)).get("body")
+        result = crm.send_message(admin, user_id, body, ctx.now(), request.state.request_id)
+        queue_message(admin.id, user_id, result["id"], body.strip(), result["requestId"])
+        return {"id": result["id"], "status": "queued"}
 
     @app.post("/api/admin/users/{user_id}/block")
     async def block(user_id: int, request: Request) -> dict:
@@ -219,14 +260,20 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         rid = request.state.request_id
         step = ctx.step_up_guard(admin, lambda: crm.set_block(admin, user_id, flag, reason, key, code, ctx.now(), rid))
         if "requestId" not in step:
-            return step
+            return {**step, "access": publish_access()}
         # No await between the checks above and this write (single pilot process). Sessions are revoked once per
         # request; a crash here is finished by the next retry or at startup (pending_requests).
         t = ctx.now()
         revoked = store.revoke_user_sessions(user_id, t, BurnWindow.for_policy(t, 300, 30))
         result = ctx.accounts.revoke_completed(admin, user_id, revoked, t, step["requestId"], action="user.block")
         return {**result, "after": {"blocked": True, "revoked": result["after"]["revoked"]},
-                "revokedSessions": result["after"]["revoked"], "resumed": step["resumed"]}
+                "revokedSessions": result["after"]["revoked"], "resumed": step["resumed"], "access": publish_access()}
+
+    @app.get("/api/admin/access/publication")
+    async def access_status(request: Request) -> dict:
+        ctx.admin_of(request)
+        status = publish_access() or {"fileWritten": False}
+        return {**status, "publicKey": policy_public_key_hex(access.signing_key)}
 
     @app.get("/api/admin/tags")
     async def tags(request: Request) -> dict:
@@ -272,7 +319,10 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         for b in items:
             if b["status"] == "draft":
                 b["audience"] = len(broadcast_audience(b["rules"]))
-        return {"items": items, "sending": "pilot_not_sent", "segments": crm.segments()}
+        for b in items:
+            if b["status"] in ("scheduled", "cancelled"):
+                b["delivery"] = outbox.batch_counts(f"bc:{b['id']}")  # queued / sent / failed … from the bot
+        return {"items": items, "sending": "bot_outbox", "segments": crm.segments()}
 
     @app.post("/api/admin/broadcasts")
     async def save_broadcast(request: Request) -> dict:
@@ -294,15 +344,21 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         item = next((b for b in crm.broadcasts() if b["id"] == broadcast_id), None)
         if item is None:
             raise ActionError("not_found", 404)
-        recipients = len(broadcast_audience(item["rules"]))
-        return ctx.step_up_guard(admin, lambda: crm.schedule_broadcast(admin, broadcast_id, at, recipients, reason,
-                                                                       key, code, ctx.now()))
+        audience_ids = [u["id"] for u in broadcast_audience(item["rules"])]
+        result = ctx.step_up_guard(admin, lambda: crm.schedule_broadcast(admin, broadcast_id, at, len(audience_ids),
+                                                                         reason, key, code, ctx.now()))
+        # Also on a replay: a crash between the schedule and the queue is finished by the retry (keys are idempotent).
+        queue_broadcast({**item, "scheduledAt": at}, audience_ids)
+        return result
 
     @app.post("/api/admin/broadcasts/{broadcast_id}/cancel")
     async def cancel(broadcast_id: int, request: Request) -> dict:
         admin = ctx.admin_of(request, "manage_users")
         reason, code, key = ctx.dangerous(await ctx.body(request))
-        return ctx.step_up_guard(admin, lambda: crm.cancel_broadcast(admin, broadcast_id, reason, key, code, ctx.now()))
+        result = ctx.step_up_guard(admin, lambda: crm.cancel_broadcast(admin, broadcast_id, reason, key, code,
+                                                                       ctx.now()))
+        # Jobs the bot has not claimed yet are cancelled (also on a replay: idempotent).
+        return {**result, "cancelledJobs": outbox.cancel_batch(f"bc:{broadcast_id}")}
 
     # ---- credits -----------------------------------------------------------------------------
 
@@ -331,7 +387,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
 
     @app.get("/api/admin/dialogs")
     async def dialogs(request: Request) -> dict:
-        ctx.admin_of(request, "read_personal")
+        admin = ctx.admin_of(request, "read_personal")
+        if not ctx.accounts.has_grant(admin.id, "view_dialogs"):
+            raise ActionError("dialogs_not_allowed", 403)  # an explicit grant per admin, never implied by a role
         if not ctx.demo_allowed(request):
             return {"source": "not_collected"}
         threads = demo.dialogs(ctx.today())

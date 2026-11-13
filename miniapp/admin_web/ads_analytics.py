@@ -87,7 +87,7 @@ class AdsAnalytics:
         def totals(group: str) -> list[dict]:
             return self._read(state, lambda: self.telemetry.ad_totals(since_day, group, campaign_id), [])
 
-        engaged = self._read(state, lambda: self.telemetry.engaged_clickers(since_day, campaign_id), {})
+        engaged = self._read(state, lambda: self.telemetry.engaged_clickers(since_day, campaign_id), None)
         variants: dict[tuple[int, str], dict[str, Any]] = {}
         for row in totals("variant"):
             item = variants.setdefault((row["campaignId"], row["key"]), {
@@ -109,9 +109,12 @@ class AdsAnalytics:
             item["ctr"] = round(item["clicks"] / item["impressions"], 6) if item["impressions"] else None
             # Unique CTR with its 95 % interval: what the A/B comparison is read on. Only clickers who were shown
             # the variant in the period count, so the proportion never exceeds 1 (raw clickers stay in "clickers").
-            shown = min(engaged.get((item["campaignId"], item["variant"]), 0), item["reach"])
-            item["uniqueCtr"] = round(shown / item["reach"], 6) if item["reach"] else None
-            item["uniqueCtrCi"] = wilson(shown, item["reach"])
+            if engaged is None:  # that read failed: unknown, not zero
+                item["uniqueCtr"] = item["uniqueCtrCi"] = None
+            else:
+                shown = min(engaged.get((item["campaignId"], item["variant"]), 0), item["reach"])
+                item["uniqueCtr"] = round(shown / item["reach"], 6) if item["reach"] else None
+                item["uniqueCtrCi"] = wilson(shown, item["reach"])
             item["campaign"] = (names or {}).get(item["campaignId"])
             rows.append(item)
         by_day: dict[str, dict[str, int]] = {}
@@ -134,12 +137,14 @@ class AdsAnalytics:
         out = io.StringIO()
         writer = csv.writer(out)
         writer.writerow(["campaign_id", "campaign", "variant", "impressions", "reach", "clicks", "clickers", "ctr",
-                         "unique_ctr", "unique_ctr_low", "unique_ctr_high", "control", "conversions"])
+                         "unique_ctr", "unique_ctr_low", "unique_ctr_high", "control", "conversions", "source"])
         for v in report["variants"]:
             ci = v["uniqueCtrCi"] or (None, None)
             writer.writerow([v["campaignId"], _cell(v["campaign"] or ""), v["variant"], v["impressions"], v["reach"],
                              v["clicks"], v["clickers"], v["ctr"], v["uniqueCtr"], ci[0], ci[1], v["control"],
-                             v["conversions"]])
+                             v["conversions"], report["source"]])
+        if not report["variants"]:  # an empty export still says whether telemetry was readable
+            writer.writerow([""] * 13 + [report["source"]])
         return out.getvalue()
 
     def record_conversions(self, actor: Admin, campaign_id: int, mb_ids: Any, now: int) -> dict:

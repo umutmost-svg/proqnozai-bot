@@ -368,15 +368,37 @@ class CrmStore:
                                  {"noteId": note_id}, None, None, "done")
         return {"id": note_id}
 
-    def send_message(self, actor: Admin, user_id: int, body: str, now: int) -> dict:
+    def send_message(self, actor: Admin, user_id: int, body: str, now: int, request_id: str) -> dict:
+        """Step 1 of 2: the message row and a `requested` event in one transaction. The caller then queues the job
+        for the bot (outbox, idempotent by `msg:<id>`) and records `completed` (unfinished ones: at startup)."""
         body = _text(body, "message", MAX_TEXT)
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "manage_users")
             msg_id = conn.execute("INSERT INTO crm_messages (user_id, body, status, created_at, admin_id) "
-                                  "VALUES (?, ?, 'not_sent_pilot', ?, ?)", (user_id, body, now, actor.id)).lastrowid
+                                  "VALUES (?, ?, 'queued', ?, ?)", (user_id, body, now, actor.id)).lastrowid
+            # The journal keeps the message id, never its text.
             self.accounts._event(conn, now, actor.id, "user.message", "user", str(user_id), None,
-                                 {"messageId": msg_id, "status": "not_sent_pilot"}, None, None, "done")
-        return {"id": msg_id, "status": "not_sent_pilot"}
+                                 {"messageId": msg_id}, None, None, "requested", request_id)
+        return {"id": msg_id, "status": "queued", "requestId": request_id}
+
+    def message_queued(self, admin_id: int | None, user_id: int, msg_id: int, request_id: str, now: int) -> None:
+        """Step 2: the job is in the outbox (exactly one `completed` per request, a retry is a no-op)."""
+        with self.accounts._write() as conn:
+            if conn.execute("SELECT 1 FROM admin_events WHERE kind = 'completed' AND request_id = ?",
+                            (request_id,)).fetchone() is None:
+                self.accounts._event(conn, now, admin_id, "user.message", "user", str(user_id), None,
+                                     {"messageId": msg_id, "queued": True}, None, None, "completed", request_id)
+
+    def unqueued_messages(self) -> list[dict]:
+        """Messages whose `requested` event has no `completed` one (a crash between the two steps)."""
+        with self.accounts._connect() as conn:
+            rows = conn.execute(
+                "SELECT e.request_id, e.admin_id, e.after_json, m.user_id, m.body FROM admin_events e "
+                "JOIN crm_messages m ON m.id = CAST(json_extract(e.after_json, '$.messageId') AS INTEGER) "
+                "WHERE e.action = 'user.message' AND e.kind = 'requested' AND NOT EXISTS (SELECT 1 FROM admin_events c "
+                "WHERE c.kind = 'completed' AND c.request_id = e.request_id)").fetchall()
+        return [{"requestId": r[0], "adminId": r[1], "messageId": json.loads(r[2])["messageId"], "userId": r[3],
+                 "body": r[4]} for r in rows]
 
     def save_segment(self, actor: Admin, name: str, rules: Any, now: int, segment_id: int | None = None) -> dict:
         name = _text(name, "name", 80)
