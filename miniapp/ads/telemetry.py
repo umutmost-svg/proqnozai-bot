@@ -240,7 +240,7 @@ class Telemetry:
                 chunk = user_ids[start:start + 500]
                 rows = conn.execute(
                     f"SELECT user_id, variant FROM ad_events WHERE kind = 'click' AND campaign_id = ? AND at >= ? "
-                    f"AND user_id IN ({','.join('?' * len(chunk))}) ORDER BY at", (campaign_id, since, *chunk)).fetchall()
+                    f"AND user_id IN ({','.join('?' * len(chunk))}) ORDER BY at, id", (campaign_id, since, *chunk)).fetchall()
                 out.update({uid: variant for uid, variant in rows})
         return out
 
