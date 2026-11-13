@@ -113,11 +113,12 @@ def register_ads_routes(
         country = country_from(request.headers.get(COUNTRY_HEADER), trust_country)
         return JSONResponse(await run_in_threadpool(offer_sync, active[1].user_id, country, placement, event_key))
 
-    def current_variant(t: Token, country: str | None) -> tuple[policy.Campaign, policy.Variant] | None:
+    def current_variant(t: Token, country: str | None,
+                        fresh: bool = False) -> tuple[policy.Campaign, policy.Variant] | None:
         """The offer as it stands NOW for this user: the campaign is still in the snapshot, and the user — with the
         current country, age statement and audience — is still eligible and still assigned this variant. A paused
         campaign, a narrowed audience or a raised age minimum takes effect on a token issued before."""
-        current = reader.current()
+        current = reader.current(fresh=fresh)
         if current is None:
             return None
         ts = now()
@@ -167,7 +168,7 @@ def register_ads_routes(
         country = country_from(request.headers.get(COUNTRY_HEADER), trust_country)
 
         def record() -> str | None:
-            found = current_variant(t, country)
+            found = current_variant(t, country, fresh=True)  # the newest snapshot on disk, not a cached one
             if found is None:
                 return None
             c, v = found

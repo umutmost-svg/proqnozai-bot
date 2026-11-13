@@ -196,3 +196,20 @@ def test_conversions_need_readable_telemetry(ads_env):
     post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB777"})
     r = post(client, f"/api/admin/ads/campaigns/{cid}/conversions", csrf, {"mbIds": ["MB777"]})
     assert r.status_code == 503 and r.json()["error"] == "telemetry_unavailable"
+
+
+def test_conversions_use_the_same_utc_day_window_as_events(ads_env):
+    import sqlite3
+
+    config, clock, client, accounts, _, csrf, pid = ads_env
+    cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()))).json()["id"]
+    seed(config, int(clock()), cid)
+    now = int(clock())
+    midnight = now - now % 86400
+    inside = midnight - 6 * 86400 + 60           # first UTC day of a 7-day window, but more than 7x24 h ago
+    outside = midnight - 6 * 86400 - 60          # the day before the window
+    with sqlite3.connect(config.admin_db) as conn:
+        conn.execute("INSERT INTO ad_conversions (campaign_id, user_id, variant, confirmed_at, admin_id) "
+                     "VALUES (?, 1, 'A', ?, 1), (?, 2, 'A', ?, 1)", (cid, inside, cid, outside))
+    report = client.get(f"/api/admin/ads/analytics?days=7&campaign={cid}").json()
+    assert next(v for v in report["variants"] if v["variant"] == "A")["conversions"] == 1

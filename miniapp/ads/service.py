@@ -75,10 +75,13 @@ class PolicyReader:
         # A mark far in the future would refuse every real snapshot: treated like a lost mark.
         return value if policy.plausible_version(value, self.clock()) else 0
 
-    def current(self) -> Policy | None:
+    def current(self, fresh: bool = False) -> Policy | None:
+        """The applied policy. Offers may use a copy up to RELOAD_S old; `fresh` (a click: the link leaves the
+        app) always checks the file now — one stat, a re-read only when it changed — so a paused or replaced
+        campaign is never clicked through once its publication is on disk."""
         with self._lock:
             now = self.clock()
-            if self._checked_at is not None and 0 <= now - self._checked_at < RELOAD_S:
+            if not fresh and self._checked_at is not None and 0 <= now - self._checked_at < RELOAD_S:
                 return self._policy
             self._checked_at = now
             try:

@@ -413,3 +413,18 @@ def test_recommended_matches_are_shared_between_workers(tmp_path):
         c2.cookies.set(k, v)
     c2.uid = USER
     assert second.offer(c2, event="fd:42", picked=False).json()["offer"]["id"] == 1
+
+
+def test_a_click_follows_the_newest_publication_at_once(tmp_path):
+    env = Env(tmp_path)
+    publish(tmp_path, campaign())
+    c, csrf = env.user()
+    token = env.offer(c).json()["offer"]["impressionToken"]
+    replaced = campaign()
+    replaced["variants"][0]["url"] = "https://p.example.com/new"
+    publish(tmp_path, replaced, version=11)
+    env.clock.advance(1)  # well inside the 30 s reload interval of offers
+    assert post(c, "/api/ads/click", csrf, {"impressionToken": token}).json() == {"url": "https://p.example.com/new"}
+    publish(tmp_path, version=12)  # paused: an empty snapshot
+    env.clock.advance(1)
+    assert post(c, "/api/ads/click", csrf, {"impressionToken": token}).status_code == 410

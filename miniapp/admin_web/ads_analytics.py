@@ -12,6 +12,7 @@ import csv
 import io
 import math
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -99,7 +100,9 @@ class AdsAnalytics:
                 item["clicks"], item["clickers"] = row["events"], row["users"]
             else:
                 item["control"] = row["users"]
-        for (cid, variant), count in self._conversions(now - days * DAY, campaign_id).items():
+        # Same period as the events: from 00:00 UTC of the first day of the window (not now - days x 24 h).
+        since_ts = int(datetime.strptime(since_day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp())
+        for (cid, variant), count in self._conversions(since_ts, campaign_id).items():
             key = (cid, variant or "unattributed")
             variants.setdefault(key, {"campaignId": cid, "variant": key[1], "impressions": 0, "reach": 0,
                                       "clicks": 0, "clickers": 0, "control": 0, "conversions": 0})
