@@ -24,7 +24,7 @@ export function AdsRoutes() {
       <Route path="partners" element={<Page title="Партнёры" subtitle="Домены ссылок, страны, возраст, постбэк"><PartnersGate /></Page>} />
       <Route path="groups" element={<Page title="Группы" subtitle="Списки пользователей для таргетинга"><GroupsGate /></Page>} />
       <Route path="settings" element={<Page title="Настройки показа" subtitle="Запрещённые страны и возрастное подтверждение"><SettingsGate /></Page>} />
-      <Route path="analytics" element={<Page title="Аналитика рекламы" subtitle="Показы, охват, клики, CTR, конверсии"><AdsAnalyticsView /></Page>} />
+      <Route path="analytics" element={<Page title="Аналитика рекламы" subtitle="Показы, охват, клики, CTR, конверсии"><AnalyticsGate /></Page>} />
     </Routes>
   );
 }
@@ -192,6 +192,11 @@ function PartnersGate() {
 function GroupsGate() {
   const { manage } = useAdsRole();
   return <GroupsView manage={manage} />;
+}
+
+function AnalyticsGate() {
+  const { manage } = useAdsRole();
+  return <AdsAnalyticsView manage={manage} />;
 }
 
 function SettingsGate() {

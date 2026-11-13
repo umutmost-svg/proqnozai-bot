@@ -12,7 +12,7 @@ const SEGMENT_LABEL: Record<string, string> = { new: 'Новые (до 7 дне�
 
 /** Ads analytics: impressions, unique reach, clicks, CTR (with the 95 % interval of the unique CTR), control
  * group, confirmed conversions (partner report by MB id) and partner postbacks; by variant, segment, country, day. */
-export function AdsAnalyticsView() {
+export function AdsAnalyticsView({ manage }: { manage: boolean }) {
   const [days, setDays] = useState<AdsPeriod>(30);
   const [campaign, setCampaign] = useState<number | null>(null);
   const campaigns = useLoad<{ items: Campaign[] }>('/api/admin/ads/campaigns');
@@ -32,7 +32,7 @@ export function AdsAnalyticsView() {
       {report.error ? <ErrorBox error={report.error} onRetry={report.reload} /> : !report.data ? <Loading /> : (
         <ReportView report={report.data} />
       )}
-      {campaign !== null && <Conversions campaign={campaign} onDone={report.reload} />}
+      {campaign !== null && manage && <Conversions campaign={campaign} onDone={report.reload} />}
     </>
   );
 }
@@ -83,6 +83,22 @@ export function ReportView({ report }: { report: AdsReport }) {
             </tbody>
           </table>
         </div>
+      )}
+      {report.days.length > 0 && (
+        <section className="card" style={{ marginTop: 16 }}>
+          <h2 className="card-title">По дням (UTC)</h2>
+          <table className="table" data-testid="ads-days">
+            <thead><tr><th>День</th><th className="num">Показы</th><th className="num">Клики</th><th className="num">CTR</th><th className="num">Контроль</th></tr></thead>
+            <tbody>
+              {report.days.map((d) => (
+                <tr key={d.day}>
+                  <td>{d.day}</td><td className="num">{num(d.impressions)}</td><td className="num">{num(d.clicks)}</td>
+                  <td className="num">{d.impressions ? pct(d.clicks / d.impressions) : '—'}</td><td className="num">{num(d.control)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
       )}
       <div className="grid card-3" style={{ marginTop: 16 }}>
         <section className="card">
