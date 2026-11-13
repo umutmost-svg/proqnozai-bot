@@ -3,7 +3,7 @@
     python3 - <IMAGE_TAG> [--deploy] < deploy/miniapp/dokploy_deploy.py
 
 Reads, never prints: /root/.dokploy-api-key (Dokploy API key), /root/miniapp-secrets/{edge,csrf,
-football-data-key,owner-id}. Talks only to http://127.0.0.1:3000 (Dokploy on this host).
+football-data-key,owner-id} and, when present, {odds-feed,anthropic-key}. Talks only to http://127.0.0.1:3000 (Dokploy on this host).
 Idempotent configuration: finds the project/application by exact name, checks it BEFORE any change (no
 published ports), re-saves image, environment, resources, Swarm update config, the data volume and the domain
 (each only once). Without --deploy it configures and stops; every run WITH --deploy starts one Dokploy
@@ -77,6 +77,15 @@ if ODDS_SECRET and len(ODDS_SECRET) < 32:
     sys.exit("STOP: the odds feed secret is shorter than 32 characters")
 print("odds feed:", "on (secret present)" if ODDS_SECRET else "off (no /root/miniapp-secrets/odds-feed)")
 
+# AI forecasts: on once its key file exists (the bot's Anthropic key, copied server-side); validated BEFORE any change.
+_AI_FILE = Path("/root/miniapp-secrets/anthropic-key")
+AI_KEY = secret(str(_AI_FILE)) if _AI_FILE.exists() else ""
+# Same syntax rule as miniapp.settings (else the app would refuse to start after the change).
+if _AI_FILE.exists() and not (AI_KEY.startswith("sk-ant-") and AI_KEY.isascii() and AI_KEY.isprintable()
+                              and " " not in AI_KEY and 20 <= len(AI_KEY) <= 256):
+    sys.exit("STOP: the Anthropic key file exists but does not hold a valid Anthropic key")
+print("ai forecasts:", "on (key present)" if AI_KEY else "off (no /root/miniapp-secrets/anthropic-key)")
+
 if len(sys.argv) < 2 or not sys.argv[1].isalnum():
     sys.exit("usage: python3 - <IMAGE_TAG> [--deploy] < dokploy_deploy.py")
 tag, deploy = sys.argv[1], "--deploy" in sys.argv[2:]
@@ -111,10 +120,6 @@ if app is None:
 app_id = app["applicationId"]
 print("application:", app.get("appName"), app_id)
 
-# 3) image from the loopback registry (no login)
-call("application.saveDockerProvider", {"applicationId": app_id, "dockerImage": f"{REGISTRY}:{tag}",
-                                         "username": "", "password": "", "registryUrl": ""})
-
 # 4) environment (secrets from files; never printed)
 env_vars = {
     "MINIAPP_ENV": "production",
@@ -142,9 +147,16 @@ if not OWNER.isdigit():
     sys.exit("STOP: owner id is not a Telegram id")
 if ODDS_SECRET:
     env_vars["MINIAPP_ODDS_FEED_SECRET"] = ODDS_SECRET
+if AI_KEY:
+    # Closed pilot limits (model calls; cache hits are free): per Telegram user and for the whole app, per UTC day.
+    env_vars |= {"MINIAPP_ANTHROPIC_API_KEY": AI_KEY, "MINIAPP_AI_PER_USER_DAILY": "10", "MINIAPP_AI_DAILY_BUDGET": "100"}
 for k, v in env_vars.items():
     if "\n" in v or not v:
         sys.exit(f"STOP: bad value for {k}")
+# 3) image from the loopback registry (no login)
+call("application.saveDockerProvider", {"applicationId": app_id, "dockerImage": f"{REGISTRY}:{tag}",
+                                         "username": "", "password": "", "registryUrl": ""})
+
 call("application.saveEnvironment", {"applicationId": app_id, "env": "\n".join(f"{k}={v}" for k, v in env_vars.items()),
                                       "buildArgs": "", "buildSecrets": "", "createEnvFile": False})
 print("environment: saved", len(env_vars), "variables (values not shown)")
