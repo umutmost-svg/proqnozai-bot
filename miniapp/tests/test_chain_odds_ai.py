@@ -3,6 +3,8 @@ odds store → the match page and the AI analysis → what the user receives.
 
 Everything outside is a fake: football-data answers by URL, the goal model per match, the language
 model records its prompts. One app, one push route, one AI route — the production wiring of create_app.
+The lines are written here in the bot's wire format; the bot's own selection and payload building
+(mostbet_feed.OddsExport → FeedReceiver) are covered by tests/test_mostbet_feed.py in the bot's suite.
 """
 
 from __future__ import annotations
