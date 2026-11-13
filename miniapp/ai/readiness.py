@@ -25,7 +25,7 @@ NOT_ANALYSED = frozenset({"postponed", "suspended", "cancelled", "unknown"})
 class Evidence:
     """What verified material exists for one event. Nothing here is inferred."""
 
-    has_odds: bool  # real bookmaker odds passed in as data (no source in the Mini App yet)
+    has_odds: bool  # current real bookmaker odds from the signed feed (miniapp/odds), passed in as data
     has_verified_data: bool  # provider-verified form / results / statistics for both sides
     reasons: tuple[str, ...]
 

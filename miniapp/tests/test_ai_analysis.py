@@ -710,12 +710,13 @@ def test_a_reason_against_the_pick_is_bad_output_never_kept(clock: FakeClock) ->
 
 
 @pytest.mark.parametrize("reason", ["small_sample", "team_history"])
-def test_without_enough_history_for_the_goal_model_nothing_is_guessed_or_charged(clock: FakeClock, reason: str) -> None:
+def test_without_the_goal_model_form_or_odds_nothing_is_guessed_or_charged(clock: FakeClock, reason: str) -> None:
+    # The model-less PARTIAL is in test_ai_partial.py; with neither form nor odds it stays INSUFFICIENT.
     ledger, model = MemoryLedger(), FakeModel()
-    ai, _ = make_ai(clock, model, ledger=ledger, forecaster=FakeForecaster(Unavailable(reason)))
+    ai, _ = make_ai(clock, model, ledger=ledger, chelsea_games=2, forecaster=FakeForecaster(Unavailable(reason)))
     result = run(ai.analyse("fd:7", user_id=1))
     assert result.kind == "insufficient" and result.probabilities is None and result.pick is None
-    assert result.reasons == (f"model_{reason}", "no_odds_source") and not model.calls and not ledger.used
+    assert result.reasons == ("no_verified_form", "no_odds_source") and not model.calls and not ledger.used
 
 
 def test_each_forecast_shown_is_recorded_once_and_cache_hits_add_nothing(tmp_path, clock: FakeClock) -> None:

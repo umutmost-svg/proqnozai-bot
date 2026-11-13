@@ -563,6 +563,10 @@ export const az: Dictionary = {
   'ai.markets.under': '{line}-dən az',
   'ai.pick.noBet.partialHistory': 'Turnirin ötən mövsümü hazırda mənbədə əlçatan deyil: ehtimallar natamam məlumatla hesablanıb, ona görə tövsiyə yoxdur.',
   'ai.reason.modelExtremeRates': 'Model qeyri-real qol proqnozu verdi — hesablama göstərilmir',
+  'ai.probabilitiesEstimated': 'Ehtimalların qiymətləndirilməsi',
+  'ai.marketEstimate': 'Cari əmsallara görə, bukmeker marjası çıxılmaqla',
+  'ai.basisOnlyTitle': 'Statistik modelsiz analiz',
+  'ai.basisOnlyText': 'Bu matç üçün qol modeli hesablanmır, ona görə tövsiyə yoxdur. Aşağıda komandalar haqqında yoxlanılmış məlumatlar və mövcud olduqda bazar əmsallarına görə qiymətləndirmə var.',
   'ai.pick.noBet.unvalidatedCompetition': 'Bu turnir modelin yoxlamasına daxil deyildi: ehtimallar göstərilir, lakin tövsiyə yoxdur.',
   'ai.pick.noBet.earlyForecast': 'Matç gününə qədər tövsiyə yoxdur: seçim qaydaları yalnız oyun günü proqnozu üçün yoxlanılıb. Matç günü yenidən baxın — nəticə qaydalardan keçərsə, tövsiyə görünə bilər. Yuxarıdakı ehtimallar bu günkü qiymətləndirmədir.',
   // M3.6: top matches of the day and quick prediction.

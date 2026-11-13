@@ -199,8 +199,10 @@ def report(history: ForecastHistory) -> bool:
         c = sqlite3.connect(history.path)
         for ev, st, fh, fa in c.execute("SELECT event_id, settled_status, final_home, final_away FROM ai_forecasts"):
             rows[ev] = (st, fh, fa)
-    # Delivered = an analysis with probabilities (ready/partial); "insufficient" for a top league counts as a miss.
-    ok_rows = [x for x in ledger if x.get("status") == "ok" and (x.get("result") or {}).get("kind") in ("ready", "partial")]
+    # Delivered = a goal-model analysis (ready/partial with a forecast); "insufficient", or a PARTIAL
+    # without the goal model, for a top league counts as a miss.
+    ok_rows = [x for x in ledger if x.get("status") == "ok" and (x.get("result") or {}).get("kind") in ("ready", "partial")
+               and (x.get("result") or {}).get("forecast")]
     ok_events = {x["event"] for x in ok_rows}
     attempted = sorted({x["event"] for x in ledger if x.get("status") in ("ok", "error", "in_flight")})
     errors = [x for x in ledger if x.get("status") == "error"]

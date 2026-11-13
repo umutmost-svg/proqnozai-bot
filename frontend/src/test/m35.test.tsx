@@ -401,3 +401,80 @@ describe('market identities', () => {
     expect(marketsConsistent({ ...M, 'O3.5': M['O2.5'] + 1, 'U3.5': 99 - M['O2.5'] })).toBe(false);
   });
 });
+
+// --- PARTIAL without the goal model (cups, qualifiers, small samples) ---------------------------
+
+function basisOnly(over: Over = {}) {
+  return {
+    schema: 'v3', eventId: 'fd:4', kind: 'partial', reasons: ['model_small_sample', 'no_odds_source'],
+    generatedAt: '2026-11-08T06:00:00Z', model: 'm', probabilities: null, factors: ['away_form', 'home_table'],
+    basis: { home: team('Crystal Palace FC', 'LLLWD', 3, 10, 19, 7), away: team('Liverpool FC', 'WWDWW', 11, 3, 2, 25) },
+    estimated: true, pick: null, forecast: null, alternatives: [], market: null,
+    ...over,
+  };
+}
+const MARKET_ESTIMATE = { reasons: ['model_team_history'], probabilities: { home: 21, draw: 25, away: 54 } };
+
+describe('PARTIAL without the goal model', () => {
+  const read = async (body: unknown) => aiBackend(body).requestAnalysis('fd:4');
+
+  it('reads verified facts only: no pick, no model figures, probabilities only from the market', async () => {
+    const a = await read(basisOnly());
+    expect(a).toMatchObject({ kind: 'partial', estimated: true, probabilities: [], reasons: ['modelSmallSample', 'noOddsSource'],
+      factors: ['awayForm', 'homeTable'] });
+    expect(a.pick).toBeUndefined();
+    expect(a.forecast).toBeUndefined();
+    const priced = await read(basisOnly(MARKET_ESTIMATE));
+    expect(priced.probabilities).toEqual([21, 25, 54]);
+    // Odds without verified form: no explanation (no language-model answer), the market's estimate only.
+    const oddsOnly = await read(basisOnly({ ...MARKET_ESTIMATE, reasons: ['model_team_history', 'no_verified_form'], factors: [] }));
+    expect(oddsOnly.factors).toEqual([]);
+  });
+
+  it.each([
+    ['a pick', basisOnly({ pick: { market: 'NO_BET', reasons: [], probability: null } })],
+    ['probabilities without odds', basisOnly({ probabilities: { home: 40, draw: 30, away: 30 } })],
+    ['probabilities that are not 100', basisOnly({ ...MARKET_ESTIMATE, probabilities: { home: 40, draw: 30, away: 31 } })],
+    ['no estimated marking', basisOnly({ estimated: false })],
+    ['no reason why the model is missing', basisOnly({ reasons: ['no_odds_source'] })],
+    ['two model reasons', basisOnly({ reasons: ['model_small_sample', 'model_team_history', 'no_odds_source'] })],
+    ['neither form nor odds (that is INSUFFICIENT)', basisOnly({ reasons: ['model_small_sample', 'no_verified_form', 'no_odds_source'], factors: [] })],
+    ['a model figure as a factor', basisOnly({ factors: ['home_rating', 'away_form'] })],
+    ['one factor', basisOnly({ factors: ['away_form'] })],
+    ['factors without verified form', basisOnly({ ...MARKET_ESTIMATE, reasons: ['model_team_history', 'no_verified_form'] })],
+    ['prices against a model', basisOnly({ ...MARKET_ESTIMATE, market: PRICES })],
+    ['alternatives', basisOnly({ alternatives: [{ market: 'X2', probability: 70 }] })],
+    ['free text', basisOnly({ summary: 'Liverpool will win' })],
+  ])('rejects %s', async (_name, body) => {
+    await expect(read(body)).rejects.toMatchObject({ reason: 'bad_response' });
+  });
+
+  it('shows why there is no model, the factors and no pick; without odds no probabilities at all', async () => {
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(basisOnly()) });
+    const note = await screen.findByTestId('ai-basis-only');
+    expect(note).toHaveTextContent('Разбор без статистической модели');
+    expect(note).toHaveTextContent(dictionaries.ru['ai.reason.modelSmallSample']);
+    expect(screen.queryByTestId('ai-result')).toBeNull();
+    expect(screen.queryByTestId('ai-pick')).toBeNull();
+    expect(screen.queryByTestId('ai-markets')).toBeNull();
+    expect(screen.getByTestId('ai-factors')).toHaveTextContent('Liverpool');
+    expect(screen.getByTestId('ai-basis')).toBeInTheDocument();
+  });
+
+  it.each(LANGS)('labels the market estimate in every language (%s)', async (lang) => {
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(basisOnly(MARKET_ESTIMATE)), settings: { lang } });
+    await screen.findByTestId('ai-result');
+    expect(screen.getByTestId('ai-probabilities-title')).toHaveTextContent(dictionaries[lang]['ai.probabilitiesEstimated']);
+    expect(screen.getByTestId('ai-limited')).toHaveTextContent(dictionaries[lang]['ai.marketEstimate']);
+    expect(screen.getAllByTestId('ai-outcome')).toHaveLength(3);
+    expect(document.body.textContent).not.toMatch(/ai\.[a-zA-Z]/);
+  });
+
+  it('a goal-model analysis with prices but without verified form stays PARTIAL', async () => {
+    const a = await read(v3({ kind: 'partial', reasons: ['no_verified_form'], market: PRICES }));
+    expect(a.kind).toBe('partial');
+    expect(a.market?.quotes).toHaveLength(5);
+    await expect(read(v3({ kind: 'partial', reasons: [], market: PRICES }))).rejects.toMatchObject({ reason: 'bad_response' });
+    await expect(read(v3({ kind: 'partial', reasons: ['no_verified_form'] }))).rejects.toMatchObject({ reason: 'bad_response' });
+  });
+});

@@ -19,6 +19,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from miniapp.forecast.markets import largest_remainder
+
 from . import margin
 from .book import GROUPS
 
@@ -89,3 +91,13 @@ def book_json(book: Mapping[str, float]) -> list[dict]:
     Numbers only: never the source's name."""
     return [{"market": k, "odds": round(price, 2), "marketProbability": round(fair * 100, 1), "margin": round(m * 100, 1)}
             for k, (price, fair, m) in market_book(book).items()]
+
+
+def market_1x2_percent(book: Mapping[str, float]) -> dict[str, int] | None:
+    """Whole percents of the 1X2 market with the margin removed (Shin), summing to 100; None
+    without a checked 1X2 group. An estimate from the prices, never a model's probability."""
+    fair = market_book(book)
+    if not all(k in fair for k in ("1", "X", "2")):
+        return None
+    home, draw, away = largest_remainder([fair[k][1] for k in ("1", "X", "2")])
+    return {"home": home, "draw": draw, "away": away}

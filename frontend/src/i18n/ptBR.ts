@@ -561,6 +561,10 @@ export const ptBR: Dictionary = {
   'ai.markets.under': 'Menos de {line}',
   'ai.pick.noBet.partialHistory': 'A temporada anterior do campeonato não está disponível na fonte agora: as probabilidades usam dados incompletos, por isso não há recomendação.',
   'ai.reason.modelExtremeRates': 'O modelo gerou uma estimativa de gols irreal — o cálculo não é exibido',
+  'ai.probabilitiesEstimated': 'Estimativa de probabilidades',
+  'ai.marketEstimate': 'Pelas odds atuais, sem a margem da casa',
+  'ai.basisOnlyTitle': 'Análise sem o modelo estatístico',
+  'ai.basisOnlyText': 'O modelo de gols não pode ser calculado para esta partida, por isso não há recomendação. Abaixo estão os dados verificados das equipes e, quando houver, uma estimativa pelas odds do mercado.',
   'ai.pick.noBet.unvalidatedCompetition': 'Este campeonato não fez parte da verificação do modelo: as probabilidades aparecem, mas não há recomendação.',
   'ai.pick.noBet.earlyForecast': 'Sem recomendação antes do dia do jogo: as regras de seleção foram verificadas apenas para prognósticos do dia da partida. Volte no dia do jogo — uma recomendação pode aparecer se um resultado passar pelas regras. As probabilidades acima são a estimativa de hoje.',
   // M3.6: top matches of the day and quick prediction.

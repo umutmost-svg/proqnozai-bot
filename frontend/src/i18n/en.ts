@@ -561,6 +561,10 @@ export const en: Dictionary = {
   'ai.markets.under': 'Under {line}',
   'ai.pick.noBet.partialHistory': 'The competition’s previous season is unavailable from the source right now: the probabilities rest on incomplete data, so there is no recommendation.',
   'ai.reason.modelExtremeRates': 'The model produced an unrealistic goals estimate — no calculation is shown',
+  'ai.probabilitiesEstimated': 'Estimated probabilities',
+  'ai.marketEstimate': 'From current odds, bookmaker margin removed',
+  'ai.basisOnlyTitle': 'Analysis without the statistical model',
+  'ai.basisOnlyText': 'The goal model cannot be calculated for this match, so there is no recommendation. Below are the teams\' verified data and, when available, an estimate from the market odds.',
   'ai.pick.noBet.unvalidatedCompetition': 'This competition was not part of the model’s check: the probabilities are shown, but there is no recommendation.',
   'ai.pick.noBet.earlyForecast': 'No recommendation before match day: the selection rules were checked only for match-day forecasts. Check again on match day — a recommendation may appear if an outcome passes the rules. The probabilities above are today’s estimate.',
   // M3.6: top matches of the day and quick prediction.

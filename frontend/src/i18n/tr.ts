@@ -561,6 +561,10 @@ export const tr: Dictionary = {
   'ai.markets.under': '{line} alt',
   'ai.pick.noBet.partialHistory': 'Turnuvanın önceki sezonu şu anda kaynakta kullanılamıyor: olasılıklar eksik verilerle hesaplandı, bu yüzden öneri yok.',
   'ai.reason.modelExtremeRates': 'Model gerçekçi olmayan bir gol tahmini üretti — hesaplama gösterilmiyor',
+  'ai.probabilitiesEstimated': 'Olasılık tahmini',
+  'ai.marketEstimate': 'Güncel oranlardan, bahis şirketi marjı çıkarılarak',
+  'ai.basisOnlyTitle': 'İstatistiksel model olmadan analiz',
+  'ai.basisOnlyText': 'Bu maç için gol modeli hesaplanamıyor, bu yüzden öneri yok. Aşağıda takımlarla ilgili doğrulanmış veriler ve varsa piyasa oranlarından bir tahmin yer alıyor.',
   'ai.pick.noBet.unvalidatedCompetition': 'Bu turnuva modelin kontrolüne dahil değildi: olasılıklar gösteriliyor ama öneri yok.',
   'ai.pick.noBet.earlyForecast': 'Maç gününden önce öneri yok: seçim kuralları yalnızca maç günü tahminleri için kontrol edildi. Maç günü tekrar bakın — bir sonuç kuralları geçerse öneri görünebilir. Yukarıdaki olasılıklar bugünkü tahmindir.',
   // M3.6: top matches of the day and quick prediction.

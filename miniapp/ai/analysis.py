@@ -2,24 +2,27 @@
 
 Order of decisions, all in Python before any model call:
 1. the event must exist and be an upcoming football match;
-2. verified form of both teams must exist (readiness: READY / PARTIAL /
-   INSUFFICIENT — without odds the best possible level is PARTIAL);
-3. the goal model (miniapp/forecast) must have enough history for both teams; it
-   computes every probability and, by frozen rules, the recommended market or NO_BET;
-4. INSUFFICIENT never calls the language model;
+2. readiness (the bot's rule): READY = current real odds (the signed odds feed,
+   miniapp/odds) AND verified form of both teams; PARTIAL = exactly one of them;
+   INSUFFICIENT = neither — it never calls the language model;
+3. when the goal model (miniapp/forecast) has enough history for both teams it computes
+   every probability and, by frozen rules, the recommended market or NO_BET — its numbers
+   are always the ones shown;
+4. otherwise (cups, qualifiers, small samples) the analysis is still PARTIAL: verified
+   form, table rows and — when a fresh line exists — the market's 1X2 with the margin
+   removed, labelled as estimated probabilities; no pick, nothing in the forecast history;
 5. a language-model call is cached per (event, evidence), shared by every user and
    language, runs once per key at a time, and is charged against a per-user and a
    global daily budget.
 
-The language model gets only verified numbers and the model's result and returns
-strict JSON: 2–4 keys of the factors that explain the estimate best and up to three
-reason codes, both from lists computed here (every offered reason is true and
-supports the recommended market). It returns no number and no free text: it cannot
-change a probability, add a market, lift NO_BET or name data we never gave; every
-sentence the user sees is a template filled with verified numbers by the frontend.
-Anything outside the contract is rejected, never repaired.
+The language model gets only verified numbers, the model's result and (when present) the
+current odds as data, and returns strict JSON: 2–4 keys of the factors that explain the
+estimate best and up to three reason codes, both from lists computed here (every offered
+reason is true and supports the recommended market). It returns no number and no free
+text: it cannot change a probability or a price, add a market, lift NO_BET or name data
+we never gave; every sentence the user sees is a template filled with verified numbers by
+the frontend. Anything outside the contract is rejected, never repaired.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -38,7 +41,7 @@ from miniapp.forecast.history import ForecastHistory, ForecastRecord
 from miniapp.forecast.markets import KEYS as MARKET_KEYS
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.odds.store import OddsStore
-from miniapp.odds.value import compare
+from miniapp.odds.value import book_json, compare, market_1x2_percent, market_book
 from miniapp.sports import football_data
 from miniapp.sports.cache import Cached, SportsCache
 from miniapp.sports.client import UpstreamError
@@ -46,7 +49,7 @@ from miniapp.sports.models import FootballEvent, Tournament
 from miniapp.sports.service import ModelHistory, SportsService, parse_instant
 
 from .evidence import TeamSummary, has_verified_form, summarize
-from .pick import MAX_REASONS, NO_BET, REASONS, Pick, allowed_reasons
+from .pick import FORM_REASONS, MAX_REASONS, NO_BET, REASONS, Pick, allowed_reasons
 from .readiness import NOT_ANALYSED, forecast_readiness
 
 logger = logging.getLogger("miniapp.ai")
@@ -62,8 +65,6 @@ MODEL_TIMEOUT_S = 60.0
 # Closer to kickoff than this counts as started: covers the reservation wait and the call
 # itself, so no paid call can start (or finish) for a match already underway.
 KICKOFF_MARGIN_S = 5 * 60.0
-# Paid attempts per unchanged analysis (one evidence digest): a model call that keeps failing
-# (refusal, bad output, timeouts) is not paid for again and again until kickoff.
 # Paid calls per unchanged analysis, counted durably before each call: a successful answer is
 # restored from the history (never paid again), so this caps calls that failed in any way.
 MAX_PAID_ATTEMPTS = 2
@@ -71,6 +72,10 @@ MAX_PAID_ATTEMPTS = 2
 # that team, or from the goal model's figures (rating, home advantage).
 FACTORS = ("home_form", "away_form", "home_goals", "away_goals", "home_table", "away_table",
            "home_rating", "away_rating", "home_advantage")
+# Factors rendered from the recent-form numbers: offered only when that form is verified.
+FORM_FACTORS = frozenset({"home_form", "away_form", "home_goals", "away_goals"})
+# How the probabilities of every PARTIAL analysis are labelled (CLAUDE.md, LLM output).
+ESTIMATED_LABEL = "Оценка вероятностей / estimated probabilities"
 
 SCHEMA = {
     "type": "object",
@@ -96,8 +101,12 @@ finished results (form string newest first: W/D/L; venues H/A; goals; points); t
 rows in the competition table when present; and the model's figures — expected goals,
 attack/defence ratings relative to the competition average (1.0 = average; attack
 above 1 scores more, defence above 1 concedes more), the competition's home advantage,
-its 1X2 estimate, the recommended market and the alternatives. Nothing else is known:
-no injuries, lineups, odds, head-to-head history or any other data. Do not assume any.
+its 1X2 estimate, the recommended market and the alternatives; and, ONLY when a
+"market" list is present, the bookmaker's current decimal odds with the market
+probability (margin removed) that the app computed from them. Nothing else is known:
+no injuries, lineups, head-to-head history or any other data. Do not assume any.
+Without a "market" list there are no odds: do not assume any, and the probabilities
+are shown to the user as an estimate ("Оценка вероятностей" / "estimated probabilities").
 
 Return:
 - "factors": the 2 to 4 facts that best explain the model's estimate, most important
@@ -106,7 +115,32 @@ Return:
   verified true and supports the recommended market) that explain it best, most
   important first. Empty when the recommendation is NO_BET or "allowedReasons" is empty.
 
-There are no bookmaker odds: nothing here is a claim of value, profit or certainty."""
+Odds, when given, are context only: nothing here is a claim of value, profit or certainty."""
+
+# The goal model has no estimate for this match (too little history): verified facts only.
+BASIS_PROMPT = """You describe one upcoming football match for the ProqnozAI app from verified
+data only. The app's goal model has too little history for this match, so there is NO
+model estimate and NO recommended market. You do not estimate, change or restate any
+number, and you write no free text.
+
+Use ONLY the facts in the JSON you are given: the fixture; each team's most recent
+finished results (form string newest first: W/D/L; venues H/A; goals; points); their
+rows in the competition table when present; and, ONLY when a "market" list is present,
+the bookmaker's current decimal odds with the market probability (margin removed) that
+the app computed from them. Nothing else is known: no injuries, lineups, head-to-head
+history, model figures or any other data. Do not assume any. Without a "market" list
+there are no odds: do not assume any.
+
+This analysis is PARTIAL. Any probabilities shown with it are an ESTIMATE from the
+market prices, never a certainty, and are labelled exactly as "probabilityLabel" says
+("Оценка вероятностей" / "estimated probabilities").
+
+Return:
+- "factors": the 2 to 4 facts that best describe the match, most important first,
+  chosen ONLY from "allowedFactors". No duplicates.
+- "reasons": always an empty list (there is no recommended market to argue for).
+
+Nothing here is a claim of value, profit or certainty."""
 
 
 class AiError(Exception):
@@ -287,14 +321,18 @@ class AiService:
             return found
         event, tournament, home, away, forecast = found
         basis = {"home": home.to_json(), "away": away.to_json()}
-        # No odds source in the Mini App: verified form alone gives PARTIAL at best.
-        readiness = forecast_readiness(has_odds=False, has_verified_data=has_verified_form(home, away))
+        has_form = has_verified_form(home, away)
+        book = self._book(event)
+        readiness = forecast_readiness(has_odds=bool(book), has_verified_data=has_form)
         if readiness == "insufficient":
             return AnalysisResult(event.id, "insufficient", ("no_verified_form", "no_odds_source"), basis=basis)
+        fixture = {"home": home.name, "away": away.name, "competition": tournament.name if tournament else None,
+                   "kickoffUtc": event.starts_at}
         if isinstance(forecast, Unavailable):
-            # Too little history for the goal model: no probabilities at all, never a guess.
-            return AnalysisResult(event.id, "insufficient", (f"model_{forecast.reason}", "no_odds_source"),
-                                  basis=basis)
+            # Too little history for the goal model: a PARTIAL analysis of the verified form, the
+            # table rows and the current market — never the model's numbers, never a pick.
+            return await self._basis_analysis(event, home, away, basis, fixture, forecast.reason, has_form,
+                                              user_id, create)
         figures = forecast.to_json()
         shown = forecast.display
         probabilities = {"home": shown["1"], "draw": shown["X"], "away": shown["2"]}
@@ -302,12 +340,13 @@ class AiService:
         market = chosen.market if chosen else "NO_BET"
         alternatives = tuple({"market": c.market, "probability": shown[c.market]}
                              for c in forecast.selection.alternatives)
-        reasons_allowed = allowed_reasons(market, basis, figures)
-        allowed = tuple(f for f in FACTORS if not f.endswith("_table")
-                        or (home if f.startswith("home") else away).table_position is not None)
+        # Without verified form (PARTIAL on the odds alone) nothing read from that form is offered.
+        reasons_allowed = tuple(r for r in allowed_reasons(market, basis, figures) if has_form or r not in FORM_REASONS)
+        allowed = tuple(f for f in FACTORS
+                        if (has_form or f not in FORM_FACTORS)
+                        and (not f.endswith("_table") or (home if f.startswith("home") else away).table_position is not None))
         facts = {
-            "fixture": {"home": home.name, "away": away.name, "competition": tournament.name if tournament else None,
-                        "kickoffUtc": event.starts_at},
+            "fixture": fixture,
             "home": basis["home"],
             "away": basis["away"],
             "model": {
@@ -320,7 +359,9 @@ class AiService:
             "allowedReasons": list(reasons_allowed),
         }
         # The identity covers everything shown, not only what the language model reads: any change
-        # of a displayed percentage (e.g. a corrected old result) is a new analysis.
+        # of a displayed percentage (e.g. a corrected old result) is a new analysis. Prices are not
+        # part of it: they move every few minutes while the answer (codes checked against the
+        # verified numbers) stays true; the current prices are attached when served.
         shown_forecast = {"figures": {k: v for k, v in figures.items() if k != "computedAt"},
                           "exact": {k: round(v, 9) for k, v in forecast.exact.items()},
                           "selection": forecast.selection.to_json()}
@@ -329,25 +370,19 @@ class AiService:
         # Language-free (the frontend renders every sentence), versioned by answer shape and model.
         key = f"ai:{SCHEMA_VERSION}:{MODEL_VERSION}:{event.id}:{digest}"
         client = self.client
+        missing = () if has_form else ("no_verified_form",)
 
         def build(factors: tuple[str, ...], reasons: tuple[str, ...], model: str | None,
                   generated_at: str) -> AnalysisResult:
+            # Without prices: PARTIAL, estimated; `_with_odds` completes it when a fresh line exists.
             pick = Pick(market, reasons, shown[market]) if chosen else NO_BET
-            return AnalysisResult(event.id, readiness, ("no_odds_source",), generated_at, model,
-                                  probabilities, factors, basis, estimated=readiness == "partial",
+            return AnalysisResult(event.id, "partial", (*missing, "no_odds_source"), generated_at, model,
+                                  probabilities, factors, basis, estimated=True,
                                   pick=pick, forecast=figures, alternatives=alternatives)
 
-        def until_kickoff() -> float:
-            return max(60.0, kickoff - self._clock())
-
         async def load() -> tuple[AnalysisResult, float]:
-            request = f"Facts (JSON):\n{json.dumps(facts, ensure_ascii=False, sort_keys=True)}"
-            assert client is not None  # obtain() refuses a new analysis without the model
-            try:
-                # Wall-clock bound: the SDK timeout bounds network waits, not the whole call.
-                answer = await asyncio.wait_for(client.complete(SYSTEM_PROMPT, request, SCHEMA), MODEL_TIMEOUT_S)
-            except TimeoutError:
-                raise AiError("timeout") from None
+            assert client is not None  # _obtain() refuses a new analysis without the model
+            answer = await self._complete(client, SYSTEM_PROMPT, self._with_market_facts(facts, event))
             factors, reasons = validate_output(answer.text, frozenset(allowed), reasons_allowed,
                                                no_bet=chosen is None)
             result = build(factors, reasons, answer.model, self._iso())
@@ -357,16 +392,99 @@ class AiService:
             except AiError:
                 self._uncounted.add(key)  # paid but not storable: never paid for again in this process
                 raise
-            return result, until_kickoff()
+            return result, self._until_kickoff(event)
 
         async def restore(stored: dict) -> tuple[AnalysisResult, float]:
             # The same evidence digest = the same numbers; only the stored explanation is reused.
             return build(tuple(stored["factors"]), tuple(stored["reasons"]), stored["model"],
-                         stored["created_at"]), until_kickoff()
+                         stored["created_at"]), self._until_kickoff(event)
 
+        result = await self._obtain(event, key, user_id, create, load,
+                                    restore=restore, prefix=f"{MODEL_VERSION}:{event.id}:{digest}:")
+        return self._with_odds(result, event, forecast, has_form)
+
+    async def _basis_analysis(self, event: FootballEvent, home: TeamSummary, away: TeamSummary, basis: dict,
+                              fixture: dict, model_reason: str, has_form: bool, user_id: int,
+                              create: bool) -> AnalysisResult:
+        """PARTIAL without the goal model: the language model picks which verified facts (form,
+        goals, table rows) describe the match; probabilities, when shown, are the market's 1X2 with
+        the margin removed, computed here when served and always labelled as an estimate.
+
+        Never written to the forecast history (it holds the goal model's forecasts, evaluated and
+        settled against results): there is no model probability and no pick to settle."""
+        if not has_form:
+            # Odds alone: nothing verified about the teams to explain, so no language-model call
+            # (and no charge) — the market's estimate and the table rows are shown as they are.
+            result = AnalysisResult(event.id, "partial", (), self._iso(), None, basis=basis, estimated=True)
+            return self._with_market_estimate(result, event, model_reason, has_form)
+        allowed = tuple(f for f in FACTORS
+                        if f in FORM_FACTORS
+                        or (f.endswith("_table") and (home if f.startswith("home") else away).table_position is not None))
+        facts = {
+            "fixture": fixture,
+            "home": basis["home"],
+            "away": basis["away"],
+            "goalModel": {"available": False, "reason": model_reason},
+            "probabilityLabel": ESTIMATED_LABEL,
+            "allowedFactors": list(allowed),
+            "allowedReasons": [],
+        }
+        digest = hashlib.sha256(json.dumps({"facts": facts}, sort_keys=True).encode()).hexdigest()[:16]
+        # Its own namespace: never a goal-model answer's key, never restored from the forecast history.
+        key = f"ai:{SCHEMA_VERSION}:basis:{event.id}:{digest}"
+        client = self.client
+
+        async def load() -> tuple[AnalysisResult, float]:
+            assert client is not None  # _obtain() refuses a new analysis without the model
+            answer = await self._complete(client, BASIS_PROMPT, self._with_market_facts(facts, event))
+            factors, _ = validate_output(answer.text, frozenset(allowed), (), no_bet=True)
+            logger.info("ai.analysis event=%s readiness=partial basis_only=%s", event.id, model_reason)
+            # Kept in memory only: a successful call gives its attempt back, so the attempt cap still
+            # bounds failed calls only (a restart may pay for the same analysis once more).
+            await self._uncount_attempt(key)
+            return (AnalysisResult(event.id, "partial", (), self._iso(), answer.model, factors=factors, basis=basis,
+                                   estimated=True), self._until_kickoff(event))
+
+        result = await self._obtain(event, key, user_id, create, load)
+        return self._with_market_estimate(result, event, model_reason, has_form)
+
+    async def _complete(self, client: ModelClient, system: str, facts: dict) -> Completion:
+        request = f"Facts (JSON):\n{json.dumps(facts, ensure_ascii=False, sort_keys=True)}"
+        try:
+            # Wall-clock bound: the SDK timeout bounds network waits, not the whole call.
+            return await asyncio.wait_for(client.complete(system, request, SCHEMA), MODEL_TIMEOUT_S)
+        except TimeoutError:
+            raise AiError("timeout") from None
+
+    def _until_kickoff(self, event: FootballEvent) -> float:
+        return max(60.0, parse_instant(event.starts_at).timestamp() - self._clock())
+
+    def _book(self, event: FootballEvent) -> dict[str, tuple[float, float, float]]:
+        """The match's current checked prices (fresh, strictly matched, before kickoff), else {}."""
+        found = self.odds.lookup(event) if self.odds is not None else None
+        return market_book(found.book) if found is not None else {}
+
+    def _with_market_facts(self, facts: dict, event: FootballEvent) -> dict:
+        """The prompt's facts plus, only when the odds store holds a current line, its prices and
+        their margin-free probabilities (computed here, never by the model). Not part of any key."""
+        found = self.odds.lookup(event) if self.odds is not None else None
+        quotes = book_json(found.book) if found is not None else []
+        return {**facts, "market": quotes} if quotes else facts
+
+    async def _obtain(self, event: FootballEvent, key: str, user_id: int, create: bool,
+                      load: Callable[[], Awaitable[tuple[AnalysisResult, float]]], *,
+                      restore: Callable[[dict], Awaitable[tuple[AnalysisResult, float]]] | None = None,
+                      prefix: str | None = None) -> AnalysisResult:
+        """The cached answer, the running load, or a charged new load (single flight per key).
+        With `prefix` (goal-model answers): restored from the forecast history, and a new one is
+        paid for only while that history is writable."""
         loader = _as_upstream(load)
-        prefix = f"{MODEL_VERSION}:{event.id}:{digest}:"
         kickoff = parse_instant(event.starts_at).timestamp()
+
+        async def stored_answer() -> dict | None:
+            if self.history is None or prefix is None:
+                return None
+            return await asyncio.to_thread(self.history.stored_answer, prefix)
 
         async def obtain() -> AnalysisResult | Cached | asyncio.Future:
             # One step under the lock: the cached answer, the running load, or a paid
@@ -390,28 +508,27 @@ class AiService:
                 if found is not None:
                     return found  # joining or reading is free
                 if not create:
-                    if self.history is not None:
-                        stored = await asyncio.to_thread(self.history.stored_answer, prefix)
-                        if stored is not None:
-                            # Rebuilt here, not through the cache: a paid load of the same key
-                            # still in flight (single flight) must never be joined by a read.
-                            restored, _ = await restore(stored)
-                            return restored
+                    stored = await stored_answer()
+                    if stored is not None and restore is not None:
+                        # Rebuilt here, not through the cache: a paid load of the same key
+                        # still in flight (single flight) must never be joined by a read.
+                        restored, _ = await restore(stored)
+                        return restored
                     raise AiError("not_created")
                 # Charged outside the shared cache: a personal refusal is never
                 # remembered as everyone's answer.
                 user = f"user:{user_id}"
                 limits = {user: self._per_user_daily, "all": self._daily_budget}
-                # Every shown forecast must enter the history (it is how the experimental rules get
-                # confirmed): an unwritable history refuses before anything is paid.
-                if self.history is not None and not await asyncio.to_thread(self.history.writable):
-                    raise AiError("upstream_error")
-                if self.history is not None:
-                    stored = await asyncio.to_thread(self.history.stored_answer, prefix)
-                    if stored is not None:  # evicted or restarted: rebuilt for free, never paid again
+                if prefix is not None and self.history is not None:
+                    # Every shown forecast must enter the history (it is how the experimental rules
+                    # get confirmed): an unwritable history refuses before anything is paid.
+                    if not await asyncio.to_thread(self.history.writable):
+                        raise AiError("upstream_error")
+                    stored = await stored_answer()
+                    if stored is not None and restore is not None:  # evicted or restarted: rebuilt for free
                         return self._cache.start(key, _as_upstream(lambda: restore(stored)))
                 # Only a NEW analysis needs the model: a made one (cache, history) is read without it.
-                if client is None:
+                if self.client is None:
                     raise AiError("not_configured")
                 if key in self._uncounted or await self._attempts(key) >= MAX_PAID_ATTEMPTS:
                     raise AiError("upstream_error")  # this exact analysis was already paid for twice
@@ -435,16 +552,15 @@ class AiService:
         step.add_done_callback(_retrieve)
         found = await asyncio.shield(step)
         if isinstance(found, AnalysisResult):
-            result = found
-        elif isinstance(found, Cached):
-            result = found.value
-        else:
-            result = (await asyncio.shield(found)).value
-        return self._with_odds(result, event, forecast)
+            return found
+        if isinstance(found, Cached):
+            return found.value
+        return (await asyncio.shield(found)).value
 
-    def _with_odds(self, result: AnalysisResult, event: FootballEvent, forecast: MatchForecast) -> AnalysisResult:
+    def _with_odds(self, result: AnalysisResult, event: FootballEvent, forecast: MatchForecast,
+                   has_form: bool) -> AnalysisResult:
         """The current prices of this match against the model, when a fresh strictly matched
-        line exists; with them the analysis has every input it can have (READY)."""
+        line exists; with them AND verified form the analysis has every input it can have (READY)."""
         if self.odds is None or result.pick is None or result.kind not in ("ready", "partial"):
             return result
         found = self.odds.lookup(event)
@@ -455,7 +571,22 @@ class AiService:
             return result
         market = {"fetchedAt": _iso_ts(found.fetched_at), "validFor": int(found.valid_for),
                   "quotes": [quotes[k].to_json() for k in MARKET_KEYS if k in quotes]}
-        return replace(result, kind="ready", reasons=(), estimated=False, market=market)
+        if has_form:
+            return replace(result, kind="ready", reasons=(), estimated=False, market=market)
+        return replace(result, kind="partial", reasons=("no_verified_form",), estimated=True, market=market)
+
+    def _with_market_estimate(self, result: AnalysisResult, event: FootballEvent, model_reason: str,
+                              has_form: bool) -> AnalysisResult:
+        """A PARTIAL without the goal model as served now: the market's margin-free 1X2 (when a
+        fresh line has one) as estimated probabilities, and why the analysis is partial."""
+        if result.kind != "partial":
+            return result  # e.g. "not_upcoming": kickoff passed meanwhile
+        found = self.odds.lookup(event) if self.odds is not None else None
+        priced = found is not None and bool(market_book(found.book))
+        estimate = market_1x2_percent(found.book) if found is not None else None
+        reasons = (f"model_{model_reason}", *(() if has_form else ("no_verified_form",)),
+                   *(() if priced else ("no_odds_source",)))
+        return replace(result, reasons=reasons, probabilities=estimate, estimated=True)
 
     async def _evidence(self, event_id: str):
         event, tournament = await self.sports.event(event_id)

@@ -64,8 +64,11 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
     home: shortFor(analysis.basis.home, event.home),
     away: shortFor(analysis.basis.away, event.away),
   };
-  const title = real ? t('ai.probabilitiesReal') : t('ai.probabilities');
   const forecast = analysis.forecast;
+  // A real analysis without the goal model (cups, qualifiers, small samples): no pick, no model
+  // figures; its probabilities, when present, are the market's — labelled as an estimate.
+  const basisOnly = real && !forecast && analysis.kind === 'partial' && !analysis.pick;
+  const title = !real ? t('ai.probabilities') : basisOnly ? t('ai.probabilitiesEstimated') : t('ai.probabilitiesReal');
   const live = usePricesLive(real ? analysis.market?.expires : undefined);
   const prices = real && live ? analysis.market : undefined;
   const tournament = data.getTournament(event.tournamentId);
@@ -85,12 +88,26 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
       ) : (
         generated
       )}
-      <ProbabilityBlock
-        title={title}
-        labels={labels}
-        values={analysis.probabilities}
-        sport={analysis.sport}
-      />
+      {basisOnly && (
+        <section className={ui.section} data-testid="ai-basis-only">
+          <h3 className={ui.sectionTitle}>{t('ai.basisOnlyTitle')}</h3>
+          <p className={ui.body}>{t('ai.basisOnlyText')}</p>
+          <ul className={s.reasons}>
+            {analysis.reasons.map((r) => (
+              <li key={r}>{t(`ai.reason.${r}`)}</li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {analysis.probabilities.length > 0 && (
+        <ProbabilityBlock
+          title={title}
+          labels={labels}
+          values={analysis.probabilities}
+          sport={analysis.sport}
+          badge={basisOnly ? t('ai.marketEstimate') : undefined}
+        />
+      )}
       {real && basis && analysis.pick && (
         <PickCard
           pick={analysis.pick}

@@ -107,7 +107,7 @@ def probabilities(matrix: ScoreMatrix) -> dict[str, float]:
     return out
 
 
-def _largest_remainder(values: list[float], total: int = 100) -> list[int]:
+def largest_remainder(values: list[float], total: int = 100) -> list[int]:
     scaled = [v * total for v in values]
     floors = [math.floor(s) for s in scaled]
     left = total - sum(floors)
@@ -125,7 +125,7 @@ def display_percentages(p: dict[str, float]) -> dict[str, int]:
     """Whole percents that keep every identity of the exact numbers:
     1+X+2 = 100; 1X = 1+X, X2 = X+2, 12 = 1+2; H1-0.5 = 1; H2+0.5 = X2; each two-way
     pair sums to 100; over/under and handicap lines stay ordered."""
-    one, draw, two = _largest_remainder([p["1"], p["X"], p["2"]])
+    one, draw, two = largest_remainder([p["1"], p["X"], p["2"]])
     out = {"1": one, "X": draw, "2": two, "1X": one + draw, "X2": draw + two, "12": one + two,
            "H1-0.5": one, "H2+0.5": draw + two}
     for first, second in PAIRS:

@@ -561,6 +561,10 @@ export const uz: Dictionary = {
   'ai.markets.under': '{line} dan kam',
   'ai.pick.noBet.partialHistory': 'Turnirning o‘tgan mavsumi hozir manbada mavjud emas: ehtimollar to‘liq bo‘lmagan ma’lumot bilan hisoblangan, shuning uchun tavsiya yo‘q.',
   'ai.reason.modelExtremeRates': 'Model gollar bo‘yicha noreal baho berdi — hisob ko‘rsatilmaydi',
+  'ai.probabilitiesEstimated': 'Ehtimolliklar bahosi',
+  'ai.marketEstimate': 'Joriy koeffitsiyentlar boʻyicha, bukmeker marjasiz',
+  'ai.basisOnlyTitle': 'Statistik modelsiz tahlil',
+  'ai.basisOnlyText': 'Bu oʻyin uchun gollar modeli hisoblanmaydi, shuning uchun tavsiya yoʻq. Quyida jamoalar haqidagi tasdiqlangan maʼlumotlar va mavjud boʻlsa, bozor koeffitsiyentlari boʻyicha baho.',
   'ai.pick.noBet.unvalidatedCompetition': 'Bu turnir model tekshiruviga kirmagan: ehtimollar ko‘rsatiladi, lekin tavsiya yo‘q.',
   'ai.pick.noBet.earlyForecast': 'O‘yin kunigacha tavsiya yo‘q: tanlov qoidalari faqat o‘yin kuni prognozi uchun tekshirilgan. O‘yin kuni yana qarang — natija qoidalardan o‘tsa, tavsiya paydo bo‘lishi mumkin. Yuqoridagi ehtimollar — bugungi baho.',
   // M3.6: top matches of the day and quick prediction.

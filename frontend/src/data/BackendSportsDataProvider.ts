@@ -1100,6 +1100,7 @@ function readAnalysisV3(b: Json, eventId: string, sport: Sport, sent: PriceDeadl
     return { eventId, sport, kind: 'insufficient', probabilities: [], reasons: known, generatedAt: null, basis };
   }
   if ((b.kind !== 'partial' && b.kind !== 'ready') || !basis) return null;
+  if (b.kind === 'partial' && b.forecast === null) return readBasisAnalysis(b, eventId, sport, known, basis);
   const forecast = readForecast(b.forecast);
   const generatedAt = validInstant(b.generatedAt);
   if (!forecast || !generatedAt) return null;
@@ -1142,7 +1143,11 @@ function readAnalysisV3(b: Json, eventId: string, sport: Sport, sent: PriceDeadl
     if (!prices) return null;
     market = prices;
   }
-  if ((market !== undefined) !== (b.kind === 'ready') || (market && known.length)) return null;
+  // READY: prices and nothing missing. PARTIAL: no prices ("no odds source"), or prices without
+  // verified form ("no verified form") — never prices next to "no odds source".
+  if (b.kind === 'ready' ? !market || known.length > 0 : market ? known.includes('noOddsSource') || !known.includes('noVerifiedForm') : !known.includes('noOddsSource')) {
+    return null;
+  }
   return {
     eventId,
     sport,
@@ -1157,6 +1162,58 @@ function readAnalysisV3(b: Json, eventId: string, sport: Sport, sent: PriceDeadl
     estimated: b.kind === 'partial' || b.estimated === true,
     forecast,
     alternatives,
+  };
+}
+
+const MODEL_MISSING: ReadonlySet<InsufficientReason> = new Set(['modelSmallSample', 'modelTeamHistory', 'modelExtremeRates']);
+
+/**
+ * PARTIAL without the goal model (cups, qualifiers, small samples): verified form and table rows,
+ * optionally the market's 1X2 with the margin removed (computed by the backend) — always an
+ * estimate, never a pick, never model figures or prices against a model.
+ */
+function readBasisAnalysis(
+  b: Json,
+  eventId: string,
+  sport: Sport,
+  known: InsufficientReason[],
+  basis: { home: TeamBasis; away: TeamBasis },
+): AiAnalysis | null {
+  if (b.pick !== null || (b.market !== null && b.market !== undefined) || b.estimated !== true) return null;
+  if (!Array.isArray(b.alternatives) || b.alternatives.length) return null;
+  // Exactly one reason why the model is missing, plus what else is missing (never everything).
+  if (known.filter((r) => MODEL_MISSING.has(r)).length !== 1 || new Set(known).size !== known.length) return null;
+  if (known.some((r) => !MODEL_MISSING.has(r) && r !== 'noVerifiedForm' && r !== 'noOddsSource')) return null;
+  if (known.includes('noVerifiedForm') && known.includes('noOddsSource')) return null;
+  const generatedAt = validInstant(b.generatedAt);
+  if (!generatedAt) return null;
+  let probabilities: number[] = [];
+  if (b.probabilities !== null) {
+    // The market's estimate exists only with prices.
+    if (!isObj(b.probabilities) || known.includes('noOddsSource')) return null;
+    const p = b.probabilities;
+    const values = [int(p.home), int(p.draw), int(p.away)];
+    if (values.some((n) => n === null || n > 100)) return null;
+    if ((values as number[]).reduce((a, n) => a + n, 0) !== 100) return null;
+    probabilities = values as number[];
+  }
+  if (!Array.isArray(b.factors)) return null;
+  const factors = b.factors.map((f) => (typeof f === 'string' && !V3_ONLY_FACTORS.has(f) ? FACTORS[f] : undefined));
+  // Without verified form nothing is explained (no language-model answer): no factors at all.
+  const range = known.includes('noVerifiedForm') ? factors.length === 0 : factors.length >= 2 && factors.length <= 4;
+  if (!range || factors.some((f) => f === undefined) || new Set(factors).size !== factors.length) return null;
+  if (factors.some((f) => TABLE_FACTORS[f!] && basis[TABLE_FACTORS[f!]!].tablePosition === null)) return null;
+  return {
+    eventId,
+    sport,
+    kind: 'partial',
+    probabilities,
+    reasons: known,
+    generatedAt,
+    factors: factors as AiFactor[],
+    basis,
+    estimated: true,
+    alternatives: [],
   };
 }
 

@@ -26,6 +26,9 @@ REASONS = (
     "home_advantage",
 )
 MAX_REASONS = 3
+# Reasons read from the recent-form numbers: never offered when that form is not verified.
+FORM_REASONS = frozenset({"home_better_form", "away_better_form", "home_more_goals", "away_more_goals",
+                          "home_fewer_conceded", "away_fewer_conceded", "evenly_matched"})
 CLOSE_MARGIN = 8
 # Ratings closer than this (difference of ln attack − ln defence) are not "stronger".
 RATING_MARGIN = 0.10
