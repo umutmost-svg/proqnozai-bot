@@ -292,3 +292,43 @@ def test_interrupted_extract_leaves_no_plaintext(env, tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         pb.cmd_extract(cfg, archive, dest)
     assert not dest.exists()
+
+
+def test_decrypt_timeout_kills_openssl(env, monkeypatch, tmp_path):
+    cfg, _, _ = env
+
+    class Hung:
+        returncode = None
+        killed = False
+
+        def communicate(self, timeout=None):
+            raise pb.subprocess.TimeoutExpired("openssl", timeout)
+
+        def poll(self):
+            return None if not self.killed else -9
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self):
+            return -9
+
+    hung = Hung()
+    monkeypatch.setattr(pb, "_openssl", lambda *a, **k: hung)
+    with pytest.raises(pb.subprocess.TimeoutExpired):
+        pb.decrypt_and_check(cfg, b"x" * 32, "bot", tmp_path / "a.tar.enc", tmp_path)
+    assert hung.killed                                   # no child keeps writing plaintext after cleanup
+
+
+def test_verify_without_manifest_still_sweeps_stale_plaintext(env, tmp_path):
+    cfg, _, _ = env
+    old = cfg.backup_dir / ".work" / "verify-old"
+    old.mkdir(parents=True)
+    (old / "stream.tar").write_bytes(b"plaintext")
+    past = pb.time.time() - pb.STALE_SECONDS - 60
+    os.utime(old, (past, past))
+    bogus = cfg.backup_dir / "bot" / f"bot-{STAMP}.tar.enc"
+    bogus.parent.mkdir(parents=True, exist_ok=True)
+    bogus.write_bytes(b"x")
+    assert pb.cmd_verify(cfg, bogus) == 1
+    assert not old.exists()

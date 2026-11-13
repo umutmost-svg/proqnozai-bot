@@ -165,7 +165,12 @@ def decrypt_and_check(cfg: Config, pw: bytes, kind: str, archive: Path, dest: Pa
     Returns (plaintext tar sha256, {member: {size, sha256, integrity, tables}})."""
     tar_path = dest / "stream.tar"
     proc = _openssl(cfg, pw, ["-d", "-in", str(archive), "-out", str(tar_path)], stderr=subprocess.PIPE)
-    _, err = proc.communicate(timeout=600)
+    try:
+        _, err = proc.communicate(timeout=600)
+    finally:
+        if proc.poll() is None:   # timeout or interruption: no child keeps writing plaintext after cleanup
+            proc.kill()
+            proc.wait()
     if proc.returncode != 0:
         raise BackupError(f"decrypt failed: {err.decode(errors='replace').strip()[:120]}")
     tar_sha = sha256_file(tar_path)
@@ -413,9 +418,9 @@ def _check_against(manifest: dict, files: dict) -> None:
 
 def cmd_verify(cfg: Config, archive: Path) -> int:
     try:
+        sweep_stale(cfg)
         kind = _kind_of(archive)
         man = _manifest(archive)
-        sweep_stale(cfg)
         work = _private_dir(cfg.backup_dir / ".work")
         with tempfile.TemporaryDirectory(dir=work, prefix="verify-") as tmp:
             _, files = decrypt_and_check(cfg, passphrase(cfg), kind, archive, Path(tmp),
@@ -434,6 +439,7 @@ def cmd_extract(cfg: Config, archive: Path, dest: Path) -> int:
     """For drills: verified databases into `dest` (must not exist; created 0700). The caller deletes it."""
     created = done = False
     try:
+        sweep_stale(cfg)
         kind = _kind_of(archive)
         man = _manifest(archive)
         dest.mkdir(mode=0o700)

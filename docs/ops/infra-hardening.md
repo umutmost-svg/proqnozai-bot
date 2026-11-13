@@ -186,7 +186,9 @@ launchctl kickstart gui/$(id -u)/com.proqnozai.backup-pull && sleep 60 && tail ~
 выгрузка, идущая в ту же секунду, может принять новую ручную копию за свою и удалить её:
 `flock /run/proqnozai-backup-export.lock docker exec -i <бот> python - < /opt/proqnozai-ops/bot_db_backup.py`.
 
-**[разрешение] Уборка старых копий в томе бота:** `docker exec <бот> sh -c 'rm -f /app/data/bot-backup-2026111*.db'`
+**[разрешение] Уборка старых копий в томе бота** — ровно четырёх файлов, найденных 2026-11-12 (сначала
+`docker exec <бот> ls -l /app/data` и сверка списка): `docker exec <бот> rm -f /app/data/bot-backup-20261111T214312Z.db
+/app/data/bot-backup-20261111T221942Z.db /app/data/bot-backup-20261112T150519Z.db /app/data/bot-backup-20261112T150531Z.db`
 — только после первой успешной автоматической выгрузки и проверки (`verify` PASS). Это 4 незашифрованные копии
 с данными пользователей; зашифрованные экземпляры трёх из них уже лежат в `~/.proqnozai-backups/`.
 
