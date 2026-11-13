@@ -68,14 +68,15 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
   // A real analysis without the goal model (cups, qualifiers, small samples): no pick, no model
   // figures; its probabilities, when present, are the market's — labelled as an estimate.
   const basisOnly = real && !forecast && analysis.kind === 'partial' && !analysis.pick;
-  // Every PARTIAL marks its probabilities as an estimate (CLAUDE.md, LLM output).
-  const title = !real
-    ? t('ai.probabilities')
-    : analysis.kind === 'partial'
-      ? t('ai.probabilitiesEstimated')
-      : t('ai.probabilitiesReal');
   const live = usePricesLive(real ? analysis.market?.expires : undefined);
   const prices = real && live ? analysis.market : undefined;
+  // Every PARTIAL marks its probabilities as an estimate (CLAUDE.md, LLM output). READY means
+  // current prices: once they expire on screen the analysis is PARTIAL again, so it is marked too.
+  const title = !real
+    ? t('ai.probabilities')
+    : analysis.kind === 'partial' || !prices
+      ? t('ai.probabilitiesEstimated')
+      : t('ai.probabilitiesReal');
   // The market's estimate disappears with the prices it was computed from.
   const estimateLive = usePricesLive(analysis.estimateExpires);
   const showProbabilities = analysis.probabilities.length > 0 && (!analysis.estimateExpires || estimateLive);

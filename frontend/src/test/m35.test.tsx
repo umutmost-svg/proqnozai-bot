@@ -235,7 +235,11 @@ describe('the model against the market', () => {
   it('prices disappear on screen once their validity ends; the analysis stays', async () => {
     renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3({ ...READY_OVER, market: { ...PRICES, validFor: 1 } })) });
     expect(await screen.findByTestId('ai-market-value')).toBeInTheDocument();
+    expect(screen.getByTestId('ai-probabilities-title')).toHaveTextContent(dictionaries.ru['ai.probabilitiesReal']);
+    expect(screen.getByTestId('ai-probabilities-title')).not.toHaveTextContent(dictionaries.ru['ai.probabilitiesEstimated']);
     await waitFor(() => expect(screen.queryByTestId('ai-market-value')).toBeNull(), { timeout: 3000 });
+    // Without current prices it is no longer READY: the probabilities are marked as an estimate.
+    expect(screen.getByTestId('ai-probabilities-title')).toHaveTextContent(dictionaries.ru['ai.probabilitiesEstimated']);
     expect(screen.queryByTestId('price-line')).toBeNull();
     expect(within(screen.getByTestId('ai-markets')).queryByText(/кэф/)).toBeNull();
     expect(screen.getByTestId('ai-pick')).toHaveTextContent('Liverpool не проиграет');
