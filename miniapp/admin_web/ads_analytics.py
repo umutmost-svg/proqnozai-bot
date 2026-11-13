@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from miniapp.ads.telemetry import DAY, Telemetry, days_back
+from miniapp.ads.telemetry import DAY, EVENTS_RETENTION_DAYS, Telemetry, days_back
 from miniapp.admin_web.accounts import ActionError, Admin, AdminStore
 
 _SCHEMA = """
@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS ad_conversions (
 """
 
 ATTRIBUTION_DAYS = 30
+# 1-90 days: raw events (exact reach and unique CTR); longer: daily aggregates (events only, reach unknown).
+PERIODS = (1, 7, 30, 90, 180, 365, 395)
 # Fits the admin's 16 KiB request body limit (app.MAX_BODY) with the longest ids; bigger reports go in batches.
 MAX_REPORT = 400
 Z95 = 1.959964
@@ -84,35 +86,47 @@ class AdsAnalytics:
     def report(self, now: int, days: int, campaign_id: int | None = None, names: dict[int, str] | None = None) -> dict:
         since_day = days_back(now, days - 1)
         state = {"source": "telemetry"}
+        # Beyond the raw retention distinct users cannot be counted: reach, clickers and unique CTR are None.
+        aggregated = days > EVENTS_RETENTION_DAYS
 
         def totals(group: str) -> list[dict]:
+            if aggregated:
+                return self._read(state, lambda: self.telemetry.long_totals(since_day, group, campaign_id), [])
             return self._read(state, lambda: self.telemetry.ad_totals(since_day, group, campaign_id), [])
 
-        engaged = self._read(state, lambda: self.telemetry.engaged_clickers(since_day, campaign_id), None)
+        engaged = None if aggregated else self._read(
+            state, lambda: self.telemetry.engaged_clickers(since_day, campaign_id), None)
+        postbacks = self._read(state, lambda: self.telemetry.postback_totals(since_day, campaign_id), [])
         variants: dict[tuple[int, str], dict[str, Any]] = {}
+
+        def blank(cid: int, variant: str) -> dict[str, Any]:
+            return {"campaignId": cid, "variant": variant, "impressions": 0, "reach": None if aggregated else 0,
+                    "clicks": 0, "clickers": None if aggregated else 0, "control": 0, "conversions": 0,
+                    "partnerConversions": 0}
+
         for row in totals("variant"):
-            item = variants.setdefault((row["campaignId"], row["key"]), {
-                "campaignId": row["campaignId"], "variant": row["key"], "impressions": 0, "reach": 0, "clicks": 0,
-                "clickers": 0, "control": 0, "conversions": 0})
+            item = variants.setdefault((row["campaignId"], row["key"]), blank(row["campaignId"], row["key"]))
             if row["kind"] == "impression":
                 item["impressions"], item["reach"] = row["events"], row["users"]
             elif row["kind"] == "click":
                 item["clicks"], item["clickers"] = row["events"], row["users"]
             else:
-                item["control"] = row["users"]
+                item["control"] = row["events"] if aggregated else row["users"]
+        for row in postbacks:  # partner-confirmed (postback / partner API), attributed to the clicked variant
+            item = variants.setdefault((row["campaignId"], row["variant"]), blank(row["campaignId"], row["variant"]))
+            item["partnerConversions"] += row["count"]
         # Same period as the events: from 00:00 UTC of the first day of the window (not now - days x 24 h).
         since_ts = int(datetime.strptime(since_day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp())
         for (cid, variant), count in self._conversions(since_ts, campaign_id).items():
             key = (cid, variant or "unattributed")
-            variants.setdefault(key, {"campaignId": cid, "variant": key[1], "impressions": 0, "reach": 0,
-                                      "clicks": 0, "clickers": 0, "control": 0, "conversions": 0})
+            variants.setdefault(key, blank(cid, key[1]))
             variants[key]["conversions"] += count
         rows = []
         for item in sorted(variants.values(), key=lambda v: (v["campaignId"], v["variant"])):
             item["ctr"] = round(item["clicks"] / item["impressions"], 6) if item["impressions"] else None
             # Unique CTR with its 95 % interval: what the A/B comparison is read on. Only clickers who were shown
             # the variant in the period count, so the proportion never exceeds 1 (raw clickers stay in "clickers").
-            if engaged is None:  # that read failed: unknown, not zero
+            if engaged is None:  # that read failed, or the period is aggregated: unknown, not zero
                 item["uniqueCtr"] = item["uniqueCtrCi"] = None
             else:
                 shown = min(engaged.get((item["campaignId"], item["variant"]), 0), item["reach"])
@@ -129,9 +143,15 @@ class AdsAnalytics:
             c = countries.setdefault(row["key"] or "unknown", {"impressions": 0, "clicks": 0})
             if row["kind"] in ("impression", "click"):
                 c[row["kind"] + "s"] += row["events"]
+        segments: dict[str, dict[str, int]] = {}
+        for row in totals("segment"):
+            seg = segments.setdefault(row["key"] or "unknown", {"impressions": 0, "clicks": 0, "control": 0})
+            seg[{"impression": "impressions", "click": "clicks", "control": "control"}[row["kind"]]] += row["events"]
         return {
-            "period": days, "source": state["source"],
+            "period": days, "source": state["source"], "aggregated": aggregated,
             "variants": rows,
+            "segments": [{"segment": k, **v} for k, v in sorted(segments.items())],
+            "postbacks": postbacks,
             "days": [{"day": d, **v} for d, v in sorted(by_day.items())],
             "countries": [{"country": k, **v} for k, v in sorted(countries.items(), key=lambda kv: -kv[1]["impressions"])],
         }
@@ -140,14 +160,15 @@ class AdsAnalytics:
         out = io.StringIO()
         writer = csv.writer(out)
         writer.writerow(["campaign_id", "campaign", "variant", "impressions", "reach", "clicks", "clickers", "ctr",
-                         "unique_ctr", "unique_ctr_low", "unique_ctr_high", "control", "conversions", "source"])
+                         "unique_ctr", "unique_ctr_low", "unique_ctr_high", "control", "conversions",
+                         "partner_conversions", "source"])
         for v in report["variants"]:
             ci = v["uniqueCtrCi"] or (None, None)
             writer.writerow([v["campaignId"], _cell(v["campaign"] or ""), v["variant"], v["impressions"], v["reach"],
                              v["clicks"], v["clickers"], v["ctr"], v["uniqueCtr"], ci[0], ci[1], v["control"],
-                             v["conversions"], report["source"]])
+                             v["conversions"], v["partnerConversions"], report["source"]])
         if not report["variants"]:  # an empty export still says whether telemetry was readable
-            writer.writerow([""] * 13 + [report["source"]])
+            writer.writerow([""] * 14 + [report["source"]])
         return out.getvalue()
 
     def record_conversions(self, actor: Admin, campaign_id: int, mb_ids: Any, now: int) -> dict:

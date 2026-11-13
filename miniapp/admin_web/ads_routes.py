@@ -13,7 +13,7 @@ from fastapi.responses import Response
 from miniapp.ads import targeting
 from miniapp.admin_web.accounts import ActionError
 from miniapp.admin_web.ads import AdsStore
-from miniapp.admin_web.ads_analytics import AdsAnalytics
+from miniapp.admin_web.ads_analytics import PERIODS, AdsAnalytics
 
 
 def register(app: FastAPI, ctx: SimpleNamespace, policy_file, applied_file, telemetry_file) -> AdsStore:
@@ -80,6 +80,25 @@ def register(app: FastAPI, ctx: SimpleNamespace, policy_file, applied_file, tele
         data = await ctx.body(request)
         return ads.save_partner(admin, data, ctx.now(), optional_id(data))
 
+    @app.post("/api/admin/ads/partners/{partner_id}/postback-token")
+    async def postback_token(partner_id: int, request: Request) -> dict:
+        """Owner: a new postback token (returned once, never stored in clear) or `{"revoke": true}`."""
+        admin = ctx.admin_of(request, "manage_partners")
+        revoke = (await ctx.body(request)).get("revoke", False)
+        if not isinstance(revoke, bool):
+            raise ActionError("invalid_value")
+        return ads.rotate_postback_token(admin, partner_id, ctx.now(), revoke)
+
+    @app.get("/api/admin/ads/settings")
+    async def display_settings(request: Request) -> dict:
+        ctx.admin_of(request)
+        return ads.display_settings()
+
+    @app.post("/api/admin/ads/settings")
+    async def save_display_settings(request: Request) -> dict:
+        admin = ctx.admin_of(request, "manage_partners")
+        return ads.save_display_settings(admin, await ctx.body(request), ctx.now())
+
     @app.get("/api/admin/ads/groups")
     async def groups(request: Request) -> dict:
         ctx.admin_of(request)
@@ -130,9 +149,16 @@ def register(app: FastAPI, ctx: SimpleNamespace, policy_file, applied_file, tele
             raise ActionError("bad_filter")
         return int(raw)
 
+    def period(request: Request) -> int:
+        """Ads periods go beyond the admin's usual 90 days: longer ones read the 13-month daily aggregates."""
+        raw = request.query_params.get("days", "30")
+        if not raw.isdigit() or int(raw) not in PERIODS:
+            raise ActionError("bad_period")
+        return int(raw)
+
     def report(request: Request) -> dict:
         names = {c["id"]: c["name"] for c in ads.campaigns(ctx.now())}
-        return analytics.report(ctx.now(), ctx.period(request), campaign_filter(request), names)
+        return analytics.report(ctx.now(), period(request), campaign_filter(request), names)
 
     @app.get("/api/admin/ads/analytics")
     async def ads_analytics(request: Request) -> dict:

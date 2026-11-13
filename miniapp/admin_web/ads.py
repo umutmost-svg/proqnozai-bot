@@ -115,7 +115,24 @@ CREATE TABLE IF NOT EXISTS ad_publications (
     event_id     INTEGER,
     revision     INTEGER NOT NULL DEFAULT 0
 );
+-- Global display rules (§9): one JSON document per key ('display': blocked countries, age gate).
+CREATE TABLE IF NOT EXISTS ad_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    admin_id   INTEGER NOT NULL
+);
 """
+
+# Additive columns (CLAUDE.md: ALTER TABLE ... ADD COLUMN, an existing column is fine).
+_MIGRATIONS = (
+    "ALTER TABLE ad_campaigns ADD COLUMN odds_mode TEXT NOT NULL DEFAULT 'optional'",
+    "ALTER TABLE ad_campaigns ADD COLUMN cap_per_day INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE ad_campaigns ADD COLUMN cap_total INTEGER NOT NULL DEFAULT 0",
+    # SHA-256 of the partner's postback token; the token itself is shown once and never stored.
+    "ALTER TABLE ad_partners ADD COLUMN postback_sha256 TEXT",
+)
+DEFAULT_DISPLAY = {"blockedCountries": [], "ageGate": False, "ageMin": 18}
 
 EDITABLE = ("draft", "paused")
 MAX_GROUP_MEMBERS = 50_000
@@ -174,6 +191,42 @@ class AdsStore:
     def init_schema(self) -> None:
         with self.accounts._connect() as conn:
             conn.executescript(_SCHEMA)
+            for ddl in _MIGRATIONS:
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc):
+                        raise
+
+    # ---- display settings (owner) ------------------------------------------------------------
+
+    @staticmethod
+    def _display(conn: sqlite3.Connection) -> dict:
+        row = conn.execute("SELECT value, updated_at FROM ad_settings WHERE key = 'display'").fetchone()
+        value = {**DEFAULT_DISPLAY, **(json.loads(row[0]) if row else {})}
+        return {**value, "updatedAt": row[1] if row else None}
+
+    def display_settings(self) -> dict:
+        with self.accounts._connect() as conn:
+            return self._display(conn)
+
+    def save_display_settings(self, actor: Admin, data: dict, now: int) -> dict:
+        """Blocked countries and the global age gate: plain configuration, above every partner and campaign."""
+        if not isinstance(data, dict) or set(data) - {"blockedCountries", "ageGate", "ageMin"}:
+            raise ActionError("invalid_settings")
+        item = {"blockedCountries": _check(policy.check_countries, data.get("blockedCountries", [])),
+                "ageGate": data.get("ageGate", False), "ageMin": data.get("ageMin", 18)}
+        _check(policy.check_settings, item)
+        with self.accounts._write() as conn:
+            self.accounts._require_actor(conn, actor.id, "manage_partners")
+            before = {k: v for k, v in self._display(conn).items() if k != "updatedAt"}
+            conn.execute("INSERT INTO ad_settings (key, value, updated_at, admin_id) VALUES ('display', ?, ?, ?) "
+                         "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, "
+                         "admin_id = excluded.admin_id", (_json(item), now, actor.id))
+            bump_revision(conn)
+            event = self.accounts._event(conn, now, actor.id, "ads.settings_save", "ads_settings", "display", before,
+                                         item, None, None, "done")
+        return {**item, "eventId": event}
 
     # ---- partners ----------------------------------------------------------------------------
 
@@ -181,10 +234,10 @@ class AdsStore:
     def _partner_row(r: tuple) -> dict:
         return {"id": r[0], "name": r[1], "hosts": json.loads(r[2]), "countries": json.loads(r[3]),
                 "allowUnknownCountry": bool(r[4]), "ageMin": r[5], "disclosure": json.loads(r[6]),
-                "active": bool(r[7]), "updatedAt": r[8]}
+                "active": bool(r[7]), "updatedAt": r[8], "postback": r[9] is not None}
 
     _PARTNER_COLS = ("id, name, url_hosts, allowed_countries, allow_unknown_country, age_min, disclosure_template, "
-                     "active, updated_at")
+                     "active, updated_at, postback_sha256")
 
     def partners(self) -> list[dict]:
         with self.accounts._connect() as conn:
@@ -227,7 +280,7 @@ class AdsStore:
                                        (partner_id,)).fetchone()
                     if row is None:
                         raise ActionError("not_found", 404)
-                    before = {k: v for k, v in self._partner_row(row).items() if k not in ("id", "updatedAt")}
+                    before = {k: v for k, v in self._partner_row(row).items() if k not in ("id", "updatedAt", "postback")}
                     conn.execute(
                         "UPDATE ad_partners SET name = ?, url_hosts = ?, allowed_countries = ?, allow_unknown_country = ?, "
                         "age_min = ?, disclosure_template = ?, active = ?, updated_at = ?, admin_id = ? WHERE id = ?",
@@ -238,6 +291,21 @@ class AdsStore:
             event = self.accounts._event(conn, now, actor.id, "ads.partner_save", "ad_partner", str(partner_id),
                                          before, item, None, None, "done")
         return {"id": partner_id, "eventId": event}
+
+    def rotate_postback_token(self, actor: Admin, partner_id: int, now: int, revoke: bool = False) -> dict:
+        """A new postback token for the partner (shown ONCE: only its SHA-256 is kept and published), or none
+        (`revoke`). Takes effect for the Mini App with the next publication. The journal never holds the token."""
+        token = None if revoke else secrets.token_urlsafe(32)
+        digest = None if token is None else hashlib.sha256(token.encode()).hexdigest()
+        with self.accounts._write() as conn:
+            self.accounts._require_actor(conn, actor.id, "manage_partners")
+            if not conn.execute("UPDATE ad_partners SET postback_sha256 = ?, updated_at = ?, admin_id = ? WHERE id = ?",
+                                (digest, now, actor.id, partner_id)).rowcount:
+                raise ActionError("not_found", 404)
+            bump_revision(conn)
+            event = self.accounts._event(conn, now, actor.id, "ads.postback_token", "ad_partner", str(partner_id),
+                                         None, {"revoked": revoke}, None, None, "done")
+        return {"id": partner_id, "token": token, "eventId": event}
 
     # ---- groups ------------------------------------------------------------------------------
 
@@ -296,7 +364,8 @@ class AdsStore:
 
     _CAMPAIGN_COLS = ("c.id, c.internal_name, c.status, c.priority_tier, c.priority, c.lang_in, c.placements, "
                       "c.countries, c.allow_unknown_country, c.starts_at, c.ends_at, c.partner_id, c.disclosure, "
-                      "c.targeting, e.salt, e.control_pct, c.created_at, c.updated_at, c.published_version, p.name")
+                      "c.targeting, e.salt, e.control_pct, c.created_at, c.updated_at, c.published_version, p.name, "
+                      "c.odds_mode, c.cap_per_day, c.cap_total")
 
     def _campaign_rows(self, conn: sqlite3.Connection, where: str = "1 = 1", args: tuple = ()) -> list[dict]:
         rows = conn.execute(
@@ -313,7 +382,8 @@ class AdsStore:
                         "allowUnknownCountry": bool(r[8]), "startsAt": r[9], "endsAt": r[10], "partnerId": r[11],
                         "disclosure": json.loads(r[12]), "condition": json.loads(r[13]) if r[13] else None,
                         "controlPct": r[15] or 0, "createdAt": r[16], "updatedAt": r[17],
-                        "publishedVersion": r[18], "partnerName": r[19], "variants": variants})
+                        "publishedVersion": r[18], "partnerName": r[19], "oddsMode": r[20],
+                        "caps": {"perDay": r[21], "total": r[22]}, "variants": variants})
         return out
 
     def campaigns(self, now: int) -> list[dict]:
@@ -339,6 +409,7 @@ class AdsStore:
                 "placements": c["placements"], "countries": c["countries"],
                 "allowUnknownCountry": c["allowUnknownCountry"], "startsAt": c["startsAt"], "endsAt": c["endsAt"],
                 "partnerId": c["partnerId"], "disclosure": c["disclosure"], "controlPct": c["controlPct"],
+                "oddsMode": c["oddsMode"], "caps": c["caps"],
                 "audience": {"kinds": targeting.leaf_kinds(c["condition"]), "digest": _digest(c["condition"])},
                 "variants": [{k: v[k] for k in ("key", "weight", "headline", "body", "extra", "cta", "url")}
                              for v in c["variants"]]}
@@ -354,10 +425,10 @@ class AdsStore:
         for v in raw_variants:
             variants.append({
                 "key": v["key"], "weight": v["weight"],
-                "headline": _check(policy.check_text, v.get("headline"), "headline", policy.TEXT_LIMITS["headline"]),
-                "body": _check(policy.check_text, v.get("body"), "body", policy.TEXT_LIMITS["body"], False, True),
-                "extra": _check(policy.check_text, v.get("extra"), "extra", policy.TEXT_LIMITS["extra"], False),
-                "cta": _check(policy.check_text, v.get("cta"), "cta", policy.TEXT_LIMITS["cta"]),
+                "headline": _check(policy.check_ad_text, v.get("headline"), "headline", policy.TEXT_LIMITS["headline"]),
+                "body": _check(policy.check_ad_text, v.get("body"), "body", policy.TEXT_LIMITS["body"], False, True),
+                "extra": _check(policy.check_ad_text, v.get("extra"), "extra", policy.TEXT_LIMITS["extra"], False),
+                "cta": _check(policy.check_ad_text, v.get("cta"), "cta", policy.TEXT_LIMITS["cta"]),
                 "url": _check(policy.check_url, v.get("url"), hosts),
             })
         langs = data.get("langIn") or []
@@ -376,7 +447,13 @@ class AdsStore:
         allow_unknown = data.get("allowUnknownCountry", False)
         if not isinstance(allow_unknown, bool):
             raise ActionError("invalid_countries")
+        odds_mode = data.get("oddsMode", "optional")
+        if odds_mode not in policy.ODDS_MODES:
+            raise ActionError("invalid_odds_mode")
+        if "odds" in data or any("odds" in v for v in raw_variants if isinstance(v, dict)):
+            raise ActionError("odds_not_editable")  # prices come from the verified odds store only
         return {
+            "oddsMode": odds_mode, "caps": _check(policy.check_caps, data.get("caps")),
             "name": _check(policy.check_text, data.get("name"), "name", MAX_NAME),
             "tier": tier, "priority": _int_field(data.get("priority", 0), 0, 1000, "invalid_priority"),
             "langIn": sorted(set(langs)), "placements": sorted(set(placements)),
@@ -399,12 +476,14 @@ class AdsStore:
             row_values = (item["name"], item["tier"], item["priority"], _json(item["langIn"]),
                           _json(item["placements"]), _json(item["countries"]), int(item["allowUnknownCountry"]),
                           item["startsAt"], item["endsAt"], item["partnerId"], _json(item["disclosure"]),
-                          _json(item["condition"]) if item["condition"] is not None else None, now, actor.id)
+                          _json(item["condition"]) if item["condition"] is not None else None, now, actor.id,
+                          item["oddsMode"], item["caps"]["perDay"], item["caps"]["total"])
             if campaign_id is None:
                 campaign_id = int(conn.execute(
                     "INSERT INTO ad_campaigns (internal_name, priority_tier, priority, lang_in, placements, countries, "
                     "allow_unknown_country, starts_at, ends_at, partner_id, disclosure, targeting, updated_at, updated_by, "
-                    "status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)",
+                    "odds_mode, cap_per_day, cap_total, status, created_by, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)",
                     (*row_values, actor.id, now)).lastrowid)
                 experiment = int(conn.execute("INSERT INTO ad_experiments (campaign_id, salt, control_pct) VALUES (?, ?, ?)",
                                               (campaign_id, secrets.token_hex(16), item["controlPct"])).lastrowid)
@@ -419,7 +498,8 @@ class AdsStore:
                 conn.execute(
                     "UPDATE ad_campaigns SET internal_name = ?, priority_tier = ?, priority = ?, lang_in = ?, placements = ?, "
                     "countries = ?, allow_unknown_country = ?, starts_at = ?, ends_at = ?, partner_id = ?, disclosure = ?, "
-                    "targeting = ?, updated_at = ?, updated_by = ? WHERE id = ?", (*row_values, campaign_id))
+                    "targeting = ?, updated_at = ?, updated_by = ?, odds_mode = ?, cap_per_day = ?, cap_total = ? "
+                    "WHERE id = ?", (*row_values, campaign_id))
                 # The salt stays: a user keeps their variant across edits (weights move only the interval borders).
                 conn.execute("UPDATE ad_experiments SET control_pct = ? WHERE campaign_id = ?",
                              (item["controlPct"], campaign_id))
@@ -515,6 +595,7 @@ class AdsStore:
                     "condition": condition,
                     "experiment": {"salt": salt, "controlPct": c["controlPct"]},
                     "variants": c["variants"],
+                    "oddsMode": c["oddsMode"], "caps": c["caps"],
                 }
                 policy._campaign(entry, {k: frozenset(v) for k, v in audiences.items()})  # same check as the reader
             except (PolicyError, targeting.ConditionError) as exc:
@@ -524,8 +605,14 @@ class AdsStore:
             included.append(c["id"])
         if sum(len(v) for v in audiences.values()) > policy.MAX_AUDIENCE_IDS:
             raise ActionError("snapshot_too_large", 409)
+        display = {k: v for k, v in self._display(conn).items() if k != "updatedAt"}
+        # Every active partner with a postback token, whether or not it has a campaign now: conversions of
+        # earlier clicks keep arriving after a campaign ends.
+        postbacks = {str(pid): {"postbackSha256": digest} for pid, digest in conn.execute(
+            "SELECT id, postback_sha256 FROM ad_partners WHERE active = 1 AND postback_sha256 IS NOT NULL")}
         body = {"schema": policy.SCHEMA, "version": version, "generatedAt": now, "campaigns": campaigns,
-                "audiences": {k: sorted(v) for k, v in sorted(audiences.items())}}
+                "audiences": {k: sorted(v) for k, v in sorted(audiences.items())}, "settings": display,
+                "partners": postbacks}
         if len(campaigns) > policy.MAX_CAMPAIGNS:
             raise ActionError("too_many_campaigns", 409)
         return policy.sign(body, self.signing_key), included, skipped
