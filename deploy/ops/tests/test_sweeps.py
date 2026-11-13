@@ -76,10 +76,36 @@ def test_drill_sweep_fails_when_a_leftover_stays(tmp_path):
     assert r.returncode == 1 and "FAIL" in r.stdout
 
 
-def test_drill_sweep_skips_quietly_without_docker(tmp_path):
+def test_drill_sweep_skips_quietly_without_docker_when_no_drill_is_on_record(tmp_path):
     env, _ = _drill_env(tmp_path, {"running": False, "containers": {}, "volumes": {}})
     r = _drill_sweep(env)
     assert r.returncode == 0 and "skipped" in r.stdout
+
+
+def test_drill_sweep_fails_without_docker_while_a_killed_drill_is_on_record(tmp_path):
+    env, sf = _drill_env(tmp_path, {"running": False, "containers": {}, "volumes": {"v-dead": "drillDEAD01"}})
+    pending = Path(env["BACKUP_DIR"]) / ".drill-pending"
+    pending.mkdir()
+    (pending / "drillDEAD01").write_text("")                 # its work dir is gone: the drill was killed
+    r = _drill_sweep(env)
+    assert r.returncode == 1 and "drillDEAD01" in r.stdout and "FAIL" in r.stdout
+    # Docker back: the leftover is removed and only then the record goes.
+    st = json.loads(sf.read_text())
+    st["running"] = True
+    sf.write_text(json.dumps(st))
+    r = _drill_sweep(env)
+    assert r.returncode == 0, r.stdout
+    assert json.loads(sf.read_text())["volumes"] == {} and not (pending / "drillDEAD01").exists()
+
+
+def test_drill_record_of_a_live_drill_is_kept(tmp_path):
+    env, _ = _drill_env(tmp_path, {"running": False, "containers": {}, "volumes": {}})
+    pending = Path(env["BACKUP_DIR"]) / ".drill-pending"
+    pending.mkdir()
+    (pending / "drillLIVE01").write_text("")
+    (Path(env["BACKUP_DIR"]) / ".work" / "drill.LIVE01").mkdir()
+    assert _drill_sweep(env).returncode == 0              # a running drill is not a leftover
+    assert (pending / "drillLIVE01").exists()
 
 
 def test_export_sweep_is_refused_through_the_ssh_key(tmp_path):

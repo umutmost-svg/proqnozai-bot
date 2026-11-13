@@ -44,9 +44,9 @@ VOL=1   # cleanup re-checks the token before removing anything
 # DRILL_PARENT (optional): an extra label from a calling drill, which removes our leftovers after a SIGKILL.
 docker volume create --label "sporbot.drill=$TOKEN" ${DRILL_PARENT:+--label "proqnozai.drill=$DRILL_PARENT"} "$T" >/dev/null
 [ "$(docker volume inspect -f '{{index .Labels "sporbot.drill"}}' "$T")" = "$TOKEN" ] || { echo "STOP: $T is not this run's volume"; exit 1; }
-docker run --rm --network none -v "$T":/data -v "$W":/in:ro --entrypoint sh "$IMG" -c \
+docker run --rm ${DRILL_PARENT:+--label "proqnozai.drill=$DRILL_PARENT"} --network none -v "$T":/data -v "$W":/in:ro --entrypoint sh "$IMG" -c \
   "cp /in/$S/miniapp.db /in/$S/miniapp.forecasts.db /data/ && chown miniapp:miniapp /data /data/miniapp*.db && chmod 700 /data && chmod 600 /data/miniapp*.db"
-docker run --rm --network none --user miniapp -v "$T":/data -e MINIAPP_DB_PATH=/data/miniapp.db --entrypoint python -i \
+docker run --rm ${DRILL_PARENT:+--label "proqnozai.drill=$DRILL_PARENT"} --network none --user miniapp -v "$T":/data -e MINIAPP_DB_PATH=/data/miniapp.db --entrypoint python -i \
   "$IMG" - verify /data < "$4" || { echo "STOP: restored copy is not usable"; exit 1; }
 CTR=$(docker run -d --name "$T" --label "sporbot.drill=$TOKEN" ${DRILL_PARENT:+--label "proqnozai.drill=$DRILL_PARENT"} --network none -v "$T":/data -e MINIAPP_ENV=development -e MINIAPP_DB_PATH=/data/miniapp.db \
   -e MINIAPP_BOT_TOKEN=000000:offline-maintenance-not-a-token -e MINIAPP_TRUSTED_ORIGINS=http://localhost "$IMG")   # set only when the container was created

@@ -50,12 +50,29 @@ sweep_orphans() {
     if docker volume rm "$v" >/dev/null; then echo "removed orphan drill volume $v"
     else echo "cannot remove orphan drill volume $v"; bad=1; fi
   done
-  return "$bad"
+  [ "$bad" = 0 ] || return 1
+  # Every dead drill's Docker leftovers are gone now: its durable record can go too.
+  for m in "$PENDING"/drill*; do
+    [ -f "$m" ] || continue
+    alive "$(basename "$m")" || rm -f "$m" || { echo "cannot remove drill record $m"; return 1; }
+  done
+  return 0
+}
+# A durable record per drill ($PENDING/<token>, outside .work so no sweep deletes it) exists from before the
+# drill creates its first container/volume until its cleanup has verifiably removed them. A record of a dead drill
+# means decrypted data may still sit in Docker.
+PENDING="$BACKUP_DIR/.drill-pending"
+dead_records() {
+  for m in "$PENDING"/drill*; do [ -f "$m" ] && ! alive "$(basename "$m")" && echo "$(basename "$m")"; done
 }
 # `sweep` only removes such leftovers (pull_backups.py runs it on every scheduled pull, so a killed drill's
-# decrypted volume cannot wait for the next monthly drill). Docker not running: nothing to reach, retried next pull.
+# decrypted volume cannot wait for the next monthly drill). Docker not running: fine when no dead drill is on
+# record; otherwise FAIL (the pull then alerts) until Docker is back and the cleanup is verified.
 if [ "$KIND" = sweep ]; then
-  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || { echo "drill sweep skipped: Docker is not running"; exit 0; }
+  if ! { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; }; then
+    [ -z "$(dead_records)" ] || fail "Docker is not running: leftovers of a killed drill ($(dead_records | tr '\n' ' ')) are not verified removed"
+    echo "drill sweep skipped: Docker is not running, no killed drill on record"; exit 0
+  fi
   sweep_orphans || fail "leftovers of an earlier drill could not be removed"
   exit 0
 fi
@@ -71,11 +88,16 @@ W=""; TOKEN=""; VOL=""
 cleanup() {
   rc=$?; trap - EXIT INT TERM HUP
   if [ -n "$TOKEN" ]; then
-    for id in $(docker ps -aq -f "label=proqnozai.drill=$TOKEN" 2>/dev/null); do
-      docker rm -f "$id" >/dev/null 2>&1 || { echo "CLEANUP FAILED: container $id"; rc=1; }; done
+    cf=0
+    if ids=$(docker ps -aq -f "label=proqnozai.drill=$TOKEN"); then
+      for id in $ids; do docker rm -f "$id" >/dev/null 2>&1 || { echo "CLEANUP FAILED: container $id"; cf=1; }; done
+    else echo "CLEANUP FAILED: listing containers"; cf=1; fi
     if vols=$(docker volume ls -q -f "label=proqnozai.drill=$TOKEN"); then
-      for v in $vols; do docker volume rm "$v" >/dev/null 2>&1 || { echo "CLEANUP FAILED: volume $v"; rc=1; }; done
-    else echo "CLEANUP FAILED: listing volumes"; rc=1; fi
+      for v in $vols; do docker volume rm "$v" >/dev/null 2>&1 || { echo "CLEANUP FAILED: volume $v"; cf=1; }; done
+    else echo "CLEANUP FAILED: listing volumes"; cf=1; fi
+    # The record goes only after a verified removal; otherwise every scheduled pull keeps alerting.
+    if [ "$cf" = 0 ]; then rm -f "$PENDING/$TOKEN" || { echo "CLEANUP FAILED: record $PENDING/$TOKEN"; rc=1; }
+    else rc=1; fi
   fi
   [ -n "$W" ] && { rm -rf "$W" || { echo "CLEANUP FAILED: $W (holds decrypted data)"; rc=1; }; }
   if [ "$rc" -eq 0 ] && [ -n "${OK:-}" ]; then echo "PASS: $(basename "$A") restored into a fresh volume — $OK; cleaned up"
@@ -89,6 +111,7 @@ trap 'exit 130' INT TERM HUP
 mkdir -p "$BACKUP_DIR/.work" && chmod 700 "$BACKUP_DIR/.work" || fail "work dir"
 W=$(mktemp -d "$BACKUP_DIR/.work/drill.XXXXXX") || fail "mktemp"
 TOKEN=$(basename "$W" | tr -cd 'A-Za-z0-9')
+mkdir -p "$PENDING" && chmod 700 "$PENDING" && : > "$PENDING/$TOKEN" || fail "drill record"
 "$PY" "$PULL" extract "$A" "$W/d" || fail "archive does not decrypt/verify"
 X="$W/d/x"
 
