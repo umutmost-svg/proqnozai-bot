@@ -79,10 +79,13 @@ function arithmetic(t: Translate, pick: AiPick, values: readonly number[], home:
  * against the model when there is one; when nothing passes the rules it says so (NO_BET is a
  * full result).
  */
-export function PickCard({ pick, event, values, basis, forecast, quote }: { pick: AiPick; event: SportEvent; values: readonly number[]; basis: Basis; forecast?: ModelForecast; quote?: MarketQuote }) {
+export function PickCard({ pick, event, values, basis, forecast, quote, lean, leanQuote }: { pick: AiPick; event: SportEvent; values: readonly number[]; basis: Basis; forecast?: ModelForecast; quote?: MarketQuote; lean?: AiLean; leanQuote?: MarketQuote }) {
   const { t, settings } = useSettings();
   const home = event.home.name;
   const away = event.away.name;
+  if (pick.market === 'NO_BET' && lean) {
+    return <LeanPick lean={lean} event={event} quote={leanQuote} reason={forecast?.noBetReason ?? undefined} />;
+  }
   if (pick.market === 'NO_BET') {
     const why = forecast?.noBetReason ? t(`ai.pick.noBet.${forecast.noBetReason}`) : t('ai.pick.noBetText');
     return (
@@ -116,19 +119,22 @@ export function PickCard({ pick, event, values, basis, forecast, quote }: { pick
 }
 
 /**
- * "Model forecast": shown on every match with probabilities — the top outcome (backend-computed) with its
- * percent and how far to trust it. Never a recommendation: that is the PickCard, under the strict rules.
+ * The recommended-bet card when the strict rules chose nothing: the most likely outcome (backend-computed lean)
+ * with its percent, marked compactly as an estimate (or as the market's when the model is missing).
  */
-export function LeanCard({ lean, event, fromMarket }: { lean: AiLean; event: SportEvent; fromMarket: boolean }) {
+export function LeanPick({ lean, event, quote, reason, fromMarket = false }: { lean: AiLean; event: SportEvent; quote?: MarketQuote; reason?: string; fromMarket?: boolean }) {
   const { t } = useSettings();
-  const note = fromMarket ? t('ai.lean.marketNote') : lean.confidence === 'model' ? t('ai.lean.modelNote') : t('ai.lean.estimateNote');
+  const kicker = fromMarket ? 'ai.lean.market' : lean.confidence === 'model' ? 'ai.lean.model' : 'ai.lean.estimate';
+  const note = fromMarket ? 'ai.lean.marketNote' : lean.confidence === 'model' ? 'ai.lean.modelNote' : 'ai.lean.estimateNote';
   return (
-    <section className={`${s.card} ${s.pick}`} data-testid="ai-lean" data-market={lean.market} data-confidence={lean.confidence}>
-      <h3 className={s.cardTitle}>{t(fromMarket ? 'ai.lean.marketTitle' : 'ai.lean.title')}</h3>
-      <p className={s.pickKicker}>{t(lean.confidence === 'model' ? 'ai.lean.model' : 'ai.lean.estimate')}</p>
+    <section className={`${s.card} ${s.pick}`} data-testid="ai-pick" data-market={lean.market} data-lean={lean.confidence}
+      data-reason={reason}>
+      <h3 className={s.cardTitle}>{t('ai.pick.title')}</h3>
+      <p className={s.pickKicker}>{t(kicker)}</p>
       <p className={s.pickOutcome}>{pickOutcomeText(t, lean.market, event.home.name, event.away.name)}</p>
       <p className={s.pickProbability}>{t('ai.pick.probability', { value: lean.probability })}</p>
-      <p className={s.body}>{note}</p>
+      {quote && <PriceLine quote={quote} />}
+      <p className={s.body}>{t(note)}</p>
     </section>
   );
 }

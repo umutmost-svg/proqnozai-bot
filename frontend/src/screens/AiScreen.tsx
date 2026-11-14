@@ -10,7 +10,7 @@ import type { AiAnalysis, SportEvent, TeamBasis } from '../data/models';
 import { Facts, Factors } from './ai/Explain';
 import { MarketValue, quoteOf, usePricesLive } from './ai/Market';
 import { Alternatives, MarketsBlock, ModelStats } from './ai/Model';
-import { LeanCard, PickCard } from './ai/PickCard';
+import { LeanPick, PickCard } from './ai/PickCard';
 import { ProbabilityBlock } from './ai/ProbabilityBlock';
 import { DataError } from '../data/provider';
 import { useAsync } from '../hooks/useAsync';
@@ -117,9 +117,6 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
           colourNote={basisOnly ? t('ai.colourNoteMarket') : undefined}
         />
       )}
-      {real && showProbabilities && analysis.lean && (
-        <LeanCard lean={analysis.lean} event={event} fromMarket={basisOnly} />
-      )}
       {real && basis && analysis.pick && (
         <PickCard
           pick={analysis.pick}
@@ -128,7 +125,12 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
           basis={basis}
           forecast={forecast}
           quote={quoteOf(prices, analysis.pick.market)}
+          lean={showProbabilities ? analysis.lean : undefined}
+          leanQuote={analysis.lean ? quoteOf(prices, analysis.lean.market) : undefined}
         />
+      )}
+      {real && basisOnly && showProbabilities && analysis.lean && (
+        <LeanPick lean={analysis.lean} event={event} fromMarket />
       )}
       {prices && <MarketValue prices={prices} event={event} />}
       {real && forecast && <Alternatives items={analysis.alternatives ?? []} event={event} prices={prices} />}

@@ -87,7 +87,7 @@ describe('ties and confidence (readLean)', () => {
 });
 
 describe('AI screen', () => {
-  it('a market estimate is titled as a forecast from odds, never as the model', async () => {
+  it('without the model the recommended bet is the market\'s most likely outcome, marked as from odds', async () => {
     const body = {
       schema: 'v3', eventId: 'fd:4', kind: 'partial', reasons: ['model_team_history'], generatedAt: '2026-11-08T06:00:00Z', model: 'm',
       probabilities: { home: 21, draw: 25, away: 54 }, factors: ['away_form', 'home_form'],
@@ -96,18 +96,47 @@ describe('AI screen', () => {
       lean: { market: '2', probability: 54, confidence: 'estimate' },
     };
     renderApp('#/event/fd%3A4/ai', { data: backend(body) });
-    const lean = await screen.findByTestId('ai-lean');
-    expect(lean).toHaveTextContent('Прогноз по коэффициентам');
-    expect(lean).not.toHaveTextContent('Прогноз модели');
+    const lean = await screen.findByTestId('ai-pick');
+    expect(lean).toHaveTextContent('Рекомендуемая ставка');
+    expect(lean).toHaveTextContent('По коэффициентам');
+    expect(lean).toHaveAttribute('data-market', '2');
   });
 
-  it('shows the model forecast above the empty recommendation, labelled as an estimate', async () => {
+  it('a NO_BET recommendation shows the most likely outcome instead of an empty card, marked as an estimate', async () => {
     renderApp('#/event/fd%3A4/ai', { data: backend(noBet(LEAN)) });
-    const lean = await screen.findByTestId('ai-lean');
-    expect(lean).toHaveTextContent('Прогноз модели');
-    expect(lean).toHaveTextContent('Оценка');
-    expect(lean).toHaveTextContent(`${M[top]}%`);
+    const pick = await screen.findByTestId('ai-pick');
+    expect(pick).toHaveTextContent('Рекомендуемая ставка');
+    expect(pick).toHaveTextContent('Оценка');
+    expect(pick).toHaveTextContent(`${M[top]}%`);
+    expect(pick).toHaveAttribute('data-market', top);
+    expect(pick).not.toHaveTextContent('Нет достаточно надежного прогноза');
+    expect(screen.queryByTestId('ai-lean')).toBeNull();      // no separate card
+    expect(screen.getAllByTestId('ai-pick')).toHaveLength(1);
+  });
+
+  it('a strict pick is shown as before, the lean does not replace it', async () => {
+    const strict = noBet(LEAN, { pick: { market: 'X2', reasons: [], probability: M.X2 },
+      alternatives: [] }, { noBetReason: null, limited: false });
+    renderApp('#/event/fd%3A4/ai', { data: backend(strict) });
+    const pick = await screen.findByTestId('ai-pick');
+    expect(pick).toHaveAttribute('data-market', 'X2');
+    expect(pick).not.toHaveAttribute('data-lean');
+  });
+});
+
+describe('the validated-model lean card', () => {
+  it('says no market passed the selection, without claiming more', async () => {
+    vi.resetModules();
+    const { createTranslator } = await import('../i18n');
+    vi.doMock('../state/contexts', () => ({ useSettings: () => ({ t: createTranslator('ru'), settings: { lang: 'ru' } }) }));
+    const { LeanPick } = await import('../screens/ai/PickCard');
+    const { render } = await import('@testing-library/react');
+    render(<LeanPick lean={{ market: '1', probability: 54, confidence: 'model' }} event={ev as never} />);
     const pick = screen.getByTestId('ai-pick');
-    expect(lean.compareDocumentPosition(pick) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pick).toHaveTextContent('Рекомендуемая ставка');
+    expect(pick).toHaveTextContent('Проверенная модель');
+    expect(pick).toHaveTextContent('Ни один рынок не прошёл строгий отбор');
+    expect(pick).not.toHaveTextContent('уверенность');
+    vi.doUnmock('../state/contexts');
   });
 });
