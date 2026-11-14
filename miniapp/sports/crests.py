@@ -7,7 +7,8 @@ CSP stays ``img-src 'self'`` and the user's IP is not sent to a third party).
 Only URLs the provider itself put in a payload are fetched, and only from one
 host, over HTTPS, as PNG (verified by its magic bytes). SVG is refused on purpose:
 served from our origin it could carry script. Nothing is invented: without a
-learned URL there is no crest, and the app shows the initial badge.
+learned URL there is no crest, and the app shows the initial badge — except the few competition
+emblems bundled with the app (BUNDLED_DIR) for competitions the provider has none for.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import urllib.request
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from xml.etree import ElementTree
 
 from .client import _OPENER, _read_with_deadline
@@ -216,14 +218,33 @@ async def urllib_crest_fetch(url: str, timeout_s: float) -> bytes | None:
         return None
 
 
+# Emblems of competitions the provider gives none for (its competition list says null), bundled with the app as
+# PNG (renders of the logos on the competitions' Wikipedia pages, fetched 14.11). Used only while the provider has
+# no emblem of its own: a provider emblem always wins.
+BUNDLED_DIR = Path(__file__).with_name("emblems")
+
+
+def load_bundled(directory: Path = BUNDLED_DIR) -> dict[str, bytes]:
+    """{competition code: PNG bytes}; anything that is not a valid PNG within the size cap is refused at startup."""
+    found: dict[str, bytes] = {}
+    for file in sorted(directory.glob("*.png")) if directory.is_dir() else []:
+        code = file.stem
+        body = file.read_bytes()
+        if not (code.isascii() and code.isalnum() and 0 < len(code) <= 12) or not is_png(body):
+            raise ValueError(f"bundled emblem {file.name} is not a PNG named by a competition code")
+        found[code] = body
+    return found
+
+
 class CrestStore:
     """Learned crest URLs plus a bounded cache of the images themselves."""
 
     def __init__(self, fetch: CrestFetch = urllib_crest_fetch, *, clock: Callable[[], float] = time.time,
                  max_urls: int = 5000, max_images: int = 800, max_bytes: int = 32 * 1024 * 1024,
                  per_minute: int = 240, per_second: int = 200, rejected_per_second: int = 200,
-                 failure_ttl_s: float = 3600.0) -> None:
+                 failure_ttl_s: float = 3600.0, bundled: dict[str, bytes] | None = None) -> None:
         self._fetch = fetch
+        self._bundled = load_bundled() if bundled is None else bundled  # competition code -> PNG
         self._clock = clock
         self._urls: OrderedDict[str, tuple[str, ...]] = OrderedDict()  # key -> sources, tried in order
         self._images: OrderedDict[str, bytes] = OrderedDict()
@@ -272,6 +293,11 @@ class CrestStore:
         self._drop_image(key)
         self._failed.pop(key, None)
 
+    def is_bundled(self, kind: str, ident: str) -> bool:
+        """The picture served now is a bundled emblem (the provider has none yet): cached briefly, so a provider
+        emblem that appears later replaces it within the hour."""
+        return kind == "competition" and self.key(kind, ident) not in self._urls and ident in self._bundled
+
     def is_fallback(self, kind: str, ident: str) -> bool:
         """The picture in memory is a stand-in (the country's flag), to be checked again soon."""
         return self.key(kind, ident) in self._fell_back
@@ -281,8 +307,9 @@ class CrestStore:
         return self._window(self._rejected, self._rejected_per_second)
 
     def path(self, kind: str, ident: str) -> str | None:
-        """Our URL for the picture, only when the provider gave one."""
-        return f"/api/crests/{kind}/{ident}" if self.key(kind, ident) in self._urls else None
+        """Our URL for the picture: when the provider gave one, or (competitions only) a bundled emblem."""
+        known = self.key(kind, ident) in self._urls or (kind == "competition" and ident in self._bundled)
+        return f"/api/crests/{kind}/{ident}" if known else None
 
     def _drop_image(self, key: str) -> None:
         self._fell_back.pop(key, None)
@@ -326,7 +353,8 @@ class CrestStore:
         key = self.key(kind, ident)
         url = self._urls.get(key)
         if url is None:
-            return None
+            # No provider picture: a bundled competition emblem, straight from memory (no fetch, no quota).
+            return self._bundled.get(ident) if kind == "competition" else None
         cached = stale = self._images.get(key)
         fell_back = self._fell_back.get(key)
         if cached is not None and fell_back is not None and self._clock() - fell_back >= self._failure_ttl:

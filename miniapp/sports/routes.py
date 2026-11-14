@@ -309,7 +309,8 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
         # The bytes were checked: a PNG, or an SVG of plain vector graphics (crests.is_safe_svg). An SVG gets a
         # no-script CSP from the app middleware; caching and nosniff come from there too.
         # A stand-in flag is cached only until the emblem itself is asked again (crests failure TTL).
-        headers = {"Cache-Control": FALLBACK_CREST_CACHE} if service.crests.is_fallback(kind, ident) else None
+        stand_in = service.crests.is_fallback(kind, ident) or service.crests.is_bundled(kind, ident)
+        headers = {"Cache-Control": FALLBACK_CREST_CACHE} if stand_in else None
         return Response(body, media_type=media_type(body), headers=headers)
 
     @app.api_route("/api/crests/{rest:path}", methods=["GET", "HEAD"])
