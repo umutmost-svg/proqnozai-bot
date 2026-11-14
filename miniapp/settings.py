@@ -35,6 +35,11 @@ MAX_SESSIONS_PER_USER = 5
 MIN_EDGE_SECRET_CHARS = 32
 
 
+# Provider requests of a fully cold AI analysis (sports.service.AI_EVIDENCE_REQUESTS; a test keeps them equal):
+# a user's share below it could never start one on a cold cache.
+USER_SHARE_MIN = 6
+
+
 class SettingsError(ValueError):
     """Invalid configuration. Messages never contain secret values."""
 
@@ -140,7 +145,10 @@ class Settings:
     sports_unknown_lookups_per_hour: int = 20
     # Each signed-in user's share of those budgets (so one account cannot exhaust them for everyone):
     # provider requests per minute and never-listed match ids per hour. Only uncached reads are charged.
-    sports_user_per_minute: int = 6
+    # None (default): a quarter of the app's own per-minute cap, never below USER_SHARE_MIN — production's 60/min
+    # gives 15, enough for a cold AI analysis plus browsing right after a restart (empty cache). Use
+    # `user_share_per_minute`.
+    sports_user_per_minute: int | None = None
     sports_user_unknown_per_hour: int = 5
     # Odds pushed by the bot (HMAC-signed, POST /api/internal/odds). Unset: the route is off
     # and no odds are shown anywhere.
@@ -269,8 +277,9 @@ class Settings:
             raise SettingsError("football_data_per_day must be 1..14400")
         if not 0 <= self.sports_unknown_lookups_per_hour <= 600:
             raise SettingsError("sports_unknown_lookups_per_hour must be 0..600")
-        if not 1 <= self.sports_user_per_minute <= 600:
-            raise SettingsError("sports_user_per_minute must be 1..600")
+        if self.sports_user_per_minute is not None and not 1 <= self.sports_user_per_minute <= self.football_data_per_minute:
+            # Above the app's own cap one user could take the whole budget the share exists to divide.
+            raise SettingsError("sports_user_per_minute must be 1..football_data_per_minute")
         if not 0 <= self.sports_user_unknown_per_hour <= 600:
             raise SettingsError("sports_user_unknown_per_hour must be 0..600")
         if self.anthropic_api_key is not None and (
@@ -294,6 +303,12 @@ class Settings:
         # `__Host-` makes browsers enforce Secure + Path=/ + no Domain (host-only).
         return "__Host-sporai_session" if self.cookie_secure else "sporai_session"
 
+    @property
+    def user_share_per_minute(self) -> int:
+        if self.sports_user_per_minute is not None:
+            return self.sports_user_per_minute
+        return min(self.football_data_per_minute, max(USER_SHARE_MIN, self.football_data_per_minute // 4))
+
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Settings:
         def required(name: str) -> str:
@@ -310,6 +325,10 @@ class Settings:
                 return int(raw)
             except ValueError:
                 raise SettingsError(f"{name} must be an integer") from None
+
+        def optional_integer(name: str) -> int | None:
+            raw = env.get(name)
+            return None if raw is None or raw.strip() == "" else integer(name, 0)
 
         def boolean(name: str, default: bool) -> bool:
             raw = (env.get(name) or "").strip().lower()
@@ -356,7 +375,7 @@ class Settings:
             football_data_per_day=integer("MINIAPP_FOOTBALL_DATA_PER_DAY", 3000),
             football_data_shared_reserve=integer("MINIAPP_FOOTBALL_DATA_SHARED_RESERVE", 0),
             sports_unknown_lookups_per_hour=integer("MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR", 20),
-            sports_user_per_minute=integer("MINIAPP_SPORTS_USER_PER_MINUTE", 6),
+            sports_user_per_minute=optional_integer("MINIAPP_SPORTS_USER_PER_MINUTE"),
             sports_user_unknown_per_hour=integer("MINIAPP_SPORTS_USER_UNKNOWN_PER_HOUR", 5),
             odds_feed_secret=optional("MINIAPP_ODDS_FEED_SECRET"),
             odds_feed_enabled=boolean("MINIAPP_ODDS_FEED_ENABLED", True),

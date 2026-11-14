@@ -576,7 +576,7 @@ def create_app(
         return found
 
     # One share per user of the shared football-data budget, for every route that may read it.
-    user_limiter = UserUpstreamLimiter(settings.sports_user_per_minute, settings.sports_user_unknown_per_hour, clock)
+    user_limiter = UserUpstreamLimiter(settings.user_share_per_minute, settings.sports_user_unknown_per_hour, clock)
     register_sports_routes(app, sports, active_session,
                            ai_status=lambda: "connected" if ai.connected else "not_connected", odds=odds,
                            user_limiter=user_limiter)

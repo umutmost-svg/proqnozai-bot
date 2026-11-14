@@ -266,7 +266,40 @@ def test_joining_a_running_load_needs_room_in_the_share(clock: FakeClock) -> Non
 
 
 def test_default_share_fits_an_ai_screen(tmp_path) -> None:
-    assert base_settings(tmp_path).sports_user_per_minute == 6
+    """14.11 in production: with a share of 6 a cold AI analysis after any browsing was refused (empty cache
+    after a deploy). The default is a quarter of the app's cap, at least one cold analysis, never above the cap."""
+    from miniapp.settings import USER_SHARE_MIN, SettingsError
+    from miniapp.sports.service import AI_EVIDENCE_REQUESTS
+
+    assert USER_SHARE_MIN == AI_EVIDENCE_REQUESTS
+    prod = base_settings(tmp_path, football_data_per_minute=60, football_data_live_plan=True)
+    assert prod.user_share_per_minute == 15
+    assert base_settings(tmp_path).user_share_per_minute == 6          # free tier (8/min): one cold analysis
+    assert base_settings(tmp_path, football_data_per_minute=3).user_share_per_minute == 3   # never above the cap
+    assert base_settings(tmp_path, sports_user_per_minute=4).user_share_per_minute == 4
+    with pytest.raises(SettingsError):
+        base_settings(tmp_path, sports_user_per_minute=9)               # above the app's 8/min
+    # Production after a restart: a match page with its calendar and table, then a cold AI analysis.
+    lim = UserUpstreamLimiter(prod.user_share_per_minute, 5, FakeClock())
+    browse = UserShare(lim, 1)
+    assert browse.gate(3) is None
+    with browse.tally() as tally:
+        for _ in range(3):
+            tally.count += 1
+            tally.charge()
+    assert UserShare(lim, 1).gate(AI_EVIDENCE_REQUESTS) is None
+
+
+def test_the_share_comes_from_the_environment(tmp_path) -> None:
+    from miniapp.settings import Settings
+    from miniapp.tests.signing import TEST_BOT_TOKEN
+
+    env = {"MINIAPP_BOT_TOKEN": TEST_BOT_TOKEN, "MINIAPP_DB_PATH": str(tmp_path / "m.db"),
+           "MINIAPP_TRUSTED_ORIGINS": ORIGIN, "MINIAPP_ENV": "development",
+           "MINIAPP_FOOTBALL_DATA_PER_MINUTE": "60", "MINIAPP_FOOTBALL_DATA_LIVE_PLAN": "true"}
+    assert Settings.from_env(env).user_share_per_minute == 15
+    assert Settings.from_env({**env, "MINIAPP_SPORTS_USER_PER_MINUTE": ""}).user_share_per_minute == 15
+    assert Settings.from_env({**env, "MINIAPP_SPORTS_USER_PER_MINUTE": "10"}).user_share_per_minute == 10
 
 
 # --- round 2: admissions reserve their expected cost ---------------------------------------------
