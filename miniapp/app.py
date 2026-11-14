@@ -587,7 +587,7 @@ def create_app(
     # One share per user of the shared football-data budget, for every route that may read it.
     user_limiter = UserUpstreamLimiter(settings.user_share_per_minute, settings.sports_user_unknown_per_hour, clock)
     register_sports_routes(app, sports, active_session,
-                           ai_status=lambda: "connected" if ai.connected else "not_connected", odds=odds,
+                           ai_status=lambda: "connected" if ai.connected else "not_connected",
                            user_limiter=user_limiter)
     register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session, user_limiter=user_limiter)
 

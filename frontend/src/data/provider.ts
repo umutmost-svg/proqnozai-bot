@@ -1,4 +1,4 @@
-import type { EventOdds,
+import type {
   AiAnalysis,
   QuickAnswer,
   QuickCriteria,
@@ -45,8 +45,6 @@ export interface SportsDataProvider {
   quickPick(criteria: QuickCriteria, now: Date, timeZone: string): Promise<QuickAnswer>;
   quickAvailable(): boolean;
   getEvent(id: string): Promise<SportEvent | null>;
-  /** The match's current odds from its last getEvent answer (real data only); null when none. */
-  eventOdds(id: string): EventOdds | null;
   getTournament(id: string): Tournament | undefined;
   /** The tournament's season schedule; null when it is not a tournament we serve. */
   getTournamentCalendar(id: string): Promise<TournamentCalendar | null>;

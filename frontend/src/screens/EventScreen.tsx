@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { Emblem } from '../components/Emblem';
@@ -8,14 +7,11 @@ import { DeferredButton, EmptyState, ErrorState, LoadingState } from '../compone
 import { SourceNote } from '../components/SourceNote';
 import { StatusBadge } from '../components/StatusBadge';
 import ui from '../components/ui.module.css';
-import type { EventOdds, SportEvent } from '../data/models';
+import type { SportEvent } from '../data/models';
 import { periodBreakdown, phaseText, statRows } from '../data/present';
 import { headlineScore } from '../data/score';
 import { useAsync } from '../hooks/useAsync';
-import { LOCALES } from '../i18n';
 import { formatDateTime, zoneWithOffset } from '../i18n/format';
-import { usePricesLive } from './ai/Market';
-import { decimal, marketText } from './ai/Model';
 import { useServices, useSettings } from '../state/contexts';
 import { timeOf } from '../time/zoned';
 import s from './EventScreen.module.css';
@@ -170,63 +166,6 @@ function Stats({ event }: { event: SportEvent }) {
   );
 }
 
-/**
- * The match's current odds: every market the feed priced, with the market probability (margin removed).
- * Numbers only, never the source's name. Hidden the moment their validity ends (no stale price shown).
- */
-function OddsCard({ event, odds }: { event: SportEvent; odds: EventOdds }) {
-  const { t, settings, timeZone } = useSettings();
-  const live = usePricesLive(odds.expires);
-  if (!live) return null;
-  const percent = new Intl.NumberFormat(LOCALES[settings.lang], { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-  return (
-    <section className={s.odds} data-testid="event-odds">
-      <h3 className={s.oddsTitle}>{t('event.odds.title')}</h3>
-      <div className={s.oddsHead} aria-hidden="true">
-        <span />
-        <span>{t('ai.value.odds')}</span>
-        <span>{t('ai.value.market')}</span>
-      </div>
-      <ul className={s.oddsRows}>
-        {odds.quotes.map((q) => (
-          <li key={q.market} className={s.oddsRow} data-market={q.market}>
-            <span className={s.oddsName}>{marketText(t, q.market, event.home.name, event.away.name)}</span>
-            <span aria-label={`${t('ai.value.odds')} ${decimal(settings.lang, q.odds)}`}>{decimal(settings.lang, q.odds)}</span>
-            <span aria-label={`${t('ai.value.market')} ${percent.format(q.marketProbability)}%`}>{percent.format(q.marketProbability)}%</span>
-          </li>
-        ))}
-      </ul>
-      <p className={s.oddsNote} data-testid="event-odds-asof">
-        {t('ai.value.asOf', { time: formatDateTime(new Date(odds.fetchedAt), timeZone) })}
-      </p>
-    </section>
-  );
-}
-
-/** How often an open match page asks again: the bot refreshes a line every 5-10 minutes. */
-export const ODDS_REFRESH_MS = 60_000;
-
-/** The odds of the last answer, refreshed while the page is open: a changed price replaces the old one. */
-function OddsSection({ event }: { event: SportEvent }) {
-  const { data } = useServices();
-  const [odds, setOdds] = useState<EventOdds | null>(() => data.eventOdds(event.id));
-  useEffect(() => {
-    let alive = true;
-    const every = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return;
-      data.getEvent(event.id).then(
-        () => alive && setOdds(data.eventOdds(event.id)),
-        () => undefined, // a failed refresh keeps the old prices only until their own deadline
-      );
-    }, ODDS_REFRESH_MS);
-    return () => {
-      alive = false;
-      window.clearInterval(every);
-    };
-  }, [data, event.id]);
-  return odds ? <OddsCard event={event} odds={odds} /> : null;
-}
-
 export function EventScreen() {
   const { id = '' } = useParams();
   const [params, setParams] = useSearchParams();
@@ -281,7 +220,6 @@ export function EventScreen() {
           {tab === 'overview' ? (
             <>
               <Overview event={event} />
-              {event.status === 'upcoming' && <OddsSection event={event} />}
               {aiEnabled && (
                 // Opens the AI screen, which only reads; creating is its own explicit button there.
                 <button type="button" className={ui.primary} onClick={openAi}>

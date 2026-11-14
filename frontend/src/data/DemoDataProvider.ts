@@ -44,9 +44,6 @@ export class DemoDataProvider implements SportsDataProvider {
     return value();
   }
 
-  eventOdds(): null {
-    return null; // the demo has no market
-  }
 
   aiAvailable(): boolean {
     return true;

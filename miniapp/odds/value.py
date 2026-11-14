@@ -87,8 +87,8 @@ def compare(book: Mapping[str, float], model: Mapping[str, float]) -> dict[str, 
 
 
 def book_json(book: Mapping[str, float]) -> list[dict]:
-    """The match's own market, for the match page: odds and the market probability without the margin.
-    Numbers only: never the source's name."""
+    """The match's own market, for an AI analysis (its facts and its screen): odds and the market probability
+    without the margin. Numbers only: never the source's name. Never sent before an analysis (owner, 15.11)."""
     return [{"market": k, "odds": round(price, 2), "marketProbability": round(fair * 100, 1), "margin": round(m * 100, 1)}
             for k, (price, fair, m) in market_book(book).items()]
 

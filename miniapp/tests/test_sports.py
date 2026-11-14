@@ -564,6 +564,7 @@ def test_event_api_and_coverage(api, clock: FakeClock) -> None:
     r = client.get("/api/sports/event/fd:21")
     assert r.status_code == 200 and r.json()["event"]["score"] == [2, 0]
     assert r.json()["tournament"]["id"] == "fd:PL"
+    assert "odds" not in r.json()                     # prices only inside an analysis, never on the match page
     assert client.get("/api/sports/event/" + "9" * 50).status_code == 404
     cov = client.get("/api/sports/coverage").json()["sports"]
     assert cov["football"]["status"] == "connected" and cov["football"]["features"]["statistics"] is False
