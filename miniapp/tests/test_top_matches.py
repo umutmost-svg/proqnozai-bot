@@ -17,15 +17,24 @@ from miniapp.tests.conftest import FakeClock, fresh, login
 from miniapp.tests.test_sports import ALLOWED, DAY, FETCHED, KEY, FakeTransport, base_settings, match, no_sleep
 from miniapp.tests.test_standings import block, row, table
 
-W = top.WEIGHTS
+REAL = top.WEIGHTS
+# The other weights are checked without the notable-teams bonus (small test ids such as 3, 4, 5 are real clubs);
+# the bonus has its own tests below, with the real weights passed explicitly.
+W = replace(top.WEIGHTS, featured=frozenset())
 
 
-def event(mid: int, status: str = "TIMED", *, code: str = "PL", stage: str | None = None, home=(57, "Arsenal FC"),
-          away=(61, "Chelsea FC"), utc: str = f"{DAY}T15:00:00Z", **kw):
+@pytest.fixture(autouse=True)
+def _weights_without_featured(monkeypatch):
+    monkeypatch.setattr(top, "WEIGHTS", W)
+
+
+# Default teams are deliberately not in featuredTeams: these tests check the other weights alone.
+def event(mid: int, status: str = "TIMED", *, code: str = "PL", stage: str | None = None, home=(1057, "Home FC"),
+          away=(1061, "Away FC"), utc: str = f"{DAY}T15:00:00Z", **kw):
     raw = match(mid, status, code=code, home=home, away=away, utc=utc, **kw)
     if stage is not None:
         raw["stage"] = stage
-    e = normalize_match(raw, FETCHED, ALLOWED | {"CL", "ELC"})
+    e = normalize_match(raw, FETCHED, ALLOWED | {"CL", "ELC", "UNL", "SD", "WSL", "UPD"})
     assert e is not None
     return e
 
@@ -45,7 +54,7 @@ def test_competition_stage_and_table_order_the_day() -> None:
     ranked = top.rank([elc, pl, final], code_of, {})
     # ELC 10 + FINAL 30 beats PL 26; a plain ELC match comes last.
     assert [r.event.id for r in ranked] == [final.id, pl.id, elc.id]
-    tab = top.Table({"fd:team:57": 1, "fd:team:61": 2, "fd:team:1": 19, "fd:team:2": 20}, 20)
+    tab = top.Table({"fd:team:1057": 1, "fd:team:1061": 2, "fd:team:1": 19, "fd:team:2": 20}, 20)
     scored = top.score(pl, "PL", tab)
     assert scored.leaders and scored.score == pytest.approx(W.competition["PL"] + W.table * (1 + 18 / 19) / 2 + W.leaders + W.upcoming)
     assert not top.score(pl, "PL", top.Table(tab.positions, 5)).leaders  # too small a table: ignored
@@ -196,3 +205,41 @@ def test_snapshots_are_bounded_and_keyed_on_the_day_grid(api, clock: FakeClock) 
     for i in range(TOP_TABLES_MAX + 50):  # a flood of distinct (future) day starts
         service._day_table(base + timedelta(minutes=15 * (i + 1)), "fd:PL")
     assert len(service._top_tables) == TOP_TABLES_MAX
+
+
+
+# --- 14.11: national-team breaks, lower tiers, notable teams by id ------------------------------------------------
+
+def test_a_national_team_competition_outranks_lower_tier_club_games() -> None:
+    unl = event(101, code="UNL", home=(765, "Portugal"), away=(782, "Denmark"))
+    second = event(102, code="SD", home=(250, "Real Valladolid CF"), away=(251, "CD Castellón"))
+    women = event(103, code="WSL", home=(9001, "Manchester Utd FC"), away=(9002, "Crystal Palace FC"))
+    ranked = top.rank([second, women, unl], code_of, {}, REAL)
+    assert ranked[0].event.id == unl.id
+    assert top.score(women, "WSL", None, REAL).score < top.score(second, "SD", None, REAL).score < top.score(unl, "UNL", None, REAL).score
+
+
+def test_a_notable_team_lifts_its_match_by_id_never_by_a_shared_name() -> None:
+    portugal = event(111, code="UNL", home=(765, "Portugal"), away=(782, "Denmark"))
+    faroe = event(112, code="UNL", home=(7000, "Faroe Islands"), away=(7001, "Moldova"), utc=f"{DAY}T12:00:00Z")
+    assert top.rank([faroe, portugal], code_of, {}, REAL)[0].event.id == portugal.id
+    both = event(113, code="UNL", home=(773, "France"), away=(803, "Turkey"))
+    assert top.score(both, "UNL", None, REAL).score - top.score(faroe, "UNL", None, REAL).score == REAL.featured_both
+    namesake = event(114, code="UPD", home=(6000, "Liverpool FC"), away=(6001, "Danubio FC"))
+    plain = event(115, code="UPD", home=(6002, "Nacional"), away=(6001, "Danubio FC"))
+    assert top.score(namesake, "UPD", None, REAL).score == top.score(plain, "UPD", None, REAL).score   # Liverpool of Uruguay
+
+
+def test_minor_competitions_keep_the_bonus_cap() -> None:
+    final = event(121, code="WSL", stage="FINAL", home=(57, "Arsenal FC"), away=(61, "Chelsea FC"))
+    assert top.score(final, "WSL", None, REAL).score <= REAL.competition["WSL"] + REAL.other_stage_cap + REAL.upcoming + REAL.kickoff_soon
+
+
+def test_featured_teams_must_be_ids(tmp_path) -> None:
+    import json
+    raw = json.loads((Path(top.__file__).with_name("top_weights.json")).read_text())
+    raw["featuredTeams"] = ["liverpool fc"]
+    path = tmp_path / "w.json"
+    path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError):
+        top.load_weights(path)

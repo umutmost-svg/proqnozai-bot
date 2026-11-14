@@ -43,6 +43,10 @@ class TopWeights:
     live: float  # = upcoming + kickoff_soon keeps a match's place when it kicks off
     kickoff_soon: float  # an upcoming match starting within kickoff_soon_s of now
     kickoff_soon_s: float
+    # Provider team ids that make a match notable on their own; see top_weights.json.
+    featured: frozenset[str] = frozenset()
+    featured_one: float = 0.0
+    featured_both: float = 0.0
 
 
 def load_weights(path: Path) -> TopWeights:
@@ -69,7 +73,12 @@ def load_weights(path: Path) -> TopWeights:
         live=number(raw["live"]),
         kickoff_soon=number(raw["kickoffSoon"]),
         kickoff_soon_s=number(raw["kickoffSoonHours"]) * 3600,
+        featured=frozenset(str(n) for n in raw.get("featuredTeams", [])),
+        featured_one=number(raw.get("featuredOne", 0)),
+        featured_both=number(raw.get("featuredBoth", 0)),
     )
+    if any(not n.startswith("fd:team:") or not n[8:].isdigit() for n in weights.featured):
+        raise ValueError("featuredTeams must be provider team ids (fd:team:<n>)")
     if not 1 <= weights.max_matches <= 5 or weights.max_per_competition < 1 or weights.leaders_top < 1 or weights.min_table_teams < 2:
         raise ValueError("top-match limits out of range")
     if weights.live != weights.upcoming + weights.kickoff_soon:
@@ -106,10 +115,13 @@ def _closeness(position: int, teams: int) -> float:
     return max(0.0, min(1.0, 1 - (position - 1) / (teams - 1)))
 
 
-def score(event: FootballEvent, code: str, table: Table | None, w: TopWeights = WEIGHTS,
+def score(event: FootballEvent, code: str, table: Table | None, w: TopWeights | None = None,
           now: float | None = None) -> Ranked:
+    w = w or WEIGHTS  # read at call time (tests may swap the module's weights)
     total = w.competition.get(code, w.other_competition)
     bonus = w.stage.get(event.stage or "", 0.0)
+    famous = sum(side.id in w.featured for side in (event.home, event.away))
+    bonus += w.featured_both if famous == 2 else w.featured_one if famous == 1 else 0.0
     leaders = False
     if table is not None and table.teams >= w.min_table_teams:
         home, away = table.positions.get(event.home.id), table.positions.get(event.away.id)
@@ -118,9 +130,11 @@ def score(event: FootballEvent, code: str, table: Table | None, w: TopWeights = 
             leaders = home <= w.leaders_top and away <= w.leaders_top
             if leaders:
                 bonus += w.leaders
-    # Stage and table lift a match within its own level: for a competition without its own weight they add
-    # at most other_stage_cap, so a minor final or a lower-tier top-of-table game cannot outrank the main leagues.
-    total += bonus if code in w.competition else min(bonus, w.other_stage_cap)
+    # Stage and table lift a match within its own level: for a competition without its own weight, or weighted at or
+    # below an unlisted one (lower tiers, women's leagues), they add at most other_stage_cap, so a minor final or a
+    # lower-tier top-of-table game cannot outrank the main leagues.
+    major = w.competition.get(code, 0.0) > w.other_competition
+    total += bonus if major else min(bonus, w.other_stage_cap)
     if event.status == "live":
         total += w.live
     elif event.status == "upcoming":
@@ -134,11 +148,12 @@ def score(event: FootballEvent, code: str, table: Table | None, w: TopWeights = 
 
 
 def rank(events: Iterable[FootballEvent], code_of: Callable[[str], str],
-         tables: Mapping[str, Table | None], w: TopWeights = WEIGHTS, now: float | None = None) -> list[Ranked]:
+         tables: Mapping[str, Table | None], w: TopWeights | None = None, now: float | None = None) -> list[Ranked]:
     """Up to `max_matches` of the given events (one day, chosen by the caller), best first.
     Postponed, suspended, cancelled or unknown matches are never top matches. At most
     `max_per_competition` from one competition while others have matches left; only then
     are the remaining places filled in plain score order."""
+    w = w or WEIGHTS
     ranked = [score(e, code_of(e.tournament_id), tables.get(e.tournament_id), w, now)
               for e in events if e.status in RANKED_STATUSES]
     ranked.sort(key=lambda r: (-r.score, r.event.starts_at, r.event.id))

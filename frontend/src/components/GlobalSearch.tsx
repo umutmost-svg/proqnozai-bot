@@ -11,12 +11,21 @@ import s from './GlobalSearch.module.css';
 
 export const MIN_SEARCH = 2;
 
-/** The server's normalisation (miniapp/sports/search.py normalize): Latin letters and digits only. */
+// The server's search key (miniapp/sports/search.py search_key): Cyrillic of the app's languages to Latin and the
+// Azerbaijani schwa, then Latin letters and digits only. A test keeps the table equal to the server's.
+export const CYRILLIC: Readonly<Record<string, string>> = {
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm',
+  н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'kh', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'shch',
+  ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya', ә: 'a', ғ: 'g', қ: 'k', ң: 'n', ө: 'o', ұ: 'u', ү: 'u', һ: 'h',
+  і: 'i', ў: 'o', ҳ: 'h', ə: 'e',
+};
+
 export function searchKey(text: string): string {
-  return text
+  return [...text.toLowerCase()]
+    .map((c) => CYRILLIC[c] ?? c)
+    .join('')
     .normalize('NFKD')
     .replace(/\p{M}/gu, '')
-    .toLowerCase()
     .replace(/ø/g, 'o')
     .replace(/ß/g, 'ss')
     .replace(/ı/g, 'i')
@@ -56,9 +65,11 @@ export function GlobalSearch({ sport, query }: { sport: Sport; query: string }) 
   const { data } = useServices();
   const { t } = useSettings();
   const settled = useDebounced(query.trim());
-  const ready = searchKey(settled).length >= MIN_SEARCH;
-  // Letters in another script (e.g. "Барса") can never match the Latin team names: say so
-  // instead of sending a query the server rejects.
+  // Typed letters count ("Ш" is one, though it reads "sh"), as on the server (search.query_letters).
+  const typed = [...settled].filter((c) => /[\p{L}\p{N}]/u.test(c)).length;
+  const ready = typed >= MIN_SEARCH && searchKey(settled).length >= MIN_SEARCH;
+  // Letters in a script the search does not read (e.g. Arabic) can never match the Latin team names: say so
+  // instead of sending a query the server rejects. Cyrillic is transliterated (searchKey).
   const otherScript = !ready && /\p{L}/u.test(settled);
   const results = useAsync(
     () => (ready ? data.search(sport, settled) : Promise.resolve(null)),
@@ -68,7 +79,7 @@ export function GlobalSearch({ sport, query }: { sport: Sport; query: string }) 
   if (!ready) {
     return (
       <p className={s.hint} data-testid="search-hint">
-        {t(otherScript && settled.length >= MIN_SEARCH ? 'search.latinHint' : 'search.minLength')}
+        {t(otherScript && typed >= MIN_SEARCH ? 'search.latinHint' : 'search.minLength')}
       </p>
     );
   }

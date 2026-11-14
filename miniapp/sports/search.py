@@ -88,6 +88,139 @@ def normalize(text: str) -> str:
     return re.sub(r"[^0-9a-z]+", " ", plain).strip()
 
 
+# Search only (the odds matcher keeps `normalize`): Cyrillic of the app's languages (ru, kz, uz) to Latin, the way
+# people type club names, and the Azerbaijani schwa. Applied to the query AND to the names it is compared with.
+_CYRILLIC = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh", "з": "z", "и": "i", "й": "y",
+    "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f",
+    "х": "kh", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
+    "я": "ya", "ә": "a", "ғ": "g", "қ": "k", "ң": "n", "ө": "o", "ұ": "u", "ү": "u", "һ": "h", "і": "i", "ў": "o",
+    "ҳ": "h", "ə": "e",
+}
+
+
+def search_key(text: str) -> str:
+    """normalize() after transliteration: 'Ливерпуль' -> 'liverpul', 'Qarabağ' -> 'qarabag', 'Fənərbaxça' ->
+    'fenerbaxca'. Typos and transliteration variants are left to the fuzzy tier of the score."""
+    lowered = text.casefold()
+    return normalize("".join(_CYRILLIC.get(c, c) for c in lowered))
+
+
+def query_letters(text: str) -> int:
+    """Letters and digits the user typed (before transliteration: 'Ш' is one letter, not 'sh')."""
+    return sum(c.isalnum() for c in text)
+
+
+def _close(token: str, word: str) -> bool:
+    """One edit for 4-7 letters, two from 8 (Levenshtein, early exit): 'barselona' ~ 'barcelona'."""
+    if len(token) < 4:
+        return False
+    limit = 1 if len(token) < 8 else 2
+    if abs(len(token) - len(word)) > limit:
+        return False
+    previous = list(range(len(word) + 1))
+    for i, a in enumerate(token, 1):
+        current = [i]
+        for j, b in enumerate(word, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a != b)))
+        if min(current) > limit:
+            return False
+        previous = current
+    return previous[-1] <= limit
+
+
+# Names people type in the app's languages (ru, az, tr), keyed by the provider's stable team id (resolved from the real
+# calendars on 14.11): a namesake (Liverpool FC of Uruguay, a club's women's team) never gets them.
+LOCAL_ALIASES: dict[int, tuple[str, ...]] = {
+    57: ("арсенал",),  # arsenal fc
+    61: ("челси",),  # chelsea fc
+    64: ("ливерпуль",),  # liverpool fc
+    65: ("манчестер сити", "ман сити"),  # manchester city fc
+    66: ("манчестер юнайтед", "ман юнайтед", "мю"),  # manchester united fc
+    73: ("тоттенхэм", "тоттенхем"),  # tottenham hotspur fc
+    67: ("ньюкасл",),  # newcastle united fc
+    58: ("астон вилла",),  # aston villa fc
+    62: ("эвертон",),  # everton fc
+    81: ("барселона", "барса"),  # fc barcelona
+    86: ("реал мадрид", "реал"),  # real madrid cf
+    78: ("атлетико",),  # club atletico de madrid
+    559: ("севилья",),  # sevilla fc
+    95: ("валенсия",),  # valencia cf
+    94: ("вильярреал",),  # villarreal cf
+    90: ("бетис",),  # real betis balompie
+    77: ("атлетик", "атлетик бильбао"),  # athletic club
+    5: ("бавария", "bavariya"),  # fc bayern munchen
+    4: ("боруссия дортмунд", "боруссия"),  # borussia dortmund
+    3: ("байер", "байер леверкузен"),  # bayer 04 leverkusen
+    721: ("лейпциг",),  # rb leipzig
+    19: ("айнтрахт",),  # eintracht frankfurt
+    109: ("ювентус",),  # juventus fc
+    108: ("интер",),  # fc internazionale milano
+    98: ("милан",),  # ac milan
+    113: ("наполи",),  # ssc napoli
+    100: ("рома",),  # as roma
+    110: ("лацио",),  # ss lazio
+    102: ("аталанта",),  # atalanta bc
+    99: ("фиорентина",),  # acf fiorentina
+    524: ("псж", "пари сен жермен"),  # paris saint germain fc
+    516: ("марсель",),  # olympique de marseille
+    523: ("лион",),  # olympique lyonnais
+    548: ("монако",),  # as monaco fc
+    521: ("лилль",),  # lille osc
+    678: ("аякс",),  # afc ajax
+    674: ("псв",),  # psv
+    675: ("фейеноорд",),  # feyenoord rotterdam
+    1903: ("бенфика", "benfica"),  # sport lisboa e benfica
+    503: ("порту",),  # fc porto
+    498: ("спортинг",),  # sporting clube de portugal
+    5613: ("брага",),  # sporting clube de braga
+    610: ("галатасарай",),  # galatasaray sk
+    613: ("фенербахче",),  # fenerbahce sk
+    600: ("бешикташ",),  # besiktas jk
+    602: ("трабзонспор",),  # trabzonspor
+    731: ("зенит",),  # fk zenit sankt petersburg
+    754: ("спартак",),  # fk spartak moskva
+    1900: ("цска", "cska"),  # pfc cska moskva
+    5455: ("локомотив",),  # fk lokomotiv moskva
+    5443: ("динамо москва",),  # fk dinamo moskva
+    5452: ("краснодар",),  # fk krasnodar
+    882: ("рубин",),  # fk rubin kazan
+    760: ("испания", "ispaniya", "ispanya"),  # spain
+    784: ("италия", "italiya", "italya"),  # italy
+    759: ("германия", "almaniya", "almanya"),  # germany
+    773: ("франция", "fransa"),  # france
+    770: ("англия", "ingiltere"),  # england
+    765: ("португалия", "portuqaliya", "portekiz"),  # portugal
+    8601: ("нидерланды", "голландия", "niderland", "hollanda"),  # netherlands
+    805: ("бельгия", "belcika"),  # belgium
+    799: ("хорватия", "xorvatiya", "hirvatistan"),  # croatia
+    788: ("швейцария", "isvecre", "isvicre"),  # switzerland
+    782: ("дания",),  # denmark
+    816: ("австрия",),  # austria
+    794: ("польша",),  # poland
+    790: ("украина", "ukrayna"),  # ukraine
+    1971: ("азербайджан", "azerbaycan"),  # azerbaijan
+    1980: ("казахстан", "qazaxistan"),  # kazakhstan
+    1978: ("грузия", "gurcustan"),  # georgia
+    1970: ("армения", "ermenistan"),  # armenia
+    803: ("турция", "turkiye", "türkiye"),  # turkey
+    8873: ("шотландия",),  # scotland
+    833: ("уэльс",),  # wales
+    806: ("ирландия",),  # ireland
+    8872: ("норвегия",),  # norway
+    792: ("швеция",),  # sweden
+    780: ("сербия",),  # serbia
+    798: ("чехия",),  # czechia
+    827: ("венгрия",),  # hungary
+    775: ("греция",),  # greece
+    1972: ("беларусь", "белоруссия"),  # belarus
+    764: ("бразилия", "braziliya", "brezilya"),  # brazil
+    762: ("аргентина", "arjantin"),  # argentina
+    758: ("уругвай",),  # uruguay
+    818: ("колумбия",),  # colombia
+}
+
+
 @dataclass(frozen=True)
 class TeamHit:
     team: Competitor
@@ -125,6 +258,7 @@ class SearchIndex:
         self.warm_past_seasons = warm_past_seasons
         self._seasons: dict[str, tuple[float, list[FootballEvent]]] = {}
         self._warm: asyncio.Task | None = None
+        self._name_cache: dict[tuple[str, str, str | None], list[str]] = {}  # (id, name, short) -> search keys
 
     def store(self, tournament_id: str, events: list, fetched_at: float) -> None:
         """Called whenever a calendar is loaded (by a user or by the warm-up)."""
@@ -191,17 +325,25 @@ class SearchIndex:
                         known[1].add(tournament_id)
         return teams
 
-    @staticmethod
-    def _names(team: Competitor) -> list[str]:
-        number = football_data.team_number(team.id)
-        names = [team.name, team.short_name or "", *ALIASES.get(number or -1, ())]
-        return [n for n in (normalize(x) for x in names) if n]
+    def _names(self, team: Competitor) -> list[str]:
+        """Search keys of a team (cached: computed once per name, not per keystroke)."""
+        key = (team.id, team.name, team.short_name)
+        cached = self._name_cache.get(key)
+        if cached is None:
+            if len(self._name_cache) > 50_000:
+                self._name_cache.clear()
+            number = football_data.team_number(team.id)
+            names = [team.name, team.short_name or "", *ALIASES.get(number or -1, ()), *LOCAL_ALIASES.get(number or -1, ())]
+            cached = self._name_cache[key] = [n for n in (search_key(x) for x in names) if n]
+        return cached
 
     @staticmethod
-    def _score(query: str, names: list[str]) -> int:
-        """0 = no match; higher is better (exact > word prefix > substring)."""
+    def _score(query: str, names: list[str], fuzzy: bool = True) -> int:
+        """0 = no match; higher is better (exact > word prefix > substring or a near spelling)."""
         best = 0
         tokens = query.split()
+        if not tokens:
+            return 0  # nothing to match (every word was punctuation)
         for name in names:
             if name == query:
                 return 3
@@ -210,16 +352,24 @@ class SearchIndex:
                 best = max(best, 2)
             elif all(t in name for t in tokens):
                 best = max(best, 1)
+            elif fuzzy and all(t in name or any(_close(t, w) for w in words) for t in tokens):
+                best = max(best, 1)
         return best
 
     def search(self, raw_query: str) -> SearchResult:
-        query = normalize(raw_query)
+        query = search_key(raw_query)
         teams = self._teams()
         scored = []
         for team, tournaments in teams.values():
-            score = self._score(query, self._names(team))
+            score = self._score(query, self._names(team), fuzzy=False)
             if score:
                 scored.append((score, team, tournaments))
+        if len(scored) < MAX_TEAMS:
+            # Near spellings only when exact, prefix and substring hits leave room: the costly pass is the rare one.
+            found = {team.id for _, team, _ in scored}
+            for team, tournaments in teams.values():
+                if team.id not in found and self._score(query, self._names(team)):
+                    scored.append((1, team, tournaments))
         scored.sort(key=lambda x: (-x[0], x[1].short_name or x[1].name))
         hits = [TeamHit(team, tuple(sorted(t))) for _, team, t in scored[:MAX_TEAMS]]
         ids = {h.team.id for h in hits}

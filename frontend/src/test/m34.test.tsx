@@ -403,16 +403,33 @@ describe('global search (real mode)', () => {
     expect(within(screen.getByTestId('team-upcoming')).getAllByTestId('event-card').map((c) => c.getAttribute('data-event-id'))).toEqual(['fd:1']);
   });
 
-  it.each(['Барса', '!!', '  '])('"%s" is not sent to the server', async (q) => {
+  it.each(['ريال', '!!', '  ', 'Ш'])('"%s" is not sent to the server', async (q) => {
     const user = userEvent.setup();
     const { data, fetchImpl } = searchBackend();
     renderApp('#/matches', { data });
     await screen.findByTestId('event-list');
     await user.type(screen.getByPlaceholderText('Поиск матча или команды'), q);
     if (q.trim()) expect(await screen.findByTestId('search-hint')).toBeInTheDocument();
-    if (q === 'Барса') await waitFor(() => expect(screen.getByTestId('search-hint')).toHaveTextContent('латиницей'));
+    if (q === 'ريال') await waitFor(() => expect(screen.getByTestId('search-hint')).toHaveTextContent('латиницей'));
     await new Promise((r) => setTimeout(r, 400));
     expect(fetchImpl.mock.calls.some(([u]) => String(u).includes('/search'))).toBe(false);
+  });
+
+  it('a Cyrillic query is transliterated and sent (the server reads it the same way)', async () => {
+    const user = userEvent.setup();
+    const { data, fetchImpl } = searchBackend();
+    renderApp('#/matches', { data });
+    await screen.findByTestId('event-list');
+    await user.type(screen.getByPlaceholderText('Поиск матча или команды'), 'Барса');
+    await waitFor(() => expect(fetchImpl.mock.calls.some(([u]) => String(u).includes('/search'))).toBe(true));
+    expect(screen.queryByTestId('search-hint')).toBeNull();
+  });
+
+  it('reads Azerbaijani and Cyrillic like the server', async () => {
+    const { searchKey } = await import('../components/GlobalSearch');
+    expect(searchKey('Fənərbaxça')).toBe('fenerbaxca');
+    expect(searchKey('Ливерпуль')).toBe('liverpul');
+    expect(searchKey('Қайрат')).toBe('kayrat');
   });
 
   it('one letter does not search', async () => {

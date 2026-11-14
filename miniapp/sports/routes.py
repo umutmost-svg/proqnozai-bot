@@ -20,7 +20,7 @@ from ..odds.value import book_json
 from .client import UpstreamError
 from .crests import KINDS, media_type
 from .models import SPORTS
-from .search import MAX_QUERY, MIN_QUERY, normalize
+from .search import MAX_QUERY, MIN_QUERY, query_letters, search_key
 from .service import RequestError, SportsService, parse_instant
 from .user_limits import UserShare, UserUpstreamLimiter
 
@@ -334,7 +334,7 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             return _error(404, "not_found")
         params = request.query_params
         raw = params.get("q", "")
-        if set(params) != {"q"} or len(raw) > MAX_QUERY or len(normalize(raw)) < MIN_QUERY:
+        if set(params) != {"q"} or len(raw) > MAX_QUERY or query_letters(raw) < MIN_QUERY or len(search_key(raw)) < MIN_QUERY:
             return _error(400, "bad_query")
         if not service.connected(sport):  # type: ignore[arg-type]
             return JSONResponse({"sport": sport, "query": raw, "teams": [], "events": [],

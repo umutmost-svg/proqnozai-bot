@@ -290,3 +290,86 @@ def test_warm_up_stops_when_its_background_budget_is_spent(clock: FakeClock) -> 
 
     run(scenario())
     assert loads == ["fd:PL"]  # no spinning through the rest: the next search starts a new pass
+
+
+# --- 14.11: searches typed in the app's languages, typos, namesakes -----------------------------------------------
+
+def test_cyrillic_and_azerbaijani_queries_are_searchable() -> None:
+    from miniapp.sports.search import search_key
+    assert search_key("Ливерпуль") == "liverpul" and search_key("Реал") == "real"
+    assert search_key("Fənərbaxça") == "fenerbaxca" and search_key("Qarabağ") == "qarabag"
+    assert search_key("Қайрат") == "kayrat"
+
+
+def test_a_cyrillic_query_finds_the_club_by_its_local_name(clock: FakeClock) -> None:
+    idx = index(clock, seasons())
+    assert [h.team.id for h in idx.search("Барселона").teams][0] == "fd:team:81"
+    assert [h.team.id for h in idx.search("барса").teams] == ["fd:team:81"]
+    assert {h.team.id for h in idx.search("Реал").teams} >= {"fd:team:86", "fd:team:90"}   # Real Madrid and Real Betis
+    assert idx.search("Реал").teams[0].team.id == "fd:team:86"                               # the alias is exact
+
+
+def test_a_typo_still_finds_the_team_but_ranks_below_exact_hits(clock: FakeClock) -> None:
+    idx = index(clock, seasons())
+    assert [h.team.id for h in idx.search("barselona").teams][0] == "fd:team:81"
+    assert [h.team.id for h in idx.search("arsenl").teams] == ["fd:team:57"]
+    assert idx.search("zz").teams == []
+
+
+def test_punctuation_only_matches_nothing(clock: FakeClock) -> None:
+    from miniapp.sports.search import SearchIndex
+    assert SearchIndex._score("", ["fc barcelona"]) == 0
+
+
+def test_local_names_follow_the_team_id_never_a_namesake(clock: FakeClock) -> None:
+    uruguay = (6000, "Liverpool FC")   # Liverpool FC of Montevideo: same provider name, another id
+    idx = index(clock, {"fd:PL": [ev(10, uruguay, (6001, "Danubio FC"), code="PL"),
+                                  ev(11, (64, "Liverpool FC"), (61, "Chelsea FC"), code="PL")]})
+    hits = [h.team.id for h in idx.search("ливерпуль").teams]
+    assert hits[0] == "fd:team:64"            # the alias (exact) belongs to id 64 only
+    assert hits == ["fd:team:64", "fd:team:6000"]   # the namesake only through the near-spelling tier
+
+
+def test_a_cyrillic_query_is_accepted_by_the_route(api, clock: FakeClock) -> None:
+    client, _ = api
+    signed_in(client, clock)
+    r = client.get("/api/sports/football/search", params={"q": "Барселона"})
+    assert r.status_code == 200, r.text
+    assert r.json()["teams"][0]["id"] == "fd:team:81"
+
+
+def test_the_frontend_transliterates_like_the_server() -> None:
+    """GlobalSearch.tsx decides on the client whether a query is sent: its table must equal _CYRILLIC."""
+    import re
+    from pathlib import Path
+
+    from miniapp.sports.search import _CYRILLIC
+    tsx = (Path(__file__).resolve().parents[2] / "frontend/src/components/GlobalSearch.tsx").read_text()
+    body = tsx.split("export const CYRILLIC", 1)[1].split("};", 1)[0]
+    client = dict(re.findall(r"(\w): '([a-z]*)'", body))
+    assert client == _CYRILLIC
+
+
+def test_one_cyrillic_letter_is_still_too_short(api, clock: FakeClock) -> None:
+    client, _ = api
+    signed_in(client, clock)
+    assert client.get("/api/sports/football/search", params={"q": "Ш"}).status_code == 400   # reads "sh"
+    assert client.get("/api/sports/football/search", params={"q": "Шо"}).status_code == 200
+
+
+def test_names_are_keyed_once_and_the_fuzzy_pass_runs_only_with_room(clock: FakeClock, monkeypatch) -> None:
+    idx = index(clock, seasons())
+    calls = []
+    real = search_module.search_key
+    monkeypatch.setattr(search_module, "search_key", lambda text: calls.append(text) or real(text))
+    idx.search("barca")
+    first = len(calls)
+    idx.search("barcelona")
+    assert len(calls) - first == 1          # only the new query: team names come from the cache
+    closes = []
+    real_close = search_module._close
+    monkeypatch.setattr(search_module, "_close", lambda t, w: closes.append(1) or real_close(t, w))
+    many = index(clock, {"fd:PL": [ev(100 + i, (2000 + i, f"Barca Club {i}"), (3000 + i, f"Other {i}"), code="PL")
+                                   for i in range(12)]})
+    assert len(many.search("barca").teams) == search_module.MAX_TEAMS
+    assert closes == []                      # enough substring hits: no near-spelling pass at all
