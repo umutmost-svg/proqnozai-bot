@@ -75,6 +75,7 @@ class _Stored:
     live: bool
     fetched_at: float
     book: dict[str, float]
+    own: bool = False  # from the Mini App's own source (else the bot's feed)
 
 
 @dataclass(frozen=True)
@@ -121,9 +122,18 @@ class OddsStore:
     def table(self) -> Leagues:
         return self._table or leagues()
 
-    def ingest(self, lines: Iterable[FeedLine]) -> IngestReport:
+    def governed(self) -> bool:
+        """The Mini App's own source has a recent complete list: the catalogue decides what is served."""
+        return self.catalog and self._clock() - self._complete_at <= CATALOG_TTL_S
+
+    def ingest(self, lines: Iterable[FeedLine], *, own: bool = False) -> IngestReport:
+        """`own`: prices from the Mini App's own source. While it governs, the bot's feed adds only live markers
+        (its parsing let second-half markets overwrite the match's prices, 15.11)."""
         accepted = unknown = empty = 0
+        governed = not own and self.governed()
         for line in lines:
+            if governed and not line.live:
+                continue
             code = self.table.code(line.country, line.league)
             if code is None and (not self.catalog or not senior(line.league, line.home, line.away, line.country)):
                 unknown += 1
@@ -131,10 +141,14 @@ class OddsStore:
             if not line.book:
                 empty += 1
             known = self._lines.get(line.line_id)
-            if known is not None and known.fetched_at >= line.fetched_at:
+            # A line once seen live stays live (an early start reported by either side): no pre-match price
+            # replaces the marker. Otherwise a newer fetch replaces an older one, and an own price a bot price.
+            if known is not None and known.live and not line.live:
+                continue
+            if known is not None and known.fetched_at >= line.fetched_at and not (own and not known.own):
                 continue
             candidate = Candidate(line.line_id, code, line.kickoff, line.home, line.away, line.country, line.league)
-            self._lines[line.line_id] = _Stored(candidate, line.live, line.fetched_at, line.book)
+            self._lines[line.line_id] = _Stored(candidate, line.live, line.fetched_at, line.book, own)
             accepted += 1
         self._evict()
         return IngestReport(accepted, unknown, empty)
@@ -164,7 +178,7 @@ class OddsStore:
         recent = (s.candidate for s in self._lines.values() if now - s.fetched_at < age - TRANSIT_ALLOWANCE_S)
         line, reason = match(recent, competition=competition, kickoff=kickoff, home=event.home, away=event.away,
                              table=self.table, area=area_of(competition) if catalogue else None, countries=COUNTRIES)
-        governed = self.catalog and now - self._complete_at <= CATALOG_TTL_S
+        governed = self.governed()
         if line is not None and (line.competition is None or governed) and self._assigned.get(line.line_id) != event.id:
             line, reason = None, "unassigned"  # withdrawn, ambiguous, or given to another match by the catalogue
         if line is None:
@@ -172,6 +186,8 @@ class OddsStore:
                 logger.info("odds.unmatched event=%s reason=%s", event.id, reason)
             return None
         stored = self._lines[line.line_id]
+        if governed and not stored.own and not stored.live:
+            return None  # a bot price stored before the own source took over (its parsing bug, 15.11)
         # Both kickoffs count: the sources may disagree by up to the matching tolerance.
         starts = min(kickoff, stored.candidate.kickoff)
         # Never more than the age limit: the client rejects a longer validity as impossible.

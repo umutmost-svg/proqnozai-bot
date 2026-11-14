@@ -134,7 +134,7 @@ class OddsSource:
             book = read_book({k: v for k, v in odds.items() if isinstance(v, float)})
             m = self._list[line_id]
             self.store.ingest([FeedLine(line_id, m["country"], m["league"], m["home"], m["away"], m["kickoff"],
-                                        False, self._clock(), book)])
+                                        False, self._clock(), book)], own=True)
             self._priced[line_id] = self._clock()
             priced += 1
         if report.samples and self._clock() - self._samples_at >= SAMPLES_EVERY_S:
@@ -176,7 +176,7 @@ class OddsSource:
         self._list = listed
         self.store.ingest_catalog(catalog)  # fetch_list returns only a list read to its end
         if markers:
-            self.store.ingest(markers)
+            self.store.ingest(markers, own=True)
         for line_id in [i for i in self._priced if i not in listed]:
             del self._priced[line_id]
         logger.info("odds.source_list lines=%d upcoming=%d live=%d", len(raw), len(listed), len(markers))

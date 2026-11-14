@@ -85,7 +85,8 @@ def test_far_matches_are_refreshed_less_often_and_served_longer(clock: FakeClock
     push(store, clock, cline(10, "Spain", "Italy", far))
     assert store.match_catalog([event(SPAIN, ITALY, far)]).wanted == [(10, FAR_REFRESH_S)]
     store.ingest(FeedReceiver(SECRET, clock).verify(*signed(clock, json.dumps({"v": 1, "nonce": "d" * 32, "lines": [
-        {**cline(10, "Spain", "Italy", far), "live": False, "fetchedAt": iso(clock.now - 40 * 60), "odds": ODDS}]}).encode())))
+        {**cline(10, "Spain", "Italy", far), "live": False, "fetchedAt": iso(clock.now - 40 * 60), "odds": ODDS}]}).encode())),
+        own=True)  # as the own source stores it (the bot's prices are not stored while the catalogue governs)
     found = store.lookup(event(SPAIN, ITALY, far))
     assert found is not None and found.valid_for <= FAR_MAX_AGE_S           # 40 min old: still served far out
     near = OddsStore(clock, catalog=True)
@@ -141,16 +142,17 @@ def test_international_womens_and_youth_competitions_name_themselves_in_the_coun
     assert store.match_catalog([event(SPAIN, ITALY, t)]).wanted == []
 
 
-def _priced(store: OddsStore, clock: FakeClock, line_id: int, home: str, away: str, kickoff: float, **where) -> None:
+def _priced(store: OddsStore, clock: FakeClock, line_id: int, home: str, away: str, kickoff: float, *,
+            own: bool = False, **where) -> None:
     raw = {**cline(line_id, home, away, kickoff, **where), "live": False, "fetchedAt": iso(clock.now - 60), "odds": ODDS}
     store.ingest(FeedReceiver(SECRET, clock).verify(*signed(clock, json.dumps(
-        {"v": 1, "nonce": f"{line_id:032d}", "lines": [raw]}).encode())))
+        {"v": 1, "nonce": f"{line_id:032d}", "lines": [raw]}).encode())), own=own)
 
 
 def test_a_line_claimed_by_two_matches_is_served_for_neither(clock: FakeClock) -> None:
     store = OddsStore(clock, catalog=True)
     t = clock.now + 3 * 3600
-    _priced(store, clock, 10, "Genk", "Gent", t, country="Belgium", league="Pro League")   # priced before the second calendar
+    _priced(store, clock, 10, "Genk", "Gent", t, own=True, country="Belgium", league="Pro League")  # before the 2nd calendar
     league, cup = event(GENK, GENT, t, comp="fd:BJL", mid="fd:1"), event(GENK, GENT, t, comp="fd:BJPP", mid="fd:2")
     assert store.lookup(league) is None                    # not assigned by any catalogue match yet
     push(store, clock, cline(10, "Genk", "Gent", t, country="Belgium", league="Pro League"))
@@ -193,11 +195,13 @@ def test_while_the_list_is_fresh_the_catalogue_decides_every_line(clock: FakeClo
     t = clock.now + 3 * 3600
     pl = event(ARSENAL, CHELSEA, t, comp="fd:PL")
     store = OddsStore(clock, catalog=True)
-    _priced(store, clock, 10, "Arsenal", "Chelsea", t, country="England", league="Premier League")
+    _priced(store, clock, 10, "Arsenal", "Chelsea", t, country="England", league="Premier League")   # the bot's price
     england = ("England", "Premier League", "Arsenal", "Chelsea", t)
     store.ingest_catalog([CatalogLine(10, *england)])
     store.match_catalog([pl])
-    assert store.lookup(pl) is not None                              # listed and uniquely matched
+    assert store.lookup(pl) is None                                  # the own source governs: never the bot's price
+    _priced(store, clock, 10, "Arsenal", "Chelsea", t, own=True, country="England", league="Premier League")
+    assert store.lookup(pl) is not None                              # listed, uniquely matched, own price
     store.ingest_catalog([CatalogLine(10, *england), CatalogLine(11, *england)])
     store.match_catalog([pl])
     assert store.lookup(pl) is None                                  # two lines for one match: none
@@ -207,3 +211,12 @@ def test_while_the_list_is_fresh_the_catalogue_decides_every_line(clock: FakeClo
     clock.advance(41 * 60)                                           # the own source stopped: the bot's feed again
     _priced(store, clock, 12, "Arsenal", "Chelsea", t, country="England", league="Premier League")
     assert store.lookup(pl) is not None
+
+
+
+def test_czechia_is_the_feeds_czech_republic(clock: FakeClock) -> None:
+    store = OddsStore(clock, catalog=True)
+    t = clock.now + 3 * 3600
+    croatia, czechia = Competitor("fd:team:799", "Croatia", None), Competitor("fd:team:798", "Czechia", None)
+    push(store, clock, cline(10, "Croatia", "Czech Republic", t))
+    assert store.match_catalog([event(croatia, czechia, t)]).wanted == [(10, NEAR_REFRESH_S)]

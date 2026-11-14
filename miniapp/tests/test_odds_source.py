@@ -202,3 +202,60 @@ def test_unmatched_names_are_logged_for_the_alias_table(clock: FakeClock, caplog
         asyncio.run(source.cycle())
     assert any("odds.unmatched_examples reason=unknown_names" in r.message and "Spain - Portugal" in r.message
                for r in caplog.records)
+
+
+
+REAL = [  # the groups and titles of a live line (15.11), in the API's order: second-half markets come later
+    {"groupTitle": "1x2", "outcomeTitle": "W1", "odd": "1.870"}, {"groupTitle": "1x2", "outcomeTitle": "X", "odd": "4.150"},
+    {"groupTitle": "1x2", "outcomeTitle": "W2", "odd": "3.650"},
+    {"groupTitle": "Double Chance", "outcomeTitle": "2X", "odd": "1.940"},
+    {"groupTitle": "Double Chance", "outcomeTitle": "1X", "odd": "1.280"},
+    {"groupTitle": "Double Chance", "outcomeTitle": "12", "odd": "1.230"},
+    {"groupTitle": "Total", "outcomeTitle": "Total Over (2.5)", "odd": "1.400"},
+    {"groupTitle": "Total", "outcomeTitle": "Total Under (2.5)", "odd": "2.700"},
+    {"groupTitle": "Home Team Total", "outcomeTitle": "Total Over (2.5)", "odd": "2.550"},
+    {"groupTitle": "Both Teams To Score", "outcomeTitle": "Yes", "odd": "1.400"},
+    {"groupTitle": "Both Teams To Score", "outcomeTitle": "No", "odd": "2.700"},
+    {"groupTitle": "Handicap", "outcomeTitle": "Handicap 1 (-1.0)", "odd": "2.350"},
+    {"groupTitle": "Handicap", "outcomeTitle": "Handicap 2 (+1.0)", "odd": "1.600"},
+    {"groupTitle": "Handicap", "outcomeTitle": "Handicap 1 (+1.0)", "odd": "1.110"},
+    {"groupTitle": "Handicap", "outcomeTitle": "Handicap 2 (-1.0)", "odd": "5.300"},
+    {"groupTitle": "2nd Half - 1x2", "outcomeTitle": "W1", "odd": "2.400"},
+    {"groupTitle": "2nd Half - Total", "outcomeTitle": "Total Over (2.5)", "odd": "2.850"},
+    {"groupTitle": "1st Half - Total", "outcomeTitle": "Total Over (2.5)", "odd": "4.050"},
+]
+
+
+def test_only_the_main_full_time_groups_are_read() -> None:
+    odds = mostbet.parse_outcomes(REAL)
+    assert (odds["w1"], odds["x"], odds["w2"]) == (1.87, 4.15, 3.65)
+    assert odds["over25"] == 1.4 and odds["under25"] == 2.7              # never the second half's 2.85
+    assert (odds["dc_1x"], odds["dc_12"], odds["dc_x2"]) == (1.28, 1.23, 1.94)
+    assert (odds["btts_yes"], odds["btts_no"]) == (1.4, 2.7)
+    assert (odds["hcp_val"], odds["hcp_w1"], odds["hcp_w2"]) == (-1.0, 2.35, 1.6)   # one line, never mixed
+
+
+def test_while_the_own_source_governs_the_bots_prices_are_not_stored(clock: FakeClock) -> None:
+    from miniapp.odds.feed import CatalogLine, FeedLine
+    t = clock.now + 3 * 3600
+    store = OddsStore(clock, catalog=True)
+    store.ingest_catalog([CatalogLine(10, "UEFA Nations League", "League A", "Spain", "Italy", t)])
+    report = store.ingest([FeedLine(10, "UEFA Nations League", "League A", "Spain", "Italy", t, False, clock.now,
+                                    {"1": 2.0, "X": 3.0, "2": 4.0})])
+    assert report.accepted == 0 and len(store) == 0
+    marker = store.ingest([FeedLine(10, "UEFA Nations League", "League A", "Spain", "Italy", t, True, clock.now, {})])
+    assert marker.accepted == 1                                          # live markers still count
+
+
+
+def test_a_live_marker_is_never_replaced_by_a_pre_match_price(clock: FakeClock) -> None:
+    from miniapp.odds.feed import CatalogLine, FeedLine
+    t = clock.now + 3 * 3600
+    store = OddsStore(clock, catalog=True)
+    store.ingest_catalog([CatalogLine(10, "UEFA Nations League", "League A", "Spain", "Italy", t)])
+    store.match_catalog([event(SPAIN, ITALY, t)])
+    store.ingest([FeedLine(10, "UEFA Nations League", "League A", "Spain", "Italy", t, True, clock.now, {})])  # bot: live
+    clock.advance(60)
+    store.ingest([FeedLine(10, "UEFA Nations League", "League A", "Spain", "Italy", t, False, clock.now,
+                           {"1": 2.0, "X": 3.0, "2": 4.0})], own=True)   # the own source, between list refreshes
+    assert store.lookup(event(SPAIN, ITALY, t)) is None

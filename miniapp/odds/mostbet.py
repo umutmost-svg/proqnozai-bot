@@ -2,8 +2,8 @@
 
 The bot is going to be retired, so the Mini App fetches the line list and the prices on its own. The API is
 IP-whitelisted (the same server as the bot). The list's kickoff times are in UTC+3 (SRC_TZ_HOURS) and are converted
-to UTC here. The outcome parsing is the bot's (mostbet.py, release/bot-odds), proven in production, into the same
-feed keys `book.read_book` already reads. Every request is paced by the caller; any 429 is reported as such so
+to UTC here. The outcome parsing reads only the exact main market groups (unlike the bot's keyword match, which let
+second-half markets overwrite the match's), into the feed keys `book.read_book` already reads. Every request is paced by the caller; any 429 is reported as such so
 the caller pauses (the bot's users keep the API's budget first while both run).
 """
 from __future__ import annotations
@@ -36,8 +36,6 @@ _THREADS = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mostbet")
 # Virtual / e-sports feeds sit in the football category (the bot's list, unchanged).
 _VIRTUAL = ("electronic game", "electronic games", "esports", "esport", "esportsbattle", "e-sports", "efootball",
             "cyber football", "cyberfootball", "fc 24", "fc 25", "fc 26", "2x3 min", "2x4 min", "2x5 min", "h2h liga")
-_NON_MAIN_GROUPS = ("corner", "card", "booking", "yellow", "individual", "team total", "player", "penalt", "offside",
-                    "throw", "goal kick", "shot", "foul", "substitut")
 
 
 class RateLimited(Exception):
@@ -149,70 +147,76 @@ async def fetch_odds(line_id: int, fetch: Fetch = http_get, sleep: Callable[[flo
     raise SourceError("page_cap")
 
 
+# The main (full-time) market groups, by their exact titles in the API. Anything else — "1st Half - …", "2nd Half - …",
+# team totals, corners — is never read: the bot's keyword parsing let "2nd Half - Total" overwrite the match total
+# (found 15.11 on a live line: over 2.5 read as 2.85 instead of 1.40).
+_GROUP_1X2 = frozenset({"1x2", "match result", "full time result", "result", "match winner", "winner"})
+_GROUP_DOUBLE = frozenset({"double chance"})
+_GROUP_DNB = frozenset({"draw no bet"})
+_GROUP_HANDICAP = frozenset({"handicap", "asian handicap", "european handicap"})
+_GROUP_TOTAL = frozenset({"total", "total goals", "over/under", "goals over/under"})
+_GROUP_BTTS = frozenset({"both teams to score", "btts"})
+
+
 def parse_outcomes(outcomes: list[dict]) -> dict[str, float]:
-    """The bot's parsing (release/bot-odds mostbet.mostbet_get_odds), main markets only."""
+    """Prices of the main full-time markets, from their exact groups only (feed keys for book.read_book)."""
     result: dict[str, float] = {}
     handicaps: dict[float, dict[str, tuple[float, float]]] = {}
     for o in outcomes:
         title = str(o.get("outcomeTitle") or "").lower().strip()
-        group = str(o.get("groupTitle") or "").lower().strip()
+        group = " ".join(str(o.get("groupTitle") or "").lower().split())
         try:
             odd = float(o.get("odd", ""))
         except (TypeError, ValueError):
             continue
-        if any(k in group for k in _NON_MAIN_GROUPS):
-            continue
-        is_half = any(k in group for k in ("1st half", "first half", "halftime", "half time", "ht ", "1st period"))
-        if is_half:
-            continue  # half-time markets are not served
-        if any(k in group for k in ("winner", "match result", "1x2", "result", "match winner")):
+        if group in _GROUP_1X2:
             if title in ("1", "w1", "home") or "(1)" in title:
                 result["w1"] = odd
             elif title in ("x", "draw", "tie"):
                 result["x"] = odd
             elif title in ("2", "w2", "away") or "(2)" in title:
                 result["w2"] = odd
-        elif any(k in group for k in ("double chance", "double result")):
+        elif group in _GROUP_DOUBLE:
             if "1x" in title or "home or draw" in title:
                 result["dc_1x"] = odd
             elif "12" in title or "home or away" in title:
                 result["dc_12"] = odd
-            elif "x2" in title or "draw or away" in title:
+            elif "x2" in title or "2x" in title or "draw or away" in title:
                 result["dc_x2"] = odd
-        elif any(k in group for k in ("draw no bet", "dnb", "moneyline")):
+        elif group in _GROUP_DNB:
             if title in ("1", "w1", "home"):
                 result["dnb_w1"] = odd
             elif title in ("2", "w2", "away"):
                 result["dnb_w2"] = odd
-        elif any(k in group for k in ("handicap", "asian handicap", "european handicap")):
-            m = re.search(r"\(([+-]?\d+\.?\d*)\)", title)
-            if m and float(m.group(1)) != 0:
-                val = float(m.group(1))
-                slot = handicaps.setdefault(abs(val), {})
-                if title.startswith("1") or "home" in title or "w1" in title:
-                    slot["w1"] = (val, odd)
-                elif title.startswith("2") or "away" in title or "w2" in title:
-                    slot["w2"] = (val, odd)
-        elif any(k in group for k in ("total", "goals", "total goals", "over/under")):
-            is_over = any(k in title for k in ("over", "more", "больше")) or "(+)" in title
-            is_under = any(k in title for k in ("under", "less", "меньше")) or "(-)" in title
+        elif group in _GROUP_HANDICAP:
+            # "Handicap 1 (-1.0)" is the home side of the line whose away side is "Handicap 2 (+1.0)": one line,
+            # keyed by the HOME value (so "1 (+1.0)" / "2 (-1.0)" is another line, never mixed with it).
+            m = re.fullmatch(r"(?:handicap )?([12]) \(([+-]?\d+(?:\.\d+)?)\)", title)
+            if m and float(m.group(2)) != 0:
+                side, val = m.group(1), float(m.group(2))
+                home_value = val if side == "1" else -val
+                slot = handicaps.setdefault(home_value, {})
+                slot["w1" if side == "1" else "w2"] = (home_value, odd)
+        elif group in _GROUP_TOTAL:
+            is_over = "over" in title or "(+)" in title
+            is_under = "under" in title or "(-)" in title
             for line, over_key, under_key in (("1.5", "over15", "under15"), ("2.5", "over25", "under25"),
                                               ("3.5", "over35", "under35")):
-                if re.search(rf"(?<!\d){re.escape(line)}", title):
+                if re.search(rf"\((?:[+-])?{re.escape(line)}\)", title):
                     if is_over:
                         result[over_key] = odd
                     elif is_under:
                         result[under_key] = odd
                     break
-        elif any(k in group for k in ("both", "btts", "gg", "обе", "goals both")):
-            if any(k in title for k in ("yes", "да", "gg")):
+        elif group in _GROUP_BTTS:
+            if title in ("yes", "gg") or title.endswith(" yes"):
                 result["btts_yes"] = odd
-            elif any(k in title for k in ("no", "нет", "ng")):
+            elif title in ("no", "ng") or title.endswith(" no"):
                 result["btts_no"] = odd
     both = {v: s for v, s in handicaps.items() if "w1" in s and "w2" in s}
     pool = both or {v: s for v, s in handicaps.items() if "w1" in s}
     if pool:
-        slot = pool[min(pool)]
+        slot = pool[min(pool, key=lambda v: (abs(v), v))]  # the most balanced line
         result["hcp_val"] = slot["w1"][0]
         result["hcp_w1"] = slot["w1"][1]
         if "w2" in slot:
