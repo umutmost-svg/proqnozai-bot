@@ -2,7 +2,9 @@
 
 A line gets a match's odds only when ALL of these hold:
 1. its (country, league) pair maps to that match's competition (leagues.json, exact
-   after normalization — never a substring);
+   after normalization — never a substring); in catalogue mode a line whose pair is not
+   in the table may stand for a match of ANY competition (the names and the time decide),
+   but a line whose pair maps to ANOTHER competition never does;
 2. its kickoff is within KICKOFF_TOLERANCE_S of the match's;
 3. its home team is the match's home team and its away team the match's away team
    (same order: a reversed pair would swap the 1 and 2 prices);
@@ -93,7 +95,7 @@ def team_names(team: Competitor, table: Leagues) -> frozenset[str]:
 class Candidate:
     """What the matcher needs of a stored line."""
     line_id: int
-    competition: str
+    competition: str | None  # None: a pair outside leagues.json (catalogue mode only)
     kickoff: float
     home: str
     away: str
@@ -101,11 +103,13 @@ class Candidate:
 
 def match(candidates: Iterable[Candidate], *, competition: str, kickoff: float, home: Competitor,
           away: Competitor, table: Leagues | None = None) -> tuple[Candidate | None, str]:
-    """(the one line for this match, or None; a reason code for the log)."""
+    """(the one line for this match, or None; a reason code for the log). Candidates without a competition
+    (catalogue mode) take part for every competition; two lines naming this match (a duplicate in the feed)
+    are ambiguous, never a choice."""
     table = table or leagues()
     home_names, away_names = team_names(home, table), team_names(away, table)
     near = [c for c in candidates
-            if c.competition == competition and abs(c.kickoff - kickoff) <= KICKOFF_TOLERANCE_S]
+            if c.competition in (competition, None) and abs(c.kickoff - kickoff) <= KICKOFF_TOLERANCE_S]
     if not near:
         return None, "no_line"
     straight: list[Candidate] = []

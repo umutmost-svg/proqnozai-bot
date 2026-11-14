@@ -1058,7 +1058,8 @@ export function readQuote(v: unknown, shown: number | undefined): MarketQuote | 
 }
 
 /** The server's validity is at most 15 minutes (miniapp/odds/store.py MAX_AGE_S). */
-const MAX_VALID_FOR_S = 15 * 60;
+// Catalogue mode serves far-from-kickoff prices up to an hour old (miniapp/odds/store.py FAR_MAX_AGE_S).
+const MAX_VALID_FOR_S = 60 * 60;
 
 /** Both clocks now: taken when a request is sent. */
 function clocksNow(): PriceDeadline {

@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from miniapp.sports.models import FootballEvent
+
 from .feed import MAX_BODY_BYTES, SIGNATURE_HEADER, TIMESTAMP_HEADER, FeedError, FeedReceiver
+
 from .store import OddsStore
 
 logger = logging.getLogger("miniapp.odds")
@@ -25,9 +28,12 @@ MAX_PUSHES_PER_MINUTE = 30
 
 
 def register_odds_routes(app: FastAPI, receiver: FeedReceiver | None, store: OddsStore,
-                         clock: Callable[[], float]) -> None:
+                         clock: Callable[[], float], events: Callable[[], Iterable[FootballEvent]] = tuple) -> None:
+    """`events`: the Mini App's upcoming matches (from the cached season calendars, no request), matched against
+    a catalogue push."""
     accepted: deque[float] = deque()
     refusals = {"logged_at": -1e18, "count": 0}
+    samples_logged = {"at": -1e18}
 
     def refused(code: str, status: int) -> JSONResponse:
         now = clock()
@@ -50,8 +56,8 @@ def register_odds_routes(app: FastAPI, receiver: FeedReceiver | None, store: Odd
             if len(body) > MAX_BODY_BYTES:
                 return refused("too_large", 413)
         try:
-            lines = receiver.verify(request.headers.get(TIMESTAMP_HEADER), request.headers.get(SIGNATURE_HEADER),
-                                    bytes(body))
+            kind, lines = receiver.verify_push(request.headers.get(TIMESTAMP_HEADER),
+                                               request.headers.get(SIGNATURE_HEADER), bytes(body))
         except FeedError as exc:
             return refused(exc.code, exc.status)
         if not store.enabled:
@@ -64,7 +70,22 @@ def register_odds_routes(app: FastAPI, receiver: FeedReceiver | None, store: Odd
             # Signed but too often: the sender pushes once per cycle (minutes apart).
             return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "60"})
         accepted.append(now)
-        report = store.ingest(lines)
+        if kind == "catalog":
+            # Always matched and logged (coverage is visible before the mode is on); the bot is told what to price
+            # only in catalogue mode — otherwise an empty list keeps it on leagues.json.
+            store.ingest_catalog(lines)  # type: ignore[arg-type]
+            found = store.match_catalog(events())
+            wanted = found.wanted if store.catalog else []
+            logger.info("odds.catalog lines=%d stored=%d events=%d %s wanted=%d mode=%s", len(lines), found.lines,
+                        found.events, " ".join(f"{k}={v}" for k, v in sorted(found.reasons.items())), len(wanted),
+                        "catalog" if store.catalog else "observe")
+            if found.samples and now - samples_logged["at"] >= 900:
+                samples_logged["at"] = now
+                for reason, items in sorted(found.samples.items()):
+                    logger.info("odds.catalog_unmatched reason=%s examples=%s", reason, " | ".join(items))
+            return JSONResponse({"received": len(lines), "events": found.events, "reasons": found.reasons,
+                                 "wanted": [{"id": i, "refresh": int(r)} for i, r in wanted]})
+        report = store.ingest(lines)  # type: ignore[arg-type]
         logger.info("odds.push lines=%d accepted=%d unknown_competition=%d without_odds=%d stored=%d",
                     len(lines), report.accepted, report.unknown_competition, report.without_odds, len(store))
         return JSONResponse({"received": len(lines), **report.to_json()})

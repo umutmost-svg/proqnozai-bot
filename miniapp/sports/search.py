@@ -268,6 +268,10 @@ class SearchIndex:
         now = self._clock()
         return {t: events for t, (at, events) in self._seasons.items() if now - at <= MAX_AGE_S}
 
+    def upcoming(self) -> list[FootballEvent]:
+        """Every upcoming match of the indexed (fresh) calendars: the odds catalogue is matched against these."""
+        return [e for events in self._fresh().values() for e in events if e.status == "upcoming"]
+
     def indexed(self) -> list[str]:
         fresh = self._fresh()
         return [t for t in self._ids() if t in fresh]

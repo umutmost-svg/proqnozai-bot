@@ -564,9 +564,9 @@ def create_app(
     settlement = Settlement(history, sports, clock)
     sports.calendar_listeners.append(settlement.on_calendar)
     # Odds pushed by the bot: in memory only, served after strict matching (miniapp/odds).
-    odds = OddsStore(clock, enabled=settings.odds_feed_enabled)
+    odds = OddsStore(clock, enabled=settings.odds_feed_enabled, catalog=settings.odds_catalog)
     receiver = FeedReceiver(settings.odds_feed_secret.encode(), clock) if settings.odds_feed_secret else None
-    register_odds_routes(app, receiver, odds, clock)
+    register_odds_routes(app, receiver, odds, clock, events=lambda: sports.search_index.upcoming())
     ai = ai or build_ai_service(settings, sports, clock=clock, ledger=store, history=history, odds=odds)
     async def active_session(request: Request) -> tuple[str, Session] | None:
         """current_session for the data APIs: a signed-in user may also start the settlement pass."""

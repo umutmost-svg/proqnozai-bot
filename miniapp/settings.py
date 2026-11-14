@@ -156,6 +156,9 @@ class Settings:
     # Kill switch: false answers signed pushes with 410 (the bot then asks the source for no
     # prices) and shows no odds anywhere, without touching the secret or the bot.
     odds_feed_enabled: bool = True
+    # Odds across the whole catalogue (docs/miniapp/odds-catalog.md): lines outside leagues.json matched by time and
+    # team names, and the bot told which lines to price. Off: catalogue pushes are only matched and logged.
+    odds_catalog: bool = False
     # AI analysis (M3.2). Without a key the analysis is reported "not connected".
     anthropic_api_key: str | None = field(default=None, repr=False)
     ai_model: str = "claude-opus-5-5"
@@ -379,6 +382,7 @@ class Settings:
             sports_user_unknown_per_hour=integer("MINIAPP_SPORTS_USER_UNKNOWN_PER_HOUR", 5),
             odds_feed_secret=optional("MINIAPP_ODDS_FEED_SECRET"),
             odds_feed_enabled=boolean("MINIAPP_ODDS_FEED_ENABLED", True),
+            odds_catalog=boolean("MINIAPP_ODDS_CATALOG", False),
             anthropic_api_key=optional("MINIAPP_ANTHROPIC_API_KEY"),
             ai_model=optional("MINIAPP_AI_MODEL") or "claude-opus-5-5",
             ai_per_user_daily=integer("MINIAPP_AI_PER_USER_DAILY", 10),
