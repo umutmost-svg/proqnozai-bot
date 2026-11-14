@@ -228,6 +228,7 @@ export const tr: Dictionary = {
   'ai.factorsTitle': 'Tahmini etkileyenler',
   'ai.limitText': 'Günlük AI analizi limiti doldu. Yarın tekrar deneyin — daha önce hazırlanan analizler limitsiz açılır.',
   'ai.busyText': 'AI şu anda yoğun. Biraz sonra tekrar deneyin.',
+  'ai.sourceBusyText': 'Futbol veri kaynağı şu anda isteklerle yoğun. {n} sn sonra tekrar deneyin — bu AI limiti değil.',
   'ai.viewStats': 'Mevcut istatistiklere bak',
   'ai.checkAgain': 'Tekrar kontrol et',
   'ai.errorTitle': 'Analiz oluşturulamadı',

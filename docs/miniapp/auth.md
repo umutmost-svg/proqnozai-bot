@@ -127,7 +127,7 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 | `MINIAPP_INIT_DATA_MAX_AGE_S` | `300` | максимальный возраст initData при обмене; не больше 3600 |
 | `MINIAPP_INIT_DATA_FUTURE_SKEW_S` | `30` | допустимое расхождение часов «в будущее»; 0…300 |
 | `MINIAPP_SESSION_TTL_S` | `43200` (12 ч) | срок сессии; не больше 604800 (7 дней) |
-| `MINIAPP_LOGIN_RATE_LIMIT` / `_WINDOW_S` | `10` / `60` | входов с **проверенной подписью** одного Telegram-пользователя за окно |
+| `MINIAPP_LOGIN_RATE_LIMIT` / `_WINDOW_S` | `20` / `3600` | входов с **проверенной подписью** одного Telegram-пользователя за окно (каждый вход без cookie — строка в `sessions`; завершённых строк хранится не больше 20 на пользователя) |
 | `MINIAPP_COOKIE_SAMESITE` | `lax` | `lax` / `strict` / `none` (`none` только с Secure) |
 | `MINIAPP_MAX_SESSIONS_PER_USER` | `5` | активных сессий на пользователя; 1…5; новая отзывает старейшую |
 | `MINIAPP_LOGINS_ENABLED` | `true` | `false` — аварийно закрыть новые входы (503 `logins_disabled`); сессии работают |

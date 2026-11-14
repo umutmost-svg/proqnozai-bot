@@ -176,8 +176,19 @@ class QuickService:
             for uid in [u for u, q in self._recent.items() if not q or now - q[-1] >= 60]:
                 del self._recent[uid]
 
+    def first_cost(self, start: datetime, end: datetime) -> int:
+        """1 when the first UTC day a pick lists is cold (a provider request), else 0 (for the user's share)."""
+        now_dt = datetime.fromtimestamp(self._clock(), UTC)
+        first = max(start, now_dt)
+        if end <= first or not self.sports.connected("football"):
+            return 0
+        midnight = datetime.combine(first.date() + timedelta(days=1), datetime.min.time(), UTC)
+        return self.sports.events_cost(first, min(end, midnight))
+
     async def pick(self, user_id: int, start: datetime, end: datetime, tournaments: frozenset[str] | None,
-                   criteria: Criteria) -> QuickAnswer:
+                   criteria: Criteria, budget: Callable[[int], bool] | None = None) -> QuickAnswer:
+        """`budget(cost)`: reserves that many provider requests in the caller's share, False when it has no
+        room (the step is then skipped like one over the shared limit)."""
         now = self._clock()
         now_dt = datetime.fromtimestamp(now, UTC)
         if end <= start or end - start > MAX_PERIOD or abs(start - now_dt) > CLOCK_SLACK:
@@ -194,25 +205,30 @@ class QuickService:
         try:
             token = LOW_PRIORITY_RESERVE.set(self.reserve)
             try:
-                return await self._pick(max(start, now_dt), end, tournaments, criteria, now_dt.date())
+                return await self._pick(max(start, now_dt), end, tournaments, criteria, now_dt.date(), budget)
             finally:
                 LOW_PRIORITY_RESERVE.reset(token)
         finally:
             self._running.discard(user_id)
 
     async def _pick(self, start: datetime, end: datetime, tournaments: frozenset[str] | None,
-                    criteria: Criteria, today: date) -> QuickAnswer:
+                    criteria: Criteria, today: date, budget: Callable[[int], bool] | None = None) -> QuickAnswer:
         """`today`: the UTC day of the single clock reading that started the pick; a later day
         change makes the answer "unavailable" (checked at the end)."""
-        def affordable(cost: int) -> bool:
-            return cost == 0 or cost <= self.sports.upstream_headroom() - self.reserve
+        def affordable(cost: int, user_cost: int | None = None) -> bool:
+            """`cost`: requests for the shared limit; `user_cost`: for the user's share, where a load already
+            running counts (it may be a refused background load the cache repeats for this caller)."""
+            mine = cost if user_cost is None else user_cost
+            if cost and cost > self.sports.upstream_headroom() - self.reserve:
+                return False
+            return mine == 0 or budget is None or budget(mine)
 
         days = _utc_days(start, end)
         events: dict[str, FootballEvent] = {}
         unchecked = 0
 
         async def list_day(day: date) -> bool:
-            if not affordable(self.sports.day_cost(day)):
+            if not affordable(self.sports.day_cost(day), self.sports.day_user_cost(day)):
                 return False
             lo = max(start, datetime.combine(day, datetime.min.time(), UTC))
             hi = min(end, datetime.combine(day + timedelta(days=1), datetime.min.time(), UTC))
@@ -247,7 +263,7 @@ class QuickService:
         for tournament in sorted(counts, key=lambda t: (-counts[t], t)):
             if tournament in unvalidated:
                 continue
-            if not affordable(self.sports.history_cost(tournament)):
+            if not affordable(self.sports.history_cost(tournament), self.sports.history_cost(tournament, user=True)):
                 unavailable.append(tournament)
                 continue
             try:

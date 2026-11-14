@@ -228,6 +228,7 @@ export const uz: Dictionary = {
   'ai.factorsTitle': 'Bahoga nima ta’sir qildi',
   'ai.limitText': 'AI tahlillarning kunlik limiti tugadi. Ertaga urinib koʻring — tayyor tahlillar limitsiz ochiladi.',
   'ai.busyText': 'AI hozir band. Birozdan keyin urinib koʻring.',
+  'ai.sourceBusyText': 'Futbol maʼlumotlari manbasi hozir soʻrovlar bilan band. {n} soniyadan keyin urinib koʻring — bu AI limiti emas.',
   'ai.viewStats': 'Mavjud statistikani koʻrish',
   'ai.checkAgain': 'Yana tekshirish',
   'ai.errorTitle': 'Tahlil yaratilmadi',

@@ -70,6 +70,9 @@ class ForeignDatabaseError(RuntimeError):
 
 
 SESSION_RETENTION_S = 7 * 86400
+# Ended (revoked or expired) sessions kept per user for incident review: repeated logins of one account
+# can never grow the table beyond this many rows per user (plus its active ones).
+ENDED_SESSIONS_KEPT_PER_USER = 20
 
 
 @dataclass(frozen=True)
@@ -245,6 +248,14 @@ class Store:
                     " AND expires_at > ? ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)",
                     (user_id, now, max_active), now, burn,
                 )
+            # Only rows: burned launches live in consumed_init_data, and a deleted ended session reads
+            # exactly like a revoked one (no session).
+            conn.execute(
+                "DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM sessions WHERE user_id = ?"
+                " AND (revoked_at IS NOT NULL OR expires_at <= ?) ORDER BY created_at DESC, rowid DESC"
+                " LIMIT -1 OFFSET ?)",
+                (user_id, now, ENDED_SESSIONS_KEPT_PER_USER),
+            )
             self._purge(conn, now)
         return session, evicted
 

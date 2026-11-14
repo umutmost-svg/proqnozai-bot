@@ -38,6 +38,47 @@ LOW_PRIORITY_RESERVE: contextvars.ContextVar[int] = contextvars.ContextVar("low_
 LOW_PRIORITY_DAY_SHARE: contextvars.ContextVar[float] = contextvars.ContextVar("low_priority_day_share", default=1.0)
 
 
+class UpstreamTally:
+    """Provider requests made on behalf of one user request (see sports/user_limits.py). Each one is
+    passed to `charge` at once — also from a load that outlives the request. `pending`: cache loads
+    this request started that are still running; `on_idle` runs once the request has ended and the
+    last of them is done (so a load outliving its request keeps the request's reservation)."""
+
+    __slots__ = ("count", "charge", "pending", "closed", "on_idle", "may_retry")
+
+    def __init__(self, charge: Callable[[], None] | None = None,
+                 may_retry: Callable[[], bool] | None = None) -> None:
+        self.count = 0
+        self.charge = charge
+        # A retry is one more request: allowed only while the user's share has room for it (reserved then).
+        self.may_retry = may_retry
+        self.pending = 0
+        self.closed = False
+        self.on_idle: Callable[[], None] | None = None
+
+    def load_started(self) -> None:
+        self.pending += 1
+
+    def load_done(self, _task: object = None) -> None:
+        self.pending -= 1
+        self._maybe_idle()
+
+    def close(self, on_idle: Callable[[], None]) -> None:
+        self.closed, self.on_idle = True, on_idle
+        self._maybe_idle()
+
+    def _maybe_idle(self) -> None:
+        if self.closed and self.pending <= 0 and self.on_idle is not None:
+            on_idle, self.on_idle = self.on_idle, None
+            on_idle()
+
+
+# Set around a user's request: every provider request it makes — directly, through a cache load it
+# starts (tasks copy the context) or as a retry — is counted. Background work (marked by a day share
+# below 1) is never charged to the user who happened to trigger it.
+USER_TALLY: contextvars.ContextVar[UpstreamTally | None] = contextvars.ContextVar("user_upstream_tally", default=None)
+
+
 @dataclass(frozen=True)
 class HttpResponse:
     status: int
@@ -234,6 +275,11 @@ class ProviderClient:
                                 low_priority_only=len(self._minute) < self._limits.per_minute)
         self._day_used += 1
         self._minute.append(now)
+        tally = USER_TALLY.get()
+        if tally is not None and LOW_PRIORITY_DAY_SHARE.get() >= 1.0:
+            tally.count += 1
+            if tally.charge is not None:
+                tally.charge()
 
     def _cool_down(self, headers: Mapping[str, str]) -> None:
         wait = 60.0
@@ -309,6 +355,11 @@ class ProviderClient:
                 if self._limits.shared_reserve and not known_above_reserve:
                     # Shared key and the remaining minute is unknown (timeout, no header): a retry could
                     # spend the bot's reserve, so the error is returned instead of retried.
+                    raise self._fail(error)
+                tally = USER_TALLY.get()
+                if (tally is not None and tally.may_retry is not None and LOW_PRIORITY_DAY_SHARE.get() >= 1.0
+                        and not tally.may_retry()):
+                    # The user's share is used up: the error is returned, never retried past it.
                     raise self._fail(error)
                 attempt += 1
                 await self._sleep(self._limits.backoff_s * (2 ** (attempt - 1)))

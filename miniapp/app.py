@@ -31,7 +31,8 @@ from miniapp.odds.store import OddsStore
 from miniapp.quick.routes import register_quick_routes
 from miniapp.quick.service import QuickService
 from miniapp.sports.client import UpstreamError
-from miniapp.sports.routes import register_sports_routes
+from miniapp.sports.routes import refused, register_sports_routes, upstream_response, user_share
+from miniapp.sports.user_limits import UserUpstreamLimiter
 from miniapp.sports.service import SportsService, build_service
 from miniapp.store import SUPPORTED_LANGS, BurnWindow, InitDataConsumedError, Session, Store, User
 from miniapp.telegram_auth import TELEGRAM_PUBLIC_KEYS, InitDataError, ed25519_shadow_status, validate_init_data
@@ -574,9 +575,12 @@ def create_app(
             settlement.ensure()
         return found
 
+    # One share per user of the shared football-data budget, for every route that may read it.
+    user_limiter = UserUpstreamLimiter(settings.sports_user_per_minute, settings.sports_user_unknown_per_hour, clock)
     register_sports_routes(app, sports, active_session,
-                           ai_status=lambda: "connected" if ai.connected else "not_connected", odds=odds)
-    register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session)
+                           ai_status=lambda: "connected" if ai.connected else "not_connected", odds=odds,
+                           user_limiter=user_limiter)
+    register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session, user_limiter=user_limiter)
 
     @app.get("/api/ai/analysis")
     async def ai_analysis_cached(request: Request) -> JSONResponse:
@@ -589,9 +593,20 @@ def create_app(
         event_id = params.get("event_id")
         if set(params) != {"event_id"} or not event_id or len(event_id) > 40 or len(params.getlist("event_id")) > 1:
             raise ApiError(400, "bad_request")
+        # Evidence (event, forms, seasons, tables) may read the data source: gated by the user's share
+        # with what is still cold (a never-listed id also by its hourly count), charged by what it loaded.
+        cost, unknown = sports.analysis_cost(event_id)
+        share = user_share(user_limiter, active[1].user_id)
+        if no := refused(share, cost, unknown=unknown):
+            return no
         try:
-            result = await ai.analyse(event_id, active[1].user_id, create=False)
-        except (AiError, UpstreamError) as exc:
+            with share.tally():
+                result = await ai.analyse(event_id, active[1].user_id, create=False)
+        except UpstreamError as exc:
+            # The football data source, not the AI: its own answer (with its wait), never "AI busy".
+            logger.info("ai.source_unavailable path=read reason=%s", exc.code)
+            return upstream_response(exc)
+        except AiError as exc:
             if exc.code == "not_created":
                 return JSONResponse({"error": "ai_not_created"}, status_code=404)
             logger.info("ai.unavailable path=read reason=%s", exc.code)  # code only: monitoring of timeouts etc.
@@ -616,9 +631,17 @@ def create_app(
         event_id = body["event_id"]
         if not isinstance(event_id, str) or not 0 < len(event_id) <= 40:
             raise ApiError(400, "bad_request")
+        cost, unknown = sports.analysis_cost(event_id)
+        share = user_share(user_limiter, session.user_id)
+        if no := refused(share, cost, unknown=unknown):
+            return no
         try:
-            result = await ai.analyse(event_id, session.user_id)
-        except (AiError, UpstreamError) as exc:
+            with share.tally():
+                result = await ai.analyse(event_id, session.user_id)
+        except UpstreamError as exc:
+            logger.info("ai.source_unavailable path=create reason=%s", exc.code)
+            return upstream_response(exc)
+        except AiError as exc:
             logger.info("ai.unavailable path=create reason=%s", exc.code)  # code only: monitoring of timeouts etc.
             if exc.code in AI_ERROR_CODES:
                 status = 429 if exc.code == "limit_reached" else 503

@@ -222,15 +222,22 @@ export function AiScreen() {
       />
     );
   } else if (event.status === 'error') {
-    body = <ErrorState title={t('event.errorTitle')} text={t('catalog.errorText')} onRetry={event.retry} />;
+    // A deep link whose match lookup met the data source's limit says so with its wait, as below.
+    const wait = event.error instanceof DataError && event.error.reason === 'source_unavailable' ? event.error.retryAfter : undefined;
+    const text = wait !== undefined ? t('ai.sourceBusyText', { n: wait }) : t('catalog.errorText');
+    body = <ErrorState title={t('event.errorTitle')} text={text} onRetry={event.retry} />;
   } else if (analysis.status === 'error') {
     const reason = analysis.error instanceof DataError ? analysis.error.reason : undefined;
+    // The football data source's limit (shared or this user's share) carries its wait: never "AI busy".
+    const sourceWait = analysis.error instanceof DataError && reason === 'source_unavailable' ? analysis.error.retryAfter : undefined;
     const text =
       reason === 'limit_reached'
         ? t('ai.limitText')
         : reason === 'budget_exhausted' || reason === 'rate_limited'
           ? t('ai.busyText')
-          : t('ai.errorText');
+          : sourceWait !== undefined
+            ? t('ai.sourceBusyText', { n: sourceWait })
+            : t('ai.errorText');
     body = (
       <>
         <section className={ui.section} data-testid="ai-error" data-reason={reason}>

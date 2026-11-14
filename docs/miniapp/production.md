@@ -231,6 +231,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 | `MINIAPP_FOOTBALL_DATA_PER_MINUTE` | `60` (общий ключ с ботом, §3) |
 | `MINIAPP_FOOTBALL_DATA_PER_DAY` | `14400` |
 | `MINIAPP_FOOTBALL_DATA_SHARED_RESERVE` | `40` (резерв бота, §3) |
+| `MINIAPP_SPORTS_USER_PER_MINUTE` / `MINIAPP_SPORTS_USER_UNKNOWN_PER_HOUR` | `6` / `5` (по умолчанию; холодный AI-разбор ≈ 4–6 запросов) — доля одного пользователя в общем бюджете football-data: запросов к источнику в минуту и неизвестных id матчей в час; кэш бесплатен. Сверх — 503 `source_unavailable` `scope: user` с `Retry-After` | |
 | `MINIAPP_FOOTBALL_DATA_COMPETITIONS` | `all` | |
 | `MINIAPP_ANTHROPIC_API_KEY` | **на публичном запуске НЕ задавать**: AI-разбор выключен (кнопки нет, вызова модели нет) до проверки качества 20–22.11 и исправления условий из `tech-debt.md` («Условия включения AI-разбора»). Потом — ключ Anthropic **только для Mini App** (не `ANTHROPIC_API_KEY` бота) с лимитом расходов | да (позже) |
 | `MINIAPP_AI_PER_USER_DAILY` / `MINIAPP_AI_DAILY_BUDGET` | `10` / `200` (≈ $0,007 за анализ → до ~$1,5 в сутки) | |

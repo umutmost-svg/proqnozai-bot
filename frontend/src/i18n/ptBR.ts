@@ -228,6 +228,7 @@ export const ptBR: Dictionary = {
   'ai.factorsTitle': 'O que influenciou a estimativa',
   'ai.limitText': 'O limite diário de análises AI acabou. Tente amanhã — as análises já feitas abrem sem limite.',
   'ai.busyText': 'A AI está ocupada agora. Tente daqui a pouco.',
+  'ai.sourceBusyText': 'A fonte de dados de futebol está sobrecarregada de pedidos. Tente em {n} s — não é o limite da AI.',
   'ai.viewStats': 'Ver estatísticas disponíveis',
   'ai.checkAgain': 'Verificar de novo',
   'ai.errorTitle': 'A análise não foi criada',

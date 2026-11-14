@@ -228,6 +228,7 @@ export const en: Dictionary = {
   'ai.factorsTitle': 'What shaped the estimate',
   'ai.limitText': 'The daily limit of AI analyses is used up. Try again tomorrow — analyses already made open without the limit.',
   'ai.busyText': 'The AI is busy right now. Please try a bit later.',
+  'ai.sourceBusyText': 'The football data source is busy with requests right now. Try again in {n} s — this is not the AI limit.',
   'ai.viewStats': 'View available stats',
   'ai.checkAgain': 'Check again',
   'ai.errorTitle': 'Analysis not created',

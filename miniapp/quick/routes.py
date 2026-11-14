@@ -7,7 +7,8 @@ from fastapi.responses import JSONResponse
 
 from miniapp.forecast.quick import Criteria
 from miniapp.sports.client import UpstreamError
-from miniapp.sports.routes import SessionCheck, _error, _upstream
+from miniapp.sports.routes import SessionCheck, _error, _upstream, refused, user_share
+from miniapp.sports.user_limits import UserUpstreamLimiter
 from miniapp.sports.service import RequestError, parse_instant
 
 from .service import QuickBusy, QuickService
@@ -16,7 +17,8 @@ PARAMS = frozenset({"mode", "from", "to", "tournaments", "market", "risk", "size
 MAX_TOURNAMENTS = 20
 
 
-def register_quick_routes(app: FastAPI, service: QuickService, current_session: SessionCheck) -> None:
+def register_quick_routes(app: FastAPI, service: QuickService, current_session: SessionCheck,
+                          user_limiter: UserUpstreamLimiter | None = None) -> None:
     @app.get("/api/quick/pick")
     async def pick(request: Request) -> JSONResponse:
         active = await current_session(request)
@@ -39,8 +41,14 @@ def register_quick_routes(app: FastAPI, service: QuickService, current_session: 
             if len(ids) > MAX_TOURNAMENTS or any(not 0 < len(i) <= 40 for i in ids):
                 return _error(400, "bad_request")
             tournaments = frozenset(ids)
+        share = user_share(user_limiter, session.user_id)
+        # Admitted while the share has room for its first cold step; every further step (a day, a season
+        # history) is reserved as it goes and skipped ("unavailable") when the share has no room left.
+        if no := refused(share, service.first_cost(start, end)):
+            return no
         try:
-            answer = await service.pick(session.user_id, start, end, tournaments, criteria)
+            with share.tally():
+                answer = await service.pick(session.user_id, start, end, tournaments, criteria, budget=share.take)
         except QuickBusy:
             return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "10"})
         except RequestError as exc:

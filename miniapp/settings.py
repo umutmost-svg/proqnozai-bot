@@ -113,8 +113,8 @@ class Settings:
     max_body_bytes: int = 8 * 1024
     max_init_data_chars: int = 4096
     # Successful-signature logins per verified Telegram user per window.
-    login_rate_limit: int = 10
-    login_rate_window_s: int = 60
+    login_rate_limit: int = 20
+    login_rate_window_s: int = 3600
     cookie_samesite: SameSite = "lax"
     # Active sessions per user; creating one more revokes the oldest.
     max_sessions_per_user: int = 5
@@ -138,6 +138,10 @@ class Settings:
     football_data_shared_reserve: int = 0
     # Event ids never seen in a listing may cost an upstream call: capped per hour.
     sports_unknown_lookups_per_hour: int = 20
+    # Each signed-in user's share of those budgets (so one account cannot exhaust them for everyone):
+    # provider requests per minute and never-listed match ids per hour. Only uncached reads are charged.
+    sports_user_per_minute: int = 6
+    sports_user_unknown_per_hour: int = 5
     # Odds pushed by the bot (HMAC-signed, POST /api/internal/odds). Unset: the route is off
     # and no odds are shown anywhere.
     odds_feed_secret: str | None = field(default=None, repr=False)
@@ -265,6 +269,10 @@ class Settings:
             raise SettingsError("football_data_per_day must be 1..14400")
         if not 0 <= self.sports_unknown_lookups_per_hour <= 600:
             raise SettingsError("sports_unknown_lookups_per_hour must be 0..600")
+        if not 1 <= self.sports_user_per_minute <= 600:
+            raise SettingsError("sports_user_per_minute must be 1..600")
+        if not 0 <= self.sports_user_unknown_per_hour <= 600:
+            raise SettingsError("sports_user_unknown_per_hour must be 0..600")
         if self.anthropic_api_key is not None and (
             not self.anthropic_api_key.isascii() or not self.anthropic_api_key.isprintable()
             or " " in self.anthropic_api_key or not 20 <= len(self.anthropic_api_key) <= 256
@@ -333,8 +341,8 @@ class Settings:
             init_data_max_age_s=integer("MINIAPP_INIT_DATA_MAX_AGE_S", 300),
             init_data_future_skew_s=integer("MINIAPP_INIT_DATA_FUTURE_SKEW_S", 30),
             session_ttl_s=integer("MINIAPP_SESSION_TTL_S", 12 * 3600),
-            login_rate_limit=integer("MINIAPP_LOGIN_RATE_LIMIT", 10),
-            login_rate_window_s=integer("MINIAPP_LOGIN_RATE_WINDOW_S", 60),
+            login_rate_limit=integer("MINIAPP_LOGIN_RATE_LIMIT", 20),
+            login_rate_window_s=integer("MINIAPP_LOGIN_RATE_WINDOW_S", 3600),
             cookie_samesite=env.get("MINIAPP_COOKIE_SAMESITE", "lax").strip().lower() or "lax",  # type: ignore[arg-type]
             max_sessions_per_user=integer("MINIAPP_MAX_SESSIONS_PER_USER", 5),
             logins_enabled=boolean("MINIAPP_LOGINS_ENABLED", True),
@@ -348,6 +356,8 @@ class Settings:
             football_data_per_day=integer("MINIAPP_FOOTBALL_DATA_PER_DAY", 3000),
             football_data_shared_reserve=integer("MINIAPP_FOOTBALL_DATA_SHARED_RESERVE", 0),
             sports_unknown_lookups_per_hour=integer("MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR", 20),
+            sports_user_per_minute=integer("MINIAPP_SPORTS_USER_PER_MINUTE", 6),
+            sports_user_unknown_per_hour=integer("MINIAPP_SPORTS_USER_UNKNOWN_PER_HOUR", 5),
             odds_feed_secret=optional("MINIAPP_ODDS_FEED_SECRET"),
             odds_feed_enabled=boolean("MINIAPP_ODDS_FEED_ENABLED", True),
             anthropic_api_key=optional("MINIAPP_ANTHROPIC_API_KEY"),

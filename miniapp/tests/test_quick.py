@@ -118,7 +118,10 @@ class StubSports:
     def day_cost(self, day):
         return self._day_cost
 
-    def history_cost(self, tournament):
+    def day_user_cost(self, day):
+        return self._day_cost
+
+    def history_cost(self, tournament, *, user=False):
         return self._history_cost
 
     stale = False

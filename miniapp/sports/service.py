@@ -37,6 +37,9 @@ SPECULATE_MIN_HEADROOM = 12
 FUTURE_WINDOW = timedelta(days=60)
 # Day-table snapshots of the top-match ranking kept at most (one per day start and competition).
 TOP_TABLES_MAX = 2000
+# Provider requests a fully cold AI analysis reads: the match, two team forms, the calendar, the
+# previous season and the table.
+AI_EVIDENCE_REQUESTS = 6
 # Standings warm-up: every served table is refreshed in the background before its cache entry
 # (football_data.STANDINGS_TTL_S, 30 min) expires, so a user never waits on, or fails at, the
 # provider's per-minute limit for a table. It runs only while the app is used (each signed-in
@@ -279,11 +282,7 @@ class SportsService:
         catalog = self.tournaments(sport)
         if tournament is not None and tournament not in {t.id for t in catalog}:
             raise RequestError("unknown_tournament")
-        days: list[date] = []
-        day = start.date()
-        while day <= (end - timedelta(microseconds=1)).date():
-            days.append(day)
-            day += timedelta(days=1)
+        days = _days(start, end)
         events: dict[str, SportEvent] = {}
         oldest: float | None = None
         stale = False
@@ -437,11 +436,93 @@ class SportsService:
     def day_cost(self, day: date) -> int:
         return int(self.football is not None and self._costs_request(f"football:day:{day.isoformat()}"))
 
-    def history_cost(self, tournament_id: str) -> int:
-        """Provider requests model_history() would make now (an unknown season counts as one)."""
+    def day_user_cost(self, day: date) -> int:
+        """day_cost for a user's share (a load already running counts, see _user_cost)."""
+        return int(self.football is not None and bool(self._user_cost(f"football:day:{day.isoformat()}")))
+
+    def _user_cost(self, key: str) -> int:
+        """For a user's share: 0 only when the key is answered without a request (a fresh value, a
+        remembered failure). A load already running counts: if it was a background load refused by
+        its own limits, the cache repeats it in the foreground for this caller."""
+        try:
+            return int(not isinstance(self.cache.existing(key), Cached))
+        except UpstreamError:
+            return 0
+
+    def events_cost(self, start: datetime, end: datetime) -> int:
+        """Provider requests a listing of [start, end) would make now (0 for a range events() refuses)."""
+        try:
+            self._check_range(start, end)
+        except RequestError:
+            return 0
+        if self.football is None:
+            return 0
+        return sum(self._user_cost(f"football:day:{d.isoformat()}") for d in _days(start, end))
+
+    def _served(self, sport: str, tournament_id: str) -> str | None:
+        if not self.connected(sport) or not any(t.id == tournament_id for t in self.tournaments(sport)):  # type: ignore[arg-type]
+            return None
+        return tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+
+    def calendar_cost(self, sport: str, tournament_id: str) -> int:
+        code = self._served(sport, tournament_id)
+        return 0 if code is None else self._user_cost(f"football:calendar:{code}")
+
+    def standings_cost(self, sport: str, tournament_id: str) -> int:
+        code = self._served(sport, tournament_id)
+        return 0 if code is None else self._user_cost(f"football:standings:{code}")
+
+    def event_cost(self, event_id: str) -> tuple[int, bool]:
+        """(provider requests event() would make now, whether it is an id never seen in a listing).
+        A match from a known calendar costs at most that calendar's refresh, never an unknown lookup."""
+        match_id = football_data.parse_event_id(event_id)
+        if match_id is None or self.football is None:
+            return 0, False
+        calendar_of = self._calendar_index.get(event_id)
+        cost = self._user_cost(f"football:match:{match_id}")
+        if calendar_of is not None and (event_id not in self._known_ids or self._calendar_fresh(calendar_of)):
+            # Listed in a calendar: answered from it, or (a match a refresh no longer lists) also by its own
+            # lookup — both requests when the calendar is cold.
+            calendar = self.calendar_cost("football", calendar_of)
+            return (calendar + cost if calendar else 0), False
+        return cost, bool(cost) and event_id not in self._known_ids
+
+    def analysis_cost(self, event_id: str) -> tuple[int, bool]:
+        """(provider requests an AI analysis's evidence would make now, whether the id was never listed):
+        the match, both teams' forms, the goal model's seasons and the table — each only while still cold.
+        A match not in the cache counts every piece (its teams are not known yet)."""
+        cost, unknown = self.event_cost(event_id)
+        event = self._peek_event(event_id)
+        if event is None:
+            return (cost + AI_EVIDENCE_REQUESTS - 1 if cost else 0), unknown
+        if not isinstance(event, FootballEvent) or event.status != "upcoming":
+            return cost, unknown  # not analysed: the evidence stops at the match
+        forms = sum(self._user_cost(f"football:form:{n}") for n in
+                    (football_data.team_number(t.id) for t in (event.home, event.away)) if n is not None)
+        code = event.tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+        table = self._user_cost(f"football:standings:{code}") if code in self.football.codes else 0  # type: ignore[union-attr]
+        return cost + forms + self.history_cost(event.tournament_id, user=True) + table, unknown
+
+    def _peek_event(self, event_id: str) -> SportEvent | None:
+        """The match as already cached (fresh or not), from its calendar or its own lookup; never loads."""
+        calendar_of = self._calendar_index.get(event_id)
+        if calendar_of is not None:
+            entry = self.cache.peek(f"football:calendar:{calendar_of.removeprefix(f'{football_data.ID_PREFIX}:')}")
+            if entry is not None:
+                found = next((e for e in entry.value[0] if e.id == event_id), None)
+                if found is not None:
+                    return found
+        match_id = football_data.parse_event_id(event_id)
+        entry = self.cache.peek(f"football:match:{match_id}") if match_id is not None else None
+        return entry.value if entry is not None else None
+
+    def history_cost(self, tournament_id: str, *, user: bool = False) -> int:
+        """Provider requests model_history() would make now (an unknown season counts as one). `user`: for a
+        user's share, a load already running counts too (see _user_cost)."""
         code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
         key = f"football:calendar:{code}"
-        cost = int(self._costs_request(key))
+        costs = (lambda k: bool(self._user_cost(k))) if user else self._costs_request
+        cost = int(costs(key))
         entry = self.cache.peek(key)
         if entry is None:
             return cost + 1
@@ -451,7 +532,7 @@ class SportsService:
         year = int(start[:4]) - 1
         if self._clock() < self._past_retry_at.get((code, year), 0.0):
             return cost
-        return cost + int(self._costs_request(f"football:season:{code}:{year}"))
+        return cost + int(costs(f"football:season:{code}:{year}"))
 
     async def model_history(self, tournament_id: str) -> ModelHistory | None:
         """Current-season calendar plus the previous season (one request a day, shared)."""
@@ -732,6 +813,16 @@ class SportsService:
         if len(self._unknown_lookups) >= self._unknown_per_hour:
             raise UpstreamError("rate_limited")
         self._unknown_lookups.append(now)
+
+
+def _days(start: datetime, end: datetime) -> list[date]:
+    """The UTC dates a listing of [start, end) reads (one cached day listing each)."""
+    days: list[date] = []
+    day = start.date()
+    while day <= (end - timedelta(microseconds=1)).date():
+        days.append(day)
+        day += timedelta(days=1)
+    return days
 
 
 def _with_cache_state(event: SportEvent, stale: bool) -> SportEvent:

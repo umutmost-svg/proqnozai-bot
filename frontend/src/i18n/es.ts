@@ -228,6 +228,7 @@ export const es: Dictionary = {
   'ai.factorsTitle': 'Qué influyó en la estimación',
   'ai.limitText': 'Se ha agotado el límite diario de análisis AI. Vuelve a intentarlo mañana; los análisis ya hechos se abren sin límite.',
   'ai.busyText': 'La AI está saturada ahora mismo. Inténtalo un poco más tarde.',
+  'ai.sourceBusyText': 'La fuente de datos de fútbol está saturada de solicitudes. Inténtalo en {n} s — no es el límite de la AI.',
   'ai.viewStats': 'Ver estadísticas disponibles',
   'ai.checkAgain': 'Comprobar de nuevo',
   'ai.errorTitle': 'No se creó el análisis',

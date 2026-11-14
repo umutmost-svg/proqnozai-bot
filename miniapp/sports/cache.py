@@ -28,7 +28,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from .client import LOW_PRIORITY_DAY_SHARE, LOW_PRIORITY_RESERVE, UpstreamError
+from .client import LOW_PRIORITY_DAY_SHARE, LOW_PRIORITY_RESERVE, USER_TALLY, UpstreamError
 
 T = TypeVar("T")
 
@@ -113,6 +113,11 @@ class SportsCache:
             running = asyncio.ensure_future(self._refresh(key, load, self._entries.get(key)))
             self._inflight[key] = running
             running.add_done_callback(lambda task, k=key: self._finished(k, task))
+            # A user's request that starts a load keeps its share's reservation until the load ends.
+            tally = USER_TALLY.get()
+            if tally is not None and LOW_PRIORITY_DAY_SHARE.get() >= 1.0:
+                tally.load_started()
+                running.add_done_callback(tally.load_done)
         return running
 
     def _finished(self, key: str, task: asyncio.Future) -> None:

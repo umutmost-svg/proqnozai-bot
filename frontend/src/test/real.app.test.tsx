@@ -251,6 +251,31 @@ describe('real mode', () => {
     expect(await screen.findByTestId('ai-error')).toHaveTextContent('Дневной лимит AI-разборов исчерпан');
   });
 
+  it('AI screen: a busy football data source says so with its wait, never "AI busy"', async () => {
+    const upcoming = ev(7, 'upcoming', 'Leeds United', 'Burnley FC');
+    const fetchImpl = vi.fn<typeof fetch>(async (input) =>
+      String(input).startsWith('/api/ai/analysis')
+        ? new Response(JSON.stringify({ error: 'source_unavailable', reason: 'rate_limited', scope: 'user', retryAfter: 42 }),
+            { status: 503, headers: { 'Retry-After': '42' } })
+        : new Response(JSON.stringify({ event: upcoming, tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'connected' } }), { status: 200 }),
+    );
+    const data = new BackendSportsDataProvider({ waitForSession: async () => true, getCsrfToken: () => 'c', fetchImpl });
+    renderApp('#/event/fd%3A7/ai', { data });
+    const error = await screen.findByTestId('ai-error');
+    expect(error).toHaveTextContent('Источник футбольных данных сейчас перегружен запросами. Попробуйте через 42 с');
+    expect(error).not.toHaveTextContent('AI сейчас перегружен');
+  });
+
+  it('AI deep link: a busy data source on the match lookup also says so with its wait', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      new Response(JSON.stringify({ error: 'source_unavailable', reason: 'rate_limited', scope: 'user', retryAfter: 17 }),
+        { status: 503, headers: { 'Retry-After': '17' } }),
+    );
+    const data = new BackendSportsDataProvider({ waitForSession: async () => true, getCsrfToken: () => 'c', fetchImpl });
+    renderApp('#/event/fd%3A8/ai', { data });
+    expect(await screen.findByText(/Попробуйте через 17 с/)).toBeInTheDocument();
+  });
+
   it('a source outage is an error state with retry, not demo data', async () => {
     const user = userEvent.setup();
     const outage = new Response(JSON.stringify({ error: 'source_unavailable', reason: 'rate_limited' }), { status: 503 });

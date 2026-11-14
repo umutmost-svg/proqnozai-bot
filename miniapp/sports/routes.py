@@ -22,6 +22,7 @@ from .crests import KINDS, media_type
 from .models import SPORTS
 from .search import MAX_QUERY, MIN_QUERY, normalize
 from .service import RequestError, SportsService, parse_instant
+from .user_limits import UserShare, UserUpstreamLimiter
 
 # A stand-in flag: cached only until the emblem itself is asked again (the crest store's failure TTL).
 FALLBACK_CREST_CACHE = "public, max-age=3600"
@@ -37,6 +38,32 @@ def _error(status: int, code: str, **extra: Any) -> JSONResponse:
 
 
 MAX_RETRY_AFTER_S = 3600
+
+
+def user_busy(wait: float) -> JSONResponse:
+    """This user's share of the data source is used up: the same "source busy, retry in N s" answer
+    the app already shows for the shared limit (never an AI reason), marked as the user's own."""
+    seconds = min(max(math.ceil(wait), 1), MAX_RETRY_AFTER_S)
+    return JSONResponse({"error": "source_unavailable", "reason": "rate_limited", "scope": "user",
+                         "retryAfter": seconds}, status_code=503, headers={"Retry-After": str(seconds)})
+
+
+def user_share(limiter: UserUpstreamLimiter | None, user_id: int) -> UserShare:
+    return UserShare(limiter, user_id)
+
+
+def refused(share: UserShare, cost: int = 1, unknown: bool = False) -> JSONResponse | None:
+    """None when the user may go on (then run the call inside `share.tally()`), else the refusal."""
+    wait = share.gate(cost, unknown)
+    if wait is None:
+        return None
+    logger.info("sports.user_limited unknown=%s", unknown)
+    return user_busy(wait)
+
+
+def upstream_response(exc: UpstreamError) -> JSONResponse:
+    """The data source's own refusal (shared limits, quota, outage) as the app shows it."""
+    return _upstream(exc)
 
 
 def _upstream(exc: UpstreamError) -> JSONResponse:
@@ -73,26 +100,30 @@ def _event_odds(odds: OddsStore | None, event: Any) -> dict | None:
 
 def register_sports_routes(app: FastAPI, service: SportsService, current_session: SessionCheck,
                            ai_status: Callable[[], str] = lambda: "not_connected",
-                           odds: OddsStore | None = None) -> None:
-    async def signed_in(request: Request) -> bool:
-        if await current_session(request) is None:
-            return False
+                           odds: OddsStore | None = None, user_limiter: UserUpstreamLimiter | None = None) -> None:
+    async def signed_in(request: Request) -> int | None:
+        """The signed-in user's id, else None."""
+        active = await current_session(request)
+        if active is None:
+            return None
         # The app is in use: keep the tables and the season calendars (with the goal model's previous
         # season) warm — background passes, only when one is due — so an AI analysis rarely starts cold.
         service.ensure_standings_warm()
         service.ensure_calendars_warm()
-        return True
+        return active[1].user_id
 
     @app.get("/api/sports/coverage")
     async def coverage(request: Request) -> JSONResponse:
-        if not await signed_in(request):
+        user = await signed_in(request)
+        if user is None:
             return _error(401, "unauthenticated")
         await service.ensure_emblems()
         return JSONResponse({**service.coverage(), "ai": {"status": ai_status()}})
 
     @app.get("/api/sports/{sport}/tournaments")
     async def tournaments(sport: str, request: Request) -> JSONResponse:
-        if not await signed_in(request):
+        user = await signed_in(request)
+        if user is None:
             return _error(401, "unauthenticated")
         if sport not in SPORTS:
             return _error(404, "not_found")
@@ -106,7 +137,8 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
 
     @app.get("/api/sports/{sport}/events")
     async def events(sport: str, request: Request) -> JSONResponse:
-        if not await signed_in(request):
+        user = await signed_in(request)
+        if user is None:
             return _error(401, "unauthenticated")
         if sport not in SPORTS:
             return _error(404, "not_found")
@@ -116,7 +148,11 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             return _error(400, "bad_request")
         try:
             start, end = parse_instant(params["from"]), parse_instant(params["to"])
-            result = await service.events(sport, start, end, params.get("tournament") or None)  # type: ignore[arg-type]
+            share = user_share(user_limiter, user)
+            if service.connected(sport) and (no := refused(share, service.events_cost(start, end))):  # type: ignore[arg-type]
+                return no
+            with share.tally():
+                result = await service.events(sport, start, end, params.get("tournament") or None)  # type: ignore[arg-type]
         except RequestError as exc:
             return _error(400, exc.code)
         except UpstreamError as exc:
@@ -136,7 +172,8 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
     @app.get("/api/sports/football/top")
     async def top(request: Request) -> JSONResponse:
         """The day's top matches. `from`/`to`: the user's local day in UTC (as for /events)."""
-        if not await signed_in(request):
+        user = await signed_in(request)
+        if user is None:
             return _error(401, "unauthenticated")
         params = request.query_params
         if set(params) - {"from", "to", "tournament"} or "from" not in params or "to" not in params:
@@ -146,7 +183,11 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             # One local day (23–25 h with a clock change), never a longer ranking.
             if not timedelta(0) < end - start <= MAX_TOP_DAY:
                 return _error(400, "bad_range")
-            ranked, result = await service.top(start, end, params.get("tournament") or None)
+            share = user_share(user_limiter, user)
+            if no := refused(share, service.events_cost(start, end)):
+                return no
+            with share.tally():
+                ranked, result = await service.top(start, end, params.get("tournament") or None)
         except RequestError as exc:
             return _error(400, exc.code)
         except UpstreamError as exc:
@@ -164,12 +205,17 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
 
     @app.get("/api/sports/event/{event_id}")
     async def event(event_id: str, request: Request) -> JSONResponse:
-        if not await signed_in(request):
+        user = await signed_in(request)
+        if user is None:
             return _error(401, "unauthenticated")
         if len(event_id) > 40:
             return _error(404, "not_found")
+        share = user_share(user_limiter, user)
+        if no := refused(share, *service.event_cost(event_id)):
+            return no
         try:
-            found, tournament = await service.event(event_id)
+            with share.tally():
+                found, tournament = await service.event(event_id)
         except UpstreamError as exc:
             return _upstream(exc)
         if found is None:
@@ -182,14 +228,19 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
 
     @app.get("/api/sports/{sport}/tournaments/{tournament_id}/calendar")
     async def calendar(sport: str, tournament_id: str, request: Request) -> JSONResponse:
-        if not await signed_in(request):
+        user = await signed_in(request)
+        if user is None:
             return _error(401, "unauthenticated")
         if sport not in SPORTS or len(tournament_id) > 40:
             return _error(404, "not_found")
         if request.query_params:
             return _error(400, "bad_request")
+        share = user_share(user_limiter, user)
+        if no := refused(share, service.calendar_cost(sport, tournament_id)):
+            return no
         try:
-            result = await service.calendar(sport, tournament_id)  # type: ignore[arg-type]
+            with share.tally():
+                result = await service.calendar(sport, tournament_id)  # type: ignore[arg-type]
         except UpstreamError as exc:
             return _upstream(exc)
         if result is None:
@@ -208,14 +259,19 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
 
     @app.get("/api/sports/{sport}/tournaments/{tournament_id}/standings")
     async def standings(sport: str, tournament_id: str, request: Request) -> JSONResponse:
-        if not await signed_in(request):
+        user = await signed_in(request)
+        if user is None:
             return _error(401, "unauthenticated")
         if sport not in SPORTS or len(tournament_id) > 40:
             return _error(404, "not_found")
         if request.query_params:
             return _error(400, "bad_request")
+        share = user_share(user_limiter, user)
+        if no := refused(share, service.standings_cost(sport, tournament_id)):
+            return no
         try:
-            result = await service.standings_table(sport, tournament_id)  # type: ignore[arg-type]
+            with share.tally():
+                result = await service.standings_table(sport, tournament_id)  # type: ignore[arg-type]
         except UpstreamError as exc:
             return _upstream(exc)
         if result is None:
@@ -271,7 +327,8 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
     async def search(sport: str, request: Request) -> JSONResponse:
         # Global: independent of any date or tournament the catalogue shows. Served from the
         # season index (no upstream request per keystroke; the warm-up runs in the background).
-        if not await signed_in(request):
+        user = await signed_in(request)
+        if user is None:
             return _error(401, "unauthenticated")
         if sport not in SPORTS:
             return _error(404, "not_found")
@@ -297,7 +354,8 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
 
     @app.get("/api/sports/{sport}/teams/{team_id}/matches")
     async def team_matches(sport: str, team_id: str, request: Request) -> JSONResponse:
-        if not await signed_in(request):
+        user = await signed_in(request)
+        if user is None:
             return _error(401, "unauthenticated")
         if sport not in SPORTS or len(team_id) > 40 or not service.connected(sport):  # type: ignore[arg-type]
             return _error(404, "not_found")

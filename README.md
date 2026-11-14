@@ -123,7 +123,9 @@ Mini App (`miniapp/`, `frontend/`) читает только свои перем
 «не подключён»), `MINIAPP_FOOTBALL_DATA_COMPETITIONS`,
 `MINIAPP_FOOTBALL_DATA_LIVE_PLAN`, `MINIAPP_FOOTBALL_DATA_PER_MINUTE`,
 `MINIAPP_FOOTBALL_DATA_PER_DAY`, `MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR`
-(`PER_MINUTE` — 1..10 на бесплатном тарифе, до 120 только с `LIVE_PLAN=true`).
+(`PER_MINUTE` — 1..10 на бесплатном тарифе, до 120 только с `LIVE_PLAN=true`),
+`MINIAPP_SPORTS_USER_PER_MINUTE` / `MINIAPP_SPORTS_USER_UNKNOWN_PER_HOUR` (доля одного пользователя в общем
+бюджете: запросов к источнику в минуту и неизвестных id матчей в час; по умолчанию 6 / 5).
 
 Коэффициенты (подписанная выгрузка от бота, `docs/miniapp/odds.md`):
 `MINIAPP_ODDS_FEED_SECRET` (секрет HMAC, ≥ 32 символов; пусто — приём

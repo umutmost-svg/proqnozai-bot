@@ -230,6 +230,7 @@ export const az: Dictionary = {
   'ai.factorsTitle': 'Qiymətləndirməyə nə təsir etdi',
   'ai.limitText': 'Günlük AI analiz limiti bitib. Sabah yenidən cəhd edin — artıq hazır analizlər limitsiz açılır.',
   'ai.busyText': 'AI hazırda yüklənib. Bir az sonra yenidən cəhd edin.',
+  'ai.sourceBusyText': 'Futbol məlumatları mənbəyi hazırda sorğularla yüklənib. {n} san sonra yenidən cəhd edin — bu AI limiti deyil.',
   'ai.viewStats': 'Mövcud statistikaya bax',
   'ai.checkAgain': 'Yenidən yoxla',
   'ai.errorTitle': 'Analiz yaradılmadı',
