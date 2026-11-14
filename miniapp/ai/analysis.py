@@ -165,6 +165,19 @@ class ModelClient(Protocol):
         """The model's answer, or AiError."""
 
 
+_DOUBLE = {frozenset({"1", "X"}): "1X", frozenset({"X", "2"}): "X2", frozenset({"1", "2"}): "12"}
+
+
+def lean_of(home: int, draw: int, away: int, confidence: str) -> dict:
+    """{"market", "probability", "confidence"}: the top outcome, or with the top two tied their double
+    chance (probability = their sum). Deterministic, from the whole percents the user sees."""
+    ranked = sorted((("1", home), ("X", draw), ("2", away)), key=lambda kv: -kv[1])
+    (first, top), (second, runner_up) = ranked[0], ranked[1]
+    if top == runner_up:
+        return {"market": _DOUBLE[frozenset({first, second})], "probability": top + runner_up, "confidence": confidence}
+    return {"market": first, "probability": top, "confidence": confidence}
+
+
 @dataclass(frozen=True)
 class AnalysisResult:
     event_id: str
@@ -186,9 +199,22 @@ class AnalysisResult:
     # stop being current ({"fetchedAt", "validFor"}); the client hides the estimate after that.
     estimate_from: dict | None = None
 
+    def lean(self) -> dict | None:
+        """The model's forecast for EVERY match with probabilities: the most likely 1X2 outcome (a tie
+        of the top two: their double chance, summed). Computed here from the shown whole percents, never
+        by the language model. "model" confidence only for a READY analysis in the validated population
+        (gateEligible), else "estimate". Separate from `pick`, which stays the strict selection rules."""
+        p = self.probabilities
+        if not isinstance(p, dict) or not all(isinstance(p.get(k), int) for k in ("home", "draw", "away")):
+            return None
+        return lean_of(p["home"], p["draw"], p["away"],
+                       "model" if self.kind == "ready" and not self.estimated and bool((self.forecast or {}).get("gateEligible"))
+                       else "estimate")
+
     def to_json(self) -> dict:
         return {
             "schema": SCHEMA_VERSION,
+            "lean": self.lean(),
             "eventId": self.event_id,
             "kind": self.kind,
             "reasons": list(self.reasons),

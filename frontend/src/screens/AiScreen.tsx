@@ -10,7 +10,7 @@ import type { AiAnalysis, SportEvent, TeamBasis } from '../data/models';
 import { Facts, Factors } from './ai/Explain';
 import { MarketValue, quoteOf, usePricesLive } from './ai/Market';
 import { Alternatives, MarketsBlock, ModelStats } from './ai/Model';
-import { PickCard } from './ai/PickCard';
+import { LeanCard, PickCard } from './ai/PickCard';
 import { ProbabilityBlock } from './ai/ProbabilityBlock';
 import { DataError } from '../data/provider';
 import { useAsync } from '../hooks/useAsync';
@@ -116,6 +116,9 @@ function Result({ event, analysis }: { event: SportEvent; analysis: AiAnalysis }
           badge={basisOnly ? t('ai.marketEstimate') : undefined}
           colourNote={basisOnly ? t('ai.colourNoteMarket') : undefined}
         />
+      )}
+      {real && showProbabilities && analysis.lean && (
+        <LeanCard lean={analysis.lean} event={event} fromMarket={basisOnly} />
       )}
       {real && basis && analysis.pick && (
         <PickCard

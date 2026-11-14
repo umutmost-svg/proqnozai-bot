@@ -44,8 +44,7 @@ import type { BookQuote, EventOdds,
   NoBetReason,
   StandingBlock,
   StandingRow,
-  TournamentStandings,
-} from './models';
+  TournamentStandings, AiLean } from './models';
 import { MARKET_KEYS, QUICK_REASONS } from './models';
 import { FAMILIES, FAMILY, isMarketKey, marketsConsistent } from './markets';
 import { pickProbability } from './probabilities';
@@ -992,8 +991,33 @@ function readForecast(v: unknown): ModelForecast | null {
     homeAdvantage,
     leagueGoals: { home: lgHome, away: lgAway },
     noBetReason,
+    ...(typeof v.gateEligible === 'boolean' ? { gateEligible: v.gateEligible } : {}),
     experimental: v.experimental,
   };
+}
+
+const LEAN_PARTS: Record<AiLean['market'], readonly (0 | 1 | 2)[]> = { '1': [0], X: [1], '2': [2], '1X': [0, 1], X2: [1, 2], '12': [0, 2] };
+
+/**
+ * The backend's lean, checked against the probabilities shown next to it: the top outcome (or a tied top two as
+ * their double chance) with the matching percent; "model" only where `modelAllowed`. undefined: none sent (older
+ * answers, no probabilities); null: a contract violation.
+ */
+export function readLean(v: unknown, values: readonly number[], modelAllowed: boolean): AiLean | null | undefined {
+  if (v === undefined) return undefined; // an answer from before the field existed
+  // The backend sends null only without probabilities; here they are shown, so null breaks the contract.
+  if (!isObj(v) || typeof v.market !== 'string' || !Object.hasOwn(LEAN_PARTS, v.market) || values.length !== 3) return null;
+  if (v.confidence !== 'model' && v.confidence !== 'estimate') return null;
+  if (v.confidence === 'model' && !modelAllowed) return null;
+  const market = v.market as AiLean['market'];
+  const parts = LEAN_PARTS[market];
+  const top = Math.max(...values);
+  const tops = values.flatMap((n, i) => (n === top ? [i] : []));
+  // One top: that outcome. Two tied: their double chance. (Three equal cannot sum to 100 in whole percents.)
+  const expected = tops.length === 1 ? [tops[0]] : tops.slice(0, 2);
+  if (parts.length !== expected.length || parts.some((i, k) => i !== expected[k])) return null;
+  if (v.probability !== parts.reduce((a, i) => a + values[i]!, 0)) return null;
+  return { market, probability: v.probability as number, confidence: v.confidence };
 }
 
 const TABLE_FACTORS: Record<string, 'home' | 'away'> = { homeTable: 'home', awayTable: 'away' };
@@ -1155,13 +1179,17 @@ function readAnalysisV3(b: Json, eventId: string, sport: Sport, sent: PriceDeadl
   if (b.kind === 'ready' ? !market || known.length > 0 : market ? known.includes('noOddsSource') || !known.includes('noVerifiedForm') : !known.includes('noOddsSource')) {
     return null;
   }
+  const shown = [m['1'], m.X, m['2']];
+  const lean = readLean(b.lean, shown, b.kind === 'ready' && b.estimated !== true && forecast.gateEligible === true);
+  if (lean === null) return null;
   return {
     eventId,
     sport,
     kind: b.kind,
     ...(market ? { market } : {}),
+    ...(lean ? { lean } : {}),
     pick: chosen,
-    probabilities: [m['1'], m.X, m['2']],
+    probabilities: shown,
     reasons: known,
     generatedAt,
     factors: factors as AiFactor[],
@@ -1216,6 +1244,9 @@ function readBasisAnalysis(
     if ((values as number[]).reduce((a, n) => a + n, 0) !== 100) return null;
     probabilities = values as number[];
   }
+  // A market estimate is never the validated population: an estimate lean only, and only with probabilities.
+  const lean = probabilities.length ? readLean(b.lean, probabilities, false) : b.lean === null || b.lean === undefined ? undefined : null;
+  if (lean === null) return null;
   if (!Array.isArray(b.factors)) return null;
   const factors = b.factors.map((f) => (typeof f === 'string' && !V3_ONLY_FACTORS.has(f) ? FACTORS[f] : undefined));
   // Without verified form nothing is explained (no language-model answer): no factors at all.
@@ -1233,6 +1264,7 @@ function readBasisAnalysis(
     basis,
     estimated: true,
     alternatives: [],
+    ...(lean ? { lean } : {}),
     ...(estimateExpires ? { estimateExpires } : {}),
   };
 }

@@ -113,6 +113,9 @@ class MatchForecast:
             "homeAdvantage": round(self.home_advantage, 2),
             "leagueGoals": {"home": round(self.league_goals[0], 2), "away": round(self.league_goals[1], 2)},
             "noBetReason": self.selection.no_bet_reason,
+            # The population the selection rules were validated on (validated competition, complete
+            # history, match day): the model's lean there is "model" confidence, elsewhere an estimate.
+            "gateEligible": self.gate_eligible,
             "experimental": FROZEN.experimental,
         }
 

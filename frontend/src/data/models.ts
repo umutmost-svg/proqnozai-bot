@@ -252,8 +252,18 @@ export interface ModelForecast {
   homeAdvantage: number;
   leagueGoals: { home: number; away: number };
   noBetReason: NoBetReason | null;
+  /** The population the selection rules were validated on (validated league, full history, match day). */
+  gateEligible?: boolean;
   /** Recommendations not yet confirmed on matches forecast before kickoff: labelled as experimental. */
   experimental: boolean;
+}
+
+/** The model's forecast for every match with probabilities (backend-computed): the top 1X2 outcome, or the
+ * double chance of a tied top two. "model": validated population; "estimate": everything else. */
+export interface AiLean {
+  market: '1' | 'X' | '2' | '1X' | 'X2' | '12';
+  probability: number;
+  confidence: 'model' | 'estimate';
 }
 
 export interface MarketChance {
@@ -331,6 +341,8 @@ export interface AiAnalysis {
   estimated?: boolean;
   /** Preferred outcome; absent in analyses made before it existed. */
   pick?: AiPick;
+  /** The model's forecast (every match with probabilities); absent in older answers or without probabilities. */
+  lean?: AiLean;
   /** v3 (M3.5): the goal model's figures; absent in older (v2) answers. */
   forecast?: ModelForecast;
   /** v3: up to three other markets that passed the selection rules. */

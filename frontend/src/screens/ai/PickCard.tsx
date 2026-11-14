@@ -1,4 +1,4 @@
-import type { AiPick, MarketQuote, ModelForecast, PickReason, SportEvent, TeamBasis } from '../../data/models';
+import type { AiLean, AiPick, MarketQuote, ModelForecast, PickReason, SportEvent, TeamBasis } from '../../data/models';
 import { FAMILY } from '../../data/markets';
 import type { Translate } from '../../i18n';
 import { plural } from '../../i18n';
@@ -111,6 +111,24 @@ export function PickCard({ pick, event, values, basis, forecast, quote }: { pick
           ))}
         </ul>
       </div>
+    </section>
+  );
+}
+
+/**
+ * "Model forecast": shown on every match with probabilities — the top outcome (backend-computed) with its
+ * percent and how far to trust it. Never a recommendation: that is the PickCard, under the strict rules.
+ */
+export function LeanCard({ lean, event, fromMarket }: { lean: AiLean; event: SportEvent; fromMarket: boolean }) {
+  const { t } = useSettings();
+  const note = fromMarket ? t('ai.lean.marketNote') : lean.confidence === 'model' ? t('ai.lean.modelNote') : t('ai.lean.estimateNote');
+  return (
+    <section className={`${s.card} ${s.pick}`} data-testid="ai-lean" data-market={lean.market} data-confidence={lean.confidence}>
+      <h3 className={s.cardTitle}>{t(fromMarket ? 'ai.lean.marketTitle' : 'ai.lean.title')}</h3>
+      <p className={s.pickKicker}>{t(lean.confidence === 'model' ? 'ai.lean.model' : 'ai.lean.estimate')}</p>
+      <p className={s.pickOutcome}>{pickOutcomeText(t, lean.market, event.home.name, event.away.name)}</p>
+      <p className={s.pickProbability}>{t('ai.pick.probability', { value: lean.probability })}</p>
+      <p className={s.body}>{note}</p>
     </section>
   );
 }
