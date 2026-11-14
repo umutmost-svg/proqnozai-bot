@@ -281,3 +281,43 @@ def test_real_odds_refresh_after_odds_ttl_not_list_ttl(monkeypatch, clean_mostbe
     clean_mostbet_cache["odds_777004"] = (ts - MOSTBET_ODDS_TTL - 1, data)
     asyncio.run(mostbet_get_odds(777004))
     assert len(good.requests) > fetches_after_first   # refetched
+
+
+
+def test_second_half_markets_never_overwrite_the_match(monkeypatch, clean_mostbet_cache):
+    """15.11, a live line: second-half groups come after the full-time ones and used to overwrite them."""
+    payload = {"lineMatchOutcomes": [
+        {"outcomeId": 1, "groupTitle": "1x2", "outcomeTitle": "W1", "odd": "1.870"},
+        {"outcomeId": 2, "groupTitle": "1x2", "outcomeTitle": "X", "odd": "4.150"},
+        {"outcomeId": 3, "groupTitle": "1x2", "outcomeTitle": "W2", "odd": "3.650"},
+        {"outcomeId": 4, "groupTitle": "Total", "outcomeTitle": "Total Over (2.5)", "odd": "1.400"},
+        {"outcomeId": 5, "groupTitle": "Total", "outcomeTitle": "Total Under (2.5)", "odd": "2.700"},
+        {"outcomeId": 6, "groupTitle": "Double Chance", "outcomeTitle": "2X", "odd": "1.940"},
+        {"outcomeId": 7, "groupTitle": "Handicap", "outcomeTitle": "Handicap 1 (-1.0)", "odd": "2.350"},
+        {"outcomeId": 8, "groupTitle": "Handicap", "outcomeTitle": "Handicap 2 (+1.0)", "odd": "1.600"},
+        {"outcomeId": 9, "groupTitle": "Handicap", "outcomeTitle": "Handicap 1 (+1.0)", "odd": "1.110"},
+        {"outcomeId": 10, "groupTitle": "Handicap", "outcomeTitle": "Handicap 2 (-1.0)", "odd": "5.300"},
+        {"outcomeId": 11, "groupTitle": "2nd Half - 1x2", "outcomeTitle": "W1", "odd": "2.400"},
+        {"outcomeId": 12, "groupTitle": "2nd Half - Total", "outcomeTitle": "Total Over (2.5)", "odd": "2.850"},
+        {"outcomeId": 13, "groupTitle": "2nd Half - Total", "outcomeTitle": "Total Under (2.5)", "odd": "1.370"},
+    ]}
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", _FakeAsyncClient(payload))
+    import asyncio
+    odds = asyncio.run(mostbet_get_odds(777002))
+    assert (odds["w1"], odds["x"], odds["w2"]) == (1.87, 4.15, 3.65)
+    assert (odds["over25"], odds["under25"]) == (1.40, 2.70)
+    assert odds["dc_x2"] == 1.94
+    assert (odds["hcp_val"], odds["hcp_w1"], odds["hcp_w2"]) == (-1.0, 2.35, 1.60)
+
+
+
+def test_handicap_titles_with_home_away_or_w1_w2_are_read(monkeypatch, clean_mostbet_cache):
+    payload = {"lineMatchOutcomes": [
+        {"outcomeId": 1, "groupTitle": "Handicap", "outcomeTitle": "Home (-1.5)", "odd": "3.10"},
+        {"outcomeId": 2, "groupTitle": "Handicap", "outcomeTitle": "Away (+1.5)", "odd": "1.38"},
+        {"outcomeId": 3, "groupTitle": "Asian Handicap", "outcomeTitle": "W1 (-2.5)", "odd": "5.50"},
+    ]}
+    monkeypatch.setattr(mostbet.httpx, "AsyncClient", _FakeAsyncClient(payload))
+    import asyncio
+    odds = asyncio.run(mostbet_get_odds(777003))
+    assert (odds["hcp_val"], odds["hcp_w1"], odds["hcp_w2"]) == (-1.5, 3.10, 1.38)
