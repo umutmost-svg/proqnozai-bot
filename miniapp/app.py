@@ -571,7 +571,8 @@ def create_app(
     register_odds_routes(app, receiver, odds, clock)
     # The Mini App's own Mostbet source (the bot is going to be retired): catalogue mode only, started by use.
     odds_source = (OddsSource(odds, lambda: sports.search_index.upcoming(),
-                              max_per_cycle=settings.odds_source_max_per_cycle)
+                              max_per_cycle=settings.odds_source_max_per_cycle,
+                              snapshot=settings.db_path.with_name("odds-snapshot.json"))
                    if settings.odds_catalog and settings.odds_feed_enabled and odds_source_enabled else None)
     ai = ai or build_ai_service(settings, sports, clock=clock, ledger=store, history=history, odds=odds)
     async def active_session(request: Request) -> tuple[str, Session] | None:

@@ -4,21 +4,31 @@ lines — nearest kickoff first, near ones every 10 minutes and far ones every 4
 `max_per_cycle` price REQUESTS (pages included) per CYCLE_S, every request SPACING_S after the previous one, and a PAUSE_S stop after any 429 (the bot, still
 running from the same IP, keeps the API's budget first). Lines the list shows live become live markers (their
 pre-match prices are dropped at once). Never more than one loop; one failing step never ends it.
+
+The priced lines are kept in a snapshot file next to the database (`snapshot`), so a restart (a deploy) does not
+empty the odds for the half hour a full refill takes: the snapshot is read once, right after the first complete list,
+and only the lines that list still shows upcoming come back (served once assigned; the usual age limits apply).
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
+import math
+import os
+import tempfile
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
+from pathlib import Path
 
 from miniapp.sports.models import FootballEvent
 
 from . import mostbet
-from .book import read_book
+from .book import FEED_KEYS, read_book
 from .feed import CatalogLine, FeedLine
-from .store import CATALOG_WINDOW_S, CUTOFF_BEFORE_KICKOFF_S, OddsStore
+from .store import CATALOG_WINDOW_S, CUTOFF_BEFORE_KICKOFF_S, FAR_MAX_AGE_S, OddsStore
 
 logger = logging.getLogger("miniapp.odds")
 
@@ -29,12 +39,14 @@ LIST_EVERY_S = 15 * 60.0
 SPACING_S = 2.0
 PAUSE_S = 120.0
 LIVE_LOOKBACK_S = 3 * 3600.0
+SNAPSHOT_MAX_LINES = 2000
+SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024
 
 
 class OddsSource:
     def __init__(self, store: OddsStore, events: Callable[[], Iterable[FootballEvent]], *, max_per_cycle: int = 20,
                  clock: Callable[[], float] = time.time, sleep=asyncio.sleep,
-                 fetch: mostbet.Fetch = mostbet.http_get) -> None:
+                 fetch: mostbet.Fetch = mostbet.http_get, snapshot: Path | None = None) -> None:
         if not 1 <= max_per_cycle <= 40:
             raise ValueError("max_per_cycle must be 1..40")
         self.store = store
@@ -50,6 +62,8 @@ class OddsSource:
         self._task: asyncio.Task | None = None
         self._requests: deque[float] = deque()  # price requests of the last BUDGET_WINDOW_S (pages included)
         self._samples_at = float("-inf")
+        self._snapshot = snapshot
+        self._restored = False
 
     def ensure_running(self) -> asyncio.Task | None:
         """Starts the loop once (from a request: the Mini App is in use)."""
@@ -92,6 +106,10 @@ class OddsSource:
                 return 0
             self._take_list(raw)
             listed = True
+            if not self._restored:
+                # Only after a complete list: it governs from now on, and only lines it still lists come back.
+                self._restored = True
+                self.restore()
         report = self.store.match_catalog(self.events())
         due = [(line_id, refresh) for line_id, refresh in report.wanted
                if self._clock() - self._priced.get(line_id, float("-inf")) >= refresh and line_id in self._list]
@@ -137,6 +155,8 @@ class OddsSource:
                                         False, self._clock(), book)], own=True)
             self._priced[line_id] = self._clock()
             priced += 1
+        if priced:
+            self.save()
         if report.samples and self._clock() - self._samples_at >= SAMPLES_EVERY_S:
             # The names behind unknown_names / ambiguous / reversed (public team names, no user data), so the alias
             # table can be extended.
@@ -180,3 +200,85 @@ class OddsSource:
         for line_id in [i for i in self._priced if i not in listed]:
             del self._priced[line_id]
         logger.info("odds.source_list lines=%d upcoming=%d live=%d", len(raw), len(listed), len(markers))
+
+    def save(self) -> None:
+        """Writes the own priced lines (atomically: a crash leaves the previous snapshot). Never raises."""
+        if self._snapshot is None:
+            return
+        lines = sorted(self.store.own_lines(), key=lambda line: line.kickoff)[:SNAPSHOT_MAX_LINES]
+        data = {"version": 1, "lines": [{"id": line.line_id, "country": line.country, "league": line.league,
+                                         "home": line.home, "away": line.away, "kickoff": line.kickoff,
+                                         "fetchedAt": line.fetched_at, "book": line.book} for line in lines]}
+        tmp: str | None = None
+        try:
+            fd, tmp = tempfile.mkstemp(prefix=self._snapshot.name + ".", suffix=".tmp", dir=self._snapshot.parent)
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(data, separators=(",", ":")))
+            os.replace(tmp, self._snapshot)
+            tmp = None
+        except OSError as exc:
+            logger.info("odds.snapshot_save_failed reason=%s", type(exc).__name__)
+        finally:
+            if tmp is not None:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+
+    def restore(self) -> int:
+        """Reads the snapshot into the store as own prices (fresh, not yet started lines only). Never raises."""
+        if self._snapshot is None:
+            return 0
+        try:
+            if self._snapshot.stat().st_size > SNAPSHOT_MAX_BYTES:
+                raise ValueError("too_big")
+            raw = json.loads(self._snapshot.read_text())
+            items = raw["lines"] if isinstance(raw, dict) and raw.get("version") == 1 else None
+            if not isinstance(items, list):
+                raise ValueError("bad_format")
+        except FileNotFoundError:
+            return 0
+        except (OSError, ValueError, KeyError) as exc:
+            logger.info("odds.snapshot_restore_failed reason=%s", type(exc).__name__)
+            return 0
+        now = self._clock()
+        lines: list[FeedLine] = []
+        for item in items[:SNAPSHOT_MAX_LINES]:
+            line = _snapshot_line(item)
+            if line is None or not now - FAR_MAX_AGE_S < line.fetched_at <= now or line.kickoff <= now:
+                continue
+            listed = self._list.get(line.line_id)
+            # The same line as the fresh list shows it (teams, competition, kickoff), not just the same id.
+            if listed is None or any(listed.get(k) != getattr(line, k) for k in ("country", "league", "home", "away",
+                                                                                  "kickoff")):
+                continue
+            lines.append(line)
+        if lines:
+            self.store.ingest(lines, own=True)
+            for line in lines:
+                self._priced[line.line_id] = line.fetched_at
+        logger.info("odds.snapshot_restored lines=%d", len(lines))
+        return len(lines)
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _snapshot_line(item: object) -> FeedLine | None:
+    if not isinstance(item, dict):
+        return None
+    line_id, kickoff, fetched_at, book = item.get("id"), _number(item.get("kickoff")), _number(item.get("fetchedAt")), item.get("book")
+    texts = [item.get(k) for k in ("country", "league", "home", "away")]
+    if (not isinstance(line_id, int) or isinstance(line_id, bool) or kickoff is None or fetched_at is None
+            or not all(isinstance(t, str) for t in texts) or not isinstance(book, dict)):
+        return None
+    # The stored book is in our keys: it is checked again by the same rule as a fresh read.
+    prices = read_book({feed: book[ours] for feed, ours in FEED_KEYS.items() if _number(book.get(ours)) is not None})
+    if not prices:
+        return None
+    return FeedLine(line_id, *texts, kickoff, False, fetched_at, prices)

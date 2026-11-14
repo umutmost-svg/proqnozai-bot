@@ -52,3 +52,8 @@
 3. Несколько часов наблюдения покрытия и логов unmatched/ambiguous; дополнение алиасов.
 4. Флаг в Mini App → бот оценивает `wanted`. E2E smoke: ближайший матч и матч на более позднюю дату — цены
    совпадают с линией Mostbet, у несопоставленного — «данные по коэффициентам недоступны».
+
+## 15.11: names and the snapshot
+
+- **Team names stay exact.** A loose pass was tried and dropped after three Codex rounds. Any rule that sets words aside ("AF", "RJ", "SE", "Regatas") or accepts one name inside another also accepted different clubs: "Portuguesa RJ" for "Portuguesa", "Regatas Brasil" for "Brasil", "Inter Milan" for "Milan", "Barcelona Femeni" for "Barcelona". Missing names go to the alias table (`leagues.json` aliases, keyed by the football-data team id). National teams also take the area aliases ("Czechia" / "Czech Republic"). The `odds.unmatched_examples` log now carries up to 30 samples per reason with both teams' provider ids, so an alias can be added directly. From the 14.11 log, "Vasco da Gama RJ" became alias 1780.
+- **Snapshot.** Own prices are kept in `odds-snapshot.json` next to the database and written after every priced cycle (atomically). They are read once, right after the first complete list, and only lines that list still shows upcoming, with the same teams, competition and kickoff, come back. A deploy therefore no longer empties the odds for the roughly 30 minutes a refill takes, and a line withdrawn or gone live meanwhile is not served. They are re-checked by `read_book` and the usual age limits apply.

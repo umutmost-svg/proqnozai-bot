@@ -88,7 +88,12 @@ def team_names(team: Competitor, table: Leagues) -> frozenset[str]:
     names: list[str] = [team.name, team.short_name or ""]
     if number is not None:
         names += [*SEARCH_ALIASES.get(number, ()), *table.aliases.get(number, ())]
-    return frozenset(k for k in (team_key(n) for n in names) if k)
+    keys = {k for k in (team_key(n) for n in names) if k}
+    for key in list(keys):  # national teams: "Czechia" is the feed's "Czech Republic" (both ways)
+        for country, others in COUNTRY_ALIASES.items():
+            if key == country or key in others:
+                keys |= {country, *others}
+    return frozenset(keys)
 
 
 # Areas of football-data competitions that are not countries: their lines carry the competition's name in the feed's

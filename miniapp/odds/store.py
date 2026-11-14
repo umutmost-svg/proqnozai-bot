@@ -45,7 +45,7 @@ FAR_MAX_AGE_S = 60 * 60.0
 CATALOG_TTL_S = 40 * 60.0
 CATALOG_WINDOW_S = 48 * 3600.0
 MAX_CATALOG = 6000
-SAMPLES_PER_REASON = 5
+SAMPLES_PER_REASON = 30
 
 
 def max_age(kickoff: float, now: float, catalog: bool) -> float:
@@ -153,6 +153,12 @@ class OddsStore:
         self._evict()
         return IngestReport(accepted, unknown, empty)
 
+    def own_lines(self) -> list[FeedLine]:
+        """The own source's priced pre-match lines, for its snapshot (prices survive a restart)."""
+        return [FeedLine(i, s.candidate.country, s.candidate.league, s.candidate.home, s.candidate.away,
+                         s.candidate.kickoff, False, s.fetched_at, dict(s.book))
+                for i, s in self._lines.items() if s.own and not s.live and s.book]
+
     def _evict(self) -> None:
         now = self._clock()
         for line_id in [i for i, s in self._lines.items() if now - s.candidate.kickoff > KEEP_AFTER_KICKOFF_S]:
@@ -254,7 +260,8 @@ class OddsStore:
                 owner[line.line_id] = event.id
             elif reason in ("unknown_names", "ambiguous", "reversed") and len(samples.get(reason, [])) < SAMPLES_PER_REASON:
                 samples.setdefault(reason, []).append(
-                    f"{event.tournament_id}: {event.home.name} - {event.away.name} ~ {unmatched_names(near)}")
+                    f"{event.tournament_id}: {event.home.name} [{event.home.id}] - {event.away.name} [{event.away.id}]"
+                    f" ~ {unmatched_names(near)}")  # the provider's public team ids: the alias table's keys
         # A line claimed by two matches (two fixtures of the same teams at once) is priced for neither.
         for line_id in [i for i, n in claimed.items() if n > 1]:
             del chosen[line_id]

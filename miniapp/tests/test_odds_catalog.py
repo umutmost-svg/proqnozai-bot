@@ -220,3 +220,22 @@ def test_czechia_is_the_feeds_czech_republic(clock: FakeClock) -> None:
     croatia, czechia = Competitor("fd:team:799", "Croatia", None), Competitor("fd:team:798", "Czechia", None)
     push(store, clock, cline(10, "Croatia", "Czech Republic", t))
     assert store.match_catalog([event(croatia, czechia, t)]).wanted == [(10, NEAR_REFRESH_S)]
+
+
+@pytest.mark.parametrize("feed_home", ["Manchester City", "United", "Real", "Manchester United Women", "Manchester United B",
+                                       "Manchester", "Manchester United Femeni", "Inter Manchester United",
+                                       "Manchester United RJ"])
+def test_a_similar_name_is_never_a_match(clock: FakeClock, feed_home) -> None:
+    store = OddsStore(clock, catalog=True)
+    t = clock.now + 3 * 3600
+    mu, ars = Competitor("fd:team:66", "Manchester United FC", "Man United"), Competitor("fd:team:57", "Arsenal FC", "Arsenal")
+    push(store, clock, cline(10, feed_home, "Arsenal", t, country="England", league="Premier League"))
+    assert store.match_catalog([event(mu, ars, t, comp="fd:PL")]).wanted == []
+
+
+def test_vasco_is_the_feeds_vasco_da_gama_rj(clock: FakeClock) -> None:
+    store = OddsStore(clock, catalog=True)
+    t = clock.now + 3 * 3600
+    chape, vasco = Competitor("fd:team:1772", "Chapecoense AF", "Chapecoense"), Competitor("fd:team:1780", "CR Vasco da Gama", None)
+    push(store, clock, cline(10, "Chapecoense", "Vasco da Gama RJ", t, country="Brazil", league="Serie A"))
+    assert store.match_catalog([event(chape, vasco, t, comp="fd:BSA")]).wanted == [(10, NEAR_REFRESH_S)]

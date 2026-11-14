@@ -259,3 +259,91 @@ def test_a_live_marker_is_never_replaced_by_a_pre_match_price(clock: FakeClock) 
     store.ingest([FeedLine(10, "UEFA Nations League", "League A", "Spain", "Italy", t, False, clock.now,
                            {"1": 2.0, "X": 3.0, "2": 4.0})], own=True)   # the own source, between list refreshes
     assert store.lookup(event(SPAIN, ITALY, t)) is None
+
+
+def test_prices_survive_a_restart_through_the_snapshot(clock: FakeClock, tmp_path) -> None:
+    t = clock.now + 3 * 3600
+    snap = tmp_path / "odds-snapshot.json"
+    api = FakeApi([line(10, "Spain", "Italy", t)])
+    first = OddsSource(OddsStore(clock, catalog=True), lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep,
+                       fetch=api, snapshot=snap)
+    assert asyncio.run(first.cycle()) == 1 and snap.exists()
+    clock.advance(60)
+    store = OddsStore(clock, catalog=True)                          # the restart: an empty store
+    second = OddsSource(store, lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep, fetch=api, snapshot=snap)
+    calls = sum("/outcomes/" in u for u in api.calls)
+    assert asyncio.run(second.cycle()) == 0                         # restored after the first list: no new request
+    assert sum("/outcomes/" in u for u in api.calls) == calls
+    found = store.lookup(event(SPAIN, ITALY, t))
+    assert found is not None and found.book["1"] == 1.8
+
+
+def test_a_restored_line_gone_from_the_list_is_not_served(clock: FakeClock, tmp_path) -> None:
+    t = clock.now + 3 * 3600
+    snap = tmp_path / "odds-snapshot.json"
+    first = OddsSource(OddsStore(clock, catalog=True), lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep,
+                       fetch=FakeApi([line(10, "Spain", "Italy", t)]), snapshot=snap)
+    asyncio.run(first.cycle())
+    store = OddsStore(clock, catalog=True)
+    second = OddsSource(store, lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep, fetch=FakeApi([]),
+                        snapshot=snap)
+    asyncio.run(second.cycle())
+    assert len(store) == 0 and store.lookup(event(SPAIN, ITALY, t)) is None
+
+
+def test_nothing_is_restored_before_a_complete_list(clock: FakeClock, tmp_path) -> None:
+    t = clock.now + 3 * 3600
+    snap = tmp_path / "odds-snapshot.json"
+    first = OddsSource(OddsStore(clock, catalog=True), lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep,
+                       fetch=FakeApi([line(10, "Spain", "Italy", t)]), snapshot=snap)
+    asyncio.run(first.cycle())
+
+    async def failing(url: str) -> tuple[int, bytes]:
+        return 500, b""
+    store = OddsStore(clock, catalog=True)
+    second = OddsSource(store, lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep, fetch=failing, snapshot=snap)
+    asyncio.run(second.cycle())
+    assert len(store) == 0
+
+
+@pytest.mark.parametrize("content", ["not json", '{"version": 2, "lines": []}', '{"version": 1, "lines": [{"id": "x"}]}',
+                                     '{"version": 1, "lines": [{"id": 10, "country": "c", "league": "l", "home": "h", '
+                                     '"away": "a", "kickoff": 1e18, "fetchedAt": 1e18, "book": {"1": 1.8}}]}',
+                                     '{"version": 1, "lines": [{"id": 10, "country": "c", "league": "l", "home": "h", '
+                                     '"away": "a", "kickoff": ' + "9" * 400 + ', "fetchedAt": 1, "book": {}}]}'])
+def test_a_bad_or_stale_snapshot_is_ignored(clock: FakeClock, tmp_path, content) -> None:
+    snap = tmp_path / "odds-snapshot.json"
+    snap.write_text(content)
+    source = OddsSource(OddsStore(clock, catalog=True), lambda: [], clock=clock, sleep=no_sleep, fetch=FakeApi([]),
+                        snapshot=snap)
+    assert source.restore() == 0
+
+
+def test_an_old_snapshot_price_is_not_restored(clock: FakeClock, tmp_path) -> None:
+    t = clock.now + 30 * 3600
+    snap = tmp_path / "odds-snapshot.json"
+    first = OddsSource(OddsStore(clock, catalog=True), lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep,
+                       fetch=FakeApi([line(10, "Spain", "Italy", t)]), snapshot=snap)
+    asyncio.run(first.cycle())
+    clock.advance(2 * 3600)
+    source = OddsSource(OddsStore(clock, catalog=True), lambda: [], clock=clock, sleep=no_sleep, fetch=FakeApi([]),
+                        snapshot=snap)
+    source._list = {10: {"country": "UEFA Nations League", "league": "League A", "home": "Spain", "away": "Italy",
+                         "kickoff": float(t)}}                      # still listed: only its age keeps it out
+    assert source.restore() == 0
+    clock.advance(-2 * 3600 + 60)
+    assert source.restore() == 1                                    # the same snapshot, fresh: restored
+
+
+def test_a_restored_id_must_still_be_the_same_line(clock: FakeClock, tmp_path) -> None:
+    t = clock.now + 3 * 3600
+    snap = tmp_path / "odds-snapshot.json"
+    first = OddsSource(OddsStore(clock, catalog=True), lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep,
+                       fetch=FakeApi([line(10, "Spain", "Italy", t)]), snapshot=snap)
+    asyncio.run(first.cycle())
+    api = FakeApi([line(10, "Spain", "Portugal", t)])                # the same id, now another match
+    api.rate_limit_odds = True
+    store = OddsStore(clock, catalog=True)
+    second = OddsSource(store, lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep, fetch=api, snapshot=snap)
+    asyncio.run(second.cycle())
+    assert len(store) == 0
