@@ -63,8 +63,18 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
             return 0
         jobs = [(f"bc:{broadcast_id}:{uid}", uid, item["body"], item["buttons"])
                 for uid in crm.frozen_recipients(broadcast_id)]
-        return outbox.enqueue(jobs, batch_id=f"bc:{broadcast_id}", not_before=item["scheduledAt"],
-                              admin_event_id=None, now=ctx.now())
+        batch = f"bc:{broadcast_id}"
+        # Cancel vs enqueue across the two databases. A cancel takes effect for the bot when cancel_batch marks the
+        # batch in bot-outbox.db; enqueue and release check that mark in the same file, so SQLite orders all three.
+        # The jobs go in HELD (unclaimable) and the admin status is read again first, so a cancel already committed
+        # in admin.db (its cancel_batch still to come) never has its jobs released either.
+        added = outbox.enqueue(jobs, batch_id=batch, not_before=item["scheduledAt"], admin_event_id=None,
+                               now=ctx.now(), hold=True)
+        if next((b["status"] for b in crm.broadcasts() if b["id"] == broadcast_id), None) != "scheduled":
+            outbox.cancel_batch(batch, ctx.now())
+            return 0
+        outbox.release_batch(batch)
+        return added
 
     access = AccessPublisher(ctx.accounts, ctx.access_file)
     access.init_schema()
@@ -90,9 +100,11 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         """Recipients of a broadcast: blocked users are always excluded."""
         return audience({**rules, "blocked": False})  # always: a rule cannot opt blocked users into a broadcast
 
-    for item in crm.broadcasts():  # a schedule committed just before a crash: queue it now
-        if item["status"] == "scheduled" and not outbox.batch_counts(f"bc:{item['id']}"):
-            queue_broadcast(item["id"])
+    for item in crm.broadcasts():  # after a crash: queue (or release held jobs of) a schedule, cancel a cancelled one
+        if item["status"] == "scheduled":
+            queue_broadcast(item["id"])  # idempotent by key
+        elif item["status"] == "cancelled":
+            outbox.cancel_batch(f"bc:{item['id']}", ctx.now())
 
     def with_activity(rows: list[dict], with_geo: bool = True) -> list[dict]:
         """Last seen (the later of the last Mini App login and the last telemetry activity), forecasts, GEO.
@@ -423,7 +435,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         result = ctx.step_up_guard(admin, lambda: crm.cancel_broadcast(admin, broadcast_id, reason, key, code,
                                                                        ctx.now()))
         # Jobs the bot has not claimed yet are cancelled (also on a replay: idempotent).
-        return {**result, "cancelledJobs": outbox.cancel_batch(f"bc:{broadcast_id}")}
+        return {**result, "cancelledJobs": outbox.cancel_batch(f"bc:{broadcast_id}", ctx.now())}
 
     # ---- credits -----------------------------------------------------------------------------
 

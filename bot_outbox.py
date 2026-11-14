@@ -33,6 +33,7 @@ ROW_RETENTION_DAYS = 400
 DAY = 86400
 
 # Same schema as miniapp/admin_web/outbox.py (whichever side starts first creates it; a test keeps them equal).
+# cancelled_batches is written by the admin's cancel; claim and retry honour it.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id              TEXT PRIMARY KEY,
@@ -56,6 +57,10 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS jobs_due ON jobs(status, not_before);
 CREATE INDEX IF NOT EXISTS jobs_batch ON jobs(batch_id);
 CREATE INDEX IF NOT EXISTS jobs_user ON jobs(user_id);
+CREATE TABLE IF NOT EXISTS cancelled_batches (
+    batch_id     TEXT PRIMARY KEY,
+    cancelled_at INTEGER NOT NULL
+);
 """
 
 
@@ -127,6 +132,7 @@ class BotOutbox:
                 row = conn.execute(
                     "SELECT id, user_id, text, buttons_json, attempts FROM jobs WHERE status = 'queued' "
                     "AND not_before <= ? AND expires_at > ? AND (retry_at IS NULL OR retry_at <= ?) "
+                    "AND (batch_id IS NULL OR batch_id NOT IN (SELECT batch_id FROM cancelled_batches)) "
                     "ORDER BY not_before, created_at LIMIT 1", (now, now, now)).fetchone()
                 job = None
                 if row is not None and conn.execute(
@@ -147,8 +153,10 @@ class BotOutbox:
                 cur = conn.execute(f"UPDATE jobs SET status = 'sent', sent_at = ?, last_error_code = NULL, "
                                    f"claim_token = NULL {fence}", (now, job.id, job.token))
             elif outcome.kind == "retry" and job.attempts < MAX_ATTEMPTS:
-                cur = conn.execute(f"UPDATE jobs SET status = 'queued', retry_at = ?, last_error_code = ?, "
-                                   f"claim_token = NULL {fence}",
+                # A batch cancelled while this job was being sent: never queued again.
+                cur = conn.execute(f"UPDATE jobs SET status = CASE WHEN batch_id IN (SELECT batch_id FROM "
+                                   f"cancelled_batches) THEN 'cancelled' ELSE 'queued' END, retry_at = ?, "
+                                   f"last_error_code = ?, claim_token = NULL {fence}",
                                    (now + max(1, outcome.retry_after), outcome.code, job.id, job.token))
             else:
                 cur = conn.execute(f"UPDATE jobs SET status = 'failed', last_error_code = ?, claim_token = NULL {fence}",

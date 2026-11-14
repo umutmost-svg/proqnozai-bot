@@ -199,6 +199,28 @@ export interface InquiryThread {
   user: { firstName: string | null; lastName: string | null; username: string | null; lang: string } | null;
   history: { id: string; from: 'user' | 'admin'; at: number; text: string; by?: string | null; status?: string }[];
 }
+export interface OutboxPage {
+  summary: { connected: boolean; byStatus: Record<string, number>; last24h: Record<string, number>; nextDueAt: number | null; lastSentAt: number | null };
+  limits: { batchPerRun: number; maxAttempts: number; stuckS: number; textRetentionDays: number; rowRetentionDays: number; jobTtlS: number };
+  statuses: string[];
+  items: { key: string; kind: 'message' | 'broadcast'; userId: number; batch: string | null; status: string; attempts: number;
+    error: string | null; notBefore: number; createdAt: number; sentAt: number | null }[];
+  log: AdminEvent[];
+}
+export interface RolesPage {
+  roles: Role[]; permissions: { permission: string; roles: Role[] }[]; grants: { permission: string; roles: Role[] }[];
+}
+export interface ProductDay { day: string; dau: number; quick: number; coupons: number; aiCreated: number; aiOpened: number; quickFailed: number }
+export interface ProductPage {
+  period: number;
+  product: { source: 'not_collected' } | { source: 'unavailable' } | {
+    source: 'telemetry'; series: ProductDay[]; dau: number; wau: number; mau: number;
+    totals: { quick: number; coupons: number; aiCreated: number; aiOpened: number; quickFailed: number; forecasts: number };
+    cohorts: { week: string; size: number; retention: (number | null)[] }[];
+  };
+  referrals: { starts: number; inMiniApp: number; active7d: number; converted: number | null };
+  oddsCoverage: { source: string };
+}
 export interface Geo { country: string | null; source: 'edge' | 'lang' | null }
 export interface CrmUserRow extends UserRow {
   tags: string[]; credits: { balance: number; unlimitedUntil: number | null }; blocked: boolean; mbId: string | null;

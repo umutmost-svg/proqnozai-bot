@@ -100,3 +100,119 @@ def test_the_user_card_shows_the_bots_outcome(env):
         conn.execute("UPDATE jobs SET status = 'sent' WHERE idempotency_key = ?", (f"msg:{msg['id']}",))
     card = client.get(f"/api/admin/users/{U1}").json()
     assert next(m for m in card["messages"] if m["id"] == msg["id"])["status"] == "sent"
+
+
+def test_a_cancel_committed_between_the_status_check_and_the_enqueue_still_wins(env, monkeypatch):
+    """Cancel vs enqueue across admin.db and bot-outbox.db: the jobs inserted after a concurrent cancel are
+    cancelled right after the insert (the status is read again), so none stays queued."""
+    from miniapp.admin_web.outbox import Outbox
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "Гонка", "body": "Текст", "rules": {"lang_in": ["ru"]}}).json()["id"]
+    original = Outbox.enqueue
+
+    def cancel_first(self, *args, **kwargs):  # another process cancels just before our insert lands
+        with sqlite3.connect(config.admin_db) as conn:
+            conn.execute("UPDATE crm_broadcasts SET status = 'cancelled' WHERE id = ?", (bid,))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Outbox, "enqueue", cancel_first)
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 3600})
+    states = {j[3] for j in jobs(config) if j[5] == f"bc:{bid}"}
+    assert states == {"cancelled"}
+
+
+def _bot_outbox(config):
+    """The bot's real claim code (bot_outbox.py at the repo root; the bot package is not importable here)."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[2] / "bot_outbox.py"
+    spec = importlib.util.spec_from_file_location("bot_outbox_under_test", path)
+    module = sys.modules.get("bot_outbox_under_test") or importlib.util.module_from_spec(spec)
+    sys.modules["bot_outbox_under_test"] = module  # dataclasses resolve annotations through sys.modules
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module.BotOutbox(Path(config.outbox_db))
+
+
+def test_the_bot_cannot_claim_a_broadcast_job_before_the_status_is_rechecked(env, monkeypatch):
+    """A cancel committed just before the insert: a due job inserted after it is invisible to the bot's claim
+    until the status re-check, which then cancels it — nothing of a cancelled broadcast is ever sent."""
+    from miniapp.admin_web.outbox import Outbox
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "Гонка", "body": "Текст", "rules": {"lang_in": ["ru"]}}).json()["id"]
+    bot = _bot_outbox(config)
+    claimed = []
+    original = Outbox.enqueue
+
+    def cancel_then_insert_then_bot_claims(self, *args, **kwargs):
+        with sqlite3.connect(config.admin_db) as conn:
+            conn.execute("UPDATE crm_broadcasts SET status = 'cancelled' WHERE id = ?", (bid,))
+        added = original(self, *args, **kwargs)
+        claimed.append(bot.claim(int(clock()) + 7200))  # the bot runs in the gap, the job is already due
+        return added
+
+    monkeypatch.setattr(Outbox, "enqueue", cancel_then_insert_then_bot_claims)
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 3600})
+    assert claimed == [None]
+    assert {j[3] for j in jobs(config) if j[5] == f"bc:{bid}"} == {"cancelled"}
+
+
+def test_a_scheduled_broadcast_is_released_and_a_crash_while_held_is_released_at_startup(env, monkeypatch):
+    from miniapp.admin_web.outbox import Outbox
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "Норма", "body": "Текст", "rules": {"lang_in": ["ru"]}}).json()["id"]
+    monkeypatch.setattr(Outbox, "release_batch", lambda self, batch: 0)  # crash before the release
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 60})
+    bot = _bot_outbox(config)
+    assert bot.claim(int(clock()) + 120) is None  # still held
+    monkeypatch.undo()
+    create_admin_app(config, clock=clock)  # restart: the still-scheduled broadcast's jobs are released
+    job = bot.claim(int(clock()) + 120)
+    assert job is not None and job.text == "Текст"
+
+
+def test_a_crash_while_held_after_a_cancel_cancels_the_jobs_at_startup(env, monkeypatch):
+    from miniapp.admin_web.outbox import Outbox
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "Сбой", "body": "Текст", "rules": {"lang_in": ["ru"]}}).json()["id"]
+    monkeypatch.setattr(Outbox, "release_batch", lambda self, batch: 0)
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 60})
+    monkeypatch.undo()
+    with sqlite3.connect(config.admin_db) as conn:  # cancelled, but its cancel_batch never ran (crash)
+        conn.execute("UPDATE crm_broadcasts SET status = 'cancelled' WHERE id = ?", (bid,))
+    create_admin_app(config, clock=clock)
+    assert {j[3] for j in jobs(config) if j[5] == f"bc:{bid}"} == {"cancelled"}
+
+
+def test_a_cancel_between_the_recheck_and_the_release_is_never_released(env, monkeypatch):
+    """Codex round 2: the status re-check passed, then a cancel ran its cancel_batch before the release —
+    the release sees the batch cancelled in bot-outbox.db and the bot can claim nothing."""
+    from miniapp.admin_web.outbox import Outbox
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "Окно", "body": "Текст", "rules": {"lang_in": ["ru"]}}).json()["id"]
+    original = Outbox.release_batch
+
+    def cancel_lands_first(self, batch):
+        with sqlite3.connect(config.admin_db) as conn:
+            conn.execute("UPDATE crm_broadcasts SET status = 'cancelled' WHERE id = ?", (bid,))
+        self.cancel_batch(batch, int(clock()))
+        return original(self, batch)
+
+    monkeypatch.setattr(Outbox, "release_batch", cancel_lands_first)
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 60})
+    assert _bot_outbox(config).claim(int(clock()) + 120) is None
+    assert {j[3] for j in jobs(config) if j[5] == f"bc:{bid}"} == {"cancelled"}
+
+
+def test_a_cancelled_batch_never_gets_new_jobs(tmp_path):
+    from miniapp.admin_web.outbox import Outbox
+    box = Outbox(tmp_path / "outbox.db")
+    box.init_schema()
+    box.cancel_batch("bc:9", 1)
+    assert box.enqueue([("bc:9:1", 1, "x", [])], batch_id="bc:9", not_before=1, admin_event_id=None, now=1) == 0
+    assert box.batch_counts("bc:9") == {}

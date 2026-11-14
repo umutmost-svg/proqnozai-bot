@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     init_hash    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS users_created ON users(created_at);
 -- initData whose session was logged out: it cannot be exchanged again.
 CREATE TABLE IF NOT EXISTS consumed_init_data (
     init_hash   TEXT PRIMARY KEY,
@@ -445,6 +446,12 @@ class Store:
                 return {}
             return {int(u): {"code": c, "at": int(a)} for u, c, a in conn.execute(
                 "SELECT user_id, code, created_at FROM user_attribution")}
+
+    def registrations_since(self, since: int) -> list[dict]:
+        """Id and registration time of every user registered at or after `since` (cohorts; no other fields)."""
+        with self._connect() as conn:
+            return [{"id": int(u), "createdAt": int(c)} for u, c in conn.execute(
+                "SELECT telegram_user_id, created_at FROM users WHERE created_at >= ?", (since,))]
 
     def users_by_ids(self, user_ids: list[int], now: int) -> list[dict]:
         """Rows like list_users for the given ids (batched IN queries; unknown ids are skipped)."""

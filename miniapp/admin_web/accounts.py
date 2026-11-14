@@ -176,26 +176,29 @@ def verify_password(password: str, stored: str | None) -> bool:
 GRANTS: dict[str, tuple[str, ...]] = {"view_dialogs": ("owner", "admin")}
 
 
+# Role -> permission matrix (§4.2), also served read-only to the panel (Settings -> Roles).
+PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "read": ROLES,
+    "read_personal": ("owner", "admin"),
+    "manage_users": ("owner", "admin"),
+    "manage_settings": ("owner", "admin"),
+    "manage_admins": ("owner",),
+    # Ads (ads-architecture.md §8): owner — everything; admin — campaigns, groups and publication;
+    # analyst — read and analytics only. Partners define the allowed link hosts and countries: owner only.
+    "manage_ads": ("owner", "admin"),
+    "publish_ads": ("owner", "admin"),
+    "manage_partners": ("owner",),
+    # Referral links: create and archive (owner, admin); per-link stats are aggregates (analysts too).
+    "manage_referrals": ("owner", "admin"),
+    # Inquiries: reading them needs read_personal AND the explicit view_dialogs grant; the retention period of
+    # stored inquiries is an owner decision.
+    "manage_inquiry_settings": ("owner",),
+}
+
+
 def can(role: str, permission: str) -> bool:
     """Server-side role check for every route (§4.2); the UI only hides what is not allowed."""
-    allowed = {
-        "read": ROLES,
-        "read_personal": ("owner", "admin"),
-        "manage_users": ("owner", "admin"),
-        "manage_settings": ("owner", "admin"),
-        "manage_admins": ("owner",),
-        # Ads (ads-architecture.md §8): owner — everything; admin — campaigns, groups and publication;
-        # analyst — read and analytics only. Partners define the allowed link hosts and countries: owner only.
-        "manage_ads": ("owner", "admin"),
-        "publish_ads": ("owner", "admin"),
-        "manage_partners": ("owner",),
-        # Referral links: create and archive (owner, admin); per-link stats are aggregates (analysts too).
-        "manage_referrals": ("owner", "admin"),
-        # Inquiries: reading them needs read_personal AND the explicit view_dialogs grant; the retention period of
-        # stored inquiries is an owner decision.
-        "manage_inquiry_settings": ("owner",),
-    }
-    return role in allowed[permission]
+    return role in PERMISSIONS[permission]
 
 
 class AdminStore:

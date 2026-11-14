@@ -5,9 +5,9 @@ import { PERIOD_LABELS, useAuth, useMe, usePrefs, type Period } from './state';
 
 const NAV = [
   ['/', 'Аналитика'], ['/users', 'Пользователи'], ['/inquiries', 'Обращения'], ['/dialogs', 'Диалоги (демо)'], ['/broadcasts', 'Рассылки'],
-  ['/segments', 'Сегменты'], ['/credits', 'Кредиты'], ['/referrals', 'Ссылки'],
+  ['/segments', 'Сегменты'], ['/credits', 'Кредиты'], ['/referrals', 'Ссылки'], ['/outbox', 'Очередь'], ['/ads', 'Реклама'],
 ] as const;
-const NAV_DATA = [['/forecasts', 'Прогнозы'], ['/ai', 'AI и расходы'], ['/sports-api', 'Спортивные API']] as const;
+const NAV_DATA = [['/product', 'Продукт'], ['/forecasts', 'Прогнозы'], ['/ai', 'AI и расходы'], ['/sports-api', 'Спортивные API']] as const;
 const NAV_ADMIN = [['/system', 'Система'], ['/settings', 'Настройки']] as const;
 
 const ROLE_LABEL: Record<string, string> = { owner: 'Владелец', admin: 'Администратор', analyst: 'Аналитик' };
@@ -81,7 +81,8 @@ export function Layout() {
           <span className="brand-logo">S</span>
           <div><div className="brand-name">SporBot</div><div className="brand-sub">CRM · админ</div></div>
         </div>
-        <nav className="nav" aria-label="Разделы" style={{ marginTop: 24 }}>{NAV.map(link)}</nav>
+        {/* The queue lists recipients (personal data): hidden for roles without read_personal (the API refuses too). */}
+        <nav className="nav" aria-label="Разделы" style={{ marginTop: 24 }}>{NAV.filter(([to]) => to !== '/outbox' || me.admin.role !== 'analyst').map(link)}</nav>
         <div className="nav-caption">ДАННЫЕ</div>
         <nav className="nav" aria-label="Данные">{NAV_DATA.map(link)}</nav>
         <div className="nav-grow" />
@@ -149,11 +150,16 @@ export function PageHead({ crumb, title, subtitle, actions }: { crumb?: string; 
   );
 }
 
+/** The period a page shows: one without a one-day view shows 7 days for "24 h" (the selector says the same). */
+export function pagePeriod(period: Period, allowToday = true): Period {
+  return !allowToday && period === 1 ? 7 : period;
+}
+
 export function PeriodSelect({ allowToday = true }: { allowToday?: boolean }) {
   const { period, setPeriod } = usePrefs();
   const options = (Object.keys(PERIOD_LABELS).map(Number) as Period[]).filter((p) => allowToday || p !== 1);
   return (
-    <select className="control" aria-label="Период" value={period} onChange={(e) => setPeriod(Number(e.target.value) as Period)}>
+    <select className="control" aria-label="Период" value={pagePeriod(period, allowToday)} onChange={(e) => setPeriod(Number(e.target.value) as Period)}>
       {options.map((p) => <option key={p} value={p}>{PERIOD_LABELS[p]}</option>)}
     </select>
   );

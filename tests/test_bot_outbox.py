@@ -80,7 +80,7 @@ async def test_scheduled_cancelled_expired_and_stuck_jobs(tmp_path):
     assert await bot.run_once(ok, lambda: NOW + bot_outbox.STUCK_S + 1) == {}
     assert statuses(tmp_path)["bc:2:11"] == ("failed", "interrupted")  # outcome unknown: never sent twice
     assert bot.finish(stale, Outcome("sent"), NOW + 700) is False  # a late result of the old claim is fenced off
-    assert admin.cancel_batch("bc:1") == 2
+    assert admin.cancel_batch("bc:1", 1) == 2
     assert await bot.run_once(ok, lambda: NOW + 3600) == {}
     admin.enqueue([("msg:9", 11, "late", [])], batch_id=None, not_before=NOW, admin_event_id=None, now=NOW)
     assert await bot.run_once(ok, lambda: NOW + admin_outbox.JOB_TTL_S + 1) == {}
@@ -104,7 +104,7 @@ async def test_exceptions_are_classified_by_type_only(tmp_path):
 def test_retention_clears_texts_then_rows(tmp_path):
     admin, bot = setup(tmp_path)
     admin.enqueue([("msg:1", 11, "secret", [])], batch_id=None, not_before=NOW, admin_event_id=None, now=NOW)
-    admin.cancel_batch("none")
+    admin.cancel_batch("none", 1)
     with sqlite3.connect(tmp_path / "bot-outbox.db") as conn:
         conn.execute("UPDATE jobs SET status = 'sent'")
     bot.purge(NOW + 31 * 86400)
@@ -137,3 +137,24 @@ async def test_a_timeout_is_never_retried(tmp_path):
 
     assert await bot.run_once(lost, lambda: NOW) == {"failed": 2}
     assert statuses(tmp_path) == {"msg:1": ("failed", "unknown_outcome"), "msg:2": ("failed", "unknown_outcome")}
+
+
+def test_a_retry_after_the_cancel_is_never_sent(tmp_path):
+    """Codex round 3: a job being sent when its batch is cancelled, then Telegram answers RetryAfter — it ends
+    cancelled, and the bot never claims it again."""
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("bc:5:11", 11, "x", [])], batch_id="bc:5", not_before=NOW, admin_event_id=None, now=NOW)
+    job = bot.claim(NOW)
+    assert job is not None
+    assert admin.cancel_batch("bc:5", NOW + 1) == 0  # in flight: not cancellable as queued
+    assert bot.finish(job, Outcome("retry", "rate_limited", 5), NOW + 2) is True
+    assert statuses(tmp_path)["bc:5:11"] == ("cancelled", "rate_limited")
+    assert bot.claim(NOW + 3600) is None
+
+
+def test_a_queued_job_of_a_marked_batch_is_never_claimed(tmp_path):
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("bc:6:11", 11, "x", [])], batch_id="bc:6", not_before=NOW, admin_event_id=None, now=NOW)
+    with sqlite3.connect(tmp_path / "bot-outbox.db") as conn:  # marked, its queued rows not yet updated
+        conn.execute("INSERT INTO cancelled_batches VALUES ('bc:6', ?)", (NOW,))
+    assert bot.claim(NOW + 10) is None

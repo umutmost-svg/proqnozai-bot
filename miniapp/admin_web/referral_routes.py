@@ -7,7 +7,8 @@ account) -> active in 7 days (last seen) -> converted (at least one forecast in 
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+import sqlite3
+
 from types import SimpleNamespace
 
 from fastapi import FastAPI, Request
@@ -20,7 +21,8 @@ from miniapp.admin_web.referrals import PREFIX, Referrals, link_url, source_of
 DAY = 86400
 
 
-def register(app: FastAPI, ctx: SimpleNamespace) -> Callable[[list[int]], dict[int, dict | None]]:
+def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
+    """Returns `sources(user_ids)` (users list and card) and `funnel()` (product analytics)."""
     referrals = Referrals(ctx.accounts)
     referrals.init_schema()
     bot_file = BotCrmFile(ctx.bot_crm_file)
@@ -48,8 +50,12 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> Callable[[list[int]], dict[i
             if src is not None:
                 by_code.setdefault(src["code"], set()).add(uid)
         known = {u["id"]: u for u in store.users_by_ids(sorted(users), t)} if users else {}
-        collected = insights.available()
-        activity = insights.activity(sorted(users), t) if users and collected else {}
+        # A telemetry file that exists but cannot be read: conversion unknown (None), never a measured zero.
+        try:
+            collected = insights.available(strict=True)
+            activity = insights.activity(sorted(users), t, strict=True) if users and collected else {}
+        except sqlite3.Error:
+            collected, activity = False, {}
         out: dict[str, dict] = {}
         for code, ids in by_code.items():
             seen = {uid: max((known.get(uid) or {}).get("lastLoginAt") or 0,
@@ -102,4 +108,4 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> Callable[[list[int]], dict[i
             raise ActionError("invalid_value")
         return referrals.set_archived(admin, link_id, data["archived"], ctx.now())
 
-    return sources
+    return SimpleNamespace(sources=sources, funnel=lambda: stats()[1])

@@ -5,11 +5,12 @@ import { utc } from '../format';
 import { can, useLoad, useMe, usePrefs } from '../state';
 import { DangerDialog, Empty, ErrorBox, Loading, Note, PageHead, PeriodSelect, SectionHead, Status, Toast } from '../ui';
 
-function Tabs() {
+export function SettingsTabs() {
   return (
     <nav className="tabs" aria-label="Вкладки настроек">
       <NavLink to="/settings" end>Функции</NavLink>
       <NavLink to="/settings/admins">Администраторы</NavLink>
+      <NavLink to="/settings/roles">Роли и права</NavLink>
       <NavLink to="/settings/journal">Журнал действий</NavLink>
     </nav>
   );
@@ -37,7 +38,7 @@ export function SettingsFeatures() {
   return (
     <>
       <PageHead crumb="Настройки" title="Настройки" subtitle="Функции продукта, лимиты и аудит изменений" />
-      <Tabs />
+      <SettingsTabs />
       {error ? <ErrorBox error={error} onRetry={reload} /> : loading && !data ? <Loading rows={6} /> : data && (
         <div className="cols" style={{ gridTemplateColumns: 'minmax(0, 1fr) 380px', gap: 60 }}>
           <section className="section">
@@ -133,7 +134,7 @@ export function SettingsAdmins() {
   return (
     <>
       <PageHead crumb="Настройки" title="Администраторы и роли" subtitle="Персональные учётные записи, разрешения и 2FA" />
-      <Tabs />
+      <SettingsTabs />
       <div className="filters" style={{ justifyContent: 'flex-end' }}>
         <button type="button" className="btn" disabled={!owner} title={owner ? undefined : 'Только владелец'}
           onClick={() => { setEmail(''); setRole('analyst'); setAction({ kind: 'invite' }); }}>Добавить администратора</button>
@@ -264,7 +265,7 @@ export function SettingsJournal() {
   return (
     <>
       <PageHead crumb="Настройки" title="Журнал действий" subtitle="Кто, когда и почему изменил настройки или доступ" />
-      <Tabs />
+      <SettingsTabs />
       <div className="filters">
         <PeriodSelect />
         <select className="control" aria-label="Администратор" value={adminId} onChange={(e) => setAdminId(e.target.value)}>

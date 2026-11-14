@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from miniapp.admin_web import ads_routes, crm_routes, demo, referral_routes
+from miniapp.admin_web import ads_routes, crm_routes, demo, ops_routes, referral_routes
 from miniapp.admin_web.accounts import ActionError, Admin, AdminStore, AuthError, can
 from miniapp.admin_web.config import AdminWebConfig
 from miniapp.forecast.history import GATE_MIN_FORECASTS, ForecastHistory
@@ -480,8 +480,10 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         outbox_file=config.outbox_db, telemetry_file=config.telemetry_db, bot_crm_file=config.bot_crm_db,
         bot_username=config.bot_username, miniapp_short_name=config.miniapp_short_name,
         can_personal=lambda request: can(request.state.admin.role, "read_personal"))
-    ctx.sources = referral_routes.register(app, ctx)  # acquisition sources for the users list and card
+    referrals = referral_routes.register(app, ctx)
+    ctx.sources, ctx.referral_funnel = referrals.sources, referrals.funnel  # users list / card, product analytics
     crm_routes.register(app, ctx)
+    ops_routes.register(app, ctx)
     ads_routes.register(app, ctx, config.ads_policy_file, config.ads_applied_file,  # after CRM: MB ids live there
                         config.telemetry_db)
 
