@@ -140,7 +140,11 @@ env_vars = {
     "MINIAPP_FOOTBALL_DATA_SHARED_RESERVE": "40",
     "MINIAPP_FOOTBALL_DATA_COMPETITIONS": "all",
     # Odds from the bot (signed push): on once its shared secret exists on this host (same value in the bot).
-    "MINIAPP_ODDS_FEED_ENABLED": "true" if ODDS_SECRET else "false",
+    # Odds are served from the Mini App's own Mostbet source (catalogue mode, docs/miniapp/odds-catalog.md) and,
+    # while the bot runs, also from its signed feed: serving no longer depends on the bot's secret.
+    "MINIAPP_ODDS_FEED_ENABLED": "true",
+    "MINIAPP_ODDS_CATALOG": "true",
+    "MINIAPP_ODDS_SOURCE_MAX_PER_CYCLE": "20",  # modest while the bot shares the API's IP; up to 40 after it is retired
     "MINIAPP_LOGINS_ENABLED": "true",
 }
 if not OWNER.isdigit():

@@ -159,6 +159,9 @@ class Settings:
     # Odds across the whole catalogue (docs/miniapp/odds-catalog.md): lines outside leagues.json matched by time and
     # team names, and the bot told which lines to price. Off: catalogue pushes are only matched and logged.
     odds_catalog: bool = False
+    # The Mini App's own Mostbet source (catalogue mode only): price requests per 5-minute cycle. 20 while the bot
+    # still runs from the same IP (the bot's users keep the API's budget first); up to 40 after it is retired.
+    odds_source_max_per_cycle: int = 20
     # AI analysis (M3.2). Without a key the analysis is reported "not connected".
     anthropic_api_key: str | None = field(default=None, repr=False)
     ai_model: str = "claude-opus-5-5"
@@ -283,6 +286,8 @@ class Settings:
         if self.sports_user_per_minute is not None and not 1 <= self.sports_user_per_minute <= self.football_data_per_minute:
             # Above the app's own cap one user could take the whole budget the share exists to divide.
             raise SettingsError("sports_user_per_minute must be 1..football_data_per_minute")
+        if not 1 <= self.odds_source_max_per_cycle <= 40:
+            raise SettingsError("odds_source_max_per_cycle must be 1..40")
         if not 0 <= self.sports_user_unknown_per_hour <= 600:
             raise SettingsError("sports_user_unknown_per_hour must be 0..600")
         if self.anthropic_api_key is not None and (
@@ -383,6 +388,7 @@ class Settings:
             odds_feed_secret=optional("MINIAPP_ODDS_FEED_SECRET"),
             odds_feed_enabled=boolean("MINIAPP_ODDS_FEED_ENABLED", True),
             odds_catalog=boolean("MINIAPP_ODDS_CATALOG", False),
+            odds_source_max_per_cycle=integer("MINIAPP_ODDS_SOURCE_MAX_PER_CYCLE", 20),
             anthropic_api_key=optional("MINIAPP_ANTHROPIC_API_KEY"),
             ai_model=optional("MINIAPP_AI_MODEL") or "claude-opus-5-5",
             ai_per_user_daily=integer("MINIAPP_AI_PER_USER_DAILY", 10),

@@ -209,7 +209,7 @@ describe('the model against the market', () => {
     ['no quotes', v3({ ...READY_OVER, market: { ...PRICES, quotes: [] } })],
     ['no validity', v3({ ...READY_OVER, market: { ...PRICES, validFor: undefined } })],
     ['an expired validity', v3({ ...READY_OVER, market: { ...PRICES, validFor: 0 } })],
-    ['a validity beyond the longest the server gives', v3({ ...READY_OVER, market: { ...PRICES, validFor: 901 } })],
+    ['a validity beyond the longest the server gives', v3({ ...READY_OVER, market: { ...PRICES, validFor: 3601 } })],
     ['an estimate validity on a goal-model analysis', v3({ estimateFrom: { fetchedAt: '2026-11-08T05:58:00Z', validFor: 840 } })],
   ])('rejects %s', async (_, body) => {
     await expect(aiBackend(body).requestAnalysis('fd:4')).rejects.toThrow();

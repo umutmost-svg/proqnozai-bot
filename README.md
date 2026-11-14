@@ -130,7 +130,8 @@ Mini App (`miniapp/`, `frontend/`) читает только свои перем
 Коэффициенты (подписанная выгрузка от бота, `docs/miniapp/odds.md`):
 `MINIAPP_ODDS_FEED_SECRET` (секрет HMAC, ≥ 32 символов; пусто — приём
 выключен, коэффициенты нигде не показываются), `MINIAPP_ODDS_CATALOG` (коэффициенты по всему каталогу,
-`docs/miniapp/odds-catalog.md`; по умолчанию false — каталог только сопоставляется и логируется), `MINIAPP_ODDS_FEED_ENABLED`
+`docs/miniapp/odds-catalog.md`; по умолчанию false — каталог только сопоставляется и логируется; true — Mini App сама берёт коэффициенты Mostbet),
+`MINIAPP_ODDS_SOURCE_MAX_PER_CYCLE` (запросов цен Mostbet за 5 мин, 1..40, по умолчанию 20), `MINIAPP_ODDS_FEED_ENABLED`
 (аварийный выключатель: `false` — выгрузки получают 410, бот перестаёт
 запрашивать коэффициенты, в Mini App их нет).
 AI-разбор Mini App (M3.2): `MINIAPP_ANTHROPIC_API_KEY` (секрет, только

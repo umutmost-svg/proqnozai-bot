@@ -21,7 +21,8 @@ describe('match page odds (numbers only, valid until a deadline)', () => {
     expect(readEventOdds(null, sent)).toBeNull();
     expect(readEventOdds({ ...ok, quotes: [] }, sent)).toBeNull();
     expect(readEventOdds({ ...ok, validFor: 0 }, sent)).toBeNull();
-    expect(readEventOdds({ ...ok, validFor: 3600 }, sent)).toBeNull(); // longer than 15 min is impossible
+    expect(readEventOdds({ ...ok, validFor: 3601 }, sent)).toBeNull(); // longer than an hour is impossible (FAR_MAX_AGE_S)
+    expect(readEventOdds({ ...ok, validFor: 3600 }, sent)).not.toBeNull(); // far from kickoff: up to an hour
     expect(readEventOdds({ ...ok, fetchedAt: 'yesterday' }, sent)).toBeNull();
     for (const bad of [{ market: 'Mostbet', odds: 2, marketProbability: 50, margin: 5 }, { market: '1', odds: 1, marketProbability: 50, margin: 5 },
       { market: '1', odds: 2, marketProbability: 120, margin: 5 }, { market: '1', odds: '2', marketProbability: 50, margin: 5 }]) {

@@ -3,14 +3,15 @@ App's own matches by time and team names, never a guess; the bot told which line
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import pytest
 
-from miniapp.odds.feed import FeedError, FeedReceiver
+from miniapp.odds.feed import FeedReceiver
 from miniapp.odds.store import FAR_MAX_AGE_S, FAR_REFRESH_S, MAX_AGE_S, NEAR_REFRESH_S, OddsStore
 from miniapp.sports.models import Competitor, FootballEvent, Provenance
 from miniapp.tests.conftest import FakeClock
-from miniapp.tests.test_odds import ARSENAL, CHELSEA, ODDS, SECRET, client_for, iso, signed
+from miniapp.tests.test_odds import ARSENAL, CHELSEA, ODDS, SECRET, iso, signed
 
 SPAIN = Competitor("fd:team:760", "Spain", None)
 ITALY = Competitor("fd:team:784", "Italy", None)
@@ -24,28 +25,17 @@ def event(home: Competitor, away: Competitor, kickoff: float, *, comp: str = "fd
                          Provenance("football-data.org", "2027-01-14T08:00:00Z", None), "TIMED")
 
 
-def catalog_body(*lines: dict, nonce: str = "b" * 32) -> bytes:
-    return json.dumps({"v": 1, "nonce": nonce, "kind": "catalog", "lines": list(lines)}).encode()
-
-
 def cline(line_id: int, home: str, away: str, kickoff: float, *, country: str = "UEFA Nations League",
           league: str = "League A") -> dict:
     return {"id": line_id, "country": country, "league": league, "home": home, "away": away, "kickoff": iso(kickoff)}
 
 
-def push(store: OddsStore, clock: FakeClock, *lines: dict, nonce: str = "b" * 32) -> None:
-    kind, parsed = FeedReceiver(SECRET, clock).verify_push(*signed(clock, catalog_body(*lines, nonce=nonce)))
-    assert kind == "catalog"
-    store.ingest_catalog(parsed)
-
-
-def test_a_catalogue_push_is_signed_and_carries_no_prices(clock: FakeClock) -> None:
-    receiver = FeedReceiver(SECRET, clock)
-    kind, lines = receiver.verify_push(*signed(clock, catalog_body(cline(1, "Spain", "Italy", clock.now + 7200))))
-    assert kind == "catalog" and lines[0].home == "Spain"
-    with pytest.raises(FeedError):  # the priced-lines entry point never takes a catalogue
-        FeedReceiver(SECRET, clock).verify(*signed(clock, catalog_body(cline(1, "Spain", "Italy", clock.now + 7200),
-                                                                        nonce="c" * 32)))
+def push(store: OddsStore, clock: FakeClock, *lines: dict) -> None:
+    """A complete Mostbet list as the Mini App's own source stores it."""
+    from miniapp.odds.feed import CatalogLine
+    store.ingest_catalog([CatalogLine(ln["id"], ln["country"], ln["league"], ln["home"], ln["away"],
+                                      datetime.fromisoformat(ln["kickoff"].replace("Z", "+00:00")).timestamp())
+                          for ln in lines])
 
 
 def test_a_line_outside_the_league_table_is_matched_by_time_and_both_names(clock: FakeClock) -> None:
@@ -83,7 +73,7 @@ def test_a_line_mapped_to_another_competition_never_prices_this_one(clock: FakeC
 def test_one_line_claimed_by_two_matches_is_priced_for_neither(clock: FakeClock) -> None:
     store = OddsStore(clock, catalog=True)
     t = clock.now + 3 * 3600
-    push(store, clock, cline(10, "Genk", "Gent", t, country="Belgium", league="Cup"))
+    push(store, clock, cline(10, "Genk", "Gent", t, country="Belgium", league="Pro League"))
     report = store.match_catalog([event(GENK, GENT, t, comp="fd:BJL", mid="fd:1"),
                                   event(GENK, GENT, t, comp="fd:BJPP", mid="fd:2")])
     assert report.wanted == [] and report.reasons.get("duplicate") == 2 and report.reasons.get("matched") == 0
@@ -114,30 +104,106 @@ def test_without_catalogue_mode_lines_outside_the_table_stay_unknown(clock: Fake
     assert report.unknown_competition == 1 and store.lookup(event(SPAIN, ITALY, t)) is None
 
 
-def test_catalogue_entries_expire_when_the_bot_stops_listing_them(clock: FakeClock) -> None:
+def test_womens_youth_and_reserve_lines_never_price_a_senior_match(clock: FakeClock) -> None:
     store = OddsStore(clock, catalog=True)
-    t = clock.now + 20 * 3600
-    push(store, clock, cline(10, "Spain", "Italy", t))
-    clock.advance(41 * 60)
-    push(store, clock, cline(11, "Arsenal", "Chelsea", t, country="England", league="Premier League"), nonce="c" * 32)
+    t = clock.now + 3 * 3600
+    push(store, clock, cline(10, "Spain W", "Italy W", t), cline(11, "Spain U21", "Italy U21", t + 60),
+         cline(12, "Spain", "Italy", t + 120, league="Women. Nations League"))
     assert store.match_catalog([event(SPAIN, ITALY, t)]).wanted == []
 
 
-def test_the_route_tells_the_bot_what_to_price_only_in_catalogue_mode(tmp_path, clock: FakeClock, monkeypatch) -> None:
-    from fastapi.testclient import TestClient
-
-    from miniapp.app import create_app
-    from miniapp.sports.search import SearchIndex
-    from miniapp.tests.test_sports import base_settings
-
+def test_a_line_must_come_from_the_competitions_country(clock: FakeClock) -> None:
+    store = OddsStore(clock, catalog=True)
     t = clock.now + 3 * 3600
-    monkeypatch.setattr(SearchIndex, "upcoming", lambda self: [event(ARSENAL, CHELSEA, t, comp="fd:PL")])
-    for mode, expected in ((False, []), (True, [{"id": 10, "refresh": int(NEAR_REFRESH_S)}])):
-        settings = base_settings(tmp_path / str(mode), odds_feed_secret="s" * 40, odds_catalog=mode)
-        client = TestClient(create_app(settings, clock=clock), base_url="http://127.0.0.1:8000")
-        payload = catalog_body(cline(10, "Arsenal", "Chelsea", t, country="England", league="Premier League"),
-                               nonce=("1" if mode else "2") * 32)
-        stamp, signature, _ = signed(clock, payload)
-        r = client.post("/api/internal/odds", content=payload, headers={"X-Odds-Timestamp": stamp, "X-Odds-Signature": signature})
-        assert r.status_code == 200 and r.json()["wanted"] == expected and r.json()["reasons"] == {"matched": 1}
-    assert client_for  # imported helper stays used
+    # A Belgian cup line never prices a Dutch league match of namesakes, and a domestic line never an international one.
+    push(store, clock, cline(10, "Genk", "Gent", t, country="Belgium", league="Pro League"),
+         cline(11, "Spain", "Italy", t, country="Spain", league="Friendlies"),
+         cline(12, "Spain", "Italy", t + 60, country="España", league="Amistosos"))     # an unknown spelling
+    assert store.match_catalog([event(GENK, GENT, t, comp="fd:DED")]).wanted == []
+    assert store.match_catalog([event(SPAIN, ITALY, t)]).wanted == []
+    assert store.match_catalog([event(GENK, GENT, t, comp="fd:BJL")]).wanted == [(10, NEAR_REFRESH_S)]
+
+
+def test_a_cup_line_prices_only_the_cup_and_a_league_line_only_the_league(clock: FakeClock) -> None:
+    store = OddsStore(clock, catalog=True)
+    t = clock.now + 3 * 3600
+    arsenal, chelsea = Competitor("fd:team:57", "Arsenal FC", "Arsenal"), Competitor("fd:team:61", "Chelsea FC", "Chelsea")
+    push(store, clock, cline(10, "Arsenal", "Chelsea", t, country="England", league="FA Cup"))
+    assert store.match_catalog([event(arsenal, chelsea, t, comp="fd:EL1")]).wanted == []      # a league: never
+    assert store.match_catalog([event(arsenal, chelsea, t, comp="fd:FAC")]).wanted == [(10, NEAR_REFRESH_S)]
+
+
+def test_international_womens_and_youth_competitions_name_themselves_in_the_country(clock: FakeClock) -> None:
+    store = OddsStore(clock, catalog=True)
+    t = clock.now + 3 * 3600
+    push(store, clock, cline(10, "Spain", "Italy", t, country="UEFA Women's Euro", league="Group A"),
+         cline(11, "Spain", "Italy", t + 60, country="UEFA U21 Championship", league="Group B"))
+    assert store.match_catalog([event(SPAIN, ITALY, t)]).wanted == []
+
+
+def _priced(store: OddsStore, clock: FakeClock, line_id: int, home: str, away: str, kickoff: float, **where) -> None:
+    raw = {**cline(line_id, home, away, kickoff, **where), "live": False, "fetchedAt": iso(clock.now - 60), "odds": ODDS}
+    store.ingest(FeedReceiver(SECRET, clock).verify(*signed(clock, json.dumps(
+        {"v": 1, "nonce": f"{line_id:032d}", "lines": [raw]}).encode())))
+
+
+def test_a_line_claimed_by_two_matches_is_served_for_neither(clock: FakeClock) -> None:
+    store = OddsStore(clock, catalog=True)
+    t = clock.now + 3 * 3600
+    _priced(store, clock, 10, "Genk", "Gent", t, country="Belgium", league="Pro League")   # priced before the second calendar
+    league, cup = event(GENK, GENT, t, comp="fd:BJL", mid="fd:1"), event(GENK, GENT, t, comp="fd:BJPP", mid="fd:2")
+    assert store.lookup(league) is None                    # not assigned by any catalogue match yet
+    push(store, clock, cline(10, "Genk", "Gent", t, country="Belgium", league="Pro League"))
+    store.match_catalog([league])
+    assert store.lookup(league) is not None                # assigned to the one match
+    store.match_catalog([league, cup])
+    assert store.lookup(league) is None and store.lookup(cup) is None
+
+
+def test_mapped_fallback_lines_keep_working_without_a_catalogue_match(clock: FakeClock) -> None:
+    store = OddsStore(clock, catalog=True)
+    t = clock.now + 3 * 3600
+    _priced(store, clock, 10, "Arsenal", "Chelsea", t, country="England", league="Premier League")
+    assert store.lookup(event(ARSENAL, CHELSEA, t, comp="fd:PL")) is not None
+
+
+
+def test_local_words_for_womens_and_youth_football_are_known(clock: FakeClock) -> None:
+    from miniapp.odds.matching import senior
+    assert not senior("Frauen Bundesliga", "Bayern Munich", "VfL Wolfsburg")
+    assert not senior("Liga F. Femenina", "Barcelona", "Real Madrid")
+    assert not senior("Serie A Femminile", "Juventus", "Roma")
+    assert not senior("Primavera 1", "Inter", "Milan")
+    assert senior("Bundesliga", "Bayern Munich", "VfL Wolfsburg")
+
+
+def test_a_line_gone_from_a_complete_list_is_gone_at_once(clock: FakeClock) -> None:
+    from miniapp.odds.feed import CatalogLine
+    store = OddsStore(clock, catalog=True)
+    t = clock.now + 30 * 3600
+    store.ingest_catalog([CatalogLine(10, "UEFA Nations League", "League A", "Spain", "Italy", t)])
+    assert store.match_catalog([event(SPAIN, ITALY, t)]).wanted
+    store.ingest_catalog([])                       # the next full list no longer has it
+    assert store.match_catalog([event(SPAIN, ITALY, t)]).wanted == []
+
+
+
+def test_while_the_list_is_fresh_the_catalogue_decides_every_line(clock: FakeClock) -> None:
+    from miniapp.odds.feed import CatalogLine
+    t = clock.now + 3 * 3600
+    pl = event(ARSENAL, CHELSEA, t, comp="fd:PL")
+    store = OddsStore(clock, catalog=True)
+    _priced(store, clock, 10, "Arsenal", "Chelsea", t, country="England", league="Premier League")
+    england = ("England", "Premier League", "Arsenal", "Chelsea", t)
+    store.ingest_catalog([CatalogLine(10, *england)])
+    store.match_catalog([pl])
+    assert store.lookup(pl) is not None                              # listed and uniquely matched
+    store.ingest_catalog([CatalogLine(10, *england), CatalogLine(11, *england)])
+    store.match_catalog([pl])
+    assert store.lookup(pl) is None                                  # two lines for one match: none
+    store.ingest_catalog([])
+    store.match_catalog([pl])
+    assert store.lookup(pl) is None                                  # withdrawn from a complete list: none
+    clock.advance(41 * 60)                                           # the own source stopped: the bot's feed again
+    _priced(store, clock, 12, "Arsenal", "Chelsea", t, country="England", league="Premier League")
+    assert store.lookup(pl) is not None

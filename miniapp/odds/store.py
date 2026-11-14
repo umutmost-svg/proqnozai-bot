@@ -16,7 +16,19 @@ from miniapp.sports.models import FootballEvent
 from miniapp.sports.service import parse_instant
 
 from .feed import TRANSIT_ALLOWANCE_S, CatalogLine, FeedLine
-from .matching import Candidate, Leagues, leagues, match, unmatched_names
+from miniapp.sports.football_data import KNOWN_COMPETITIONS
+
+from .matching import Candidate, Leagues, all_country_keys, leagues, match, senior, unmatched_names
+
+# Women's competitions of the catalogue never get a line outside leagues.json (the feed often names women's teams
+# like the clubs' senior teams).
+NO_CATALOGUE_ODDS = frozenset({"WSL", "ECF", "WCF"})
+COUNTRIES = all_country_keys(area for _, area in KNOWN_COMPETITIONS.values())
+
+
+def area_of(code: str) -> str | None:
+    known = KNOWN_COMPETITIONS.get(code)
+    return known[1] if known else None
 
 logger = logging.getLogger("miniapp.odds")
 
@@ -29,7 +41,7 @@ NEAR_S = 6 * 3600.0
 NEAR_REFRESH_S = 10 * 60.0
 FAR_REFRESH_S = 45 * 60.0
 FAR_MAX_AGE_S = 60 * 60.0
-# A catalogue entry not seen in a push for this long is gone from the bot's list.
+# The catalogue governs serving while the last complete list is at most this old (the source reads it every 15 min).
 CATALOG_TTL_S = 40 * 60.0
 CATALOG_WINDOW_S = 48 * 3600.0
 MAX_CATALOG = 6000
@@ -97,6 +109,13 @@ class OddsStore:
         self._table = table
         self._lines: dict[int, _Stored] = {}
         self._catalog: dict[int, tuple[Candidate, float]] = {}  # line id -> (candidate, last seen)
+        # Line id -> the one Mini App match the last catalogue match gave it: a line outside leagues.json is served
+        # for that match only (two matches claiming one line get neither, in serving as in pricing).
+        self._assigned: dict[int, str] = {}
+        # When the Mini App's own source last stored a COMPLETE list: while that is recent, the catalogue decides
+        # every line (a withdrawn or ambiguous line is served for no match); without it, mapped lines from the
+        # bot's feed are served as before (the fallback).
+        self._complete_at = float("-inf")
 
     @property
     def table(self) -> Leagues:
@@ -106,7 +125,7 @@ class OddsStore:
         accepted = unknown = empty = 0
         for line in lines:
             code = self.table.code(line.country, line.league)
-            if code is None and not self.catalog:
+            if code is None and (not self.catalog or not senior(line.league, line.home, line.away, line.country)):
                 unknown += 1
                 continue
             if not line.book:
@@ -114,7 +133,7 @@ class OddsStore:
             known = self._lines.get(line.line_id)
             if known is not None and known.fetched_at >= line.fetched_at:
                 continue
-            candidate = Candidate(line.line_id, code, line.kickoff, line.home, line.away)
+            candidate = Candidate(line.line_id, code, line.kickoff, line.home, line.away, line.country, line.league)
             self._lines[line.line_id] = _Stored(candidate, line.live, line.fetched_at, line.book)
             accepted += 1
         self._evict()
@@ -138,12 +157,16 @@ class OddsStore:
         if now >= kickoff:
             return None
         competition = event.tournament_id.removeprefix("fd:")
+        catalogue = self.catalog and competition not in NO_CATALOGUE_ODDS
         # Expired lines take no part: an old copy of a fixture under a previous line id must not
         # make a fresh one ambiguous (live markers are recent, so they still take part).
         age = max_age(kickoff, now, self.catalog)
         recent = (s.candidate for s in self._lines.values() if now - s.fetched_at < age - TRANSIT_ALLOWANCE_S)
-        line, reason = match(recent, competition=competition,
-                             kickoff=kickoff, home=event.home, away=event.away, table=self.table)
+        line, reason = match(recent, competition=competition, kickoff=kickoff, home=event.home, away=event.away,
+                             table=self.table, area=area_of(competition) if catalogue else None, countries=COUNTRIES)
+        governed = self.catalog and now - self._complete_at <= CATALOG_TTL_S
+        if line is not None and (line.competition is None or governed) and self._assigned.get(line.line_id) != event.id:
+            line, reason = None, "unassigned"  # withdrawn, ambiguous, or given to another match by the catalogue
         if line is None:
             if reason not in ("no_line",):
                 logger.info("odds.unmatched event=%s reason=%s", event.id, reason)
@@ -162,17 +185,21 @@ class OddsStore:
     # --- the catalogue: which of the bot's lines stand for the Mini App's matches -------------------------
 
     def ingest_catalog(self, lines: Iterable[CatalogLine]) -> int:
-        """Keeps the bot's list metadata (no prices); entries the bot stopped listing expire after CATALOG_TTL_S."""
+        """Replaces the catalogue with Mostbet's whole list (the Mini App's own source reads it to its end): a line
+        the list no longer has is gone at once."""
         now = self._clock()
         count = 0
+        self._catalog.clear()
+        self._complete_at = now
         for line in lines:
             if not now < line.kickoff <= now + CATALOG_WINDOW_S:
                 continue
-            code = self.table.code(line.country, line.league)  # None outside leagues.json: any competition
-            self._catalog[line.line_id] = (Candidate(line.line_id, code, line.kickoff, line.home, line.away), now)
+            code = self.table.code(line.country, line.league)  # None outside leagues.json: checked by area
+            if code is None and not senior(line.league, line.home, line.away, line.country):
+                continue  # women's, youth or reserve football: never a senior match
+            self._catalog[line.line_id] = (
+                Candidate(line.line_id, code, line.kickoff, line.home, line.away, line.country, line.league), now)
             count += 1
-        for line_id in [i for i, (c, seen) in self._catalog.items() if now - seen > CATALOG_TTL_S or c.kickoff <= now]:
-            del self._catalog[line_id]
         if len(self._catalog) > MAX_CATALOG:
             for line_id in sorted(self._catalog, key=lambda i: -self._catalog[i][0].kickoff)[: len(self._catalog) - MAX_CATALOG]:
                 del self._catalog[line_id]
@@ -189,6 +216,7 @@ class OddsStore:
         samples: dict[str, list[str]] = {}
         chosen: dict[int, float] = {}  # line id -> kickoff
         claimed: dict[int, int] = {}  # line id -> how many matches it stands for
+        owner: dict[int, str] = {}  # line id -> the match it stands for
         counted = 0
         for event in events:
             if not isinstance(event, FootballEvent) or event.status != "upcoming":
@@ -199,20 +227,25 @@ class OddsStore:
             counted += 1
             slot = int(kickoff // 900)
             near = [c for k in (slot - 1, slot, slot + 1) for c in buckets.get(k, ())]
-            line, reason = match(near, competition=event.tournament_id.removeprefix("fd:"), kickoff=kickoff,
-                                 home=event.home, away=event.away, table=self.table)
+            code = event.tournament_id.removeprefix("fd:")
+            area = None if code in NO_CATALOGUE_ODDS else area_of(code)
+            line, reason = match(near, competition=code, kickoff=kickoff, home=event.home, away=event.away,
+                                 table=self.table, area=area, countries=COUNTRIES)
             reasons[reason] = reasons.get(reason, 0) + 1
             if line is not None:
                 chosen[line.line_id] = line.kickoff
                 claimed[line.line_id] = claimed.get(line.line_id, 0) + 1
+                owner[line.line_id] = event.id
             elif reason in ("unknown_names", "ambiguous", "reversed") and len(samples.get(reason, [])) < SAMPLES_PER_REASON:
                 samples.setdefault(reason, []).append(
                     f"{event.tournament_id}: {event.home.name} - {event.away.name} ~ {unmatched_names(near)}")
         # A line claimed by two matches (two fixtures of the same teams at once) is priced for neither.
         for line_id in [i for i, n in claimed.items() if n > 1]:
             del chosen[line_id]
+            owner.pop(line_id, None)
             reasons["duplicate"] = reasons.get("duplicate", 0) + claimed[line_id]
             reasons["matched"] -= claimed[line_id]
+        self._assigned = owner
         wanted = sorted(((i, k) for i, k in chosen.items()), key=lambda x: (x[1], x[0]))
         return CatalogReport(len(self._catalog), counted, reasons,
                              [(i, NEAR_REFRESH_S if k - now <= NEAR_S else FAR_REFRESH_S) for i, k in wanted], samples)

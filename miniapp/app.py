@@ -27,6 +27,7 @@ from miniapp.forecast.history import ForecastHistory, history_path
 from miniapp.forecast.settlement import Settlement
 from miniapp.odds.feed import FeedReceiver
 from miniapp.odds.routes import register_odds_routes
+from miniapp.odds.source import OddsSource
 from miniapp.odds.store import OddsStore
 from miniapp.quick.routes import register_quick_routes
 from miniapp.quick.service import QuickService
@@ -176,6 +177,7 @@ def create_app(
     store: Store | None = None,
     sports: SportsService | None = None,
     ai: AiService | None = None,
+    odds_source_enabled: bool = True,  # tests switch the Mostbet source off (no network)
 ) -> FastAPI:
     store = store or Store(settings.db_path)
     store.init_schema()
@@ -566,13 +568,19 @@ def create_app(
     # Odds pushed by the bot: in memory only, served after strict matching (miniapp/odds).
     odds = OddsStore(clock, enabled=settings.odds_feed_enabled, catalog=settings.odds_catalog)
     receiver = FeedReceiver(settings.odds_feed_secret.encode(), clock) if settings.odds_feed_secret else None
-    register_odds_routes(app, receiver, odds, clock, events=lambda: sports.search_index.upcoming())
+    register_odds_routes(app, receiver, odds, clock)
+    # The Mini App's own Mostbet source (the bot is going to be retired): catalogue mode only, started by use.
+    odds_source = (OddsSource(odds, lambda: sports.search_index.upcoming(),
+                              max_per_cycle=settings.odds_source_max_per_cycle)
+                   if settings.odds_catalog and settings.odds_feed_enabled and odds_source_enabled else None)
     ai = ai or build_ai_service(settings, sports, clock=clock, ledger=store, history=history, odds=odds)
     async def active_session(request: Request) -> tuple[str, Session] | None:
         """current_session for the data APIs: a signed-in user may also start the settlement pass."""
         found = await current_session(request)
         if found is not None:
             settlement.ensure()
+            if odds_source is not None:
+                odds_source.ensure_running()
         return found
 
     # One share per user of the shared football-data budget, for every route that may read it.

@@ -32,9 +32,6 @@ from .book import read_book
 
 MAX_BODY_BYTES = 512 * 1024
 MAX_LINES = 600
-# A catalogue push (metadata of the bot's football lines, no prices) may carry more lines; the bot splits larger
-# catalogues into several pushes.
-MAX_CATALOG_LINES = 1500
 MAX_SKEW_S = 120.0
 REPLAY_WINDOW_S = 2 * MAX_SKEW_S
 MAX_NONCES = 5000
@@ -73,27 +70,13 @@ class FeedLine:
 
 @dataclass(frozen=True)
 class CatalogLine:
-    """A line of the bot's match list (no prices): what the Mini App matches against its own catalogue."""
+    """A line of Mostbet's match list (no prices), from the Mini App's own source: matched against its catalogue."""
     line_id: int
     country: str
     league: str
     home: str
     away: str
     kickoff: float
-
-
-def _catalog_line(raw: object) -> CatalogLine | None:
-    if not isinstance(raw, dict):
-        return None
-    line_id = raw.get("id")
-    if isinstance(line_id, bool) or not isinstance(line_id, int) or not 0 < line_id < 2 ** 53:
-        return None
-    country, home, away = (_text(raw.get(k)) for k in ("country", "home", "away"))
-    league = _text(raw.get("league")) if raw.get("league") != "" else ""
-    kickoff = _instant(raw.get("kickoff"))
-    if None in (country, home, away, kickoff) or league is None:
-        return None
-    return CatalogLine(line_id, country, league, home, away, kickoff)  # type: ignore[arg-type]
 
 
 def sign(secret: bytes, timestamp: str, body: bytes) -> str:
@@ -148,15 +131,6 @@ class FeedReceiver:
         self._nonces: OrderedDict[str, float] = OrderedDict()
 
     def verify(self, timestamp: str | None, signature: str | None, body: bytes) -> list[FeedLine]:
-        """A push of priced lines (and live markers); a catalogue push is a bad payload here."""
-        kind, lines = self.verify_push(timestamp, signature, body)
-        if kind != "odds":
-            raise FeedError("bad_payload", 400)
-        return lines  # type: ignore[return-value]
-
-    def verify_push(self, timestamp: str | None, signature: str | None,
-                    body: bytes) -> tuple[str, list[FeedLine] | list[CatalogLine]]:
-        """("odds", priced lines) or ("catalog", the bot's list metadata): signature, freshness and replay checked."""
         if len(body) > MAX_BODY_BYTES:
             raise FeedError("too_large", 413)
         now = self._clock()
@@ -173,10 +147,9 @@ class FeedReceiver:
             raise FeedError("bad_payload", 400) from None
         if not isinstance(payload, dict) or payload.get("v") != 1:
             raise FeedError("bad_payload", 400)
-        nonce, lines, kind = payload.get("nonce"), payload.get("lines"), payload.get("kind", "odds")
-        limit = MAX_CATALOG_LINES if kind == "catalog" else MAX_LINES
-        if (kind not in ("odds", "catalog") or not isinstance(nonce, str) or not _NONCE.match(nonce)
-                or not isinstance(lines, list) or len(lines) > limit):
+        nonce, lines = payload.get("nonce"), payload.get("lines")
+        if (payload.get("kind", "odds") != "odds" or not isinstance(nonce, str) or not _NONCE.match(nonce)
+                or not isinstance(lines, list) or len(lines) > MAX_LINES):
             raise FeedError("bad_payload", 400)
         self._forget(now)
         if nonce in self._nonces:
@@ -184,13 +157,11 @@ class FeedReceiver:
         self._nonces[nonce] = now
         while len(self._nonces) > MAX_NONCES:
             self._nonces.popitem(last=False)
-        if kind == "catalog":
-            return "catalog", [c for c in (_catalog_line(raw) for raw in lines) if c is not None]
         sent = float(int(timestamp))
         # now - sent is clock skew plus transit time; the two cannot be told apart, so a later
         # arrival never lengthens a price's life: only a bot clock AHEAD of ours shifts it back.
         offset = min(now - sent, 0.0)
-        return "odds", [line for line in (_line(raw, sent, offset) for raw in lines) if line is not None]
+        return [line for line in (_line(raw, sent, offset) for raw in lines) if line is not None]
 
     def _forget(self, now: float) -> None:
         while self._nonces:
