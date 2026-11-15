@@ -151,7 +151,7 @@ env_vars = {
     # while the bot runs, also from its signed feed: serving no longer depends on the bot's secret.
     "MINIAPP_ODDS_FEED_ENABLED": "true",
     "MINIAPP_ODDS_CATALOG": "true",
-    "MINIAPP_ODDS_SOURCE_MAX_PER_CYCLE": "20",  # modest while the bot shares the API's IP; up to 40 after it is retired
+    "MINIAPP_ODDS_SOURCE_MAX_PER_CYCLE": "40",  # the bot no longer reads Mostbet (launcher only, 15.11): the full budget
     "MINIAPP_LOGINS_ENABLED": "true",
 }
 if not OWNER.isdigit():

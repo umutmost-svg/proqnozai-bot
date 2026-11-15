@@ -97,12 +97,12 @@ def test_at_most_five_and_ties_are_stable() -> None:
     assert [r.event.id for r in first] == sorted(r.event.id for r in first)
 
 
-def test_one_competition_takes_at_most_two_places_while_others_have_matches() -> None:
+def test_one_competition_takes_at_most_three_places_while_others_have_matches() -> None:
     pl = [event(i, home=(i * 2, f"T{i} FC"), away=(i * 2 + 1, f"U{i} FC")) for i in range(1, 6)]
     pd = [event(i, code="PD", home=(i * 2, f"T{i} FC"), away=(i * 2 + 1, f"U{i} FC")) for i in range(10, 12)]
     elc = event(20, code="ELC", home=(40, "X FC"), away=(41, "Y FC"))
     ids = [r.event.id for r in top.rank([*pl, *pd, elc], code_of, {})]
-    assert ids == ["fd:1", "fd:2", "fd:10", "fd:11", "fd:20"]
+    assert ids == ["fd:1", "fd:2", "fd:3", "fd:10", "fd:11"]          # 3 of the PL's 5, then the others
     # Nothing else that day: the remaining places go to the same competition.
     assert [r.event.id for r in top.rank(pl, code_of, {})] == ["fd:1", "fd:2", "fd:3", "fd:4", "fd:5"]
 
@@ -243,3 +243,13 @@ def test_featured_teams_must_be_ids(tmp_path) -> None:
     path.write_text(json.dumps(raw))
     with pytest.raises(ValueError):
         top.load_weights(path)
+
+
+def test_three_big_matches_of_one_competition_all_make_the_top():
+    """15.11: three Nations League matches scored alike; with a cap of 2 the third (Spain - England) lost its place to
+    a far weaker club game. Up to 3 per competition now."""
+    assert REAL.max_per_competition == 3
+    unl = [event(i, code="UNL", home=(100 + i, f"N{i}"), away=(200 + i, f"M{i}")) for i in (1, 2, 3)]
+    club = [event(10 + i, code="SD", home=(300 + i, f"C{i} FC"), away=(400 + i, f"D{i} FC")) for i in (1, 2, 3, 4)]
+    ids = [r.event.id for r in top.rank([*unl, *club], code_of, {})]           # 7 candidates for 5 places
+    assert ids[:3] == ["fd:1", "fd:2", "fd:3"] and len(ids) == 5           # the third big match is not displaced

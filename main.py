@@ -251,8 +251,10 @@ def main():
     async def post_init(application):
         from stats_server import set_bot_app
         set_bot_app(application, asyncio.get_event_loop())
-        asyncio.create_task(_preload_mostbet())
-        _start_odds_export()
+        if not BOT_LAUNCHER_MODE:
+            # Launcher mode reads nothing from Mostbet: the Mini App's own source has the whole API budget.
+            asyncio.create_task(_preload_mostbet())
+            _start_odds_export()
         if BOT_OUTBOX_ENABLED:
             asyncio.create_task(_run_outbox(application))
         if BOT_LAUNCHER_MODE:

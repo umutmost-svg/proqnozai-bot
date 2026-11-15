@@ -50,7 +50,8 @@ def register_launcher(app):
         app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, inquiry_hook),
                         group=-1)
     app.add_handler(CommandHandler("start", launcher_start))
-    for name, handler in (("admin", admin_cmd), ("cancel", cancel_cmd), ("testapi", testapi_cmd),
+    # /testapi is left out: it calls the sports and odds APIs, which the launcher no longer reads.
+    for name, handler in (("admin", admin_cmd), ("cancel", cancel_cmd),
                           ("setpromo", setpromo_cmd), ("promostats", promostats_cmd), ("delpromo", delpromo_cmd),
                           ("promodiag", promodiag_cmd)):
         app.add_handler(CommandHandler(name, handler, filters=filters.User(ADMIN_ID)))
