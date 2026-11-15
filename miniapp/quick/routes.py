@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from miniapp.forecast.quick import Criteria
 from miniapp.sports.client import UpstreamError
@@ -18,7 +21,10 @@ MAX_TOURNAMENTS = 20
 
 
 def register_quick_routes(app: FastAPI, service: QuickService, current_session: SessionCheck,
-                          user_limiter: UserUpstreamLimiter | None = None) -> None:
+                          user_limiter: UserUpstreamLimiter | None = None,
+                          on_pick: Callable[[int, str, list[str]], None] | None = None) -> None:
+    """`on_pick(user_id, field, event_ids)`: optional hook for a successful pick (ads: activity counter and the
+    matches an offer may be shown for)."""
     @app.get("/api/quick/pick")
     async def pick(request: Request) -> JSONResponse:
         active = await current_session(request)
@@ -55,4 +61,9 @@ def register_quick_routes(app: FastAPI, service: QuickService, current_session: 
             return _error(400, exc.code)
         except UpstreamError as exc:
             return _upstream(exc)
-        return JSONResponse(answer.to_json())
+        body = answer.to_json()
+        if on_pick is not None and body.get("status") == "ok":
+            events = [leg["event"]["id"] for leg in body.get("legs", []) if isinstance(leg.get("event"), dict)]
+            await run_in_threadpool(on_pick, session.user_id,
+                                    "quick_coupon_ok" if body.get("mode") == "coupon" else "quick_single_ok", events)
+        return JSONResponse(body)

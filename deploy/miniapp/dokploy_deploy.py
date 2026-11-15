@@ -86,6 +86,14 @@ if _AI_FILE.exists() and not (AI_KEY.startswith("sk-ant-") and AI_KEY.isascii() 
     sys.exit("STOP: the Anthropic key file exists but does not hold a valid Anthropic key")
 print("ai forecasts:", "on (key present)" if AI_KEY else "off (no /root/miniapp-secrets/anthropic-key)")
 
+# The admin panel's policy key (public half, hex; not a secret): ads snapshots and the access policy (users blocked
+# in the admin) are signed by the admin and verified here. Present = telemetry, ads, referrals and blocking on.
+_POLICY_FILE = Path("/root/miniapp-secrets/admin-policy-public-key")
+POLICY_KEY = secret(str(_POLICY_FILE)) if _POLICY_FILE.exists() else ""
+if _POLICY_FILE.exists() and not (len(POLICY_KEY) == 64 and all(c in "0123456789abcdef" for c in POLICY_KEY)):
+    sys.exit("STOP: the admin policy public key must be 64 lower-case hex characters")
+print("admin features (telemetry, ads, referrals, blocking):", "on" if POLICY_KEY else "off (no admin policy key)")
+
 if len(sys.argv) < 2 or not sys.argv[1].isalnum():
     sys.exit("usage: python3 - <IMAGE_TAG> [--deploy] < dokploy_deploy.py")
 tag, deploy = sys.argv[1], "--deploy" in sys.argv[2:]
@@ -151,6 +159,10 @@ if not OWNER.isdigit():
     sys.exit("STOP: owner id is not a Telegram id")
 if ODDS_SECRET:
     env_vars["MINIAPP_ODDS_FEED_SECRET"] = ODDS_SECRET
+if POLICY_KEY:
+    # Telemetry (activity, retention) exists only with ads on; no offer is shown until the admin publishes one.
+    env_vars |= {"MINIAPP_ADS_ENABLED": "true", "MINIAPP_ADS_POLICY_PUBLIC_KEY": POLICY_KEY,
+                 "MINIAPP_ACCESS_POLICY_PUBLIC_KEY": POLICY_KEY, "MINIAPP_REFERRALS_ENABLED": "true"}
 if AI_KEY:
     # Closed pilot limits (model calls; cache hits are free): per Telegram user and for the whole app, per UTC day.
     env_vars |= {"MINIAPP_ANTHROPIC_API_KEY": AI_KEY, "MINIAPP_AI_PER_USER_DAILY": "10", "MINIAPP_AI_DAILY_BUDGET": "100"}

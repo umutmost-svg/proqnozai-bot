@@ -86,6 +86,9 @@ Odds Checker API (доступ по IP whitelist).
 | `PARTNERS_URL` | Legacy: одна ссылка, тот же bootstrap-only режим, fallback если `PARTNERS` пуст | Нет |
 | `PARTNER_REDIRECT_BASE` | Публичный URL дашборда для подсчёта кликов по партнёрам. Пусто → кнопки ведут напрямую, кликов не видно | Нет |
 | `PARTNER_CPA` | Стоимость одного партнёрского клика. Пусто → дашборд показывает воронку без денег; задано → считает прогноз дохода на пользователя (не фактическая выручка) | Нет |
+| `BOT_CRM_DB` | Путь к `bot-crm.db` на томе, общем с админ-панелью (бот → админка: реферальные запуски, обращения). Пусто — обе функции выключены | Нет |
+| `BOT_REFERRALS_ENABLED` | `true` — запоминать код `/start ref_<код>` при первом запуске нового пользователя (нужен `BOT_CRM_DB`; по умолчанию выключено) | Нет |
+| `BOT_INQUIRIES_ENABLED` | `true` — сохранять новые входящие сообщения для раздела «Обращения» админ-панели (нужен `BOT_CRM_DB`; по умолчанию выключено) | Нет |
 | `WEBHOOK_URL` | Если задан — webhook вместо polling | Нет |
 | `PORT` | Порт webhook-режима / Flask-дашборда | Нет |
 | `STATS_PORT` | Порт внутреннего stats-сервера (по умолчанию 8888) | Нет |
@@ -111,6 +114,9 @@ Mini App (`miniapp/`, `frontend/`) читает только свои перем
 переменные закрытого HTTPS-стенда — `docs/miniapp/stand.md`:
 `MINIAPP_INITDATA_MODE`, `MINIAPP_BOT_TOKEN`, `MINIAPP_BOT_ID`, `MINIAPP_TELEGRAM_ENV`,
 `MINIAPP_CSRF_SECRET`, `MINIAPP_ALLOWED_USER_IDS`, `MINIAPP_BLOCKED_USER_IDS`, `MINIAPP_DB_PATH`, `MINIAPP_TRUSTED_ORIGINS`,
+`MINIAPP_ADS_ENABLED` (по умолчанию `false`), `MINIAPP_ADS_POLICY_PUBLIC_KEY` (обязателен при включённой рекламе),
+`MINIAPP_ACCESS_POLICY_PUBLIC_KEY` (блокировки из админ-панели; не задан — только env-список),
+`MINIAPP_REFERRALS_ENABLED` (по умолчанию `false`; `true` — код `startapp=ref_<код>` первого запуска пишется в `user_attribution`),
 `MINIAPP_ENV`, `MINIAPP_EDGE_SECRET`, `MINIAPP_CSP_MODE`,
 `MINIAPP_LOGINS_ENABLED`, `MINIAPP_MAX_SESSIONS_PER_USER`,
 `MINIAPP_STATIC_DIR`, `MINIAPP_SESSION_TTL_S`, `MINIAPP_INIT_DATA_MAX_AGE_S`,

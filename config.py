@@ -107,6 +107,12 @@ MOSTBET_BASE    = "https://mostbet2.com"   # Odds Checker API (IP whitelisted)
 # Used by both the date-window filter and display formatting — keep in sync.
 MOSTBET_SRC_TZ  = 3
 
+# bot -> admin panel file (referral starts, user inquiries): docs/miniapp/admin-pilot.md. Both features are off
+# unless their flag is on AND BOT_CRM_DB names the file on the volume shared with the admin process.
+BOT_CRM_DB = os.environ.get("BOT_CRM_DB", "").strip()
+BOT_REFERRALS_ENABLED = os.environ.get("BOT_REFERRALS_ENABLED", "").strip().lower() == "true" and bool(BOT_CRM_DB)
+BOT_INQUIRIES_ENABLED = os.environ.get("BOT_INQUIRIES_ENABLED", "").strip().lower() == "true" and bool(BOT_CRM_DB)
+
 RATE_WINDOW = 60; RATE_MAX = 5; SPAM_AFTER = 3; SPAM_DUR = 600
 # Pure menu navigation (sport/day/country/league/pagination/back) is cheap and
 # clicked in quick bursts, so it gets its OWN, far more generous budget — a

@@ -677,4 +677,9 @@ export const az: Dictionary = {
   'quick.tryWeek': 'Yaxın 7 gün',
   'quick.openCalendar': 'Matç təqvimi',
   'quick.demoText': 'Demo rejimində model ehtimalları hesablanmır.',
+  'ads.label': 'Tərəfdaş reklamı',
+  'ads.ageGate.text': 'Tərəfdaş təklifləri {min} yaş və yuxarı istifadəçilər üçündür.',
+  'ads.ageGate.confirm': 'Mənim {min} yaşım var',
+  'ads.gone': 'Bu təklif artıq mövcud deyil',
+  'ads.adId': 'Reklam ID: {id}',
 };

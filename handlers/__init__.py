@@ -21,6 +21,8 @@ from handlers.compare import compare_cmd
 from handlers.promo import (promo_cmd, promo_check_cb, setpromo_cmd,
                             promostats_cmd, delpromo_cmd, promodiag_cmd)
 from handlers.admin import admin_cmd, adm_cb, handle_adm_msg, cancel_cmd, testapi_cmd
+from handlers.inquiries import inquiry_hook
+import bot_crm
 from handlers.utils import SUPPORT_URL
 from translations import T
 from db import db_lang, db_is_reg
@@ -41,6 +43,10 @@ async def support_handler(update, context):
 
 
 def register_handlers(app):
+    if bot_crm.BOT_INQUIRIES_ENABLED:
+        # Group -1 runs before every other handler and never stops them (admin inquiries, flag off by default).
+        app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, inquiry_hook),
+                        group=-1)
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("lang",    lang_cmd))
     app.add_handler(CommandHandler("profile", profile_cmd))

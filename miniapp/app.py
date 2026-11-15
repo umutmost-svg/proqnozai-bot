@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 
-from miniapp.security import CsrfTokens, LoginRateLimiter, origin_allowed
+from miniapp.security import ACCESS_POLICY_FILE, AccessPolicy, CsrfTokens, LoginRateLimiter, origin_allowed
 from miniapp.settings import Settings
 from miniapp.ai.analysis import AI_ERROR_CODES, AiError, AiService, build_ai_service
 from miniapp.forecast.history import ForecastHistory, history_path
@@ -35,7 +35,7 @@ from miniapp.sports.client import UpstreamError
 from miniapp.sports.routes import refused, register_sports_routes, upstream_response, user_share
 from miniapp.sports.user_limits import UserUpstreamLimiter
 from miniapp.sports.service import SportsService, build_service
-from miniapp.store import SUPPORTED_LANGS, BurnWindow, InitDataConsumedError, Session, Store, User
+from miniapp.store import SUPPORTED_LANGS, BurnWindow, InitDataConsumedError, Session, Store, User, referral_code
 from miniapp.telegram_auth import TELEGRAM_PUBLIC_KEYS, InitDataError, ed25519_shadow_status, validate_init_data
 
 logger = logging.getLogger("miniapp")
@@ -311,6 +311,13 @@ def create_app(
         )
         mark_partitioned(response)
 
+    # Users blocked in the admin panel (signed access-policy.json): no sign-in, sessions stop (≤ 30 s); data stays.
+    access = (AccessPolicy(settings.db_path.parent / ACCESS_POLICY_FILE, settings.access_policy_public_key, clock)
+              if settings.access_policy_public_key else None)
+
+    def is_blocked(user_id: int) -> bool:
+        return user_id in settings.blocked_user_ids or (access is not None and user_id in access.blocked())
+
     async def unrevoked_session(request: Request) -> tuple[str, Session] | None:
         """Session from the cookie that was not revoked, expired or not."""
         token = request.cookies.get(settings.cookie_name)
@@ -328,9 +335,38 @@ def create_app(
             return None
         if settings.allowed_user_ids is not None and found[1].user_id not in settings.allowed_user_ids:
             return None  # closed launch: a session of someone taken off the list stops working at once
-        if found[1].user_id in settings.blocked_user_ids:
+        if is_blocked(found[1].user_id):
             return None  # blocked: an existing session stops working at once
         return found
+
+    # Ads telemetry (activity segments, exposures): exists only with MINIAPP_ADS_ENABLED=true. The ads package
+    # is imported only then: an image built without it keeps working with the flag off.
+    telemetry: Any = None
+    picks: Any = None
+    if settings.ads_enabled:
+        from miniapp.ads.service import RecentPicks
+        from miniapp.ads.telemetry import Telemetry, telemetry_path
+
+        try:
+            telemetry = Telemetry(telemetry_path(settings.db_path))
+            telemetry.init_schema()
+            telemetry.maybe_purge(now())
+            picks = RecentPicks(telemetry)
+            app.state.ads_picks = picks
+        except (sqlite3.Error, OSError, RuntimeError) as exc:
+            # Non-authoritative data must not stop the Mini App: without telemetry there are no ads (routes 404).
+            logger.error("event=ads_telemetry_unavailable type=%s", type(exc).__name__)
+            telemetry = None
+
+    def note_activity(user_id: int, field: str = "requests") -> None:
+        """Neutral app activity for ads segments; never breaks the request it is attached to."""
+        if telemetry is None:
+            return
+        try:
+            telemetry.record_activity(user_id, now(), field)
+            telemetry.maybe_purge(now())
+        except sqlite3.Error as exc:
+            logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
 
     def session_payload(user: User, token: str, session: Session) -> dict[str, Any]:
         return {
@@ -397,7 +433,7 @@ def create_app(
             # Closed launch: nothing about this user is stored (no user row, no session).
             logger.info("auth.rejected reason=not_allowed")
             raise ApiError(403, "not_allowed")
-        if verified.user.id in settings.blocked_user_ids:
+        if is_blocked(verified.user.id):
             # Same answer as the closed list; nothing about this user is stored.
             logger.info("auth.rejected reason=blocked")
             raise ApiError(403, "not_allowed")
@@ -406,7 +442,8 @@ def create_app(
             logger.warning("auth.rate_limited user=%s", verified.user.id)
             raise ApiError(429, "rate_limited", {"Retry-After": str(int(retry_after + 0.999))})
 
-        user = await run_in_threadpool(store.upsert_user, verified.user, ts)
+        referral = referral_code(verified.start_param) if settings.referrals_enabled else None
+        user = await run_in_threadpool(store.upsert_user, verified.user, ts, referral)
 
         existing = await current_session(request)
         if existing is not None and existing[1].user_id == user.telegram_user_id:
@@ -432,6 +469,7 @@ def create_app(
                 logger.info("auth.session_evicted user=%s count=%s", user.telegram_user_id, evicted)
             created = True
         logger.info("auth.session user=%s created=%s", user.telegram_user_id, created)
+        await run_in_threadpool(note_activity, user.telegram_user_id)
         response = JSONResponse({**session_payload(user, token, session), "created": created})
         set_session_cookie(response, token, session.expires_at)
         return response
@@ -454,6 +492,7 @@ def create_app(
         user = await run_in_threadpool(store.get_user, session.user_id)
         if user is None:
             raise ApiError(401, "unauthenticated")
+        await run_in_threadpool(note_activity, session.user_id)
         return JSONResponse(session_payload(user, token, session))
 
     @app.post("/api/me/language")
@@ -589,7 +628,42 @@ def create_app(
     register_sports_routes(app, sports, active_session,
                            ai_status=lambda: "connected" if ai.connected else "not_connected",
                            user_limiter=user_limiter)
-    register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session, user_limiter=user_limiter)
+    def on_pick(user_id: int, field: str, event_ids: list[str]) -> None:
+        note_activity(user_id, field)
+        try:
+            picks.add(user_id, event_ids, now())
+        except sqlite3.Error as exc:  # no record = no offer for that match, never a failed pick
+            logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
+
+    register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session, user_limiter=user_limiter,
+                          on_pick=on_pick if telemetry else None)
+
+    if telemetry is not None:
+        from miniapp.ads.policy import load_public_key
+        from miniapp.ads.routes import register_ads_routes
+        from miniapp.ads.service import PolicyReader, Tokens, policy_paths
+
+        async def ads_write_check(request: Request) -> tuple[str, Session]:
+            require_origin(request)
+            active = await active_session(request)
+            if active is None:
+                raise ApiError(401, "unauthenticated")
+            if not csrf.verify(active[0], request.headers.get(CSRF_HEADER)):
+                raise ApiError(403, "csrf_failed")
+            return active
+
+        async def ads_read_json(request: Request, keys: set[str]) -> dict:
+            return await _read_json_object(request, 1024, keys)
+
+        policy_file, applied_file = policy_paths(settings.db_path)
+        register_ads_routes(
+            app, reader=PolicyReader(policy_file, applied_file,
+                                     load_public_key(settings.ads_policy_public_key or ""), clock),
+            telemetry=telemetry,
+            tokens=Tokens(settings.csrf_key_material), store=store, session_check=active_session,
+            write_check=ads_write_check, read_json=ads_read_json,
+            # CF-IPCountry is trusted only when every request must come through the edge (secret checked above).
+            trust_country=settings.edge_secret is not None, now=now, picks=picks)
 
     @app.get("/api/ai/analysis")
     async def ai_analysis_cached(request: Request) -> JSONResponse:
@@ -624,6 +698,7 @@ def create_app(
             return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503)
         if result is None:
             raise ApiError(404, "not_found")
+        await run_in_threadpool(note_activity, active[1].user_id, "ai_opened")  # telemetry only (off: no-op)
         return JSONResponse(result.to_json())
 
     @app.post("/api/ai/analysis")
@@ -658,6 +733,7 @@ def create_app(
             return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503)
         if result is None:
             raise ApiError(404, "not_found")
+        await run_in_threadpool(note_activity, session.user_id, "ai_created")  # delivered analysis (off: no-op)
         return JSONResponse(result.to_json())
 
     static = StaticFiles(directory=settings.static_dir, html=True) if settings.static_dir is not None else None

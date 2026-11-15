@@ -675,4 +675,9 @@ export const tr: Dictionary = {
   'quick.tryWeek': 'Önümüzdeki 7 gün',
   'quick.openCalendar': 'Maç takvimi',
   'quick.demoText': 'Demo modunda model olasılıkları hesaplanmaz.',
+  'ads.label': 'Partner reklamı',
+  'ads.ageGate.text': 'Partner teklifleri {min} yaş ve üzeri kullanıcılar içindir.',
+  'ads.ageGate.confirm': '{min} yaşında veya büyüğüm',
+  'ads.gone': 'Bu teklif artık geçerli değil',
+  'ads.adId': 'Reklam kimliği: {id}',
 };

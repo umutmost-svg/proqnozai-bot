@@ -673,6 +673,11 @@ export const ru = {
   'quick.tryWeek': 'Ближайшие 7 дней',
   'quick.openCalendar': 'Календарь матчей',
   'quick.demoText': 'В демо-режиме вероятности модели не рассчитываются.',
+  'ads.label': 'Реклама партнёра',
+  'ads.ageGate.text': 'Предложения партнёра доступны пользователям от {min} лет.',
+  'ads.ageGate.confirm': 'Мне есть {min} лет',
+  'ads.gone': 'Предложение больше недоступно',
+  'ads.adId': 'ID рекламы: {id}',
 };
 
 export type Dictionary = Record<keyof typeof ru, string>;

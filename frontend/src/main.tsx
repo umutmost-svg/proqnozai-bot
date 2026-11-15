@@ -14,6 +14,7 @@ import { createSessionStorageMarker } from './auth/signedOut';
 import { brand } from './config/brand';
 import { waitForSession } from './auth/waitForSession';
 import { BackendSportsDataProvider } from './data/BackendSportsDataProvider';
+import { createAdsApi } from './data/ads';
 import { DemoDataProvider, type DemoOperation } from './data/DemoDataProvider';
 import { resolveDataMode } from './data/mode';
 import { BootTracker } from './loading/boot';
@@ -30,17 +31,15 @@ const failOnce = (new URLSearchParams(window.location.search).get('demoFail') ??
 const telegram = createTelegramAdapter(window.Telegram?.WebApp);
 // Created once per page, outside React: StrictMode cannot double-bootstrap it.
 const auth = new AuthController(createHttpAuthApi(), () => telegram.initData(), createSessionStorageMarker());
+const getCsrfToken = () => {
+  const state = auth.getState();
+  return state.status === 'authenticated' ? state.session.csrfToken : null;
+};
+const real = resolveDataMode(import.meta.env.VITE_DATA_MODE) === 'real';
 // Real data needs a session; a real build never switches to demo data on errors.
-const data =
-  resolveDataMode(import.meta.env.VITE_DATA_MODE) === 'real'
-    ? new BackendSportsDataProvider({
-        waitForSession: () => waitForSession(auth),
-        getCsrfToken: () => {
-          const state = auth.getState();
-          return state.status === 'authenticated' ? state.session.csrfToken : null;
-        },
-      })
-    : new DemoDataProvider(systemClock, { failOnce });
+const data = real
+  ? new BackendSportsDataProvider({ waitForSession: () => waitForSession(auth), getCsrfToken })
+  : new DemoDataProvider(systemClock, { failOnce });
 const services = {
   clock: systemClock,
   data,
@@ -48,6 +47,8 @@ const services = {
   auth,
   scrollMemory: new Map<string, number>(),
   boot: new BootTracker(),
+  // Off unless the backend runs with MINIAPP_ADS_ENABLED=true (its first 404 switches the client off).
+  ads: real ? createAdsApi({ getCsrfToken }) : undefined,
 };
 
 createRoot(document.getElementById('root')!).render(

@@ -179,6 +179,16 @@ class Settings:
     allowed_user_ids: frozenset[int] | None = None
     # Blocked users (e.g. carried over from the bot's admin block): never sign in, sessions stop at once.
     blocked_user_ids: frozenset[int] = frozenset()
+    # Partner offers (docs/miniapp/ads-architecture.md). Off: the /api/ads routes do not exist and no ads
+    # snapshot or telemetry file is read or written.
+    ads_enabled: bool = False
+    # Public half (hex, 32 bytes) of the admin's Ed25519 key that signs ads-policy.json; required with ads on.
+    ads_policy_public_key: str | None = None
+    # Same kind of key for access-policy.json (users blocked in the admin panel). Unset: only the env list applies.
+    access_policy_public_key: str | None = None
+    # Referral links (`startapp=ref_<code>`): the code of a user's FIRST Mini App start is kept in miniapp.db
+    # (user_attribution) for the admin panel. Off: the parameter is ignored and nothing is written.
+    referrals_enabled: bool = False
 
     @property
     def csrf_key_material(self) -> str:
@@ -301,6 +311,14 @@ class Settings:
             raise SettingsError("ai_per_user_daily must be 1..1000")
         if not 1 <= self.ai_daily_budget <= 100000:
             raise SettingsError("ai_daily_budget must be 1..100000")
+        if self.ads_policy_public_key is not None and not re.fullmatch(r"[0-9a-f]{64}", self.ads_policy_public_key):
+            raise SettingsError("ads_policy_public_key must be 64 lower-case hex characters (Ed25519 public key)")
+        if self.access_policy_public_key is not None and not re.fullmatch(r"[0-9a-f]{64}",
+                                                                        self.access_policy_public_key):
+            raise SettingsError("access_policy_public_key must be 64 lower-case hex characters (Ed25519 public key)")
+        if self.ads_enabled and self.ads_policy_public_key is None:
+            # Without the key no snapshot could ever be trusted: a forgotten key must stop the start.
+            raise SettingsError("MINIAPP_ADS_ENABLED requires MINIAPP_ADS_POLICY_PUBLIC_KEY")
 
     @property
     def cookie_secure(self) -> bool:
@@ -400,4 +418,8 @@ class Settings:
             allowed_user_ids=_user_ids(env.get("MINIAPP_ALLOWED_USER_IDS")),
             blocked_user_ids=_user_ids(optional("MINIAPP_BLOCKED_USER_IDS"), "MINIAPP_BLOCKED_USER_IDS",
                                        allow_empty=True) or frozenset(),
+            ads_enabled=boolean("MINIAPP_ADS_ENABLED", False),
+            ads_policy_public_key=optional("MINIAPP_ADS_POLICY_PUBLIC_KEY"),
+            access_policy_public_key=optional("MINIAPP_ACCESS_POLICY_PUBLIC_KEY"),
+            referrals_enabled=boolean("MINIAPP_REFERRALS_ENABLED", False),
         )

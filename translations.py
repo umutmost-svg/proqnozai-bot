@@ -125,6 +125,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "partners_btn": "🌐 Sayta keç",
 "partners_cta_btn": "🤝 Partnyorlar",
 "support_text": "🆘 *Dəstək*\n\nSuallarınız və ya problemləriniz varsa — bizə yazın:",
+"inquiry_notice": "ℹ️ Dəstək komandamız müraciətlərinizə cavab verə bilsin deyə bota yazdığınız mesajları saxlayırıq. Mesajlar {days} gün saxlanılır, sonra avtomatik silinir.",
 "support_btn":  "💬 Dəstəyə yazın",
 "bot_updated":  "Bot yeniləndi! Yeni menyu aktiv oldu.",
 
@@ -255,6 +256,7 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 "partners_btn": "🌐 Перейти на сайт",
 "partners_cta_btn": "🤝 Партнёры",
 "support_text": "🆘 *Поддержка*\n\nЕсли у вас вопросы или проблемы — напишите нам:",
+"inquiry_notice": "ℹ️ Мы сохраняем ваши сообщения боту, чтобы команда поддержки могла ответить на обращения. Сообщения хранятся {days} дн., затем удаляются автоматически.",
 "support_btn":  "💬 Написать в поддержку",
 "bot_updated":  "Бот обновлён! Активировано новое меню.",
 
@@ -385,6 +387,7 @@ Draw — XX% | X.XX  (if applicable)
 "partners_btn": "🌐 Open the site",
 "partners_cta_btn": "🤝 Partners",
 "support_text": "🆘 *Support*\n\nIf you have questions or issues — contact us:",
+"inquiry_notice": "ℹ️ We keep your messages to this bot so our support team can answer your requests. Messages are kept for {days} days and then deleted automatically.",
 "support_btn":  "💬 Contact support",
 "bot_updated":  "Bot updated! New menu is now active.",
 
@@ -511,6 +514,7 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "partners_btn": "🌐 Siteye git",
 "partners_cta_btn": "🤝 Ortaklar",
 "support_text": "🆘 *Destek*\n\nSorularınız veya sorunlarınız varsa — bize yazın:",
+"inquiry_notice": "ℹ️ Destek ekibimizin taleplerinize yanıt verebilmesi için bota gönderdiğiniz mesajları saklıyoruz. Mesajlar {days} gün saklanır, ardından otomatik olarak silinir.",
 "support_btn":  "💬 Desteğe yaz",
 "bot_updated":  "Bot güncellendi! Yeni menü aktif oldu.",
 
@@ -638,6 +642,7 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 "partners_btn": "🌐 Сайтқа өту",
 "partners_cta_btn": "🤝 Серіктестер",
 "support_text": "🆘 *Қолдау*\n\nСұрақтарыңыз немесе мәселелеріңіз болса — бізге жазыңыз:",
+"inquiry_notice": "ℹ️ Қолдау командасы өтініштеріңізге жауап бере алуы үшін ботқа жазған хабарламаларыңызды сақтаймыз. Хабарламалар {days} күн сақталады, содан кейін автоматты түрде жойылады.",
 "support_btn":  "💬 Қолдауға жазу",
 "bot_updated":  "Бот жаңартылды! Жаңа мәзір белсенді болды.",
 
@@ -765,6 +770,7 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "partners_btn": "🌐 Saytga o'tish",
 "partners_cta_btn": "🤝 Hamkorlar",
 "support_text": "🆘 *Yordam*\n\nSavollaringiz yoki muammolaringiz bo'lsa — bizga yozing:",
+"inquiry_notice": "ℹ️ Qo'llab-quvvatlash jamoamiz murojaatlaringizga javob bera olishi uchun botga yozgan xabarlaringizni saqlaymiz. Xabarlar {days} kun saqlanadi, so'ng avtomatik o'chiriladi.",
 "support_btn":  "💬 Yordamga yozish",
 "bot_updated":  "Bot yangilandi! Yangi menyu faollashtirildi.",
 
@@ -892,6 +898,7 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 "partners_btn": "🌐 الانتقال إلى الموقع",
 "partners_cta_btn": "🤝 الشركاء",
 "support_text": "🆘 *الدعم*\n\nإذا كان لديك أسئلة أو مشاكل — تواصل معنا:",
+"inquiry_notice": "ℹ️ نحتفظ برسائلك إلى هذا البوت حتى يتمكن فريق الدعم من الرد على طلباتك. تُحفظ الرسائل لمدة {days} يومًا ثم تُحذف تلقائيًا.",
 "support_btn":  "💬 تواصل مع الدعم",
 "bot_updated":  "تم تحديث البوت! القائمة الجديدة نشطة الآن.",
 

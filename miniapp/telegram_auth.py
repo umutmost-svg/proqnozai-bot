@@ -78,6 +78,8 @@ class VerifiedInitData:
     launch_id: str
     # HMAC mode only: the received `hash`, the id older releases burned launches under (cutover).
     legacy_id: str | None = None
+    # `startapp` parameter of the launch link (signed like every field); used only for referral attribution.
+    start_param: str | None = None
 
 
 def _decode(component: str) -> str:
@@ -243,4 +245,4 @@ def validate_init_data(
         raise InitDataError("expired")
 
     return VerifiedInitData(user=_parse_user(fields.get("user")), auth_date=auth_date, launch_id=launch,
-                            legacy_id=legacy)
+                            legacy_id=legacy, start_param=fields.get("start_param"))

@@ -44,10 +44,18 @@ CREATE TABLE IF NOT EXISTS sessions (
     init_hash    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS users_created ON users(created_at);
 -- initData whose session was logged out: it cannot be exchanged again.
 CREATE TABLE IF NOT EXISTS consumed_init_data (
     init_hash   TEXT PRIMARY KEY,
     expires_at  INTEGER NOT NULL
+);
+-- Referral code of the user's FIRST Mini App start (`startapp=ref_<code>`, MINIAPP_REFERRALS_ENABLED); written
+-- once in the same transaction that creates the user, never updated. No foreign key: a restore replaces users.
+CREATE TABLE IF NOT EXISTS user_attribution (
+    user_id    INTEGER PRIMARY KEY,
+    code       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
 );
 -- Paid AI calls per UTC day (per user and in total): survives restarts.
 CREATE TABLE IF NOT EXISTS ai_usage (
@@ -62,7 +70,14 @@ CREATE TABLE IF NOT EXISTS ai_usage (
 _USER_COLUMNS = ("telegram_user_id, first_name, last_name, username, language_code, lang, lang_source, "
                  "created_at, last_login_at")
 _SESSION_COLUMNS = "token_hash, user_id, created_at, expires_at, revoked_at, init_hash"
-_OWN_TABLES = frozenset({"users", "sessions", "consumed_init_data", "ai_usage", "sqlite_sequence"})
+_OWN_TABLES = frozenset({"users", "sessions", "consumed_init_data", "ai_usage", "user_attribution", "sqlite_sequence"})
+_REFERRAL = re.compile(r"^ref_([a-z0-9]{3,24})$")
+
+
+def referral_code(start_param: str | None) -> str | None:
+    """`ref_<code>` (lowercase letters and digits, 3..24) -> code; anything else -> None."""
+    match = _REFERRAL.match(start_param or "")
+    return match.group(1) if match else None
 
 
 class ForeignDatabaseError(RuntimeError):
@@ -166,13 +181,16 @@ class Store:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
 
-    def upsert_user(self, tg: TelegramUser, now: int) -> User:
+    def upsert_user(self, tg: TelegramUser, now: int, referral: str | None = None) -> User:
         """Atomic insert-or-update keyed by the verified Telegram id.
 
         Profile fields follow Telegram on every login; `lang` follows Telegram's
-        language_code only until the user picks a language explicitly.
+        language_code only until the user picks a language explicitly. `referral` (a code
+        from referral_code) is kept only when this call creates the user.
         """
         with self._write() as conn:
+            existed = referral is not None and conn.execute(
+                "SELECT 1 FROM users WHERE telegram_user_id = ?", (tg.id,)).fetchone() is not None
             conn.execute(
                 """
                 INSERT INTO users (telegram_user_id, first_name, last_name, username, language_code,
@@ -189,6 +207,9 @@ class Store:
                 (tg.id, tg.first_name, tg.last_name, tg.username, tg.language_code,
                  lang_from_telegram(tg.language_code), now, now),
             )
+            if referral is not None and not existed:
+                conn.execute("INSERT OR IGNORE INTO user_attribution (user_id, code, created_at) VALUES (?, ?, ?)",
+                             (tg.id, referral, now))
         user = self.get_user(tg.id)
         assert user is not None
         return user
@@ -201,6 +222,12 @@ class Store:
                 (user_id,),
             ).fetchone()
         return User(*row) if row else None
+
+    def user_created_at(self, user_id: int) -> int | None:
+        """Registration time (ads activity segment "new"); read only, the schema is unchanged."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT created_at FROM users WHERE telegram_user_id = ?", (user_id,)).fetchone()
+        return int(row[0]) if row else None
 
     def set_language(self, user_id: int, lang: Lang) -> None:
         if lang not in SUPPORTED_LANGS:
@@ -377,6 +404,108 @@ class Store:
                 "burned_launches": count("SELECT COUNT(*) FROM consumed_init_data WHERE expires_at >= ?", now),
             }
 
+    # ---- operator reads (admin panel): no tokens or hashes ever leave these methods ----
+
+    _USER_SORTS = {"id": "u.telegram_user_id", "created": "u.created_at", "login": "u.last_login_at",
+                   "username": "u.username COLLATE NOCASE", "sessions": "active_sessions"}
+
+    def list_users(self, now: int, *, query: str = "", sort: str = "created", descending: bool = True,
+                   limit: int = 50, offset: int = 0, created_since: int | None = None,
+                   login_since: int | None = None, login_before: int | None = None,
+                   lang: str | None = None) -> tuple[int, list[dict]]:
+        """A page of users with their active session count; the total matches the filters."""
+        where, args = ["1 = 1"], []
+        if query:
+            q = query.strip().lstrip("@")
+            if q.isdigit():
+                where.append("(u.telegram_user_id = ? OR u.username LIKE ? ESCAPE '\\')")
+                args += [int(q), _like(q)]
+            else:
+                where.append("(u.username LIKE ? ESCAPE '\\' OR u.first_name LIKE ? ESCAPE '\\' "
+                             "OR u.last_name LIKE ? ESCAPE '\\')")
+                args += [_like(q)] * 3
+        if created_since is not None:
+            where.append("u.created_at >= ?")
+            args.append(created_since)
+        if login_since is not None:
+            where.append("u.last_login_at >= ?")
+            args.append(login_since)
+        if login_before is not None:
+            where.append("u.last_login_at < ?")
+            args.append(login_before)
+        if lang:
+            where.append("u.lang = ?")
+            args.append(lang)
+        order = self._USER_SORTS.get(sort, self._USER_SORTS["created"])
+        direction = "DESC" if descending else "ASC"
+        sql_where = " AND ".join(where)
+        with self._connect() as conn:
+            total = int(conn.execute(f"SELECT COUNT(*) FROM users u WHERE {sql_where}", args).fetchone()[0])
+            rows = conn.execute(
+                "SELECT u.telegram_user_id, u.username, u.first_name, u.last_name, u.lang, u.created_at, "
+                "u.last_login_at, (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.telegram_user_id "
+                "AND s.revoked_at IS NULL AND s.expires_at > ?) AS active_sessions "
+                f"FROM users u WHERE {sql_where} ORDER BY {order} {direction}, u.telegram_user_id {direction} "
+                "LIMIT ? OFFSET ?", (now, *args, limit, offset)).fetchall()
+        return total, [_user_row(r) for r in rows]
+
+    def attributions(self) -> dict[int, dict]:
+        """Referral codes of first Mini App starts (admin panel; read only). A database the Mini App has not opened
+        since this table was added has none: empty, not an error."""
+        with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_attribution'").fetchone() is None:
+                return {}
+            return {int(u): {"code": c, "at": int(a)} for u, c, a in conn.execute(
+                "SELECT user_id, code, created_at FROM user_attribution")}
+
+    def registrations_since(self, since: int) -> list[dict]:
+        """Id and registration time of every user registered at or after `since` (cohorts; no other fields)."""
+        with self._connect() as conn:
+            return [{"id": int(u), "createdAt": int(c)} for u, c in conn.execute(
+                "SELECT telegram_user_id, created_at FROM users WHERE created_at >= ?", (since,))]
+
+    def users_by_ids(self, user_ids: list[int], now: int) -> list[dict]:
+        """Rows like list_users for the given ids (batched IN queries; unknown ids are skipped)."""
+        out: list[dict] = []
+        ids = sorted(set(user_ids))
+        with self._connect() as conn:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                out += [_user_row(r) for r in conn.execute(
+                    "SELECT u.telegram_user_id, u.username, u.first_name, u.last_name, u.lang, u.created_at, "
+                    "u.last_login_at, (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.telegram_user_id "
+                    "AND s.revoked_at IS NULL AND s.expires_at > ?) FROM users u "
+                    f"WHERE u.telegram_user_id IN ({','.join('?' * len(chunk))})", (now, *chunk))]
+        return out
+
+    def user_profile(self, user_id: int, now: int) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT u.telegram_user_id, u.username, u.first_name, u.last_name, u.lang, u.created_at, "
+                "u.last_login_at, (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.telegram_user_id "
+                "AND s.revoked_at IS NULL AND s.expires_at > ?) FROM users u WHERE u.telegram_user_id = ?",
+                (now, user_id)).fetchone()
+            if row is None:
+                return None
+            sessions = conn.execute(
+                "SELECT created_at, expires_at, revoked_at FROM sessions WHERE user_id = ? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 50", (user_id,)).fetchall()
+        profile = _user_row(row)
+        profile["sessions"] = [{
+            "createdAt": c, "expiresAt": e, "revokedAt": r,
+            "state": "revoked" if r is not None else ("expired" if e <= now else "active"),
+        } for c, e, r in sessions]
+        return profile
+
+    def user_counts(self, now: int, since: int) -> dict[str, int]:
+        with self._connect() as conn:
+            total, new, logged_in = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(created_at >= ?), 0), COALESCE(SUM(last_login_at >= ?), 0) "
+                "FROM users", (since, since)).fetchone()
+            active = conn.execute("SELECT COUNT(DISTINCT user_id) FROM sessions WHERE revoked_at IS NULL "
+                                  "AND expires_at > ?", (now,)).fetchone()[0]
+        return {"total": int(total), "new": int(new), "loggedIn": int(logged_in), "withActiveSession": int(active)}
+
     def backup(self, destination: Path) -> None:
         """Consistent online copy (SQLite backup API) into a new file."""
         if destination.exists():
@@ -412,6 +541,7 @@ class Store:
         if not {"users", "sessions", "consumed_init_data"} <= tables or tables - _OWN_TABLES:
             raise ForeignDatabaseError("the restore source is not a Mini App database")
         has_ai_usage = "ai_usage" in tables  # backups made before M3.2 have no AI ledger
+        has_attribution = "user_attribution" in tables
         with self._connect() as conn:
             conn.execute("ATTACH DATABASE ? AS src", (source_uri,))
             try:
@@ -430,6 +560,10 @@ class Store:
                         "SELECT init_hash, expires_at FROM src.consumed_init_data WHERE true "
                         "ON CONFLICT(init_hash) DO UPDATE SET expires_at = MAX(expires_at, excluded.expires_at)"
                     )
+                    conn.execute("DELETE FROM user_attribution")
+                    if has_attribution:
+                        conn.execute("INSERT INTO user_attribution (user_id, code, created_at) "
+                                     "SELECT user_id, code, created_at FROM src.user_attribution")
                     if has_ai_usage:
                         # Merged like the burn ledger: a restore never gives back spent AI calls.
                         conn.execute(
@@ -475,3 +609,13 @@ class Store:
         cutoff = now - SESSION_RETENTION_S
         conn.execute("DELETE FROM sessions WHERE expires_at < ? OR revoked_at < ?", (cutoff, cutoff))
         conn.execute("DELETE FROM consumed_init_data WHERE expires_at < ?", (now,))
+
+
+def _like(text: str) -> str:
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _user_row(r: tuple) -> dict:
+    return {"id": r[0], "username": r[1], "firstName": r[2], "lastName": r[3], "lang": r[4], "createdAt": r[5],
+            "lastLoginAt": r[6], "activeSessions": int(r[7])}

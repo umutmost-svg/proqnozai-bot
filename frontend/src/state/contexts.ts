@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { AuthController } from '../auth/controller';
+import type { AdsApi } from '../data/ads';
 import type { BootTracker } from '../loading/boot';
 import type { SportsDataProvider } from '../data/provider';
 import type { Sport } from '../data/models';
@@ -19,6 +20,8 @@ export interface Services {
   scrollMemory: Map<string, number>;
   /** What the loading screen waits for: Telegram init, session check, first data. */
   boot: BootTracker;
+  /** Partner offers (real data only; absent in the demo, and switched off by a backend without ads). */
+  ads?: AdsApi;
 }
 
 export interface SettingsState {
