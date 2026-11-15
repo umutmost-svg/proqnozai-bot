@@ -517,6 +517,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
                      "leagues": leagues, "tags": crm.all_tags() if personal else []},
         }
         out["demo"] = demo.audience(days, ctx.today()) if ctx.demo_allowed(request) else None
+        # D1: sign-in country, Telegram platform and activity by hour, from the Mini App's telemetry (aggregates only).
+        out["edge"] = insights.edge_overview(t, days)
         return out
 
     inquiry_routes.register(app, ctx, crm, outbox.status_by_keys)

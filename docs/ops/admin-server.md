@@ -61,6 +61,8 @@ There are four layers. A request arriving another way, such as the server's publ
 
 ## Known limits
 
+- D1 collection (sign-in country from CF-IPCountry, Telegram platform, active hours) shares the Mini App's telemetry switch: it runs only with `MINIAPP_ADS_ENABLED=true`, which `deploy/miniapp/dokploy_deploy.py` turns on together with the admin's policy key. No IP and no device data are stored. The country and platform expire with the user's activity after 400 days.
+
 - TOTP secrets are stored in plain form in `admin.db`. They are protected by the separate volume (0700, never mounted into the Mini App) and by the server's own access. Encrypting them at rest would need a key kept outside that volume; this is deferred as a documented P2.
 - There is no access log (`access_log=False`): URLs with their queries never reach the container log.
 

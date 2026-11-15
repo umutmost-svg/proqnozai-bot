@@ -50,6 +50,8 @@ interface WebAppInsets {
 /** Subset of the SDK surface we rely on. */
 export interface TelegramWebApp {
   initData?: string;
+  /** The Telegram client: ios, android, tdesktop, macos, web… (sent at sign-in for the admin's platform figures). */
+  platform?: string;
   initDataUnsafe?: { user?: { first_name?: string; language_code?: string } };
   viewportStableHeight?: number;
   safeAreaInset?: WebAppInsets;

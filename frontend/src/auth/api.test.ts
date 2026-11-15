@@ -10,6 +10,18 @@ const SESSION_BODY = {
 };
 
 describe('HTTP auth API', () => {
+  it('sends the Telegram client platform name with the sign-in, nothing else about the device', async () => {
+    const original = window.Telegram;
+    (window as { Telegram?: unknown }).Telegram = { WebApp: { platform: 'ios' } };
+    try {
+      const fetchMock = vi.fn<typeof fetch>(async () => json(200, SESSION_BODY));
+      await createHttpAuthApi(fetchMock).createSession('query_id=1&hash=abc');
+      expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).toEqual({ init_data: 'query_id=1&hash=abc', platform: 'ios' });
+    } finally {
+      (window as { Telegram?: unknown }).Telegram = original;
+    }
+  });
+
   it('posts initData in a JSON body, never in the URL', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => json(200, SESSION_BODY));
     const api = createHttpAuthApi(fetchMock);

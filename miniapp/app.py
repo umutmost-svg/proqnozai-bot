@@ -145,10 +145,32 @@ def _json_object(body: bytes, allowed: set[str]) -> dict[str, Any]:
     return data
 
 
-async def _read_json_object(request: Request, max_bytes: int, allowed: set[str]) -> dict[str, Any]:
-    """Strict JSON contract: application/json, bounded size, exact key set."""
+async def _read_json_object(request: Request, max_bytes: int, allowed: set[str],
+                            optional: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """Strict JSON contract: application/json, bounded size, exact key set (`optional` keys may be absent)."""
     _require_json(request)
-    return _json_object(await _read_body(request, max_bytes), allowed)
+    body = await _read_body(request, max_bytes)
+    try:
+        keys = set(json.loads(body.decode("utf-8")))  # only to pick the expected set; parsed strictly below
+    except (UnicodeDecodeError, ValueError, RecursionError, TypeError):
+        keys = set()
+    return _json_object(body, allowed | (keys & optional))
+
+
+# Telegram WebApp.platform values (the client reports it; anything else is stored as "other").
+TELEGRAM_PLATFORMS = frozenset({"android", "android_x", "ios", "macos", "tdesktop", "web", "weba", "webk",
+                                "unigram", "unknown"})
+
+
+def _edge_country(request: Request, trusted: bool) -> str | None:
+    """CF-IPCountry, only when every request must come through the edge (else a client could set it)."""
+    if not trusted:
+        return None
+    raw = request.headers.get("cf-ipcountry", "").strip()
+    if not (len(raw) == 2 and raw.isascii() and raw.isalpha()):  # checked before uppercasing ("ß" -> "SS")
+        return None
+    value = raw.upper()
+    return value if value not in ("XX", "T1") else None
 
 
 def _is_busy(exc: sqlite3.OperationalError) -> bool:
@@ -368,6 +390,15 @@ def create_app(
         except sqlite3.Error as exc:
             logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
 
+    def note_edge(user_id: int, country: str | None, platform: str | None) -> None:
+        """Sign-in country (edge) and Telegram platform for the admin's cards; never breaks the sign-in."""
+        if telemetry is None:
+            return
+        try:
+            telemetry.record_edge(user_id, country, platform, now())
+        except sqlite3.Error as exc:
+            logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
+
     def session_payload(user: User, token: str, session: Session) -> dict[str, Any]:
         return {
             "user": _public_user(user),
@@ -404,9 +435,10 @@ def create_app(
         if not settings.logins_enabled:
             # Emergency switch (MINIAPP_LOGINS_ENABLED=false): existing sessions keep working.
             raise ApiError(503, "logins_disabled")
-        body = await _read_json_object(request, settings.max_body_bytes, {"init_data"})
+        body = await _read_json_object(request, settings.max_body_bytes, {"init_data"}, frozenset({"platform"}))
         init_data = body["init_data"]
-        if not isinstance(init_data, str):
+        platform = body.get("platform")
+        if not isinstance(init_data, str) or not (platform is None or (isinstance(platform, str) and len(platform) <= 32)):
             raise ApiError(400, "bad_request")
         try:
             verified = verify_launch(init_data)
@@ -470,6 +502,8 @@ def create_app(
             created = True
         logger.info("auth.session user=%s created=%s", user.telegram_user_id, created)
         await run_in_threadpool(note_activity, user.telegram_user_id)
+        await run_in_threadpool(note_edge, user.telegram_user_id, _edge_country(request, settings.edge_secret is not None),
+                                (platform if platform in TELEGRAM_PLATFORMS else "other") if platform else None)
         response = JSONResponse({**session_payload(user, token, session), "created": created})
         set_session_cookie(response, token, session.expires_at)
         return response

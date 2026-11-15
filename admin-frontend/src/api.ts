@@ -289,7 +289,13 @@ export interface Analytics {
     languages: { lang: string; count: number }[]; leagues: { name: string; count: number }[]; tags: TagCount[];
   };
   demo: DemoAudience | null;
+  /** D1 collection: users active in the period by sign-in country / Telegram platform, activity by hour (Baku). */
+  edge?: EdgeOverview;
 }
+export type EdgeOverview =
+  | { source: 'not_collected' | 'unavailable' }
+  | { source: 'telemetry'; activeUsers: number; geo: { code: string; count: number }[];
+      platforms: { name: string; count: number }[]; activityHeat: number[][] };
 export interface DialogThread {
   userId: number; name: string; username: string; unread: boolean; tag: [string, string] | null; system: string | null;
   messages: { from: 'user' | 'admin'; text: string; at: number; by?: string }[];

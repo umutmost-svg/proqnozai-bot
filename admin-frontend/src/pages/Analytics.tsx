@@ -34,6 +34,29 @@ function DemoOnly({ what }: { what: string }) {
   return <Card><NotCollected what={what} /></Card>;
 }
 
+const PLATFORM_NAMES: Record<string, string> = {
+  ios: 'iOS', android: 'Android', android_x: 'Android', tdesktop: 'Telegram Desktop', macos: 'macOS',
+  web: 'Web', weba: 'Web', webk: 'Web', unigram: 'Unigram', unknown: 'Другое', other: 'Другое',
+};
+
+function countryName(code: string): string {
+  try {
+    return new Intl.DisplayNames(['ru'], { type: 'region' }).of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+/** Platforms merged by display name (Web A/K, Android X …), largest first. */
+function platformRows(rows: { name: string; count: number }[]) {
+  const merged = new Map<string, number>();
+  for (const r of rows) {
+    const name = PLATFORM_NAMES[r.name] ?? 'Другое';
+    merged.set(name, (merged.get(name) ?? 0) + r.count);
+  }
+  return [...merged].sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value }));
+}
+
 export function Analytics() {
   const { period, demo } = usePrefs();
   const navigate = useNavigate();
@@ -44,6 +67,12 @@ export function Analytics() {
   const bc = useLoad<{ items: Broadcast[] }>('/api/admin/broadcasts');
   const d = a.data?.demo ?? null;
   const real = a.data?.real;
+  // Collected (D1): shown as measured, zero included; otherwise the pilot's demo set or "not collected".
+  const edge = a.data?.edge && a.data.edge.source === 'telemetry' ? a.data.edge : null;
+  const mobile = edge ? edge.platforms.filter((p) => ['ios', 'android', 'android_x'].includes(p.name)).reduce((x, p) => x + p.count, 0) : 0;
+  // The share among KNOWN platforms only ("other" / "unknown" are not counted either way).
+  const platformTotal = edge ? edge.platforms.reduce((x, p) => x + p.count, 0) : 0;
+  const knownPlatforms = edge ? edge.platforms.filter((p) => !['other', 'unknown'].includes(p.name)).reduce((x, p) => x + p.count, 0) : 0;
   // Measured from the Mini App files the panel reads — in the pilot that is the generated demo set.
   const src = a.data?.dataset === 'demo' ? 'демо-набор пилота' : 'реальные данные';
 
@@ -105,7 +134,14 @@ export function Analytics() {
           )}
           {tab === 'Аудитория и гео' && (
             <>
-              {d && (
+              {edge && (
+                <Metrics>
+                  <Metric label="Стран" value={num(edge.geo.length)} caption="по стране входа" />
+                  <Metric label="Активных за период" value={num(edge.activeUsers)} caption="открывали Mini App" />
+                  <Metric label="Мобильные" value={knownPlatforms ? `${Math.round((mobile / knownPlatforms) * 100)}%` : '—'} caption="iOS + Android, среди известных платформ" />
+                </Metrics>
+              )}
+              {!edge && d && (
                 <Metrics>
                   <Metric demo label="Стран" value={num(d.summary.countries)} caption="по стране входа" />
                   <Metric demo label="Пик активности" value={d.summary.peak} caption="Баку" />
@@ -114,7 +150,12 @@ export function Analytics() {
                 </Metrics>
               )}
               <div className="grid g3">
-                {d ? (
+                {edge ? (
+                  <Card title="География" sub="Страна из Cloudflare при входе, IP не хранится · активные за период">
+                    {edge.geo.length ? <BarList rows={edge.geo.map((g) => ({ label: countryName(g.code), value: g.count, extra: <Tag>{g.code}</Tag> }))} />
+                      : <p className="small muted">Пока нет входов с определённой страной.</p>}
+                  </Card>
+                ) : d ? (
                   <Card title="География" sub="Страна из Cloudflare при входе, IP не хранится" action={<Tag tone="violet">ДЕМО</Tag>}>
                     <BarList rows={d.geo.map((g) => ({ label: g.name, value: g.count, extra: g.code !== '—' ? <Tag>{g.code}</Tag> : undefined }))} />
                   </Card>
@@ -122,7 +163,12 @@ export function Analytics() {
                 <Card title="Языки интерфейса" sub={`${src} · выбор пользователя или язык Telegram`}>
                   <BarList tone="violet" rows={real.languages.map((l) => ({ label: LANG_NAMES[l.lang] ?? l.lang, value: l.count }))} />
                 </Card>
-                {d ? (
+                {edge ? (
+                  <Card title="Платформы" sub="Клиент Telegram при входе · активные за период">
+                    {platformTotal ? <BarList tone="success" rows={platformRows(edge.platforms)} />
+                      : <p className="small muted">Пока нет входов с известной платформой.</p>}
+                  </Card>
+                ) : d ? (
                   <Card title="Платформы" sub="Клиент Telegram при запуске" action={<Tag tone="violet">ДЕМО</Tag>}>
                     <BarList tone="success" rows={d.platforms.map((p) => ({ label: p.name, value: p.count }))} />
                   </Card>
@@ -132,7 +178,12 @@ export function Analytics() {
           )}
           {tab === 'Время активности' && (
             <>
-              {d ? (
+              {edge ? (
+                <Card title="Когда пользователи активны" sub="Активные пользователи по дням недели и часам · Баку (UTC+4)">
+                  <Heatmap data={edge.activityHeat} label="Тепловая карта активности" />
+                  <div className="banner info" style={{ marginTop: 14 }}>Лучшее время для рассылки: <strong>{bestSlot(edge.activityHeat)}</strong></div>
+                </Card>
+              ) : d ? (
                 <Card title="Когда пользователи активны" sub="Открытия Mini App по дням недели и часам · Баку (UTC+4)" action={<Tag tone="violet">ДЕМО</Tag>}>
                   <Heatmap data={d.activityHeat} label="Тепловая карта активности" />
                   <div className="banner info" style={{ marginTop: 14 }}>Лучшее время для рассылки: <strong>{bestSlot(d.activityHeat)}</strong></div>
@@ -177,7 +228,7 @@ export function Analytics() {
               <BarList tone="warning" rows={d.sources.map((s) => ({ label: s.name, value: s.count }))} />
             </Card>
           ) : <DemoOnly what="Источники пользователей" />)}
-          <div className="banner info" style={{ marginTop: 16 }}>Из файлов Mini App ({src}): пользователи, регистрации, языки, лиги, теги. Остальное — после D1; демо-телеметрия помечена «ДЕМО».</div>
+          <div className="banner info" style={{ marginTop: 16 }}>Из файлов Mini App ({src}): пользователи, регистрации, языки, лиги, теги{edge ? '; страна, платформа и часы активности — сбор Mini App с момента его включения' : ''}. Демо-данные помечены «ДЕМО».</div>
         </>
       )}
     </>

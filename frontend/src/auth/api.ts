@@ -157,7 +157,13 @@ export function createHttpAuthApi(
 
   return {
     me: async () => toSession(await call('/me')),
-    createSession: async (initData) => toSession(await postJson('/auth/session', { init_data: initData })),
+    createSession: async (initData) => {
+      // The Telegram client's platform name only (no device data): the admin's platform figures.
+      const platform = typeof window === 'undefined' ? undefined : window.Telegram?.WebApp?.platform;
+      const body = typeof platform === 'string' && platform && platform.length <= 32
+        ? { init_data: initData, platform } : { init_data: initData };
+      return toSession(await postJson('/auth/session', body));
+    },
     logout: (csrfToken, initData) => endSession('/auth/logout', csrfToken, initData),
     logoutAll: (csrfToken, initData) => endSession('/auth/logout-all', csrfToken, initData),
     setLanguage: async (lang, csrfToken) => {

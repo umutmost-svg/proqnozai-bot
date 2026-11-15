@@ -162,15 +162,55 @@ class UserInsights:
             out.setdefault(int(uid), set()).add(int(k))
         return out
 
+    def edge_overview(self, now: int, days: int) -> dict:
+        """Users active in the period by sign-in country and Telegram platform, and activity by weekday x hour in
+        Baku time (UTC+4, no DST) — distinct users per hour (D1 collection; no IP, no device data)."""
+        # The rolling period (the last `days` x 24 h, as every admin period), to the hour the data has.
+        start, end = datetime.fromtimestamp(now - days * 86400, UTC), datetime.fromtimestamp(now, UTC)
+        # Bounded on both sides: a row dated ahead (clock skew between the Mini App and the admin) is not counted.
+        in_period = "(day > ? OR (day = ? AND hour >= ?)) AND (day < ? OR (day = ? AND hour <= ?))"
+        args = (start.strftime("%Y-%m-%d"), start.strftime("%Y-%m-%d"), start.hour,
+                end.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), end.hour)
+        try:
+            with self._connect() as conn:
+                if conn is None:
+                    return {"source": "not_collected"}
+                tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+                if not {"user_edge", "activity_hours"} <= tables:
+                    return {"source": "not_collected"}
+                active = f"SELECT DISTINCT user_id FROM activity_hours WHERE {in_period}"
+                geo = conn.execute(f"SELECT e.country, COUNT(*) FROM ({active}) a JOIN user_edge e USING (user_id) "
+                                   "WHERE e.country IS NOT NULL GROUP BY e.country ORDER BY 2 DESC, 1", args).fetchall()
+                platforms = conn.execute(f"SELECT e.platform, COUNT(*) FROM ({active}) a JOIN user_edge e USING (user_id) "
+                                         "WHERE e.platform IS NOT NULL GROUP BY e.platform ORDER BY 2 DESC, 1",
+                                         args).fetchall()
+                hours = conn.execute(f"SELECT day, hour, COUNT(*) FROM activity_hours WHERE {in_period} GROUP BY day, hour",
+                                     args).fetchall()
+                users = conn.execute(f"SELECT COUNT(*) FROM ({active})", args).fetchone()[0]
+        except sqlite3.Error:
+            return {"source": "unavailable"}
+        heat = [[0] * 24 for _ in range(7)]
+        for day, hour, count in hours:
+            local = datetime.strptime(str(day), "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(hours=int(hour) + 4)
+            heat[local.weekday()][local.hour] += int(count)
+        return {"source": "telemetry", "activeUsers": int(users),
+                "geo": [{"code": str(c).upper()[:2], "count": int(n)} for c, n in geo if isinstance(c, str) and len(c) == 2],
+                "platforms": [{"name": str(pl)[:32], "count": int(n)} for pl, n in platforms],
+                "activityHeat": heat}
+
     def edge_countries(self, user_ids: Iterable[int] | None) -> dict[int, str]:
-        """The latest country code the edge reported for the user (ad events carry it; no IP is ever stored)."""
+        """The latest country code the edge reported for the user: the sign-in record (D1), else the latest ad event
+        (both carry the edge's two-letter code; no IP is ever stored)."""
         ids = None if user_ids is None else sorted(set(user_ids))
         if ids == []:
             return {}
+        signed = self._rows("SELECT user_id, country FROM user_edge WHERE {ids} AND country IS NOT NULL", ids)
+        found = {int(uid): str(c).upper()[:2] for uid, c in signed if isinstance(c, str) and len(c) == 2 and c.isalpha()}
         rows = self._rows(
             "SELECT e.user_id, e.country FROM ad_events e JOIN (SELECT user_id AS uid, MAX(id) AS last FROM ad_events "
             "WHERE {ids} AND country IS NOT NULL AND country != '' GROUP BY user_id) m ON e.id = m.last", ids)
-        return {int(uid): str(c).upper()[:2] for uid, c in rows if isinstance(c, str) and len(c) == 2 and c.isalpha()}
+        from_ads = {int(uid): str(c).upper()[:2] for uid, c in rows if isinstance(c, str) and len(c) == 2 and c.isalpha()}
+        return {**from_ads, **found}
 
 
 def geo(user: dict, edge: dict[int, str]) -> dict:

@@ -63,6 +63,20 @@ CREATE TABLE IF NOT EXISTS recent_picks (
     until     INTEGER NOT NULL,
     PRIMARY KEY (user_id, event_key)
 );
+-- The last country the edge reported at sign-in (two letters, no IP) and the Telegram client platform (D1).
+CREATE TABLE IF NOT EXISTS user_edge (
+    user_id    INTEGER PRIMARY KEY,
+    country    TEXT,
+    platform   TEXT,
+    updated_at INTEGER NOT NULL
+);
+-- Active (UTC day, UTC hour, user): only the fact, for the activity-by-hour chart (D1).
+CREATE TABLE IF NOT EXISTS activity_hours (
+    day     TEXT NOT NULL,
+    hour    INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
+    user_id INTEGER NOT NULL,
+    PRIMARY KEY (day, hour, user_id)
+);
 -- The user's own statement "I am N or older" for a partner's age gate (the highest N kept).
 CREATE TABLE IF NOT EXISTS age_confirmations (
     user_id      INTEGER PRIMARY KEY,
@@ -139,6 +153,19 @@ class Telemetry:
                 f"INSERT INTO user_activity (day, user_id, first_at, last_at, {field}) VALUES (?, ?, ?, ?, 1) "
                 f"ON CONFLICT(day, user_id) DO UPDATE SET last_at = MAX(last_at, excluded.last_at), "
                 f"{field} = {field} + 1", (day_of(now), user_id, now, now))
+            conn.execute("INSERT OR IGNORE INTO activity_hours (day, hour, user_id) VALUES (?, ?, ?)",
+                         (day_of(now), datetime.fromtimestamp(now, UTC).hour, user_id))
+
+    def record_edge(self, user_id: int, country: str | None, platform: str | None, now: int) -> None:
+        """Sign-in facts for the admin's geography / platform cards: a value not reported keeps the previous one."""
+        if country is None and platform is None:
+            return
+        with self._write() as conn:
+            conn.execute(
+                "INSERT INTO user_edge (user_id, country, platform, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET country = COALESCE(excluded.country, country), "
+                "platform = COALESCE(excluded.platform, platform), updated_at = excluded.updated_at",
+                (user_id, country, platform, now))
 
     def activity(self, user_id: int, since_day: str) -> list[dict]:
         """Rows of one user from `since_day` on (UTC days), oldest first."""
@@ -272,6 +299,9 @@ class Telemetry:
         with self._write() as conn:
             conn.execute("DELETE FROM ad_events WHERE day < ?", (events_before,))
             conn.execute("DELETE FROM user_activity WHERE day < ?", (activity_before,))
+            conn.execute("DELETE FROM activity_hours WHERE day < ?", (activity_before,))
+            # A user's country and platform go with their activity (same retention, counted from the last sign-in).
+            conn.execute("DELETE FROM user_edge WHERE updated_at < ?", (now - ACTIVITY_RETENTION_DAYS * DAY,))
             conn.execute("DELETE FROM recent_picks WHERE until <= ?", (now,))
 
 
