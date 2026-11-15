@@ -1,0 +1,5 @@
+# Mini App API runtime. Separate from the bot's requirements.txt.
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+anthropic>=1,<2
+cryptography>=50.0.0,<51

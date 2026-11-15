@@ -1,0 +1,23 @@
+/* No box of its own: the app's layout is exactly as without the gate. */
+.app {
+  display: contents;
+}
+
+/*
+ * Covers the whole WebView, including Telegram's safe areas (the screen inside
+ * pads itself with --safe-*). Opaque from the first frame: the plain cover
+ * before the splash uses the splash background, so nothing flashes.
+ */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: linear-gradient(105.04deg, #f9faec 7.35%, #e6f3e3 46.32%, #cfe9dc 80.88%);
+  opacity: 1;
+  transition: opacity 240ms ease-out;
+}
+
+.overlay[data-mode='exit'] {
+  opacity: 0;
+  pointer-events: none;
+}

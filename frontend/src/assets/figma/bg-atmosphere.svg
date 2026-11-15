@@ -1,0 +1,9 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="520" height="450" viewBox="0 0 520 450" fill="none" xmlns="http://www.w3.org/2000/svg">
+<ellipse id="Atmosphere / slow light" opacity="0.25" cx="260" cy="225" rx="260" ry="225" fill="url(#paint0_radial_0_72)"/>
+<defs>
+<radialGradient id="paint0_radial_0_72" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(260 225) scale(260 225)">
+<stop stop-color="white" stop-opacity="0.32"/>
+<stop offset="1" stop-color="white" stop-opacity="0"/>
+</radialGradient>
+</defs>
+</svg>

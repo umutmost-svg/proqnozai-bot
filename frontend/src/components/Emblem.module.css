@@ -1,0 +1,40 @@
+.platform {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--glass-35);
+  border: 1px solid var(--line-70);
+}
+
+.hero {
+  composes: platform;
+  background: var(--glass-24);
+  border-color: var(--line-62);
+  animation: float 6s ease-in-out infinite;
+}
+
+.plain {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.initial {
+  font-family: var(--font-display);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}

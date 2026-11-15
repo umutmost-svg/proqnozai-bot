@@ -1,0 +1,52 @@
+/* Partner offer inside the recommended bet: 320–430 px, light and dark themes through the shared tokens. */
+.offer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 20px;
+  background: var(--glass-18);
+  border: 1px solid var(--line-74);
+}
+
+.label {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.headline {
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 21px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.body,
+.extra {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-primary);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.extra {
+  color: var(--text-muted);
+}
+
+.cta {
+  margin-top: 4px;
+  width: 100%;
+}
+
+.gone,
+.adId {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-footnote);
+}

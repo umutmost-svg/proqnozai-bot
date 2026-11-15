@@ -1,0 +1,962 @@
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { BackendSportsDataProvider, readQuick } from '../data/BackendSportsDataProvider';
+import type { QuickCriteria, SportEvent } from '../data/models';
+import { DEFAULT_CRITERIA, quickRange, readCriteria } from '../data/quick';
+import { monotonic, resetQuickMemory } from '../screens/QuickScreen';
+import { renderApp } from './renderApp';
+import { FORECAST_V3 } from './fixtures/forecastV3';
+
+const ATTR = 'Football data provided by the Football-Data.org API';
+const COVERAGE = { status: 'connected', provider: 'football-data.org', attribution: ATTR, liveScores: 'delayed' };
+const TOURNAMENTS = [
+  { id: 'fd:PL', sport: 'football', name: 'Premier League', area: 'England', provider: 'football-data.org' },
+  { id: 'fd:PD', sport: 'football', name: 'LaLiga', area: 'Spain', provider: 'football-data.org' },
+];
+const source = { provider: 'football-data.org', fetchedAt: '2026-11-08T05:59:00Z', sourceUpdatedAt: null, stale: false };
+const ev = (id: number, home: string, away: string, extra: Record<string, unknown> = {}) => ({
+  id: `fd:${id}`,
+  sport: 'football',
+  tournamentId: 'fd:PL',
+  startsAt: '2026-11-08T15:00:00Z',
+  status: 'upcoming',
+  sourceStatus: 'TIMED',
+  home: { id: `fd:team:${id}1`, name: home },
+  away: { id: `fd:team:${id}2`, name: away },
+  score: null,
+  halfTime: null,
+  minute: null,
+  awarded: false,
+  stats: null,
+  statsAvailability: 'unavailable',
+  source,
+  ...extra,
+});
+const leg = (id: number, home: string, away: string, market = '1', family = '1x2', probability = 64) => ({
+  event: ev(id, home, away),
+  market,
+  family,
+  probability,
+  leagueRate: 45,
+  expectedGoals: { home: 1.62, away: 0.94 },
+  sample: 240,
+  teamMatches: { home: 24, away: 23 },
+  dataUntil: '2026-11-06T20:00:00Z',
+  price: null,
+});
+const answer = (over: Record<string, unknown> = {}) => ({
+  mode: 'single',
+  status: 'ok',
+  legs: [leg(1, 'Arsenal FC', 'Chelsea FC')],
+  size: 1,
+  suitable: 3,
+  combined: null,
+  counts: { matches: 9, forecasts: 8 },
+  reasons: { early_forecast: 4 },
+  unavailableTournaments: [],
+  uncheckedDays: 0,
+  nextMatchAt: null,
+  couponOdds: null,
+  experimental: true,
+  modelVersion: 'goals-1',
+  computedAt: '2026-11-08T06:00:00Z',
+  ...over,
+});
+const SINGLE: QuickCriteria = { ...DEFAULT_CRITERIA, mode: 'single', size: 1 };
+const COUPON: QuickCriteria = { ...DEFAULT_CRITERIA, mode: 'coupon', size: 2 };
+const asEvent = (raw: unknown) => raw as SportEvent;
+const RANGE = { from: new Date('2026-11-08T06:00:00Z'), to: new Date('2026-11-09T20:00:00Z') };
+
+describe('quick prediction answer is read strictly', () => {
+  it('accepts a consistent single and a coupon', () => {
+    expect(readQuick(answer(), SINGLE, RANGE, asEvent)?.legs[0]?.market).toBe('1');
+    const coupon = answer({ mode: 'coupon', size: 2, combined: [42, 64], legs: [leg(1, 'A', 'B'), leg(2, 'C', 'D', '1X', 'double', 78)] });
+    expect(readQuick(coupon, COUPON, RANGE, asEvent)?.combined).toEqual([42, 64]);
+  });
+
+  it.each([
+    ['another mode', answer({ mode: 'coupon' })],
+    ['a result without its leg', answer({ legs: [] })],
+    ['no_bet with legs', answer({ status: 'no_bet' })],
+    ['a family that does not match the market', answer({ legs: [leg(1, 'A', 'B', '1', 'double')] })],
+    ['an unknown reason', answer({ reasons: { lucky: 1 } })],
+    ['a probability above 100', answer({ legs: [leg(1, 'A', 'B', '1', '1x2', 140)] })],
+    ['a single with a combined chance', answer({ combined: 50 })],
+    ['an unlabelled pick while the model is unconfirmed', answer({ experimental: false })],
+    ['a leg outside the asked period', answer({ legs: [{ ...leg(1, 'A', 'B'), event: ev(1, 'A', 'B', { startsAt: '2026-11-12T15:00:00Z' }) }] })],
+    ['"no pick" with suitable matches', answer({ status: 'no_bet', legs: [], suitable: 3 })],
+    ['"not enough" for a single', answer({ status: 'not_enough', legs: [], suitable: 0 })],
+    ['"unavailable" with enough suitable matches', answer({ status: 'unavailable', legs: [], suitable: 1 })],
+    ['an impossible calendar date', answer({ computedAt: '2026-02-30T06:00:00Z' })],
+    ['an impossible time with an offset', answer({ legs: [{ ...leg(1, 'A', 'B'), event: ev(1, 'A', 'B', { startsAt: '2026-11-08T25:00:00+04:00' }) }] })],
+    ['a computed-at time without a zone', answer({ computedAt: '2026-11-08T06:00:00' })],
+    ['a kickoff without a zone', answer({ legs: [{ ...leg(1, 'A', 'B'), event: ev(1, 'A', 'B', { startsAt: '2026-11-08T15:00:00' }) }] })],
+    ['a leg on another UTC day than the pick', answer({ legs: [{ ...leg(1, 'A', 'B'), event: ev(1, 'A', 'B', { startsAt: '2026-11-09T15:00:00Z' }) }] })],
+    ['a leg below the risk floor', answer({ legs: [leg(1, 'A', 'B', '1', '1x2', 57)] })],
+    ['no unchecked-days count', answer({ uncheckedDays: undefined })],
+    ['more forecasts than matches', answer({ counts: { matches: 1, forecasts: 2 } })],
+    ['a leg with no forecast behind it', answer({ counts: { matches: 0, forecasts: 0 }, suitable: 0 })],
+    ['fewer suitable matches than legs', answer({ suitable: 0 })],
+  ])('rejects %s', (_, body) => {
+    expect(readQuick(body, SINGLE, RANGE, asEvent)).toBeNull();
+  });
+
+  it('rejects a coupon that repeats a match or a team, or lacks the combined chance', () => {
+    const same = answer({ mode: 'coupon', size: 2, combined: 30, legs: [leg(1, 'A', 'B'), leg(1, 'A', 'B', 'X2', 'double')] });
+    expect(readQuick(same, COUPON, RANGE, asEvent)).toBeNull();
+    const shared = leg(2, 'C', 'D');
+    shared.event.home = { id: 'fd:team:11', name: 'A' };
+    expect(readQuick(answer({ mode: 'coupon', size: 2, combined: 30, legs: [leg(1, 'A', 'B'), shared] }), COUPON, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ mode: 'coupon', size: 2, legs: [leg(1, 'A', 'B'), leg(2, 'C', 'D')] }), COUPON, RANGE, asEvent)).toBeNull();
+    // Bounds other than those of the shown legs (or a multiplied single number) are broken answers.
+    const two = [leg(1, 'A', 'B'), leg(2, 'C', 'D')];
+    expect(readQuick(answer({ mode: 'coupon', size: 2, combined: 41, legs: two }), COUPON, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ mode: 'coupon', size: 2, combined: [0, 64], legs: two }), COUPON, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ mode: 'coupon', size: 2, combined: [28, 64], legs: two }), COUPON, RANGE, asEvent)).not.toBeNull();
+    // Two exact 60.51% legs show as 61%: the true lower bound 21.02% rounds down to 21.
+    const sixtyOne = [leg(1, 'A', 'B', '1', '1x2', 61), leg(2, 'C', 'D', '1', '1x2', 61)];
+    expect(readQuick(answer({ mode: 'coupon', size: 2, combined: [21, 61], legs: sixtyOne }), COUPON, RANGE, asEvent)).not.toBeNull();
+    expect(readQuick(answer({ mode: 'coupon', size: 2, combined: [21, 63], legs: sixtyOne }), COUPON, RANGE, asEvent)).toBeNull();
+    // Shown 60% + 60%: an upper bound of 61 needs both above 60%, so the lower bound is at least 20.
+    const sixty = [leg(1, 'A', 'B', '1', '1x2', 60), leg(2, 'C', 'D', '1', '1x2', 60)];
+    expect(readQuick(answer({ mode: 'coupon', size: 2, combined: [19, 61], legs: sixty }), COUPON, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ mode: 'coupon', size: 2, combined: [20, 61], legs: sixty }), COUPON, RANGE, asEvent)).not.toBeNull();
+    expect(readQuick(answer({ mode: 'coupon', size: 2, combined: [19, 60], legs: sixty }), COUPON, RANGE, asEvent)).not.toBeNull();
+    // Double chance is a sum of rounded 1X2 percents: exact 66.6% may show as 66%; bounds [33, 67] are valid.
+    const doubles = [leg(1, 'A', 'B', '1X', 'double', 66), leg(2, 'C', 'D', '1X', 'double', 66)];
+    expect(readQuick(answer({ mode: 'coupon', size: 2, combined: [33, 67], legs: doubles }), COUPON, RANGE, asEvent)).not.toBeNull();
+    expect(readQuick(answer({ mode: 'coupon', size: 2, combined: [40, 67], legs: doubles }), COUPON, RANGE, asEvent)).toBeNull();
+    const elsewhere = { ...SINGLE, tournaments: ['fd:PD'] };
+    expect(readQuick(answer(), elsewhere, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ market: 'double' }), { ...SINGLE, market: 'double' }, RANGE, asEvent)).toBeNull();
+    // "Not enough" must really be fewer than asked.
+    expect(readQuick(answer({ mode: 'coupon', size: 2, status: 'not_enough', legs: [], suitable: 2 }), COUPON, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ mode: 'coupon', size: 2, status: 'not_enough', legs: [], suitable: 1 }), COUPON, RANGE, asEvent)).not.toBeNull();
+  });
+});
+
+describe('quick criteria', () => {
+  it('"today" ends at the user’s local midnight, the others count hours from now', () => {
+    const now = new Date('2026-11-08T21:30:00Z'); // 01:30 on 9 November in Baku
+    expect(quickRange('today', now, 'Asia/Baku').to.toISOString()).toBe('2026-11-09T20:00:00.000Z');
+    expect(quickRange('3d', now, 'Asia/Baku').to.toISOString()).toBe('2026-11-11T21:30:00.000Z');
+    expect(quickRange('7d', now, 'UTC').from).toBe(now);
+  });
+
+  it('a stored value with unknown parts falls back field by field', () => {
+    const known = new Set(['fd:PL']);
+    expect(readCriteria({ mode: 'coupon', size: 9, risk: 'max', tournaments: ['fd:PL', 'fd:XX', 'fd:PL'] }, known)).toEqual({
+      ...DEFAULT_CRITERIA,
+      mode: 'coupon',
+      tournaments: ['fd:PL'],
+    });
+    expect(readCriteria('garbage', known)).toEqual(DEFAULT_CRITERIA);
+  });
+});
+
+function backend(quick: (url: URL) => unknown, top: unknown[] = []) {
+  const urls: string[] = [];
+  const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+    const url = String(input);
+    urls.push(url);
+    const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+    if (url.startsWith('/api/quick/pick')) return ok(quick(new URL(url, 'http://x')));
+    if (url.startsWith('/api/sports/football/top')) return ok({ coverage: COVERAGE, tournaments: TOURNAMENTS, top });
+    if (url.startsWith('/api/sports/football/events')) return ok({ coverage: COVERAGE, tournaments: TOURNAMENTS, events: [] });
+    if (url.startsWith('/api/sports/football/tournaments')) return ok({ sport: 'football', coverage: COVERAGE, tournaments: TOURNAMENTS });
+    return new Response('{}', { status: 404 });
+  });
+  return { data: new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl }), urls };
+}
+
+describe('quick prediction screen', () => {
+  beforeEach(() => {
+    resetQuickMemory();
+    window.localStorage.clear();
+  });
+
+  it('is the fourth tab', async () => {
+    renderApp('#/');
+    const nav = await screen.findByRole('navigation', { name: /меню|навигац/i });
+    expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(['Главная', 'Матчи', 'Быстрый прогноз', 'Профиль']);
+  });
+
+  it('explains the UTC match-day rule for "today" too', async () => {
+    const { data } = backend(() => answer());
+    renderApp('#/quick', { data });
+    expect(await screen.findByTestId('quick-match-day-note')).toHaveTextContent('сегодняшние по местному времени');
+  });
+
+  it('demo mode never invents the model’s numbers', async () => {
+    renderApp('#/quick');
+    expect(await screen.findByTestId('quick-demo')).toHaveTextContent('Подбор работает на реальных данных');
+    expect(screen.queryByTestId('quick-submit')).toBeNull();
+  });
+
+  it('a single: criteria go to the backend, the result shows the bet, reasoning, risk and counts', async () => {
+    const user = userEvent.setup();
+    const { data, urls } = backend(() => answer({ legs: [{ ...leg(1, 'Arsenal FC', 'Chelsea FC', '1X', 'double', 84), event: ev(1, 'Arsenal FC', 'Chelsea FC', { tournamentId: 'fd:PD' }) }] }));
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByRole('button', { name: 'Ближайшие 3 дня' }));
+    expect(screen.getByText(/только по матчам текущего дня/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Двойной шанс' }));
+    await user.click(screen.getByRole('button', { name: 'Консервативный' }));
+    await user.click(screen.getByRole('button', { name: 'LaLiga' }));
+    await user.click(screen.getByTestId('quick-submit'));
+    const result = await screen.findByTestId('quick-result');
+    const q = new URL(urls.find((u) => u.startsWith('/api/quick/pick'))!, 'http://x').searchParams;
+    expect(Object.fromEntries(q)).toMatchObject({ mode: 'single', market: 'double', risk: 'conservative', tournaments: 'fd:PD' });
+    expect(Date.parse(q.get('to')!) - Date.parse(q.get('from')!)).toBe(72 * 3600_000);
+    expect(q.has('size')).toBe(false);
+    expect(result).toHaveTextContent('Ординар');
+    expect(within(result).getByTestId('quick-leg')).toHaveTextContent('Arsenal FC');
+    expect(result).toHaveTextContent('Вероятность по модели: 84%');
+    expect(result).toHaveTextContent('такой исход бывает в 45% матчей');
+    // No boilerplate labels or source notes in the result.
+    for (const id of ['quick-experimental', 'quick-caveat', 'source-note', 'price-line', 'quick-coupon-odds']) {
+      expect(within(result).queryByTestId(id)).toBeNull();
+    }
+    expect(result).not.toHaveTextContent(/Экспериментально|гаранти|football-data/i);
+    expect(screen.getByTestId('quick-counts')).toHaveTextContent('Предстоящих матчей в периоде: 9. Подходят под условия: 3.');
+    expect(screen.getByTestId('quick-counts')).toHaveTextContent('Не в день матча по UTC: 4');
+    // "Change criteria" returns to the same, remembered criteria.
+    await user.click(screen.getByTestId('quick-change'));
+    expect(screen.getByRole('button', { name: 'Ближайшие 3 дня' })).toHaveAttribute('aria-pressed', 'true');
+    expect(JSON.parse(window.localStorage.getItem('proqnozai.quick.v1')!)).toMatchObject({ period: '3d', market: 'double' });
+  });
+
+  it('"back" after an answer returns to the criteria, not to the page visited before', async () => {
+    const user = userEvent.setup();
+    const { data } = backend(() => answer());
+    renderApp('#/event/fd%3A4', { data });
+    window.location.hash = '#/quick';
+    await user.click(await screen.findByTestId('quick-submit'));
+    expect(await screen.findByTestId('quick-result')).toBeInTheDocument();
+    expect(window.location.hash).toContain('step=result');
+    window.history.back();
+    expect(await screen.findByTestId('quick-criteria')).toBeInTheDocument();
+    await waitFor(() => expect(window.location.hash).toBe('#/quick'));
+  });
+
+  it('"back" still returns to the criteria after opening a match from the answer', async () => {
+    const user = userEvent.setup();
+    const { data } = backend(() => answer());
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    expect(await screen.findByTestId('quick-result')).toBeInTheDocument();
+    window.location.hash = '#/event/fd%3A1';                    // another screen (the quick screen unmounts)
+    await waitFor(() => expect(screen.queryByTestId('quick-result')).toBeNull());
+    window.history.back();                                      // back to the answer
+    expect(await screen.findByTestId('quick-result')).toBeInTheDocument();
+    window.history.back();                                      // and back to the criteria, not the answer again
+    expect(await screen.findByTestId('quick-criteria')).toBeInTheDocument();
+  });
+
+  it('a coupon shows every leg, the combined chance under its assumption, and is never padded', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const { data } = backend((url) => {
+      calls++;
+      const size = Number(url.searchParams.get('size'));
+      return size === 2
+        ? answer({ mode: 'coupon', size: 2, combined: [45, 64], legs: [leg(1, 'A FC', 'B FC'), leg(2, 'C FC', 'D FC', 'HO0.5', 'team_total', 81)] })
+        : answer({ mode: 'coupon', size, status: 'not_enough', legs: [], suitable: 2 });
+    });
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByRole('button', { name: 'Купон' }));
+    await user.click(within(screen.getByTestId('quick-size')).getByRole('button', { name: '4' }));
+    await user.click(screen.getByTestId('quick-submit'));
+    expect(await screen.findByTestId('quick-not-enough')).toHaveTextContent('Нужно матчей: 4, подходят: 2');
+    await user.click(screen.getByTestId('quick-change'));
+    await user.click(within(screen.getByTestId('quick-size')).getByRole('button', { name: '2' }));
+    await user.click(screen.getByTestId('quick-submit'));
+    const result = await screen.findByTestId('quick-result');
+    expect(within(result).getAllByTestId('quick-leg')).toHaveLength(2);
+    expect(result).toHaveTextContent('Купон из 2 матчей');
+    expect(within(result).getByTestId('quick-combined')).toHaveTextContent('от 45% до 64%');
+    expect(within(result).getByTestId('quick-combined')).toHaveTextContent('диапазон верен при любой связи');
+    await user.click(screen.getByTestId('quick-repeat'));
+    await waitFor(() => expect(calls).toBe(3));
+  });
+
+  it('no suitable pick is an honest state; missing data never reads as "no pick"', async () => {
+    const user = userEvent.setup();
+    const { data } = backend(() => answer({ status: 'no_bet', legs: [], suitable: 0, reasons: { no_qualifying_market: 3 } }));
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    expect(await screen.findByTestId('quick-no-bet')).toHaveTextContent('Условия не ослабляются автоматически');
+    const partial = { status: 'no_bet', legs: [], suitable: 0, reasons: { source_unavailable: 2 }, unavailableTournaments: ['fd:PD'] };
+    expect(readQuick(answer(partial), SINGLE, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ ...partial, reasons: {} }), SINGLE, RANGE, asEvent)).toBeNull();
+    const shown = readQuick(answer({ ...partial, status: 'unavailable' }), SINGLE, RANGE, asEvent);
+    expect(shown?.unavailableTournaments).toEqual(['fd:PD']);
+  });
+});
+
+describe('quick prediction transport', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('waits for a slow (cold-cache) pick longer than an ordinary listing', async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn<typeof fetch>(
+      () => new Promise((resolve) => setTimeout(() => resolve(new Response(JSON.stringify(answer()), { status: 200 })), 25_000)),
+    );
+    const data = new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl });
+    const pending = data.quickPick(SINGLE, new Date('2026-11-08T06:00:00Z'), 'Asia/Baku');
+    await vi.advanceTimersByTimeAsync(25_000);
+    await expect(pending).resolves.toMatchObject({ status: 'ok' });
+  });
+});
+
+describe('AI screen in real mode', () => {
+  function aiBackend(cached: unknown | null, ai: 'connected' | 'not_connected' = 'connected') {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+      if (url.startsWith('/api/ai/analysis')) {
+        const id = method === 'GET' ? new URL(url, 'http://x').searchParams.get('event_id') : JSON.parse(String(init?.body)).event_id;
+        calls.push(`${method} ${id}`);
+        if (method === 'GET') return cached ? ok(cached) : ok({ error: 'ai_not_created' }, 404);
+        return ok({ error: 'ai_unavailable', reason: 'limit_reached' }, 429);
+      }
+      const event = /^\/api\/sports\/event\/fd%3A(\d+)$/.exec(url) ?? /^\/api\/sports\/event\/fd:(\d+)$/.exec(url);
+      if (event) return ok({ event: ev(Number(event[1]), `Home${event[1]} FC`, `Away${event[1]} FC`), tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: ai } });
+      return ok({ sport: 'football', coverage: COVERAGE, tournaments: TOURNAMENTS, top: [], events: [], ai: { status: ai } });
+    });
+    return { data: new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl, getCsrfToken: () => 'csrf' }), calls };
+  }
+
+  it('opening the screen only reads; the paid request goes out on the explicit button only', async () => {
+    const user = userEvent.setup();
+    const { data, calls } = aiBackend(null);
+    renderApp('#/event/fd%3A1/ai', { data });
+    expect(await screen.findByTestId('ai-create')).toHaveTextContent('Создать AI-разбор');
+    expect(screen.getByTestId('ai-create-prompt')).toHaveTextContent('расходует ваш дневной лимит AI');
+    expect(calls).toEqual(['GET fd:1']);
+    await user.click(screen.getByTestId('ai-create'));
+    await screen.findByTestId('ai-error');
+    expect(calls).toEqual(['GET fd:1', 'POST fd:1']);
+  });
+
+  it('"check again" after a free "insufficient" answer only reads; creating needs the button again', async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    const insufficient = { schema: 'v3', eventId: 'fd:1', kind: 'insufficient', reasons: ['no_verified_form', 'no_odds_source'],
+      generatedAt: null, model: null, probabilities: null, factors: [], basis: null, estimated: false, pick: null, forecast: null, alternatives: [] };
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+      if (url.startsWith('/api/ai/analysis')) {
+        calls.push(init?.method ?? 'GET');
+        return (init?.method ?? 'GET') === 'GET' ? ok({ error: 'ai_not_created' }, 404) : ok(insufficient);
+      }
+      if (url.startsWith('/api/sports/event/')) return ok({ event: ev(1, 'A FC', 'B FC'), tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'connected' } });
+      return ok({ sport: 'football', coverage: COVERAGE, tournaments: TOURNAMENTS, ai: { status: 'connected' } });
+    });
+    const data = new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl, getCsrfToken: () => 'csrf' });
+    renderApp('#/event/fd%3A1/ai', { data });
+    await user.click(await screen.findByTestId('ai-create'));
+    await screen.findByTestId('ai-insufficient');
+    expect(calls).toEqual(['GET', 'POST']);
+    await user.click(screen.getByRole('button', { name: 'Проверить еще раз' }));
+    expect(await screen.findByTestId('ai-create')).toBeInTheDocument();
+    expect(calls).toEqual(['GET', 'POST', 'GET']);
+  });
+
+  it('a slow (cold) read is waited for, not cut at the ordinary listing timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
+        if (url.startsWith('/api/ai/analysis')) {
+          return new Promise<Response>((resolve) => setTimeout(() => resolve(new Response('{"error":"ai_not_created"}', { status: 404 })), 25_000));
+        }
+        return new Response(JSON.stringify({ event: ev(1, 'A FC', 'B FC'), tournament: TOURNAMENTS[0], coverage: COVERAGE, ai: { status: 'connected' } }), { status: 200 });
+      });
+      const data = new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl });
+      const pending = data.getCachedAnalysis('fd:1');
+      await vi.advanceTimersByTimeAsync(25_000);
+      await expect(pending).resolves.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a tap for one match never creates another match’s analysis', async () => {
+    const user = userEvent.setup();
+    const { data, calls } = aiBackend(null);
+    renderApp('#/event/fd%3A1/ai', { data });
+    await user.click(await screen.findByTestId('ai-create'));
+    await screen.findByTestId('ai-error');
+    window.location.hash = '#/event/fd%3A2/ai'; // another match, same app
+    await waitFor(() => expect(calls).toContain('GET fd:2'));
+    expect(await screen.findByTestId('ai-create')).toBeInTheDocument();
+    window.location.hash = '#/event/fd%3A1/ai'; // and back: reading again, not creating again
+    await waitFor(() => expect(calls.filter((c) => c === 'GET fd:1')).toHaveLength(2));
+    expect(await screen.findByTestId('ai-create')).toBeInTheDocument();
+    expect(calls.filter((c) => c.startsWith('POST'))).toEqual(['POST fd:1']);
+  });
+
+  it('an analysis made earlier is shown even while the AI is not connected, with no request to create', async () => {
+    const made = {
+      schema: 'v3', eventId: 'fd:1', kind: 'partial', reasons: ['no_odds_source'], generatedAt: '2026-11-08T05:00:00Z', model: 'm',
+      probabilities: { home: FORECAST_V3.markets['1'], draw: FORECAST_V3.markets.X, away: FORECAST_V3.markets['2'] },
+      factors: ['home_form', 'away_form'], estimated: true,
+      basis: {
+        home: { name: 'Home1 FC', matches: 5, form: 'WWDWL', wins: 3, draws: 1, losses: 1, points: 10, goalsFor: 8, goalsAgainst: 5, tablePosition: null, tablePoints: null },
+        away: { name: 'Away1 FC', matches: 5, form: 'LDLWL', wins: 1, draws: 1, losses: 3, points: 4, goalsFor: 4, goalsAgainst: 9, tablePosition: null, tablePoints: null },
+      },
+      pick: { market: 'NO_BET', reasons: [], probability: null }, alternatives: [],
+      forecast: { ...FORECAST_V3, noBetReason: 'no_qualifying_market' },
+    };
+    const { data, calls } = aiBackend(made, 'not_connected');
+    renderApp('#/event/fd%3A1/ai', { data });
+    expect(await screen.findByTestId('ai-result')).toBeInTheDocument();
+    expect(calls).toEqual(['GET fd:1']);
+    expect(screen.queryByTestId('ai-create')).toBeNull();
+  });
+
+  it('with the AI not connected and nothing made, the screen says it is unavailable', async () => {
+    const { data, calls } = aiBackend(null, 'not_connected');
+    renderApp('#/event/fd%3A1/ai', { data });
+    await waitFor(() => expect(calls).toEqual(['GET fd:1']));
+    expect(screen.queryByTestId('ai-create')).toBeNull();
+  });
+});
+
+describe('quick prediction errors', () => {
+  beforeEach(() => {
+    resetQuickMemory();
+    window.localStorage.clear();
+  });
+
+  function failing(status: number, body: unknown, tournaments = true) {
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith('/api/quick/pick')) return new Response(JSON.stringify(body), { status });
+      if (url.startsWith('/api/sports/football/tournaments') && !tournaments) return new Response('{}', { status: 503 });
+      return new Response(JSON.stringify({ sport: 'football', coverage: COVERAGE, tournaments: TOURNAMENTS, top: [], events: [] }), { status: 200 });
+    });
+    return new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl });
+  }
+
+  it.each([
+    [429, { error: 'rate_limited' }, 'Слишком много подборов'],
+    [503, { error: 'source_unavailable', reason: 'rate_limited' }, 'Источник данных недоступен'],
+    [401, { error: 'unauthenticated' }, 'Сессия истекла. Закройте и откройте Mini App заново.'],
+    [400, { error: 'bad_range' }, 'Часы устройства расходятся с сервером'],
+  ])('HTTP %s is "try later", not a connection problem', async (status, body, title) => {
+    const user = userEvent.setup();
+    renderApp('#/quick', { data: failing(status, body) });
+    await user.click(await screen.findByTestId('quick-submit'));
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(screen.queryByText('Проверьте соединение и попробуйте ещё раз.')).toBeNull();
+  });
+
+  it('a remembered competition the catalogue no longer has is dropped and never sent', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem('proqnozai.quick.v1', JSON.stringify({ tournaments: ['fd:XX', 'fd:PD'] }));
+    const { data, urls } = backend(() => answer({ legs: [{ ...leg(1, 'A FC', 'B FC'), event: ev(1, 'A FC', 'B FC', { tournamentId: 'fd:PD' }) }] }));
+    renderApp('#/quick', { data });
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem('proqnozai.quick.v1')!).tournaments).toEqual(['fd:PD']));
+    await user.click(screen.getByTestId('quick-submit'));
+    await screen.findByTestId('quick-result');
+    expect(new URL(urls.find((u) => u.startsWith('/api/quick/pick'))!, 'http://x').searchParams.get('tournaments')).toBe('fd:PD');
+  });
+
+  it('with nothing to pick it says when the next match is and offers other dates, nothing loosened', async () => {
+    const user = userEvent.setup();
+    const periods: string[] = [];
+    const { data } = backend((url) => {
+      periods.push(String((Date.parse(url.searchParams.get('to')!) - Date.parse(url.searchParams.get('from')!)) / 3600e3));
+      return answer({ status: 'no_bet', legs: [], suitable: 0, counts: { matches: 2, forecasts: 0 }, reasons: { early_forecast: 2 }, nextMatchAt: '2026-11-10T21:30:00Z' });
+    });
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByRole('button', { name: 'Ближайшие 3 дня' }));
+    await user.click(screen.getByTestId('quick-submit'));
+    // Local and UTC days differ here: 01:30 on 11 November in Baku is still 10 November in UTC.
+    expect(await screen.findByTestId('quick-next-match')).toHaveTextContent('Ближайший матч в выбранном периоде — 11 ноября · 01:30');
+    expect(screen.getByTestId('quick-next-match')).toHaveTextContent('только в день матча по UTC — 10 ноября, и только если исход пройдёт правила модели');
+    await user.click(screen.getByTestId('quick-try-week'));
+    await waitFor(() => expect(periods.at(-1)).toBe('168'));
+    expect(await screen.findByTestId('quick-next-steps')).toBeInTheDocument();
+    expect(screen.queryByTestId('quick-try-week')).toBeNull(); // already the longest period
+    expect(JSON.parse(window.localStorage.getItem('proqnozai.quick.v1')!).period).toBe('7d');
+    await user.click(screen.getByTestId('quick-open-calendar'));
+    await waitFor(() => expect(window.location.hash).toBe('#/matches'));
+  });
+
+  it('without a pick the nearest validated matches are shown with the model\'s 1/X/2, never as a pick', async () => {
+    const user = userEvent.setup();
+    const later = ev(7, 'Manchester City FC', 'Fulham FC', { startsAt: '2026-11-21T12:30:00Z' });
+    const preview = [{ event: later, probabilities: { home: 65, draw: 22, away: 13 }, recommendationDay: '2026-11-21' }];
+    const { data } = backend(() => answer({ status: 'no_bet', legs: [], suitable: 0, reasons: { unvalidated_competition: 25 }, preview }));
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    const block = await screen.findByTestId('quick-preview');
+    expect(block).toHaveTextContent('Ближайшие матчи проверенных лиг');
+    expect(block).toHaveTextContent('Это не рекомендация');
+    const item = within(block).getByTestId('quick-preview-item');
+    expect(item).toHaveTextContent('Manchester City FC');
+    expect(item).toHaveTextContent('65% / 22% / 13%');
+    expect(item).toHaveTextContent('Рекомендация возможна 21');
+    expect(screen.queryByTestId('quick-leg')).toBeNull();
+  });
+
+  it('a preview that could pass for a pick or does not add up is a broken answer', () => {
+    const later = ev(7, 'A', 'B', { startsAt: '2026-11-21T12:30:00Z' });
+    const item = (over: Record<string, unknown> = {}) => ({ event: later, probabilities: { home: 65, draw: 22, away: 13 }, recommendationDay: '2026-11-21', ...over });
+    const noBet = { status: 'no_bet', legs: [], suitable: 0 };
+    expect(readQuick(answer({ ...noBet, preview: [item()] }), SINGLE, RANGE, asEvent)?.preview).toHaveLength(1);
+    expect(readQuick(answer({ preview: [item()] }), SINGLE, RANGE, asEvent)).toBeNull(); // never next to a pick
+    expect(readQuick(answer({ ...noBet, preview: [item({ probabilities: { home: 70, draw: 22, away: 13 } })] }), SINGLE, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ ...noBet, preview: [item({ recommendationDay: '2026-11-22' })] }), SINGLE, RANGE, asEvent)).toBeNull();
+    const today = ev(8, 'C', 'D', { startsAt: '2026-11-08T20:00:00Z' });
+    expect(readQuick(answer({ ...noBet, preview: [item({ event: today, recommendationDay: '2026-11-08' })] }), SINGLE, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ ...noBet, preview: Array.from({ length: 6 }, () => item()) }), SINGLE, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer(noBet), SINGLE, RANGE, asEvent)?.preview).toEqual([]); // an older backend: no preview at all
+    const finished = ev(9, 'E', 'F', { startsAt: '2026-11-21T12:30:00Z', status: 'finished' });
+    expect(readQuick(answer({ ...noBet, preview: [item({ event: finished })] }), SINGLE, RANGE, asEvent)).toBeNull();
+    const tennis = ev(10, 'G', 'H', { startsAt: '2026-11-21T12:30:00Z', sport: 'tennis' });
+    expect(readQuick(answer({ ...noBet, preview: [item({ event: tennis })] }), SINGLE, RANGE, asEvent)).toBeNull();
+  });
+
+  it('without a pick the estimate is shown, labelled, never as a selected bet; a malformed one is left out', async () => {
+    const user = userEvent.setup();
+    const later = ev(7, 'Germany', 'Netherlands', { startsAt: '2026-11-08T19:45:00Z', tournamentId: 'fd:PD' });
+    const estimate = {
+      legs: [{ event: later, market: '1', family: '1x2', probability: 62, source: 'market', price: { odds: 1.55, fetchedAt: '2026-11-08T05:58:00Z', validFor: 3000 } }],
+      suitable: 4,
+      combined: null,
+    };
+    const noBet = { status: 'no_bet', legs: [], suitable: 0, reasons: { unvalidated_competition: 25 } };
+    const { data } = backend(() => answer({ ...noBet, estimate }));
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    const card = await screen.findByTestId('quick-estimate');
+    expect(card).toHaveTextContent('Оценка на матч');
+    expect(card).toHaveTextContent('это оценка, а не отобранная ставка');
+    const item = within(card).getByTestId('quick-estimate-leg');
+    expect(item).toHaveAttribute('data-source', 'market');
+    expect(item).toHaveTextContent('По коэффициентам');
+    expect(item).toHaveTextContent('Germany');
+    expect(item).toHaveTextContent('Вероятность: 62%');
+    expect(screen.queryByTestId('quick-leg')).toBeNull();
+    expect(screen.queryByTestId('quick-no-bet')).toBeNull();
+  });
+
+  it('an estimate is read strictly and never next to a pick', () => {
+    const later = (id: number, home: string, away: string) => ev(id, home, away, { startsAt: '2026-11-08T19:00:00Z' });
+    const el = (id: number, home = `H${id}`, away = `A${id}`, over: Record<string, unknown> = {}) =>
+      ({ event: later(id, home, away), market: '1X', family: 'double', probability: 70, source: 'model', price: null, ...over });
+    const noBet = { status: 'no_bet', legs: [], suitable: 0 };
+    const single = (legs: unknown[], over: Record<string, unknown> = {}) => answer({ ...noBet, estimate: { legs, suitable: 3, combined: null, ...over } });
+    expect(readQuick(single([el(1)]), SINGLE, RANGE, asEvent)?.estimate?.legs).toHaveLength(1);
+    expect(readQuick(answer({ estimate: { legs: [el(1)], suitable: 3, combined: null } }), SINGLE, RANGE, asEvent)?.estimate).toBeNull();
+    expect(readQuick(single([el(1, 'a', 'b', { source: 'guess' })]), SINGLE, RANGE, asEvent)?.estimate).toBeNull();
+    expect(readQuick(single([el(1, 'a', 'b', { source: 'market' })]), SINGLE, RANGE, asEvent)?.estimate).toBeNull(); // no odds behind it
+    expect(readQuick(single([el(1, 'a', 'b', { family: '1x2' })]), SINGLE, RANGE, asEvent)?.estimate).toBeNull();
+    expect(readQuick(single([el(1), el(2)]), SINGLE, RANGE, asEvent)?.estimate).toBeNull();
+    expect(readQuick(single([el(1)]), SINGLE, RANGE, asEvent)).not.toBeNull(); // the answer itself always stands
+    expect(readQuick(single([el(1, 'a', 'b', { probability: 52 })]), SINGLE, RANGE, asEvent)?.estimate).toBeNull(); // below the band
+    expect(readQuick(single([el(1, 'a', 'b', { probability: 90 })]), SINGLE, RANGE, asEvent)?.estimate).toBeNull(); // above it
+    const outside = { ...el(1), event: ev(1, 'a', 'b', { startsAt: '2026-11-21T12:30:00Z' }) };
+    expect(readQuick(single([outside]), SINGLE, RANGE, asEvent)?.estimate).toBeNull(); // outside the asked period
+    const unavailable = answer({ status: 'unavailable', legs: [], suitable: 0, estimate: { legs: [el(1)], suitable: 3, combined: null } });
+    expect(readQuick(unavailable, SINGLE, RANGE, asEvent)?.estimate).toBeNull(); // only after a conclusive "nothing"
+    const notEnough = { status: 'not_enough', legs: [], suitable: 1, mode: 'coupon', size: 2 };
+    const coupon = (legs: unknown[], combined: unknown) => answer({ ...notEnough, estimate: { legs, suitable: 3, combined } });
+    expect(readQuick(coupon([el(1), el(2)], [40, 70]), COUPON, RANGE, asEvent)?.estimate?.combined).toEqual([40, 70]);
+    expect(readQuick(coupon([el(1), el(2)], [49, 70]), COUPON, RANGE, asEvent)?.estimate).toBeNull();
+    const shared = { ...el(2), event: { ...later(2, 'X', 'Y'), home: later(1, 'H1', 'A1').home } };
+    expect(readQuick(coupon([el(1), shared], [40, 70]), COUPON, RANGE, asEvent)?.estimate).toBeNull();
+  });
+
+  it('a next-match time outside the asked period is a broken answer', () => {
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-12T20:00:00Z' }), SINGLE, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-31T15:00:00Z' }), SINGLE, RANGE, asEvent)).toBeNull();
+    // An offset form of a valid instant is fine.
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-09T19:00:00+04:00' }), SINGLE, RANGE, asEvent)).not.toBeNull();
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-09T15:00:00Z' }), SINGLE, RANGE, asEvent)).not.toBeNull();
+  });
+
+  it('a next-match time on the pick’s own UTC day is a broken answer', () => {
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-08T20:00:00Z' }), SINGLE, RANGE, asEvent)).toBeNull();
+    expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-09T20:00:00' }), SINGLE, RANGE, asEvent)).toBeNull();
+  });
+
+  it('a failed competition list says so and offers a retry', async () => {
+    renderApp('#/quick', { data: failing(200, answer(), false) });
+    const error = await screen.findByTestId('quick-tournaments-error');
+    expect(error).toHaveTextContent('Список турниров не загрузился.');
+    expect(within(error).getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
+  });
+});
+
+describe('quick prediction freshness', () => {
+  beforeEach(() => {
+    resetQuickMemory();
+    window.localStorage.clear();
+  });
+
+  it('missing data is a retryable state, never "no pick"', async () => {
+    const user = userEvent.setup();
+    const { data } = backend(() => answer({ status: 'unavailable', legs: [], suitable: 0, counts: { matches: 5, forecasts: 0 }, reasons: { source_unavailable: 5 }, uncheckedDays: 2 }));
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    expect(await screen.findByTestId('quick-unavailable-state')).toHaveTextContent('Это не «нет прогноза»');
+    expect(screen.getByTestId('quick-unchecked')).toHaveTextContent('Не удалось проверить дней периода: 2');
+    expect(screen.queryByTestId('quick-no-bet')).toBeNull();
+  });
+
+  it('a pick left loading starts again from the criteria, not an endless spinner', async () => {
+    const user = userEvent.setup();
+    const fetchImpl = vi.fn<typeof fetch>(async (input) =>
+      String(input).startsWith('/api/quick/pick')
+        ? new Promise<Response>(() => {})
+        : new Response(JSON.stringify({ sport: 'football', coverage: COVERAGE, tournaments: TOURNAMENTS, top: [], events: [] }), { status: 200 }),
+    );
+    const data = new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl });
+    const first = renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    expect(await screen.findByTestId('loading-state')).toBeInTheDocument();
+    first.unmount();
+    renderApp('#/quick', { data });
+    expect(await screen.findByTestId('quick-submit')).toBeInTheDocument();
+  });
+
+  it('a slow device clock does not keep a pick past kickoff (the server’s time counts)', async () => {
+    const user = userEvent.setup();
+    // The device says 05:30; the server computed the pick at 06:00, when the match kicked off.
+    const now = { ...leg(1, 'A FC', 'B FC'), event: ev(1, 'A FC', 'B FC', { startsAt: '2026-11-08T06:00:00Z' }) };
+    const { data } = backend(() => answer({ legs: [now], computedAt: '2026-11-08T06:00:00Z' }));
+    renderApp('#/quick', { data, clockAt: '2026-11-08T05:30:00Z' });
+    await user.click(await screen.findByTestId('quick-submit'));
+    expect(await screen.findByTestId('quick-expired')).toBeInTheDocument();
+    expect(screen.queryByTestId('quick-result')).toBeNull();
+  });
+
+  it('time spent delivering a slow answer counts too', async () => {
+    const user = userEvent.setup();
+    let now = new Date('2026-11-08T05:30:00Z'); // device 30 min slow
+    const clock = { now: () => new Date(now.getTime()) };
+    const soon = { ...leg(1, 'A FC', 'B FC'), event: ev(1, 'A FC', 'B FC', { startsAt: '2026-11-08T06:00:30Z' }) };
+    const body = answer({ legs: [soon], computedAt: '2026-11-08T06:00:00Z' });
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith('/api/quick/pick')) {
+        now = new Date('2026-11-08T05:30:40Z'); // the answer arrives 40 s later
+        return new Response(JSON.stringify(body), { status: 200 });
+      }
+      return new Response(JSON.stringify({ sport: 'football', coverage: COVERAGE, tournaments: TOURNAMENTS, top: [], events: [] }), { status: 200 });
+    });
+    renderApp('#/quick', { data: new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl }), clock });
+    await user.click(await screen.findByTestId('quick-submit'));
+    expect(await screen.findByTestId('quick-expired')).toBeInTheDocument();
+  });
+
+  it('the kickoff timer expires the pick even if the device clock was set back meanwhile', async () => {
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let now = new Date('2026-11-08T06:00:00Z');
+      const clock = { now: () => new Date(now.getTime()) };
+      const soon = { ...leg(1, 'A FC', 'B FC'), event: ev(1, 'A FC', 'B FC', { startsAt: '2026-11-08T06:00:05Z' }) };
+      const { data } = backend(() => answer({ legs: [soon], computedAt: '2026-11-08T06:00:00Z' }));
+      renderApp('#/quick', { data, clock });
+      await user.click(await screen.findByTestId('quick-submit'));
+      expect(await screen.findByTestId('quick-result')).toBeInTheDocument();
+      now = new Date('2026-11-08T05:00:00Z'); // the device clock jumps an hour back
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(await screen.findByTestId('quick-expired')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('an estimate taken from the odds goes when those odds expire', async () => {
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const later = ev(7, 'Germany', 'Netherlands', { startsAt: '2026-11-08T19:45:00Z' });
+      const estimate = {
+        legs: [{ event: later, market: '1', family: '1x2', probability: 62, source: 'market', price: { odds: 1.55, fetchedAt: '2026-11-08T05:58:00Z', validFor: 3 } }],
+        suitable: 1,
+        combined: null,
+      };
+      const { data } = backend(() => answer({ status: 'no_bet', legs: [], suitable: 0, reasons: { unvalidated_competition: 1 }, estimate }));
+      renderApp('#/quick', { data });
+      await user.click(await screen.findByTestId('quick-submit'));
+      expect(await screen.findByTestId('quick-estimate')).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await waitFor(() => expect(screen.queryByTestId('quick-estimate')).toBeNull());
+      expect(screen.getByTestId('quick-no-bet')).toBeInTheDocument(); // the strict result's explanation is back
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a pick kept while away expires on the monotonic clock even if the device clock went back', async () => {
+    const user = userEvent.setup();
+    let mono = 1_000;
+    const spy = vi.spyOn(monotonic, 'now').mockImplementation(() => mono);
+    try {
+      const soon = { ...leg(1, 'A FC', 'B FC'), event: ev(1, 'A FC', 'B FC', { startsAt: '2026-11-08T06:10:00Z' }) };
+      const { data } = backend(() => answer({ legs: [soon], computedAt: '2026-11-08T06:00:00Z' }));
+      const first = renderApp('#/quick', { data });
+      await user.click(await screen.findByTestId('quick-submit'));
+      expect(await screen.findByTestId('quick-result')).toBeInTheDocument();
+      first.unmount();
+      mono += 11 * 60_000; // 11 minutes pass; the device clock was set back to 05:00
+      renderApp('#/quick', { data, clockAt: '2026-11-08T05:00:00Z' });
+      expect(await screen.findByTestId('quick-expired')).toBeInTheDocument();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('an old "nothing found" answer is not shown again after a while', async () => {
+    const user = userEvent.setup();
+    let mono = 5_000;
+    const spy = vi.spyOn(monotonic, 'now').mockImplementation(() => mono);
+    try {
+      const { data } = backend(() => answer({ status: 'no_bet', legs: [], suitable: 0 }));
+      const first = renderApp('#/quick', { data });
+      await user.click(await screen.findByTestId('quick-submit'));
+      expect(await screen.findByTestId('quick-no-bet')).toBeInTheDocument();
+      expect(screen.getByTestId('quick-counts')).toHaveTextContent('Расчёт: 08.11.2026');
+      first.unmount();
+      mono += 5 * 60_000; // back within 10 minutes: still shown
+      const second = renderApp('#/quick', { data });
+      expect(await screen.findByTestId('quick-no-bet')).toBeInTheDocument();
+      second.unmount();
+      mono += 6 * 60_000; // later: the criteria again, ready for a new pick
+      renderApp('#/quick', { data });
+      expect(await screen.findByTestId('quick-submit')).toBeInTheDocument();
+      expect(screen.queryByTestId('quick-no-bet')).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a "no matches" answer shows when it was computed and goes after ten minutes on screen', async () => {
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let mono = 1_000;
+    const spy = vi.spyOn(monotonic, 'now').mockImplementation(() => mono);
+    try {
+      const { data } = backend(() => answer({ status: 'no_bet', legs: [], suitable: 0, counts: { matches: 0, forecasts: 0 }, reasons: {} }));
+      renderApp('#/quick', { data });
+      await user.click(await screen.findByTestId('quick-submit'));
+      expect(await screen.findByTestId('quick-empty')).toBeInTheDocument();
+      expect(screen.getByText(/Расчёт: 08\.11\.2026/)).toBeInTheDocument();
+      mono += 10 * 60_000 + 1_000;
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+      expect(await screen.findByTestId('quick-submit')).toBeInTheDocument();
+      expect(screen.queryByTestId('quick-empty')).toBeNull();
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('a kept pick is dropped once its match has kicked off', async () => {
+    const user = userEvent.setup();
+    // TEST_NOW is 06:00 UTC; this leg starts at 06:00:01.
+    const soon = { ...leg(1, 'A FC', 'B FC'), event: ev(1, 'A FC', 'B FC', { startsAt: '2026-11-08T06:00:01Z' }) };
+    const { data } = backend(() => answer({ legs: [soon] }));
+    const first = renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    expect(await screen.findByTestId('quick-result')).toBeInTheDocument();
+    first.unmount();
+    renderApp('#/quick', { data, clockAt: '2026-11-08T06:00:02Z' });
+    // Decided before the first paint: the stale card is never rendered, not even briefly.
+    expect(screen.queryByTestId('quick-result')).toBeNull();
+    expect(await screen.findByTestId('quick-expired')).toHaveTextContent('матчей уже начался');
+    expect(screen.queryByTestId('quick-result')).toBeNull();
+  });
+});
+
+describe('top matches of the day', () => {
+  it('shows up to five cards of the chosen day, with the leaders mark, and opens a match', async () => {
+    const user = userEvent.setup();
+    const top = [
+      { event: ev(1, 'Arsenal FC', 'Chelsea FC'), leaders: true },
+      { event: ev(2, 'Everton FC', 'Fulham FC', { status: 'live', score: [1, 0], minute: 30 }), leaders: false },
+    ];
+    const { data } = backend(() => answer(), top);
+    renderApp('#/', { data });
+    const cards = await screen.findAllByTestId('top-card');
+    expect(cards.map((c) => c.getAttribute('data-event'))).toEqual(['fd:1', 'fd:2']);
+    expect(within(cards[0]!).getByTestId('top-leaders')).toHaveTextContent('Встреча лидеров');
+    expect(within(cards[1]!).queryByTestId('top-leaders')).toBeNull();
+    expect(cards[1]).toHaveTextContent('1 : 0');
+    await user.click(within(cards[0]!).getByRole('button', { name: /Открыть матч/ }));
+    await waitFor(() => expect(window.location.hash).toBe('#/event/fd:1'));
+  });
+
+  it('a postponed match in the answer makes it broken, never a top card', async () => {
+    const { data } = backend(() => answer(), [{ event: ev(1, 'A FC', 'B FC', { status: 'postponed' }), leaders: false }]);
+    renderApp('#/', { data });
+    expect(await screen.findByText('Расписание не загрузилось')).toBeInTheDocument();
+    expect(screen.queryByTestId('top-card')).toBeNull();
+  });
+
+  it('cards served from the cache after a failed refresh say so', async () => {
+    const stale = { ...source, stale: true };
+    const { data } = backend(() => answer(), [{ event: ev(1, 'A FC', 'B FC', { source: stale }), leaders: false }]);
+    renderApp('#/', { data });
+    expect(await screen.findByTestId('top-stale')).toHaveTextContent('показаны из кеша');
+  });
+
+  it('a day whose matches have no confirmed status says so, not "postponed"', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+      if (url.startsWith('/api/sports/football/top')) return ok({ coverage: COVERAGE, tournaments: TOURNAMENTS, top: [] });
+      if (url.startsWith('/api/sports/football/events')) {
+        return ok({ coverage: COVERAGE, tournaments: TOURNAMENTS, events: [ev(1, 'A FC', 'B FC', { status: 'weird', sourceStatus: 'WEIRD' })] });
+      }
+      return ok({ sport: 'football', coverage: COVERAGE, tournaments: TOURNAMENTS });
+    });
+    renderApp('#/', { data: new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl }) });
+    expect(await screen.findByText('Главных матчей нет')).toBeInTheDocument();
+    expect(screen.queryByText('Матчей по расписанию нет')).toBeNull();
+  });
+
+  it('a top match without a time zone is a broken answer', async () => {
+    const { data } = backend(() => answer(), [{ event: ev(1, 'A FC', 'B FC', { startsAt: '2026-11-08T15:00:00' }), leaders: false }]);
+    renderApp('#/', { data });
+    expect(await screen.findByText('Расписание не загрузилось')).toBeInTheDocument();
+    expect(screen.queryByTestId('top-card')).toBeNull();
+  });
+
+  it('an answer with another day’s match is broken, never shown', async () => {
+    const { data } = backend(() => answer(), [{ event: ev(1, 'A FC', 'B FC', { startsAt: '2026-11-10T15:00:00Z' }), leaders: false }]);
+    renderApp('#/', { data });
+    expect(await screen.findByText('Расписание не загрузилось')).toBeInTheDocument();
+    expect(screen.queryByTestId('top-card')).toBeNull();
+  });
+});
+
+describe('local day', () => {
+  it('"today" moves on at local midnight while the app stays open', async () => {
+    let now = new Date('2026-11-08T19:59:59Z'); // 23:59:59 in Baku
+    const clock = { now: () => new Date(now.getTime()) };
+    renderApp('#/', { clock });
+    const strip = await screen.findByTestId('date-strip');
+    expect(within(strip).getByRole('button', { name: /8 ноября/ })).toHaveAttribute('aria-pressed', 'true');
+    now = new Date('2026-11-08T20:00:05Z');
+    document.dispatchEvent(new Event('visibilitychange'));
+    await waitFor(() => expect(within(screen.getByTestId('date-strip')).getByRole('button', { name: /9 ноября/ })).toHaveAttribute('aria-pressed', 'true'));
+  });
+});
+
+describe('quick prediction prices', () => {
+  const r1 = (x: number) => Math.round(x * 10) / 10;
+  const price = (market: string, odds: number, marketP: number, modelP: number, fetchedAt = '2026-11-08T05:50:00Z') => ({
+    market, odds, impliedProbability: r1(100 / odds), marketProbability: marketP, modelProbability: modelP,
+    edge: r1(modelP - marketP), expectedValue: r1((modelP / 100) * odds * 100 - 100), margin: 5.1, fetchedAt, validFor: 840,
+  });
+  const priced = (id: number, home: string, away: string, odds: number, fetchedAt?: string) =>
+    ({ ...leg(id, home, away), price: price('1', odds, 58.2, 64, fetchedAt) });
+  const coupon = (over: Record<string, unknown> = {}) => answer({
+    mode: 'coupon', size: 2, combined: [28, 64],
+    legs: [priced(1, 'A', 'B', 1.7, '2026-11-08T05:50:00Z'), priced(2, 'C', 'D', 1.8, '2026-11-08T05:55:00Z')],
+    couponOdds: { odds: 3.06, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 }, ...over,
+  });
+
+  it('accepts priced legs and the product of their prices', () => {
+    const single = readQuick(answer({ legs: [priced(1, 'A', 'B', 1.7)] }), SINGLE, RANGE, asEvent);
+    expect(single?.legs[0]?.price?.odds).toBe(1.7);
+    expect(readQuick(coupon(), COUPON, RANGE, asEvent)?.couponOdds).toMatchObject({ odds: 3.06, fetchedAt: '2026-11-08T05:50:00Z' });
+    const half = answer({ mode: 'coupon', size: 2, combined: [28, 64], legs: [priced(1, 'A', 'B', 1.7), leg(2, 'C', 'D')] });
+    expect(readQuick(half, COUPON, RANGE, asEvent)?.couponOdds).toBeNull();
+  });
+
+  it.each([
+    ['a price of another market', answer({ legs: [{ ...leg(1, 'A', 'B'), price: price('X', 3.4, 24, 23) }] })],
+    ['a price whose expected value does not follow', answer({ legs: [{ ...leg(1, 'A', 'B'), price: { ...price('1', 1.7, 58.2, 64), expectedValue: 40 } }] })],
+    ['a model figure far from the shown percent', answer({ legs: [{ ...leg(1, 'A', 'B'), price: price('1', 1.7, 58.2, 70) }] })],
+    ['a price without its time', answer({ legs: [{ ...leg(1, 'A', 'B'), price: { ...price('1', 1.7, 58.2, 64), fetchedAt: undefined } }] })],
+    ['a coupon price that is not the product', coupon({ couponOdds: { odds: 4.5, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } })],
+    ['a coupon price a few cents off the product', coupon({ couponOdds: { odds: 3.09, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } })],
+    ['a coupon price below a cent', coupon({ couponOdds: { odds: 3.061, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } })],
+    ['a coupon price dated by the newer leg', coupon({ couponOdds: { odds: 3.06, fetchedAt: '2026-11-08T05:55:00Z', validFor: 840 } })],
+    ['a coupon price without validity', coupon({ couponOdds: { odds: 3.06, fetchedAt: '2026-11-08T05:50:00Z' } })],
+    ['a leg price without validity', answer({ legs: [{ ...leg(1, 'A', 'B'), price: { ...price('1', 1.7, 58.2, 64), validFor: undefined } }] })],
+    ['every leg priced but no coupon price', coupon({ couponOdds: null })],
+    ['a coupon price with an unpriced leg', coupon({ legs: [priced(1, 'A', 'B', 1.7), leg(2, 'C', 'D')] })],
+    ['a coupon price for a single', answer({ legs: [priced(1, 'A', 'B', 1.7)], couponOdds: { odds: 1.7, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } })],
+    ['a missing price field', answer({ legs: [{ ...leg(1, 'A', 'B'), price: undefined }] })],
+  ])('rejects %s', (_, body) => {
+    const criteria = (body as { mode: string }).mode === 'coupon' ? COUPON : SINGLE;
+    expect(readQuick(body as Record<string, unknown>, criteria, RANGE, asEvent)).toBeNull();
+  });
+
+  it('validity counts from when the request was sent: a slow answer never extends it', () => {
+    const tenMinutesAgo = { mono: performance.now() - 600_000, wall: Date.now() - 600_000 };
+    const read = readQuick(answer({ legs: [priced(1, 'A', 'B', 1.7)] }), SINGLE, RANGE, asEvent, tenMinutesAgo);
+    const left = read!.legs[0]!.price!.expires.mono - performance.now();
+    expect(left).toBeGreaterThan(230_000);
+    expect(left).toBeLessThanOrEqual(240_000);
+  });
+
+  it('a five-leg coupon of long prices is accepted (the product may be large)', () => {
+    const five = Array.from({ length: 5 }, (_, i) => priced(i + 1, `H${i}`, `A${i}`, 20));
+    const body = answer({ mode: 'coupon', size: 5, suitable: 5, combined: [0, 64], legs: five,
+      couponOdds: { odds: 3_200_000, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } });
+    const read = readQuick(body, { ...COUPON, size: 5 }, RANGE, asEvent);
+    expect(read?.couponOdds?.odds).toBe(3_200_000);
+  });
+
+  it('a coupon price of nine digits is still read in cents (floating point at that size)', () => {
+    const five = Array.from({ length: 5 }, (_, i) => priced(i + 1, `H${i}`, `A${i}`, 98.03));
+    const body = answer({ mode: 'coupon', size: 5, suitable: 5, combined: [0, 64], legs: five,
+      couponOdds: { odds: 9_053_051_963.72, fetchedAt: '2026-11-08T05:50:00Z', validFor: 840 } });
+    expect(readQuick(body, { ...COUPON, size: 5 }, RANGE, asEvent)?.couponOdds?.odds).toBe(9_053_051_963.72);
+  });
+
+  it('a coupon shows each price and the computed coupon odds as a product, not an offered price', async () => {
+    const user = userEvent.setup();
+    resetQuickMemory();
+    const { data } = backend(() => coupon({ legs: [priced(1, 'A FC', 'B FC', 1.7, '2026-11-08T05:50:00Z'), priced(2, 'C FC', 'D FC', 1.8, '2026-11-08T05:55:00Z')] }));
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByRole('button', { name: 'Купон' }));
+    await user.click(within(screen.getByTestId('quick-size')).getByRole('button', { name: '2' }));
+    await user.click(screen.getByTestId('quick-submit'));
+    const result = await screen.findByTestId('quick-result');
+    const lines = within(result).getAllByTestId('price-line');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toHaveTextContent('Коэффициент 1,70 · рынок 58,2% · модель 64% · матожидание +8,8%');
+    const odds = within(result).getByTestId('quick-coupon-odds');
+    expect(odds).toHaveTextContent('Расчётный коэффициент купона: 3,06');
+    expect(odds).toHaveTextContent('коэффициент экспресса у букмекера может отличаться');
+    expect(odds).not.toHaveTextContent(/матожидание/i);  // no expected value for the combination
+    expect(result).toHaveTextContent('Коэффициенты на');
+  });
+
+  it('prices go when their validity ends, also from a pick kept while away; the pick stays', async () => {
+    const user = userEvent.setup();
+    resetQuickMemory();
+    const short = (id: number, home: string, away: string) =>
+      ({ ...leg(id, home, away), price: { ...price('1', 1.7, 58.2, 64), validFor: 1 } });
+    const { data } = backend(() => answer({ legs: [short(1, 'A FC', 'B FC')] }));
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    const result = await screen.findByTestId('quick-result');
+    expect(within(result).getByTestId('price-line')).toBeInTheDocument();
+    await waitFor(() => expect(within(screen.getByTestId('quick-result')).queryByTestId('price-line')).toBeNull(), { timeout: 3000 });
+    expect(screen.getByTestId('quick-result')).toHaveTextContent('Вероятность по модели: 64%');
+    expect(screen.getByTestId('quick-result')).not.toHaveTextContent('Коэффициенты на');
+    // Away and back: the kept pick is shown without the expired prices from the first paint.
+    window.location.hash = '#/matches';
+    await screen.findByTestId('catalog-title').catch(() => undefined);
+    window.location.hash = '#/quick';
+    const again = await screen.findByTestId('quick-result');
+    expect(within(again).queryByTestId('price-line')).toBeNull();
+    expect(screen.getByTestId('source-footer')).toHaveTextContent('Football-Data.org');
+  });
+});

@@ -22,12 +22,14 @@ Odds Checker API (доступ по IP whitelist).
 - **БД:** SQLite (`bot.db`, создаётся автоматически при первом запуске)
 - **HTTP-клиент:** `httpx` (async)
 - **Дашборд:** Flask
-- **Хостинг:** Railway Pro (статичный outbound IP для whitelist Mostbet)
+- **Хостинг:** DigitalOcean Droplet + Dokploy (статичный IP droplet — для whitelist Mostbet).
+  Два приложения Dokploy, `bot` и `dashboard`, собираются из ветки `main`
+  (On Push, autodeploy; preview deployments выключены). Railway больше не используется
 
 ## Точки входа и процессы
 
 Проект — **не монолит**: код разбит на модули (см. `ARCHITECTURE.md`).
-Railway запускает два процесса из `Procfile`:
+Два процесса (точки входа описаны в `Procfile`; в Dokploy — приложения `bot` и `dashboard`):
 
 | Процесс | Команда | Назначение |
 |---|---|---|
@@ -35,8 +37,9 @@ Railway запускает два процесса из `Procfile`:
 | `web` | `python dashboard.py` | Flask-дашборд администратора (Basic Auth) |
 
 Дашборд **не обращается к SQLite напрямую** — все данные он получает по HTTP
-от stats-сервера воркера через приватную сеть Railway
-(`BOT_API_URL`, по умолчанию `http://worker.railway.internal:8888`).
+от stats-сервера воркера по внутренней сети (`BOT_API_URL` задаётся в Dokploy;
+значение по умолчанию в коде, `http://worker.railway.internal:8888`, —
+наследие Railway и на DigitalOcean не работает).
 
 ### Рассылки
 
@@ -61,7 +64,7 @@ Railway запускает два процесса из `Procfile`:
 ## Переменные окружения
 
 Полный список с плейсхолдерами — в `.env.example`. Секреты хранятся только
-в env (Railway → Variables), никогда в коде и репозитории.
+в env (Dokploy → Environment приложения), никогда в коде и репозитории.
 
 | Переменная | Назначение | Обязательна |
 |---|---|---|
@@ -70,16 +73,22 @@ Railway запускает два процесса из `Procfile`:
 | `ADMIN_ID` | Telegram ID администратора (доступ к `/admin`) | Нет (без него админка недоступна) |
 | `DASHBOARD_TOKEN` | Токен stats-API и пароль Basic Auth дашборда | Да для web/stats |
 | `DASHBOARD_USER` | Логин Basic Auth дашборда (по умолчанию `admin`) | Нет |
-| `BOT_DB_DIR` | Каталог для `bot.db` — **на Railway должен указывать на volume** | Нет (по умолчанию `.`) |
+| `BOT_DB_DIR` | Каталог для `bot.db` — **в production должен указывать на постоянный volume/mount** | Нет (по умолчанию `.`) |
 | `FOOTBALL_KEY` | football-data.org — форма команд текущих сезонов (предпочтительное имя) | Нет |
 | `FOOTBALL_API_KEY` | Legacy-алиас `FOOTBALL_KEY`, читается как fallback | Нет |
 | `APIFOOTBALL_KEY` | api-football.com (api-sports.io) — live-статусы, события, H2H | Нет |
+| `MINIAPP_ODDS_URL` | Адрес приёмника коэффициентов Mini App (`https://…/api/internal/odds`); пусто — выгрузка выключена | Нет |
+| `MINIAPP_ODDS_FEED_SECRET` | HMAC-секрет выгрузки (≥ 32 символов, тот же, что у Mini App) | Нет (нужен вместе с URL) |
+| `MINIAPP_ODDS_MAX_LINES` | Линий с коэффициентами за 5-минутный цикл, 1–40 (по умолчанию 40; первое включение — 5–10) | Нет |
 | `PROMO_CHANNEL` | Канал для гейта промокодов (`@name`/`-100…`); бот должен быть его админом. Пусто → кнопка скрыта | Нет |
 | `PROMO_CHANNEL_URL` | Публичная ссылка для кнопки «Открыть канал» (иначе выводится из `@name`) | Нет |
 | `PARTNERS` | **Только bootstrap.** Импортируется один раз в пустую таблицу `partners`, дальше игнорируется — партнёрами управляют в дашборде (`/partners`). Формат: `Название \| https://url` через `;` | Нет |
 | `PARTNERS_URL` | Legacy: одна ссылка, тот же bootstrap-only режим, fallback если `PARTNERS` пуст | Нет |
 | `PARTNER_REDIRECT_BASE` | Публичный URL дашборда для подсчёта кликов по партнёрам. Пусто → кнопки ведут напрямую, кликов не видно | Нет |
 | `PARTNER_CPA` | Стоимость одного партнёрского клика. Пусто → дашборд показывает воронку без денег; задано → считает прогноз дохода на пользователя (не фактическая выручка) | Нет |
+| `BOT_CRM_DB` | Путь к `bot-crm.db` на томе, общем с админ-панелью (бот → админка: реферальные запуски, обращения). Пусто — обе функции выключены | Нет |
+| `BOT_REFERRALS_ENABLED` | `true` — запоминать код `/start ref_<код>` при первом запуске нового пользователя (нужен `BOT_CRM_DB`; по умолчанию выключено) | Нет |
+| `BOT_INQUIRIES_ENABLED` | `true` — сохранять новые входящие сообщения для раздела «Обращения» админ-панели (нужен `BOT_CRM_DB`; по умолчанию выключено) | Нет |
 | `WEBHOOK_URL` | Если задан — webhook вместо polling | Нет |
 | `PORT` | Порт webhook-режима / Flask-дашборда | Нет |
 | `STATS_PORT` | Порт внутреннего stats-сервера (по умолчанию 8888) | Нет |
@@ -90,12 +99,59 @@ Railway запускает два процесса из `Procfile`:
 матчем». Без `FOOTBALL_KEY` форма команд оценивается моделью и помечается
 как «(оценочно)». Mostbet API отдельного ключа не требует — доступ по IP.
 
-### ⚠️ Персистентность SQLite на Railway
+### ⚠️ Персистентность SQLite в Docker
 
-Файловая система контейнера Railway **эфемерна**: без volume каждый редеплой
+Файловая система контейнера **эфемерна**: без volume (mount в Dokploy) каждый редеплой
 стирает `bot.db` со всеми пользователями. `BOT_DB_DIR` обязан указывать на
 примонтированный volume. По умолчанию (`.`) БД создаётся рядом с кодом —
 это подходит только для локальной разработки.
+
+### Mini App (отдельный сервис, не процессы бота)
+
+Mini App (`miniapp/`, `frontend/`) читает только свои переменные `MINIAPP_*`
+и никогда — `.env` бота. Полный список с значениями по умолчанию —
+`docs/miniapp/auth.md` («Настройки»), плейсхолдеры — `miniapp/.env.example`,
+переменные закрытого HTTPS-стенда — `docs/miniapp/stand.md`:
+`MINIAPP_INITDATA_MODE`, `MINIAPP_BOT_TOKEN`, `MINIAPP_BOT_ID`, `MINIAPP_TELEGRAM_ENV`,
+`MINIAPP_CSRF_SECRET`, `MINIAPP_ALLOWED_USER_IDS`, `MINIAPP_BLOCKED_USER_IDS`, `MINIAPP_DB_PATH`, `MINIAPP_TRUSTED_ORIGINS`,
+`MINIAPP_ADS_ENABLED` (по умолчанию `false`), `MINIAPP_ADS_POLICY_PUBLIC_KEY` (обязателен при включённой рекламе),
+`MINIAPP_ACCESS_POLICY_PUBLIC_KEY` (блокировки из админ-панели; не задан — только env-список),
+`MINIAPP_REFERRALS_ENABLED` (по умолчанию `false`; `true` — код `startapp=ref_<код>` первого запуска пишется в `user_attribution`),
+`MINIAPP_ENV`, `MINIAPP_EDGE_SECRET`, `MINIAPP_CSP_MODE`,
+`MINIAPP_LOGINS_ENABLED`, `MINIAPP_MAX_SESSIONS_PER_USER`,
+`MINIAPP_STATIC_DIR`, `MINIAPP_SESSION_TTL_S`, `MINIAPP_INIT_DATA_MAX_AGE_S`,
+`MINIAPP_INIT_DATA_FUTURE_SKEW_S`, `MINIAPP_LOGIN_RATE_LIMIT`,
+`MINIAPP_LOGIN_RATE_WINDOW_S`, `MINIAPP_COOKIE_SAMESITE`,
+`MINIAPP_ALLOW_EPHEMERAL_DB` (только локальный Docker).
+
+Реальные спортивные данные Mini App (M3, `docs/miniapp/m3-sports.md`):
+`MINIAPP_FOOTBALL_DATA_KEY` (секрет, только backend; без него футбол —
+«не подключён»), `MINIAPP_FOOTBALL_DATA_COMPETITIONS`,
+`MINIAPP_FOOTBALL_DATA_LIVE_PLAN`, `MINIAPP_FOOTBALL_DATA_PER_MINUTE`,
+`MINIAPP_FOOTBALL_DATA_PER_DAY`, `MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR`
+(`PER_MINUTE` — 1..10 на бесплатном тарифе, до 120 только с `LIVE_PLAN=true`),
+`MINIAPP_SPORTS_USER_PER_MINUTE` / `MINIAPP_SPORTS_USER_UNKNOWN_PER_HOUR` (доля одного пользователя в общем
+бюджете: запросов к источнику в минуту и неизвестных id матчей в час; по умолчанию четверть `PER_MINUTE`, не меньше 6 (при 60 — 15) / 5).
+
+Коэффициенты (подписанная выгрузка от бота, `docs/miniapp/odds.md`):
+`MINIAPP_ODDS_FEED_SECRET` (секрет HMAC, ≥ 32 символов; пусто — приём
+выключен, коэффициенты нигде не показываются), `MINIAPP_ODDS_CATALOG` (коэффициенты по всему каталогу,
+`docs/miniapp/odds-catalog.md`; по умолчанию false — каталог только сопоставляется и логируется; true — Mini App сама берёт коэффициенты Mostbet),
+`MINIAPP_ODDS_SOURCE_MAX_PER_CYCLE` (запросов цен Mostbet за 5 мин, 1..40, по умолчанию 20), `MINIAPP_ODDS_FEED_ENABLED`
+(аварийный выключатель: `false` — выгрузки получают 410, бот перестаёт
+запрашивать коэффициенты, в Mini App их нет).
+AI-разбор Mini App (M3.2): `MINIAPP_ANTHROPIC_API_KEY` (секрет, только
+backend; без него AI — «не подключён»), `MINIAPP_AI_MODEL`,
+`MINIAPP_AI_PER_USER_DAILY`, `MINIAPP_AI_DAILY_BUDGET`.
+Модель голов и история прогнозов (M3.5, `docs/miniapp/m35-goal-model.md`): новых
+переменных нет; параметры заморожены в `miniapp/forecast/frozen_goals-1.json`,
+история пишется в `<MINIAPP_DB_PATH без расширения>.forecasts.db` рядом с базой.
+Офлайн-бэктест: `python -m miniapp.forecast.backtest validate|test --data DIR --out DIR`.
+«Главные матчи дня» и «Быстрый прогноз» (M3.6, `docs/miniapp/m36-top-and-quick.md`): новых
+переменных нет; веса рейтинга — `miniapp/sports/top_weights.json`.
+Frontend: `VITE_DATA_MODE=demo|real` при сборке (по умолчанию `demo`);
+`VITE_SUPPORT_TELEGRAM` — публичный username аккаунта поддержки (без @, не
+секрет; не задан — раздел поддержки показывает кнопки неактивными).
 
 ## Модели Claude (фактический роутинг)
 

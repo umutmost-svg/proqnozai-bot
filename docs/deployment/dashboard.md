@@ -1,5 +1,10 @@
 # Dashboard Deployment
 
+> **Legacy (Railway).** Production now runs on a DigitalOcean Droplet via Dokploy
+> (apps `bot` and `dashboard`, branch `main`); Railway is no longer used. The
+> Railway-specific steps below (services, `*.railway.internal`, health check,
+> volumes) are historical; the process, env and auth notes still apply.
+
 How to run and deploy the ProqnozAI web dashboard. All values here are derived
 from the code (`Procfile`, `dashboard.py`, `stats_server.py`), not guessed.
 
