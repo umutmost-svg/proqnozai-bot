@@ -9,6 +9,7 @@ Data sources (docs/miniapp/admin-dashboard.md §3):
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import math
@@ -26,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from miniapp.admin_web import ads_routes, crm_routes, demo, ops_routes, referral_routes
 from miniapp.admin_web.accounts import ActionError, Admin, AdminStore, AuthError, can
-from miniapp.admin_web.config import AdminWebConfig
+from miniapp.admin_web.config import EDGE_SECRET_HEADER, AdminWebConfig
 from miniapp.forecast.history import GATE_MIN_FORECASTS, ForecastHistory
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.sports.football_data import KNOWN_COMPETITIONS
@@ -60,11 +61,14 @@ def _finite(value: Any) -> Any:
 
 
 def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.time) -> FastAPI:
-    config.require_pilot_data()  # the pilot never opens a stand or production data directory
+    config.require_data()  # the pilot: its demo directory only; the server: the Mini App's data directory only
+    SESSION_COOKIE, PRE_COOKIE = config.session_cookie, config.pre_cookie  # noqa: N806 — per mode
+    secure = config.server  # Secure cookies over HTTPS (server); the pilot is plain http on loopback
+    edge_secret = config.edge_secret.encode() if config.server and config.edge_secret else None
     accounts = AdminStore(config.admin_db)
     accounts.init_schema()
     store = Store(config.miniapp_db)
-    app = FastAPI(title="SporBot Admin (local pilot)", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="SporBot Admin", docs_url=None, redoc_url=None, openapi_url=None)
 
     def now() -> int:
         return int(clock())
@@ -82,7 +86,8 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
             return {}
 
     def demo_allowed(request: Request) -> bool:
-        return request.query_params.get("demo") == "1"  # the pilot is the only mode; real data never mixes in
+        # Demo telemetry is a pilot feature only: the server never serves made-up figures, whatever is asked.
+        return not config.server and request.query_params.get("demo") == "1"
 
     # ---- middleware: host, body size, origin + CSRF, headers -------------------------------
 
@@ -90,6 +95,12 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
     async def guard(request: Request, call_next):
         request.state.request_id = secrets.token_hex(8)
         request.state.admin = None
+        if edge_secret is not None:
+            # Only the edge (Cloudflare, behind Access) injects it: any other route to the process is refused
+            # before anything else is looked at. Compared in constant time; its value is never logged.
+            presented = request.headers.get(EDGE_SECRET_HEADER, "").encode()
+            if not hmac.compare_digest(presented, edge_secret):
+                return _err("forbidden", 403, request)
         if request.headers.get("host") not in config.hosts:
             return _err("bad_host", 421, request)  # DNS rebinding: only the loopback names are served
         path = request.url.path
@@ -123,6 +134,8 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        if config.server:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         if path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -171,8 +184,14 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
 
     # ---- auth --------------------------------------------------------------------------------
 
-    @app.get("/api/admin/health")
-    async def health() -> dict:
+    @app.get("/api/admin/health", response_model=None)
+    async def health(request: Request) -> dict | JSONResponse:
+        # Healthy only if both databases it needs can be read (the deploy rolls back on an unhealthy task).
+        try:
+            store.ping()
+            accounts.admins()
+        except sqlite3.Error:
+            return _err("unavailable", 503, request)
         return {"status": "ok"}
 
     @app.post("/api/admin/auth/login")
@@ -183,7 +202,8 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         except AuthError as exc:
             return _err(str(exc), 401, request)
         response = JSONResponse({"next": "totp"})
-        response.set_cookie(PRE_COOKIE, pre, max_age=300, httponly=True, samesite="strict", path="/api/admin/auth")
+        response.set_cookie(PRE_COOKIE, pre, max_age=300, httponly=True, samesite="strict", path="/api/admin/auth",
+                            secure=secure)
         return response
 
     @app.post("/api/admin/auth/totp")
@@ -198,12 +218,13 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
             status = {"locked": 423, "expired": 401}.get(str(exc), 401)
             response = _err(str(exc), status, request)
             if str(exc) != "invalid_code":
-                response.delete_cookie(PRE_COOKIE, path="/api/admin/auth")
+                response.delete_cookie(PRE_COOKIE, path="/api/admin/auth", secure=secure, httponly=True,
+                                       samesite="strict")
             return response
         response = JSONResponse({"ok": True})
-        response.delete_cookie(PRE_COOKIE, path="/api/admin/auth")
-        # Local pilot over plain http on loopback: no Secure/__Host- (server mode, D2, requires both).
-        response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict", path="/")
+        response.delete_cookie(PRE_COOKIE, path="/api/admin/auth", secure=secure, httponly=True, samesite="strict")
+        # The pilot is plain http on loopback (no Secure); the server: `__Host-` + Secure, Path=/, no Domain.
+        response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict", path="/", secure=secure)
         return response
 
     @app.post("/api/admin/auth/logout")
@@ -212,7 +233,7 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         if token:
             accounts.logout(token, now())
         response = JSONResponse({"ok": True})
-        response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(SESSION_COOKIE, path="/", secure=secure, httponly=True, samesite="strict")
         return response
 
     @app.get("/api/admin/auth/me")
@@ -221,7 +242,7 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         return {"admin": {"id": admin.id, "email": admin.email, "role": admin.role,
                           "grants": accounts.grants_of(admin.id)},
                 "csrf": accounts.csrf_for(request.cookies[SESSION_COOKIE]),
-                "pilot": {"dataset": config.dataset(), "demoTelemetry": True}}
+                "pilot": {"dataset": config.dataset(), "demoTelemetry": not config.server}}
 
     # ---- helpers -----------------------------------------------------------------------------
 
