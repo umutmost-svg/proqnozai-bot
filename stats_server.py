@@ -433,6 +433,11 @@ class _Handler(BaseHTTPRequestHandler):
         if not _auth_ok(_token_from(self)):
             self._send(503 if not STATS_TOKEN else 401, b"dashboard token required"); return
 
+        from config import BOT_LAUNCHER_MODE
+        if BOT_LAUNCHER_MODE and parsed.path == "/broadcast":
+            # Launcher mode: broadcasts go through the admin panel's outbox only (the old content is retired).
+            self._json(409, {"error": "broadcasts are sent from the admin panel"}); return
+
         if parsed.path == "/promo/archive":
             # Keyed by NAME, not by partner id: an orphan campaign has no
             # partner row to hang an id off, and the name may legitimately be

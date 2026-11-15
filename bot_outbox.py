@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterator
@@ -24,6 +25,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger("bot_outbox")
+
+
+def match_owner(path: Path, conn: sqlite3.Connection) -> None:
+    """The bot runs as root while the admin process (uid 10001) shares this file: SQLite's -wal/-shm sidecars the bot
+    creates are handed to the database file's owner, so the admin can still open the database. No-op unless root."""
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return
+    try:
+        conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()  # opens (creates) the sidecars in WAL mode
+        st = os.stat(path)
+        for suffix in ("-wal", "-shm"):
+            side = Path(f"{path}{suffix}")
+            if side.exists() and (side.stat().st_uid, side.stat().st_gid) != (st.st_uid, st.st_gid):
+                os.chown(side, st.st_uid, st.st_gid)
+    except OSError:
+        pass  # best effort: the Mini App's entrypoint also restores ownership of its volume on every start
 
 STUCK_S = 600
 MAX_ATTEMPTS = 3
@@ -107,9 +124,11 @@ class BotOutbox:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        # mode=rw: never creates the file — the admin process does (as its uid); a missing file is an error here.
+        conn = sqlite3.connect(f"file:{self.path}?mode=rw", uri=True, timeout=10, isolation_level=None)
         try:
             conn.execute("PRAGMA busy_timeout=10000")
+            match_owner(self.path, conn)
             yield conn
         finally:
             conn.close()

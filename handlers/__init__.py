@@ -42,7 +42,34 @@ async def support_handler(update, context):
     raise ApplicationHandlerStop
 
 
+def register_launcher(app):
+    """Launcher mode: inquiries, admin tools, then "open the app" for everything else (callback_data of old buttons
+    still answered, so no client spinner is left turning)."""
+    from handlers.launcher import launcher_callback, launcher_message, launcher_start
+    if bot_crm.BOT_INQUIRIES_ENABLED:
+        app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, inquiry_hook),
+                        group=-1)
+    app.add_handler(CommandHandler("start", launcher_start))
+    for name, handler in (("admin", admin_cmd), ("cancel", cancel_cmd), ("testapi", testapi_cmd),
+                          ("setpromo", setpromo_cmd), ("promostats", promostats_cmd), ("delpromo", delpromo_cmd),
+                          ("promodiag", promodiag_cmd)):
+        app.add_handler(CommandHandler(name, handler, filters=filters.User(ADMIN_ID)))
+    # Any other command (old /history, /matches..., or an admin command from someone else): the app.
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.COMMAND, launcher_message))
+    app.add_handler(CallbackQueryHandler(adm_cb, pattern=r"^adm_"))
+    app.add_handler(CallbackQueryHandler(launcher_callback))
+    # The admin's replies inside an /admin flow stop here (ApplicationHandlerStop); everything else: the app.
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), handle_adm_msg), group=0)
+    # Every other private message — text, photo, voice, sticker, file, contact…; service updates excluded.
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND & ~filters.StatusUpdate.ALL,
+                                   launcher_message), group=1)
+
+
 def register_handlers(app):
+    from config import BOT_LAUNCHER_MODE
+    if BOT_LAUNCHER_MODE:
+        register_launcher(app)
+        return
     if bot_crm.BOT_INQUIRIES_ENABLED:
         # Group -1 runs before every other handler and never stops them (admin inquiries, flag off by default).
         app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, inquiry_hook),
