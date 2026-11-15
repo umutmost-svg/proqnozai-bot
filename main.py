@@ -1,11 +1,12 @@
 import asyncio
 import os
 import threading
+import time
 
 from telegram.ext import ApplicationBuilder
 from telegram.error import TelegramError
 
-from config import TELEGRAM_TOKEN, MOSTBET_CACHE_TTL
+from config import BOT_LAUNCHER_MODE, BOT_OUTBOX_ENABLED, MOSTBET_CACHE_TTL, TELEGRAM_TOKEN
 from db import db_init, db_restore_live_subs, db_all_uids, db_lang, db_flag_done, db_flag_mark
 from mostbet import _mostbet_load_matches
 from handlers import register_handlers
@@ -124,6 +125,75 @@ def _log_db_location() -> None:
         logger.warning(f"DB: {path} (NEW/empty) — if this is not a mounted volume, data is lost on redeploy")
 
 
+async def _launcher_menu(application) -> None:
+    """Launcher mode: Telegram's menu button opens the Mini App and the "/" menu offers only /start."""
+    from telegram import BotCommand, MenuButtonWebApp, WebAppInfo
+    from telegram.error import TelegramError
+    from config import MINIAPP_URL
+    try:
+        await application.bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(text="ProqnozAI", web_app=WebAppInfo(url=MINIAPP_URL)))
+        from translations import BOT_COMMANDS
+        await application.bot.delete_my_commands()
+        for lang in BOT_COMMANDS:  # the per-language lists the full bot published
+            try:
+                await application.bot.delete_my_commands(language_code={"kz": "kk"}.get(lang, lang))
+            except TelegramError:
+                pass
+        await application.bot.set_my_commands([BotCommand("start", "ProqnozAI")])
+    except TelegramError as e:
+        logger.warning("launcher menu not set: %s", type(e).__name__)
+
+
+async def _run_outbox(application) -> None:
+    """Sends the admin panel's queued messages (bot_outbox.py: claim -> send -> record, at most once). About one
+    batch a second (below Telegram's limits); texts are never logged."""
+    from pathlib import Path
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+    from bot_outbox import BotOutbox, Outcome
+    from config import BOT_OUTBOX_DB, MINIAPP_URL
+    from db import db_is_blocked
+
+    path = Path(BOT_OUTBOX_DB)
+    # The admin process creates the file (owned by its uid, 0660); the bot, running as root, never creates it — a
+    # root-owned file would lock the admin out. Until it exists, look again every minute.
+    while not path.is_file():
+        logger.info("outbox file not there yet; waiting for the admin panel to create it")
+        await asyncio.sleep(60)
+    outbox = BotOutbox(path)
+    while True:
+        try:
+            outbox.init_schema()
+            break
+        except Exception as e:  # noqa: BLE001 — an unreadable file must never stop the bot; retried every minute
+            logger.error("outbox unavailable: %s", type(e).__name__)
+            await asyncio.sleep(60)
+
+    def markup(buttons: list[dict]):
+        rows = []
+        for b in buttons[:3]:
+            if b.get("url") == "miniapp":
+                rows.append([InlineKeyboardButton(str(b.get("text"))[:64], web_app=WebAppInfo(url=MINIAPP_URL))])
+            elif str(b.get("url", "")).startswith("https://"):
+                rows.append([InlineKeyboardButton(str(b.get("text"))[:64], url=str(b["url"]))])
+        return InlineKeyboardMarkup(rows) if rows else None
+
+    async def send(job) -> Outcome:
+        msg = await application.bot.send_message(chat_id=job.user_id, text=job.text, reply_markup=markup(job.buttons))
+        return Outcome("sent", message_id=msg.message_id)
+
+    last_purge = 0
+    while True:
+        try:
+            await outbox.run_once(send, lambda: int(time.time()), is_banned=db_is_blocked)
+            if time.time() - last_purge > 86400:
+                outbox.purge(int(time.time()))
+                last_purge = time.time()
+        except Exception as e:  # noqa: BLE001 — one failed run never ends the loop
+            logger.warning("outbox run failed: %s", type(e).__name__)
+        await asyncio.sleep(1)
+
+
 async def _publish_commands(application) -> None:
     """Fill Telegram's own "/" menu. Without it the only discoverable command is
     /start, so /history and /tz existed but nobody could find them.
@@ -181,18 +251,26 @@ def main():
     async def post_init(application):
         from stats_server import set_bot_app
         set_bot_app(application, asyncio.get_event_loop())
-        db_restore_live_subs()
-        asyncio.create_task(poller(application))
-        asyncio.create_task(daily_push(application))
         asyncio.create_task(_preload_mostbet())
         _start_odds_export()
-        asyncio.create_task(check_odds_changes(application))
-        asyncio.create_task(_broadcast_menu_update(application))
-        asyncio.create_task(_publish_commands(application))
+        if BOT_OUTBOX_ENABLED:
+            asyncio.create_task(_run_outbox(application))
+        if BOT_LAUNCHER_MODE:
+            # Only the app: no live polls, pushes, odds alerts or menu broadcasts; Telegram's menu button opens it.
+            asyncio.create_task(_launcher_menu(application))
+        else:
+            db_restore_live_subs()
+            asyncio.create_task(poller(application))
+            asyncio.create_task(daily_push(application))
+            asyncio.create_task(check_odds_changes(application))
+            asyncio.create_task(_broadcast_menu_update(application))
+            asyncio.create_task(_publish_commands(application))
         # Delayed broadcasts live in the DB, so anything scheduled before a
-        # redeploy is still waiting here and starts at its time.
-        from broadcast import scheduler as broadcast_scheduler
-        asyncio.create_task(broadcast_scheduler(application))
+        # redeploy is still waiting here and starts at its time. Not in launcher mode: the admin panel's outbox is
+        # the only sender then (an old scheduled broadcast would send the retired bot's content).
+        if not BOT_LAUNCHER_MODE:
+            from broadcast import scheduler as broadcast_scheduler
+            asyncio.create_task(broadcast_scheduler(application))
 
     app.post_init = post_init
 

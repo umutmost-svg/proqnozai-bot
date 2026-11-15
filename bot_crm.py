@@ -116,6 +116,8 @@ class BotCrm:
         conn = sqlite3.connect(self.path, timeout=5, isolation_level=None)
         try:
             conn.execute("PRAGMA busy_timeout=5000")
+            from bot_outbox import match_owner
+            match_owner(self.path, conn)
             yield conn
         finally:
             conn.close()

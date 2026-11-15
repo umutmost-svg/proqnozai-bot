@@ -1,6 +1,8 @@
 # ─── Translations ─────────────────────────────────────────────────────────────
 T = {
 "az": {
+"launcher_text": "📲 Proqnozlar artıq ProqnozAI tətbiqindədir: matçlar, AI-təhlil, sürətli proqnoz və əmsallar. Aşağıdakı düymə ilə açın.",
+"launcher_btn": "Tətbiqi aç",
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Xoş gəldiniz! Adınızı daxil edin:",
 "reg_done":      "Hazırdır, {name}! Başlayaq 👇",
@@ -132,6 +134,8 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 },
 
 "ru": {
+"launcher_text": "📲 Прогнозы теперь в приложении ProqnozAI: матчи, AI-разбор, быстрые прогнозы и коэффициенты. Откройте его кнопкой ниже.",
+"launcher_btn": "Открыть приложение",
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Добро пожаловать! Введите ваше имя:",
 "reg_done":      "Готово, {name}! Погнали 👇",
@@ -263,6 +267,8 @@ Bərabərlik — XX% | X.XX  (tətbiq olunarsa)
 },
 
 "en": {
+"launcher_text": "📲 Forecasts now live in the ProqnozAI app: matches, AI analysis, quick picks and odds. Open it with the button below.",
+"launcher_btn": "Open the app",
 "choose_lang":   "Dil secin / Выберите язык / Choose language:",
 "ask_name":      "Welcome! Please enter your name:",
 "reg_done":      "Registration complete! Hi, {name}!",
@@ -393,6 +399,8 @@ Draw — XX% | X.XX  (if applicable)
 
 },
 "tr": {
+"launcher_text": "📲 Tahminler artık ProqnozAI uygulamasında: maçlar, AI analizi, hızlı tahminler ve oranlar. Aşağıdaki düğmeyle açın.",
+"launcher_btn": "Uygulamayı aç",
 "choose_lang":   "Dil seçin / Выберите язык / Choose language:",
 "ask_name":      "Hoş geldiniz! Adınızı girin:",
 "reg_done":      "Hazır, {name}! Başlayalım 👇",
@@ -521,6 +529,8 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 },
 
 "kz": {
+"launcher_text": "📲 Болжамдар енді ProqnozAI қосымшасында: матчтар, AI-талдау, жылдам болжамдар және коэффициенттер. Төмендегі батырма арқылы ашыңыз.",
+"launcher_btn": "Қосымшаны ашу",
 "choose_lang":   "Dil seçin / Выберите язык / Choose language:",
 "ask_name":      "Қош келдіңіз! Атыңызды енгізіңіз:",
 "reg_done":      "Тіркеу аяқталды! Сәлем, {name}!",
@@ -649,6 +659,8 @@ Beraberlik — XX% | X.XX  (geçerliyse)
 },
 
 "uz": {
+"launcher_text": "📲 Bashoratlar endi ProqnozAI ilovasida: oʻyinlar, AI-tahlil, tezkor bashoratlar va koeffitsiyentlar. Quyidagi tugma orqali oching.",
+"launcher_btn": "Ilovani ochish",
 "choose_lang":   "Dil seçin / Выберите язык / Choose language:",
 "ask_name":      "Xush kelibsiz! Ismingizni kiriting:",
 "reg_done":      "Ro'yxatdan o'tish yakunlandi! Salom, {name}!",
@@ -777,6 +789,8 @@ Durrang — XX% | X.XX  (taalluqli bo'lsa)
 },
 
 "ar": {
+"launcher_text": "📲 التوقعات الآن في تطبيق ProqnozAI: المباريات وتحليل الذكاء الاصطناعي والتوقعات السريعة والاحتمالات. افتحه بالزر أدناه.",
+"launcher_btn": "افتح التطبيق",
 "choose_lang":   "Dil seçin / Выберите язык / Choose language:",
 "ask_name":      "مرحباً! أدخل اسمك:",
 "reg_done":      "اكتمل التسجيل! مرحباً، {name}!",

@@ -116,6 +116,14 @@ async def adm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer(); data = q.data
     back = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="adm_back")]])
 
+    from config import BOT_LAUNCHER_MODE
+    if BOT_LAUNCHER_MODE and (data == "adm_broadcast_menu" or data.startswith("adm_bcast")):
+        # Launcher mode: broadcasts are sent from the admin panel's outbox only (the old content is retired).
+        context.user_data.pop("adm_act", None)
+        await q.edit_message_text("📢 Рассылки теперь отправляются из админ-панели: https://admin.proqnozai.com",
+                                  reply_markup=back)
+        return
+
     # ── Stats ─────────────────────────────────────────────────────────────────
     if data == "adm_stats":
         s = db_stats()

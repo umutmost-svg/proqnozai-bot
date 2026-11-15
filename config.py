@@ -149,3 +149,13 @@ English: Choose language below
 Türkçe: Aşağıdan dil seçin
 Қазақша: Төменде тілді таңдаңыз
 """
+
+# Launcher mode (owner 15.11): the bot only opens the Mini App — every message, /start and old inline button gets one
+# "Open the app" button; admin commands, inquiries, the odds export, partner links and the admin's outbox keep
+# working. Off by default.
+BOT_LAUNCHER_MODE = os.environ.get("BOT_LAUNCHER_MODE", "").strip().lower() == "true"
+MINIAPP_URL = os.environ.get("MINIAPP_URL", "https://app.proqnozai.com").strip()
+# admin -> bot queue (bot_outbox.py): the bot sends the admin's broadcasts and personal messages from this file on the
+# volume shared with the admin process. Off unless the flag is on AND the path is set.
+BOT_OUTBOX_DB = os.environ.get("BOT_OUTBOX_DB", "").strip()
+BOT_OUTBOX_ENABLED = os.environ.get("BOT_OUTBOX_ENABLED", "").strip().lower() == "true" and bool(BOT_OUTBOX_DB)
