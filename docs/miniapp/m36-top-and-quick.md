@@ -16,8 +16,8 @@
 - Только факты источника. Уверенность модели или Claude не используется никогда.
 - Счёт и минута не участвуют: обновление LIVE не меняет порядок. Завершённый матч теряет только
   вес статуса. Диапазон запроса — не больше 26 часов (один локальный день). Перенесённые, прерванные, отменённые и неизвестные матчи не попадают в топ.
-- Ничья по очкам — раньше начало, затем id. До 5 матчей, не больше 2 из одного турнира, пока у
-  других турниров есть матчи (`maxPerCompetition`).
+- Ничья по очкам — раньше начало, затем id. От 0 до 5 матчей и только из главных турниров (`majorCompetitions`, с 15.11);
+  ограничения по одному турниру среди них нет (`maxPerCompetition` = `maxMatches`), см. раздел в конце.
 - **Ни одного нового внешнего запроса:** дневные списки берутся из общего кеша каталога, таблицы —
   только если уже лежат в кеше (не старше 24 ч). Без таблицы эта часть равна 0 у обеих команд.
   Найденная таблица фиксируется на весь день рейтинга: истечение или обновление кеша порядок не
@@ -150,3 +150,7 @@ The strict pick is unchanged and always comes first. It covers the 9 validated l
 - **Coupon:** legs are found by the strict coupon's own search, team-disjoint and searching past conflicts. Bounds are the exact Fréchet bounds rounded outward, as for a strict coupon. When there are fewer suitable matches than requested, no estimate is given.
 - **Screen:** a card titled "Оценка на матч" or "Оценочный купон". Each leg is labelled "Оценка модели" or "По коэффициентам", and the card says it is not a selected bet. Its price is the odds of that outcome, shown while valid. This is allowed by the owner's rule: odds appear only inside an analysis.
 - **Robustness:** a malformed estimate is dropped on the client without breaking the answer. A failing or slow estimate (over `ESTIMATE_WAIT_S`) is left out on the server.
+
+## Top matches: main tournaments only (owner, 15.11)
+
+The day's top shows 0 to 5 matches, and only from `majorCompetitions` in `top_weights.json`: CL, EL, FCWC, PL, PD, BL1, SA, FL1, WC, EC, QUFA, QCBL, ECQ, UNL, CA. Among them there is no per-competition cap: `maxPerCompetition` equals `maxMatches`. Lower tiers and minor leagues never fill a short day. A day without main matches shows "no confirmed matches of the main tournaments", and all matches remain in the catalogue. This replaces the earlier per-competition limits described above.

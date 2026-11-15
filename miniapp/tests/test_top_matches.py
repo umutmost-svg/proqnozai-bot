@@ -6,6 +6,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -20,7 +22,8 @@ from miniapp.tests.test_standings import block, row, table
 REAL = top.WEIGHTS
 # The other weights are checked without the notable-teams bonus (small test ids such as 3, 4, 5 are real clubs);
 # the bonus has its own tests below, with the real weights passed explicitly.
-W = replace(top.WEIGHTS, featured=frozenset())
+# ...and without the main-tournaments filter and with the old per-competition cap of 3 (these tests use any code).
+W = replace(top.WEIGHTS, featured=frozenset(), major=frozenset(), max_per_competition=3)
 
 
 @pytest.fixture(autouse=True)
@@ -97,7 +100,7 @@ def test_at_most_five_and_ties_are_stable() -> None:
     assert [r.event.id for r in first] == sorted(r.event.id for r in first)
 
 
-def test_one_competition_takes_at_most_three_places_while_others_have_matches() -> None:
+def test_the_per_competition_cap_still_works_where_configured() -> None:
     pl = [event(i, home=(i * 2, f"T{i} FC"), away=(i * 2 + 1, f"U{i} FC")) for i in range(1, 6)]
     pd = [event(i, code="PD", home=(i * 2, f"T{i} FC"), away=(i * 2 + 1, f"U{i} FC")) for i in range(10, 12)]
     elc = event(20, code="ELC", home=(40, "X FC"), away=(41, "Y FC"))
@@ -245,11 +248,26 @@ def test_featured_teams_must_be_ids(tmp_path) -> None:
         top.load_weights(path)
 
 
-def test_three_big_matches_of_one_competition_all_make_the_top():
-    """15.11: three Nations League matches scored alike; with a cap of 2 the third (Spain - England) lost its place to
-    a far weaker club game. Up to 3 per competition now."""
-    assert REAL.max_per_competition == 3
-    unl = [event(i, code="UNL", home=(100 + i, f"N{i}"), away=(200 + i, f"M{i}")) for i in (1, 2, 3)]
-    club = [event(10 + i, code="SD", home=(300 + i, f"C{i} FC"), away=(400 + i, f"D{i} FC")) for i in (1, 2, 3, 4)]
-    ids = [r.event.id for r in top.rank([*unl, *club], code_of, {})]           # 7 candidates for 5 places
-    assert ids[:3] == ["fd:1", "fd:2", "fd:3"] and len(ids) == 5           # the third big match is not displaced
+def test_only_the_main_tournaments_make_the_top():
+    """Owner 15.11: the top shows the main tournaments only — three Nations League matches, never a Uruguayan or
+    Brazilian club game to fill the places; no per-competition cap among the main ones."""
+    unl = [event(i, code="UNL", home=(100 + i, f"N{i}"), away=(200 + i, f"M{i}")) for i in (1, 2, 3, 4)]
+    minor = [event(10 + i, code="UPD", home=(300 + i, f"C{i} FC"), away=(400 + i, f"D{i} FC")) for i in (1, 2, 3)]
+    ids = [r.event.id for r in top.rank([*unl, *minor], code_of, {}, w=REAL)]
+    assert ids == ["fd:1", "fd:2", "fd:3", "fd:4"]                       # a short day stays short
+    assert top.rank(minor, code_of, {}, w=REAL) == []
+    assert {"CL", "PL", "PD", "BL1", "SA", "FL1", "UNL", "WC", "EC"} <= REAL.major and "UPD" not in REAL.major
+
+
+
+@pytest.mark.parametrize("major", [None, [], "PL", ["XX"], [1]])
+def test_the_main_tournaments_list_cannot_be_disabled_by_mistake(tmp_path: Path, major) -> None:
+    raw = json.loads(Path(top.__file__).with_name("top_weights.json").read_text())
+    if major is None:
+        raw.pop("majorCompetitions")
+    else:
+        raw["majorCompetitions"] = major
+    bad = tmp_path / "w.json"
+    bad.write_text(json.dumps(raw))
+    with pytest.raises(ValueError):
+        top.load_weights(bad)

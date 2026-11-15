@@ -582,7 +582,7 @@ export const es: Dictionary = {
   'top.carousel': 'Partidos destacados, desliza hacia el lado',
   'top.cardLabel': '{home} — {away}, {tournament}, {when}',
   'top.emptyTitle': 'No hay partidos destacados',
-  'top.emptyText': 'La fuente no ha confirmado el estado de los partidos de este día. Consulta el calendario en todos los partidos.',
+  'top.emptyText': 'No hay partidos confirmados de los torneos principales este día. Todos los partidos están abajo.',
   'top.stale': 'La fuente no respondió: las tarjetas vienen de la caché; marcadores y estados pueden estar desactualizados.',
   'quick.title': 'Pronóstico rápido',
   'quick.subtitle': 'El modelo elige los partidos según tus criterios y los compara con las cuotas actuales. Aquí no se realizan apuestas.',

@@ -584,7 +584,7 @@ export const az: Dictionary = {
   'top.carousel': 'Əsas matçlar, yana sürüşdürün',
   'top.cardLabel': '{home} — {away}, {tournament}, {when}',
   'top.emptyTitle': 'Əsas matç yoxdur',
-  'top.emptyText': 'Mənbə bu günün matçlarının statusunu təsdiqləməyib. Cədvəl — bütün matçlarda.',
+  'top.emptyText': 'Bu gün əsas turnirlərin təsdiqlənmiş matçı yoxdur. Bütün matçlar aşağıdadır.',
   'top.stale': 'Mənbə cavab vermədi: kartlar keşdən göstərilir, hesab və statuslar köhnə ola bilər.',
   'quick.title': 'Sürətli proqnoz',
   'quick.subtitle': 'Model şərtlərinizə uyğun matçları özü seçir və cari əmsallarla müqayisə edir. Mərclər burada rəsmiləşdirilmir.',

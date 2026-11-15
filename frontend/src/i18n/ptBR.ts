@@ -582,7 +582,7 @@ export const ptBR: Dictionary = {
   'top.carousel': 'Jogos em destaque, deslize para o lado',
   'top.cardLabel': '{home} — {away}, {tournament}, {when}',
   'top.emptyTitle': 'Nenhum jogo em destaque',
-  'top.emptyText': 'A fonte não confirmou o status dos jogos deste dia. Veja a programação em todos os jogos.',
+  'top.emptyText': 'Não há jogos confirmados dos principais torneios neste dia. Todos os jogos estão abaixo.',
   'top.stale': 'A fonte não respondeu: os cartões vêm do cache; placares e status podem estar desatualizados.',
   'quick.title': 'Palpite rápido',
   'quick.subtitle': 'O modelo escolhe os jogos pelos seus critérios e os compara com as odds atuais. Aqui não se fazem apostas.',

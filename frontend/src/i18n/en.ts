@@ -582,7 +582,7 @@ export const en: Dictionary = {
   'top.carousel': 'Top matches, swipe sideways',
   'top.cardLabel': '{home} — {away}, {tournament}, {when}',
   'top.emptyTitle': 'No top matches',
-  'top.emptyText': 'The source has not confirmed the status of this day’s matches. See the schedule in all matches.',
+  'top.emptyText': 'No confirmed matches of the main tournaments on this day. All matches are below.',
   'top.stale': 'The source did not respond: cards come from the cache, scores and statuses may be out of date.',
   'quick.title': 'Quick pick',
   'quick.subtitle': 'The model picks matches by your criteria and compares them with current odds. Bets are not placed here.',

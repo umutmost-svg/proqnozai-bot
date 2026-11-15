@@ -582,7 +582,7 @@ export const tr: Dictionary = {
   'top.carousel': 'Önemli maçlar, yana kaydırın',
   'top.cardLabel': '{home} — {away}, {tournament}, {when}',
   'top.emptyTitle': 'Önemli maç yok',
-  'top.emptyText': 'Kaynak bu günün maçlarının durumunu doğrulamadı. Program tüm maçlarda.',
+  'top.emptyText': 'Bu gün ana turnuvaların onaylanmış maçı yok. Tüm maçlar aşağıda.',
   'top.stale': 'Kaynak yanıt vermedi: kartlar önbellekten gösteriliyor, skorlar ve durumlar eski olabilir.',
   'quick.title': 'Hızlı tahmin',
   'quick.subtitle': 'Model, kriterlerinize göre maçları kendisi seçer ve güncel oranlarla karşılaştırır. Burada bahis yapılmaz.',

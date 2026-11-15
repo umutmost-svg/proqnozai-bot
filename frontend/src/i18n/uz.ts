@@ -582,7 +582,7 @@ export const uz: Dictionary = {
   'top.carousel': 'Asosiy o‘yinlar, yon tomonga suring',
   'top.cardLabel': '{home} — {away}, {tournament}, {when}',
   'top.emptyTitle': 'Asosiy o‘yinlar yo‘q',
-  'top.emptyText': 'Manba bu kungi o‘yinlar holatini tasdiqlamagan. Jadval — barcha o‘yinlarda.',
+  'top.emptyText': 'Bu kunda asosiy turnirlarning tasdiqlangan o‘yinlari yo‘q. Barcha o‘yinlar pastda.',
   'top.stale': 'Manba javob bermadi: kartochkalar keshdan ko‘rsatilgan, hisob va holatlar eskirgan bo‘lishi mumkin.',
   'quick.title': 'Tezkor prognoz',
   'quick.subtitle': 'Model shartlaringiz bo‘yicha o‘yinlarni o‘zi tanlaydi va joriy koeffitsiyentlar bilan solishtiradi. Bu yerda stavka rasmiylashtirilmaydi.',
