@@ -27,8 +27,8 @@ from miniapp.sports.models import FootballEvent
 
 from . import mostbet
 from .book import FEED_KEYS, read_book
-from .feed import CatalogLine, FeedLine
-from .store import CATALOG_WINDOW_S, CUTOFF_BEFORE_KICKOFF_S, FAR_MAX_AGE_S, OddsStore
+from .feed import TRANSIT_ALLOWANCE_S, CatalogLine, FeedLine
+from .store import CATALOG_WINDOW_S, CUTOFF_BEFORE_KICKOFF_S, NEAR_S, WEEK_MAX_AGE_S, OddsStore, max_age
 
 logger = logging.getLogger("miniapp.odds")
 
@@ -39,6 +39,7 @@ LIST_EVERY_S = 15 * 60.0
 SPACING_S = 2.0
 PAUSE_S = 120.0
 LIVE_LOOKBACK_S = 3 * 3600.0
+FAR_SHARE = 4  # every 4th price request of a cycle goes to a match beyond NEAR_S when one is due
 SNAPSHOT_MAX_LINES = 2000
 SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024
 
@@ -46,7 +47,8 @@ SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024
 class OddsSource:
     def __init__(self, store: OddsStore, events: Callable[[], Iterable[FootballEvent]], *, max_per_cycle: int = 20,
                  clock: Callable[[], float] = time.time, sleep=asyncio.sleep,
-                 fetch: mostbet.Fetch = mostbet.http_get, snapshot: Path | None = None) -> None:
+                 fetch: mostbet.Fetch = mostbet.http_get, snapshot: Path | None = None,
+                 warm: Callable[[], object] | None = None) -> None:
         if not 1 <= max_per_cycle <= 40:
             raise ValueError("max_per_cycle must be 1..40")
         self.store = store
@@ -62,7 +64,11 @@ class OddsSource:
         self._task: asyncio.Task | None = None
         self._requests: deque[float] = deque()  # price requests of the last BUDGET_WINDOW_S (pages included)
         self._samples_at = float("-inf")
+        self._empty: set[int] = set()  # lines whose last price read had no servable market
         self._snapshot = snapshot
+        # Keeps the Mini App's season calendars (the matches the catalogue is matched against) loaded while nobody
+        # uses the app: started at boot, the source would otherwise have nothing to match.
+        self._warm = warm
         self._restored = False
 
     def ensure_running(self) -> asyncio.Task | None:
@@ -91,7 +97,13 @@ class OddsSource:
 
     async def cycle(self) -> int:
         """One step: the list when due, then up to max_per_cycle prices. Returns how many lines were priced."""
+        if self._warm is not None:
+            try:
+                self._warm()
+            except Exception:  # noqa: BLE001 — warming is best effort; the cycle goes on with what is loaded
+                logger.exception("odds.source_warm_failed")
         if self._paused():
+            logger.info("odds.source_cycle skipped=paused")
             return 0
         now = self._clock()
         listed = False
@@ -100,9 +112,11 @@ class OddsSource:
                 raw = await mostbet.fetch_list(self._fetch, self._sleep, SPACING_S)
             except mostbet.RateLimited:
                 self._pause("list")
+                logger.info("odds.source_cycle skipped=rate_limited")
                 return 0
             except mostbet.SourceError as exc:
                 logger.info("odds.source_list_failed reason=%s", exc)
+                logger.info("odds.source_cycle skipped=list_failed")
                 return 0
             self._take_list(raw)
             listed = True
@@ -113,8 +127,26 @@ class OddsSource:
         report = self.store.match_catalog(self.events())
         due = [(line_id, refresh) for line_id, refresh in report.wanted
                if self._clock() - self._priced.get(line_id, float("-inf")) >= refresh and line_id in self._list]
+        # Coverage policy within the budget: the line whose shown price would go stale soonest comes first (never
+        # priced: at once, nearest kickoff first). Near matches still lead — their limit is 15 min — but a match days
+        # ahead is never starved by an endless queue of nearer ones: its 4 h limit makes it urgent in its turn.
+        clock_now = self._clock()
+
+        def urgency(item: tuple[int, float]) -> tuple[float, float]:
+            kickoff = self._list[item[0]]["kickoff"]
+            return self._priced.get(item[0], float("-inf")) + max_age(kickoff, clock_now, True), kickoff
+        # A share of the REQUESTS (pages included) is reserved for matches further than NEAR_S while any of them is
+        # due: near lines stop at the budget minus that share, so a long queue of near matches (or near lines with
+        # several pages) never starves the rest of the week. Within that, the soonest-to-go-stale line goes first.
+        due.sort(key=urgency)
+        far_ids = {d[0] for d in due if self._list[d[0]]["kickoff"] - clock_now > NEAR_S}
+        # At least two requests: a line takes one or two outcome pages (measured on production lines, 15.11), so a
+        # far line always fits its share whole; at the production budget (20) the share is 5.
+        reserve = min(self.max_per_cycle, max(2, self.max_per_cycle // FAR_SHARE))
         priced = 0
         spent = 0
+
+        cap = self.max_per_cycle  # requests this line may bring the window to (lower for near lines, see below)
 
         def room() -> bool:
             # A rolling five-minute window, not a per-cycle count: a cycle's late requests and the next one's early
@@ -122,7 +154,7 @@ class OddsSource:
             now = self._clock()
             while self._requests and now - self._requests[0] >= BUDGET_WINDOW_S:
                 self._requests.popleft()
-            return len(self._requests) < self.max_per_cycle
+            return len(self._requests) < cap
 
         async def budgeted(url: str) -> tuple[int, bytes]:
             # Every price request counts, pages included; a line whose pages would pass the budget is dropped
@@ -134,10 +166,31 @@ class OddsSource:
             spent += 1
             return await self._fetch(url)
 
-        for i, (line_id, _) in enumerate(due):
+        queue = deque(due)
+        deferred: set[int] = set()  # near lines held back once while a far line was due
+        waiting: list[tuple[int, float]] = []  # those lines, in their urgency order: back at the FRONT afterwards
+        attempts = 0
+        while queue:
+            line_id, refresh = queue.popleft()
+            # A near line may use the budget only down to the far matches' share while any of them is due —
+            # every page of it counts (budgeted() checks the cap on each request).
+            held = line_id not in far_ids and bool(far_ids)
+            cap = self.max_per_cycle - reserve if held else self.max_per_cycle
             if not room():
+                if held and line_id not in deferred:
+                    deferred.add(line_id)
+                    waiting.append((line_id, refresh))  # after the far ones: the rest of the budget, if any
+                    continue
+                if held:
+                    continue
                 break
-            if i or listed:
+            far_ids.discard(line_id)  # attempted: its share is not held for it any more
+            if not far_ids and waiting:
+                # Every far line has had its turn: the held near lines come next, ahead of less urgent ones.
+                queue.extendleft(reversed(waiting))
+                waiting.clear()
+            attempts += 1
+            if attempts > 1 or listed:
                 await self._sleep(SPACING_S)  # also between the list's last page and the first price
             try:
                 odds = await mostbet.fetch_odds(line_id, budgeted, self._sleep, SPACING_S)
@@ -146,13 +199,24 @@ class OddsSource:
                 break
             except mostbet.SourceError as exc:
                 if str(exc) == "budget":
+                    if held:
+                        if line_id not in deferred:
+                            deferred.add(line_id)
+                            waiting.append((line_id, refresh))  # its next page would take the far share: later
+                        continue
                     break
                 logger.info("odds.source_odds_failed line=%d reason=%s", line_id, exc)
                 continue
             book = read_book({k: v for k, v in odds.items() if isinstance(v, float)})
+            if not book:
+                self._empty.add(line_id)  # priced, but nothing servable: counted as stale, not covered
+            else:
+                self._empty.discard(line_id)
             m = self._list[line_id]
-            self.store.ingest([FeedLine(line_id, m["country"], m["league"], m["home"], m["away"], m["kickoff"],
-                                        False, self._clock(), book)], own=True)
+            report_in = self.store.ingest([FeedLine(line_id, m["country"], m["league"], m["home"], m["away"],
+                                                    m["kickoff"], False, self._clock(), book)], own=True)
+            if not report_in.accepted:
+                self._empty.add(line_id)  # refused by the store (e.g. the line went live): not covered
             self._priced[line_id] = self._clock()
             priced += 1
         if priced:
@@ -163,8 +227,13 @@ class OddsSource:
             self._samples_at = self._clock()
             for reason, items in sorted(report.samples.items()):
                 logger.info("odds.unmatched_examples reason=%s examples=%s", reason, " | ".join(items))
-        logger.info("odds.source_cycle listed=%d wanted=%d due=%d priced=%d requests=%d %s", len(self._list),
-                    len(report.wanted), len(due), priced, spent, " ".join(f"{k}={v}" for k, v in sorted(report.reasons.items())))
+        # Coverage: wanted lines whose last own price is older than its serving limit (shown as "no odds" now).
+        stale = sum(1 for line_id, _ in report.wanted
+                    if line_id in self._list and (line_id in self._empty or clock_now - self._priced.get(
+                        line_id, float("-inf")) >= max_age(self._list[line_id]["kickoff"], clock_now, True)
+                        - TRANSIT_ALLOWANCE_S))  # the same boundary as serving
+        logger.info("odds.source_cycle listed=%d wanted=%d due=%d priced=%d requests=%d stale=%d %s", len(self._list),
+                    len(report.wanted), len(due), priced, spent, stale, " ".join(f"{k}={v}" for k, v in sorted(report.reasons.items())))
         return priced
 
     def _take_list(self, raw: list[dict]) -> None:
@@ -243,7 +312,7 @@ class OddsSource:
         lines: list[FeedLine] = []
         for item in items[:SNAPSHOT_MAX_LINES]:
             line = _snapshot_line(item)
-            if line is None or not now - FAR_MAX_AGE_S < line.fetched_at <= now or line.kickoff <= now:
+            if line is None or not now - WEEK_MAX_AGE_S < line.fetched_at <= now or line.kickoff <= now:
                 continue
             listed = self._list.get(line.line_id)
             # The same line as the fresh list shows it (teams, competition, kickoff), not just the same id.

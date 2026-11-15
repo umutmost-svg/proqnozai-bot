@@ -40,19 +40,6 @@
   letter-spacing: 2px;
 }
 
-.beta {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 97px;
-  height: 32px;
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.62);
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 12px;
-}
 
 .center {
   flex: 1;

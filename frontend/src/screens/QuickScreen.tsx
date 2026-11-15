@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { Emblem } from '../components/Emblem';
 import { Header } from '../components/Header';
@@ -112,7 +112,11 @@ function restore(run: Run | null, deviceNow: number): { run: Run | null; expired
 
 /** The last pick survives a trip to a match and back (until the app is reloaded). */
 let lastRun: Run | null = null;
+/** Whether the shown answer has its own history step (?step=result); kept across remounts like the answer. */
+const resultStep = { pushed: false };
+
 export function resetQuickMemory(): void {
+  resultStep.pushed = false;
   lastRun = null;
 }
 
@@ -615,6 +619,45 @@ export function QuickScreen() {
   const [initial] = useState(() => restore(lastRun, clock.now().getTime()));
   const [run, setRun] = useState<Run | null>(initial.run);
   const sequence = useRef(0);
+  const leaving = useRef(false); // "Change" popped the answer's step: the criteria are shown before the URL changes
+  const navigationType = useNavigationType();
+  const sawStep = useRef(false); // this screen has been shown on the answer's step
+  // The answer is its own step in the history (?step=result): "back" (the header arrow, Telegram's BackButton)
+  // returns to the criteria, not to the page visited before the quick screen.
+  const navigate = useNavigate();
+  const location = useLocation();
+  const onResult = new URLSearchParams(location.search).get('step') === 'result';
+  const shown = run !== null;
+  useEffect(() => {
+    if (onResult) sawStep.current = true;
+  }, [onResult]);
+  useEffect(() => {
+    if (shown && !onResult) {
+      // A real "back" from the answer's step: this screen was on that step (a fresh start or a tab visit is not).
+      if (resultStep.pushed && navigationType === 'POP' && sawStep.current) {
+        // "Back" popped the answer's step (also after visiting another screen and coming back): the criteria.
+        resultStep.pushed = false;
+        sequence.current++;
+        setRun(null);
+      } else {
+        // A new answer, or one kept from an earlier visit reached by the tab: add its step once.
+        resultStep.pushed = true;
+        navigate({ pathname: '/quick', search: '?step=result' });
+      }
+    } else if (!shown && onResult) {
+      if (leaving.current) return; // "Change" (or an expired answer) already went back; the history catches up
+      if (resultStep.pushed) {
+        // The answer went stale on its own step: leave that step (no duplicate criteria entry under it).
+        resultStep.pushed = false;
+        leaving.current = true;
+        navigate(-1);
+      } else {
+        // Criteria on a result URL without our step (a reload): the plain screen, in place.
+        navigate({ pathname: '/quick', search: '' }, { replace: true });
+      }
+    }
+    if (!onResult) leaving.current = false;
+  }, [shown, onResult, navigate, navigationType]);
 
   const [expired, setExpired] = useState(initial.expired);
 
@@ -682,6 +725,12 @@ export function QuickScreen() {
   const edit = () => {
     sequence.current++;
     setRun(null);
+    if (onResult && resultStep.pushed) {
+      // The same as "back": the answer's step leaves the history (so the next "back" leaves the quick screen).
+      resultStep.pushed = false;
+      leaving.current = true;
+      navigate(-1);
+    }
   };
 
   return (

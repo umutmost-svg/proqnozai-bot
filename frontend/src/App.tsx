@@ -22,7 +22,7 @@ const TAB_ROOTS = new Set(['/', '/matches', '/quick', '/profile']);
 /** Keeps Telegram's native BackButton and viewport in sync with the router. */
 function TelegramBridge() {
   const { telegram, boot } = useServices();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const goBack = useGoBack('/');
   const navigate = useNavigate();
   useAuthBootstrap();
@@ -42,8 +42,9 @@ function TelegramBridge() {
   }, [pathname, telegram]);
 
   useEffect(
-    () => telegram.onBackButton(() => (TAB_ROOTS.has(pathname) ? navigate('/') : goBack())),
-    [telegram, pathname, goBack, navigate],
+    // A tab root goes home — unless it shows a step of its own (the quick answer, ?step=…): then back to that tab.
+    () => telegram.onBackButton(() => (TAB_ROOTS.has(pathname) && !search.includes('step=') ? navigate('/') : goBack())),
+    [telegram, pathname, search, goBack, navigate],
   );
   return null;
 }

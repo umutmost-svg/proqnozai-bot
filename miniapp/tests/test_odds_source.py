@@ -325,13 +325,13 @@ def test_an_old_snapshot_price_is_not_restored(clock: FakeClock, tmp_path) -> No
     first = OddsSource(OddsStore(clock, catalog=True), lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep,
                        fetch=FakeApi([line(10, "Spain", "Italy", t)]), snapshot=snap)
     asyncio.run(first.cycle())
-    clock.advance(2 * 3600)
+    clock.advance(5 * 3600)                                                 # older than any serving limit (4 h)
     source = OddsSource(OddsStore(clock, catalog=True), lambda: [], clock=clock, sleep=no_sleep, fetch=FakeApi([]),
                         snapshot=snap)
     source._list = {10: {"country": "UEFA Nations League", "league": "League A", "home": "Spain", "away": "Italy",
                          "kickoff": float(t)}}                      # still listed: only its age keeps it out
     assert source.restore() == 0
-    clock.advance(-2 * 3600 + 60)
+    clock.advance(-5 * 3600 + 60)
     assert source.restore() == 1                                    # the same snapshot, fresh: restored
 
 
@@ -347,3 +347,159 @@ def test_a_restored_id_must_still_be_the_same_line(clock: FakeClock, tmp_path) -
     second = OddsSource(store, lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep, fetch=api, snapshot=snap)
     asyncio.run(second.cycle())
     assert len(store) == 0
+
+
+def test_a_match_five_days_ahead_is_priced(clock: FakeClock) -> None:
+    t = clock.now + 5 * 86400
+    store = OddsStore(clock, catalog=True)
+    api = FakeApi([line(10, "Spain", "Italy", t)])
+    source = OddsSource(store, lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep, fetch=api)
+    assert asyncio.run(source.cycle()) == 1
+    assert store.lookup(event(SPAIN, ITALY, t)) is not None
+
+
+def test_the_source_starts_with_the_app(tmp_path, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+
+    from miniapp.app import create_app
+    from miniapp.odds import source as source_module
+    from miniapp.settings import Settings
+    from miniapp.tests.conftest import ORIGIN
+    from miniapp.tests.signing import TEST_BOT_TOKEN
+
+    started = []
+    monkeypatch.setattr(source_module.OddsSource, "ensure_running", lambda self: started.append(self))
+    settings = Settings(bot_token=TEST_BOT_TOKEN, db_path=tmp_path / "miniapp.db", trusted_origins=frozenset({ORIGIN}),
+                        environment="development", odds_feed_enabled=True, odds_catalog=True)
+    with TestClient(create_app(settings)):
+        assert len(started) == 1                 # no request yet: started at boot
+
+
+def test_the_source_keeps_the_calendars_loaded(clock: FakeClock) -> None:
+    warmed = []
+    source = OddsSource(OddsStore(clock, catalog=True), lambda: [], clock=clock, sleep=no_sleep, fetch=FakeApi([]),
+                        warm=lambda: warmed.append(1))
+    asyncio.run(source.cycle())
+    assert warmed == [1]
+
+
+def test_a_week_tier_price_is_served_hours_later_but_a_client_keeps_it_an_hour(clock: FakeClock) -> None:
+    t = clock.now + 4 * 86400
+    store = OddsStore(clock, catalog=True)
+    source = OddsSource(store, lambda: [event(SPAIN, ITALY, t)], clock=clock, sleep=no_sleep,
+                        fetch=FakeApi([line(10, "Spain", "Italy", t)]))
+    asyncio.run(source.cycle())
+    first = store.lookup(event(SPAIN, ITALY, t))
+    assert first is not None and 1 <= first.valid_for <= 3600              # a client keeps it at most an hour
+    clock.advance(2 * 3600)                                                # not re-priced (refresh every 3 h)
+    later = store.lookup(event(SPAIN, ITALY, t))
+    assert later is not None and 1 <= later.valid_for <= 3600              # still served: 4 h limit that far out
+    clock.advance(3 * 3600)
+    assert store.lookup(event(SPAIN, ITALY, t)) is None                    # past 4 h: never shown
+
+
+def test_the_price_about_to_go_stale_is_refreshed_first(clock: FakeClock) -> None:
+    near_t, week_t = clock.now + 3 * 3600, clock.now + 4 * 86400
+    near = (Competitor("fd:team:301", "Northton", None), Competitor("fd:team:302", "Eastton", None))
+    week = (Competitor("fd:team:303", "Westton", None), Competitor("fd:team:304", "Southton", None))
+    events = [FootballEvent("fd:1", "fd:UNL", datetime.fromtimestamp(near_t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "upcoming", *near, Provenance("football-data.org", "x", None), "TIMED"),
+              FootballEvent("fd:2", "fd:UNL", datetime.fromtimestamp(week_t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "upcoming", *week, Provenance("football-data.org", "x", None), "TIMED")]
+    api = FakeApi([line(10, "Northton", "Eastton", near_t), line(11, "Westton", "Southton", week_t)])
+    source = OddsSource(OddsStore(clock, catalog=True), lambda: events, max_per_cycle=1, clock=clock, sleep=no_sleep,
+                        fetch=api)
+    source._priced = {10: clock.now - 11 * 60, 11: clock.now - (4 * 3600 - 3 * 60)}  # stale in 4 min vs in 3 min
+    asyncio.run(source.cycle())
+    assert [u for u in api.calls if "/outcomes/" in u][0].count("/line/11/") == 1      # the week match goes first
+
+
+def test_a_share_of_requests_goes_beyond_the_near_matches(clock: FakeClock) -> None:
+    near_t, far_t = clock.now + 3 * 3600, clock.now + 3 * 86400
+    names = ["Aldton", "Brixton", "Corton", "Dalton", "Elton", "Fenton", "Gorton", "Hilton", "Ilton", "Jolton"]
+    teams = [(Competitor(f"fd:team:{500 + 2 * i}", names[i], None), Competitor(f"fd:team:{501 + 2 * i}", names[i] + "ville", None))
+             for i in range(5)]
+    def ev_at(i: int, home, away, t: float) -> FootballEvent:
+        return FootballEvent(f"fd:{i}", "fd:UNL", datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                             "upcoming", home, away, Provenance("football-data.org", "x", None), "TIMED")
+    events = [ev_at(i, h, a, near_t if i < 4 else far_t) for i, (h, a) in enumerate(teams)]
+    api = FakeApi([line(10 + i, h.name, a.name, near_t if i < 4 else far_t) for i, (h, a) in enumerate(teams)])
+    source = OddsSource(OddsStore(clock, catalog=True), lambda: events, max_per_cycle=4, clock=clock, sleep=no_sleep,
+                        fetch=api)
+    source._priced = {14: clock.now - 3.5 * 3600}                          # the far one: priced, not yet urgent
+    asyncio.run(source.cycle())
+    priced = [u for u in api.calls if "/outcomes/" in u]
+    assert len(priced) == 4 and any("/line/14/" in u for u in priced)      # its turn comes within the budget
+
+
+
+def test_the_far_share_counts_requests_pages_included(clock: FakeClock) -> None:
+    near_t, far_t = clock.now + 3 * 3600, clock.now + 3 * 86400
+    pages = [{"outcomeId": i, "groupTitle": "Corners", "outcomeTitle": f"o{i}", "odd": "1.5"} for i in range(1, 101)]
+
+    class TwoPages(FakeApi):
+        async def __call__(self, url: str):
+            if "/outcomes/" in url and "lastId=0" in url and "/line/14/" not in url:
+                self.calls.append(url)
+                return 200, json.dumps({"lineMatchOutcomes": pages}).encode()      # near lines: two pages each
+            return await super().__call__(url)
+
+    a, b = Competitor("fd:team:601", "Aldton", None), Competitor("fd:team:602", "Brixton", None)
+    c, d = Competitor("fd:team:603", "Corton", None), Competitor("fd:team:604", "Dalton", None)
+    f1, f2 = Competitor("fd:team:605", "Fenton", None), Competitor("fd:team:606", "Gorton", None)
+    def ev_at(i, h, w, t):
+        return FootballEvent(f"fd:{i}", "fd:UNL", datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                             "upcoming", h, w, Provenance("football-data.org", "x", None), "TIMED")
+    events = [ev_at(0, a, b, near_t), ev_at(1, c, d, near_t), ev_at(4, f1, f2, far_t)]
+    api = TwoPages([line(10, "Aldton", "Brixton", near_t), line(11, "Corton", "Dalton", near_t),
+                    line(14, "Fenton", "Gorton", far_t)])
+    source = OddsSource(OddsStore(clock, catalog=True), lambda: events, max_per_cycle=4, clock=clock, sleep=no_sleep,
+                        fetch=api)
+    source._priced = {14: clock.now - 3.5 * 3600}
+    asyncio.run(source.cycle())
+    assert any("/line/14/" in u for u in api.calls)                         # the far match got its share
+
+
+
+def test_a_two_page_far_line_fits_its_share_whole(clock: FakeClock) -> None:
+    near_t, far_t = clock.now + 3 * 3600, clock.now + 3 * 86400
+    page = [{"outcomeId": i, "groupTitle": "Corners", "outcomeTitle": f"o{i}", "odd": "1.5"} for i in range(1, 101)]
+
+    class FarTwoPages(FakeApi):
+        async def __call__(self, url: str):
+            if "/line/13/outcomes/" in url and "lastId=0" in url:
+                self.calls.append(url)
+                return 200, json.dumps({"lineMatchOutcomes": page}).encode()
+            return await super().__call__(url)                              # records the call itself
+
+    names = ["Aldton", "Brixton", "Corton", "Dalton", "Elton", "Fenton", "Gorton", "Hilton"]
+    comps = [Competitor(f"fd:team:{700 + i}", n, None) for i, n in enumerate(names)]
+    def ev_at(i, h, w, t):
+        return FootballEvent(f"fd:{i}", "fd:UNL", datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                             "upcoming", h, w, Provenance("football-data.org", "x", None), "TIMED")
+    events = [ev_at(i, comps[2 * i], comps[2 * i + 1], near_t if i < 3 else far_t) for i in range(4)]
+    api = FarTwoPages([line(10 + i, comps[2 * i].name, comps[2 * i + 1].name, near_t if i < 3 else far_t) for i in range(4)])
+    store = OddsStore(clock, catalog=True)
+    source = OddsSource(store, lambda: events, max_per_cycle=4, clock=clock, sleep=no_sleep, fetch=api)
+    source._priced = {13: clock.now - 3.5 * 3600}
+    asyncio.run(source.cycle())
+    assert sum("/line/13/outcomes/" in u for u in api.calls) == 2              # both of its pages were read
+    assert source._priced[13] == clock.now                                  # and the far line was priced
+
+
+def test_a_held_near_line_keeps_its_place_ahead_of_less_urgent_ones(clock: FakeClock) -> None:
+    far_t = clock.now + 3 * 86400
+    names = ["Aldton", "Brixton", "Corton", "Dalton", "Elton", "Fenton", "Gorton", "Hilton", "Ilton", "Jolton"]
+    comps = [Competitor(f"fd:team:{800 + i}", n, None) for i, n in enumerate(names)]
+    kicks = [clock.now + 3600, clock.now + 4000, clock.now + 4400, far_t, clock.now + 5000]   # A B C, far D, E
+    def ev_at(i, t):
+        return FootballEvent(f"fd:{i}", "fd:UNL", datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                             "upcoming", comps[2 * i], comps[2 * i + 1], Provenance("football-data.org", "x", None), "TIMED")
+    events = [ev_at(i, k) for i, k in enumerate(kicks)]
+    api = FakeApi([line(10 + i, comps[2 * i].name, comps[2 * i + 1].name, k) for i, k in enumerate(kicks)])
+    source = OddsSource(OddsStore(clock, catalog=True), lambda: events, max_per_cycle=4, clock=clock, sleep=no_sleep,
+                        fetch=api)
+    source._priced = {13: clock.now - 3.5 * 3600}
+    asyncio.run(source.cycle())
+    order = [int(u.split("/line/")[1].split("/")[0]) for u in api.calls if "/outcomes/" in u]
+    assert order == [10, 11, 13, 12]                                        # C right after the far D; E waits

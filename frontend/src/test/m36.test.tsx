@@ -225,6 +225,33 @@ describe('quick prediction screen', () => {
     expect(JSON.parse(window.localStorage.getItem('proqnozai.quick.v1')!)).toMatchObject({ period: '3d', market: 'double' });
   });
 
+  it('"back" after an answer returns to the criteria, not to the page visited before', async () => {
+    const user = userEvent.setup();
+    const { data } = backend(() => answer());
+    renderApp('#/event/fd%3A4', { data });
+    window.location.hash = '#/quick';
+    await user.click(await screen.findByTestId('quick-submit'));
+    expect(await screen.findByTestId('quick-result')).toBeInTheDocument();
+    expect(window.location.hash).toContain('step=result');
+    window.history.back();
+    expect(await screen.findByTestId('quick-criteria')).toBeInTheDocument();
+    await waitFor(() => expect(window.location.hash).toBe('#/quick'));
+  });
+
+  it('"back" still returns to the criteria after opening a match from the answer', async () => {
+    const user = userEvent.setup();
+    const { data } = backend(() => answer());
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    expect(await screen.findByTestId('quick-result')).toBeInTheDocument();
+    window.location.hash = '#/event/fd%3A1';                    // another screen (the quick screen unmounts)
+    await waitFor(() => expect(screen.queryByTestId('quick-result')).toBeNull());
+    window.history.back();                                      // back to the answer
+    expect(await screen.findByTestId('quick-result')).toBeInTheDocument();
+    window.history.back();                                      // and back to the criteria, not the answer again
+    expect(await screen.findByTestId('quick-criteria')).toBeInTheDocument();
+  });
+
   it('a coupon shows every leg, the combined chance under its assumption, and is never padded', async () => {
     const user = userEvent.setup();
     let calls = 0;

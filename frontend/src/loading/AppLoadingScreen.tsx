@@ -52,7 +52,6 @@ export function AppLoadingScreen({ phase, subject, hint, view, reducedMotion, on
     >
       <div className={s.top} aria-hidden="true">
         <span className={s.wordmark}>{brand.name.toUpperCase()}</span>
-        <span className={s.beta}>BETA</span>
       </div>
 
       <div className={s.center}>

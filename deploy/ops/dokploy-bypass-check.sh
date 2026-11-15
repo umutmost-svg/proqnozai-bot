@@ -13,13 +13,16 @@
 #   3) the Dokploy Swarm service carries Traefik labels (a route through the Swarm provider);
 #   4) the default Host is answered from the public address with anything but 404.
 # Result goes to healthchecks.io (URL in /root/.hc-dokploy-bypass, 0600): ping when all is well, /fail otherwise;
-# a missing ping (server, cron or network down) alerts after the check's grace time. Prints nothing secret.
+# a missing ping (server, cron or network down) alerts after the check's grace time. Without that file, a failure
+# runs $NOTIFY "<reason>" instead (default /root/notify-telegram.sh: a Telegram message to the owner).
+# Prints nothing secret.
 set -u
 DIR=${TRAEFIK_DYNAMIC_DIR:-/etc/dokploy/traefik/dynamic}
 F="$DIR/dokploy.yml"
 APPROVED=${APPROVED_SHA_FILE:-/root/.dokploy-route.sha256}
 IP=${PUBLIC_IP:-164.90.180.208}
 HC_FILE=${HC_FILE:-/root/.hc-dokploy-bypass}
+NOTIFY=${NOTIFY:-/root/notify-telegram.sh}
 reason=""
 add() { reason="${reason:+$reason; }$1"; }
 
@@ -46,12 +49,17 @@ fi
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H 'Host: dokploy.docker.localhost' "http://$IP/")
 [ "$code" = 404 ] || add "default host answered $code"
 
+"$NOTIFY" --refresh >/dev/null 2>&1 || true   # keeps the alert channel's cache fresh (alerts with Docker down)
 u=$(cat "$HC_FILE" 2>/dev/null) || u=""
 if [ -z "$reason" ]; then
   [ -n "$u" ] && curl -fsS -m 10 -o /dev/null "$u"
   exit 0
 fi
 logger -t dokploy-bypass "OPEN: $reason" 2>/dev/null
-[ -n "$u" ] && curl -fsS -m 10 -o /dev/null "$u/fail"
+if [ -n "$u" ]; then
+  curl -fsS -m 10 -o /dev/null "$u/fail"
+else
+  "$NOTIFY" "Dokploy may be reachable without Access: $reason" || true
+fi
 echo "OPEN: $reason"
 exit 1

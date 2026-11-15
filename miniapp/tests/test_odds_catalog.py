@@ -250,3 +250,11 @@ def test_aliases_from_the_unmatched_log(clock: FakeClock) -> None:
     other = OddsStore(clock, catalog=True)                              # the same names from another country
     push(other, clock, cline(11, "Deportivo Moquegua", "Atletico Grau", t, country="Uruguay", league="Primera Division"))
     assert other.match_catalog([event(h, a, t, comp="fd:PPD")]).wanted == []
+
+
+def test_the_rest_of_the_week_refreshes_less_often_and_serves_at_most_an_hour_per_load(clock: FakeClock) -> None:
+    from miniapp.odds.store import WEEK_REFRESH_S
+    store = OddsStore(clock, catalog=True)
+    t = clock.now + 4 * 86400
+    push(store, clock, cline(10, "Spain", "Italy", t))
+    assert store.match_catalog([event(SPAIN, ITALY, t)]).wanted == [(10, WEEK_REFRESH_S)]

@@ -645,9 +645,17 @@ def create_app(
     # The Mini App's own Mostbet source (the bot is going to be retired): catalogue mode only, started by use.
     odds_source = (OddsSource(odds, lambda: sports.search_index.upcoming(),
                               max_per_cycle=settings.odds_source_max_per_cycle,
-                              snapshot=settings.db_path.with_name("odds-snapshot.json"))
+                              snapshot=settings.db_path.with_name("odds-snapshot.json"),
+                              warm=sports.ensure_calendars_warm)
                    if settings.odds_catalog and settings.odds_feed_enabled and odds_source_enabled else None)
     ai = ai or build_ai_service(settings, sports, clock=clock, ledger=store, history=history, odds=odds)
+    if odds_source is not None:
+        # The source runs from the start, not from the first signed-in request: after a deploy (or with nobody in the
+        # app) prices would otherwise go stale and every match would show none until someone opened it.
+        async def start_odds_source() -> None:
+            odds_source.ensure_running()
+        app.router.on_startup.append(start_odds_source)
+
     async def active_session(request: Request) -> tuple[str, Session] | None:
         """current_session for the data APIs: a signed-in user may also start the settlement pass."""
         found = await current_session(request)

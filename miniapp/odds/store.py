@@ -41,16 +41,32 @@ NEAR_S = 6 * 3600.0
 NEAR_REFRESH_S = 10 * 60.0
 FAR_REFRESH_S = 45 * 60.0
 FAR_MAX_AGE_S = 60 * 60.0
+# Matches further than WEEK_TIER_S (the rest of the week): prices move slowly that far out, so they refresh every
+# WEEK_REFRESH_S and may be served up to WEEK_MAX_AGE_S old — this keeps the whole week inside the request budget,
+# near matches first. A client keeps a price at most MAX_VALID_FOR_S (it asks again on the next page load).
+WEEK_TIER_S = 48 * 3600.0
+WEEK_REFRESH_S = 3 * 3600.0
+WEEK_MAX_AGE_S = 4 * 3600.0
+MAX_VALID_FOR_S = 3600.0
 # The catalogue governs serving while the last complete list is at most this old (the source reads it every 15 min).
 CATALOG_TTL_S = 40 * 60.0
-CATALOG_WINDOW_S = 48 * 3600.0
+# How far ahead the catalogue prices matches (the whole week the Mini App lists; far ones refresh every FAR_REFRESH_S).
+CATALOG_WINDOW_S = 7 * 86400.0
 MAX_CATALOG = 6000
 SAMPLES_PER_REASON = 30
 
 
 def max_age(kickoff: float, now: float, catalog: bool) -> float:
     """How old a price may be when served: 15 min near kickoff, an hour further out (catalogue mode only)."""
-    return FAR_MAX_AGE_S if catalog and kickoff - now > NEAR_S else MAX_AGE_S
+    if not catalog or kickoff - now <= NEAR_S:
+        return MAX_AGE_S
+    return WEEK_MAX_AGE_S if kickoff - now > WEEK_TIER_S else FAR_MAX_AGE_S
+
+
+def refresh_every(kickoff: float, now: float) -> float:
+    """How often the own source re-prices a line (catalogue mode): near / far / the rest of the week."""
+    ahead = kickoff - now
+    return NEAR_REFRESH_S if ahead <= NEAR_S else WEEK_REFRESH_S if ahead > WEEK_TIER_S else FAR_REFRESH_S
 # No prices in the last minutes before the (earlier) kickoff: the bot learns that a match has
 # gone live from its match list, refreshed every 15 minutes, so a match starting a little
 # early could otherwise still show pre-match prices.
@@ -198,7 +214,7 @@ class OddsStore:
         starts = min(kickoff, stored.candidate.kickoff)
         # Never more than the age limit: the client rejects a longer validity as impossible.
         valid_for = min(stored.fetched_at + age - TRANSIT_ALLOWANCE_S, starts - CUTOFF_BEFORE_KICKOFF_S,
-                        now + age) - now
+                        now + min(age, MAX_VALID_FOR_S)) - now
         # Under a second left: not served (the client counts validity in whole seconds).
         if stored.live or not stored.book or valid_for < 1:
             return None
@@ -271,7 +287,7 @@ class OddsStore:
         self._assigned = owner
         wanted = sorted(((i, k) for i, k in chosen.items()), key=lambda x: (x[1], x[0]))
         return CatalogReport(len(self._catalog), counted, reasons,
-                             [(i, NEAR_REFRESH_S if k - now <= NEAR_S else FAR_REFRESH_S) for i, k in wanted], samples)
+                             [(i, refresh_every(k, now)) for i, k in wanted], samples)
 
     def __len__(self) -> int:
         return len(self._lines)

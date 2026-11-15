@@ -26,7 +26,7 @@
 
 1. **Каталог линий (бот → Mini App, без запросов к API Mostbet).** Раз в цикл бот отправляет подписанным
    push'ем метаданные всех футбольных линий из своего кэша списка: не live, не виртуальные, не outright, начало в
-   окне 48 ч: `id, country, league, home, away, kickoff`. Это бесплатно (список бот и так обновляет каждые 15 мин).
+   окне 7 дней (с 15.11; было 48 ч): `id, country, league, home, away, kickoff`. Это бесплатно (список бот и так обновляет каждые 15 мин).
 2. **Сопоставление в Mini App (одно место правды).** Для каждой линии каталога — матч каталога Mini App:
    - кандидаты — события любого турнира с началом в пределах ±15 мин (всё в UTC; бот уже переводит время в UTC);
    - обе команды совпадают после нормализации (`team_key`: регистр, диакритика, пунктуация, `FC/CF/SK…`) по имени,
@@ -58,3 +58,13 @@
 - **Team names stay exact.** A loose pass was tried and dropped after three Codex rounds. Any rule that sets words aside ("AF", "RJ", "SE", "Regatas") or accepts one name inside another also accepted different clubs: "Portuguesa RJ" for "Portuguesa", "Regatas Brasil" for "Brasil", "Inter Milan" for "Milan", "Barcelona Femeni" for "Barcelona". Missing names go to the alias table (`leagues.json` aliases, keyed by the football-data team id). National teams also take the area aliases ("Czechia" / "Czech Republic"). The `odds.unmatched_examples` log now carries up to 30 samples per reason with both teams' provider ids, so an alias can be added directly. From the 14.11 log, "Vasco da Gama RJ" became alias 1780.
 - **Snapshot.** Own prices are kept in `odds-snapshot.json` next to the database and written after every priced cycle (atomically). They are read once, right after the first complete list, and only lines that list still shows upcoming, with the same teams, competition and kickoff, come back. A deploy therefore no longer empties the odds for the roughly 30 minutes a refill takes, and a line withdrawn or gone live meanwhile is not served. They are re-checked by `read_book` and the usual age limits apply.
 - **No odds before an analysis.** The owner's rule (15.11): prices are shown only inside an AI analysis or a quick forecast, never on the match page. `/api/sports/event/{id}` no longer carries `odds`, and the match page's odds card is removed.
+
+## 15.11: the whole week and start at boot
+
+- The catalogue window is 7 days (`CATALOG_WINDOW_S`), so matches further than 48 h ahead get prices too. There are three tiers:
+  - up to 6 h ahead: refreshed every 10 min, served at most 15 min old;
+  - 6–48 h: every 45 min, at most 60 min;
+  - beyond 48 h: every 3 h, at most 4 h.
+
+  A client keeps any price at most 1 h, then asks again. Within the budget, the soonest-to-go-stale line goes first. While any match beyond 6 h is due, a quarter of the requests (pages included) is reserved for those matches. The `stale=` count in `odds.source_cycle` measures coverage in production.
+- The source starts with the app (a startup hook), no longer at the first signed-in request. After a deploy, or while nobody uses the app, prices no longer go stale.
