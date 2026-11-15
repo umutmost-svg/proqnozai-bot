@@ -239,3 +239,14 @@ def test_vasco_is_the_feeds_vasco_da_gama_rj(clock: FakeClock) -> None:
     chape, vasco = Competitor("fd:team:1772", "Chapecoense AF", "Chapecoense"), Competitor("fd:team:1780", "CR Vasco da Gama", None)
     push(store, clock, cline(10, "Chapecoense", "Vasco da Gama RJ", t, country="Brazil", league="Serie A"))
     assert store.match_catalog([event(chape, vasco, t, comp="fd:BSA")]).wanted == [(10, NEAR_REFRESH_S)]
+
+
+def test_aliases_from_the_unmatched_log(clock: FakeClock) -> None:
+    store = OddsStore(clock, catalog=True)
+    t = clock.now + 3 * 3600
+    h, a = Competitor("fd:team:11346", "CD Moquegua", None), Competitor("fd:team:8741", "CA Grau", None)
+    push(store, clock, cline(10, "Deportivo Moquegua", "Atletico Grau", t, country="Peru", league="Liga 1"))
+    assert store.match_catalog([event(h, a, t, comp="fd:PPD")]).wanted == [(10, NEAR_REFRESH_S)]
+    other = OddsStore(clock, catalog=True)                              # the same names from another country
+    push(other, clock, cline(11, "Deportivo Moquegua", "Atletico Grau", t, country="Uruguay", league="Primera Division"))
+    assert other.match_catalog([event(h, a, t, comp="fd:PPD")]).wanted == []
