@@ -19,6 +19,7 @@ function parseRules(raw: string | null): Rules {
 // ---------------- broadcasts ----------------
 
 export function Broadcasts() {
+  const server = useServerMode();
   const navigate = useNavigate();
   const me = useMe();
   const [filter, setFilter] = useState<'all' | Broadcast['status']>('all');
@@ -32,7 +33,9 @@ export function Broadcasts() {
     <>
       <PageHead title="Рассылки" subtitle="Кампании в Telegram: аудитория, расписание, доставка и клики"
         actions={<button type="button" className="btn primary" disabled={!manage} onClick={() => navigate('/broadcasts/new')}>Новая рассылка</button>} />
-      <div className="banner warn" style={{ marginBottom: 16 }}>Рассылки сохраняются и планируются, но в Telegram пока не уходят — отправка появится через внутренний канал бота.</div>
+      {server
+        ? <div className="banner info" style={{ marginBottom: 16 }}>Рассылки уходят в Telegram через бота в запланированное время.</div>
+        : <div className="banner warn" style={{ marginBottom: 16 }}>Пилот: рассылки сохраняются и планируются, но в Telegram не уходят.</div>}
       <Metrics>
         <Metric label="Всего кампаний" value={num(data?.items.length)} caption="в админке" />
         <Metric label="Запланированы" value={num(count('scheduled'))} caption="ждут отправки" />
@@ -145,6 +148,7 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
   item: Broadcast | null; initialRules: Rules; tags: TagCount[]; onSaved: (id: number, schedule: boolean) => void; reload: () => void;
   autoConfirm: boolean;
 }) {
+  const server = useServerMode();
   const me = useMe();
   const editable = (!item || item.status === 'draft') && can(me.admin.role, 'manage_users');
   const [name, setName] = useState(item?.name ?? '');
@@ -214,13 +218,13 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
             <div className="kv-row"><span>Получателей</span><b>{size === null ? '…' : `≈ ${num(size)}`}</b></div>
             <div className="kv-row"><span>Подтверждение</span><b>причина + 2FA</b></div>
             <div className="kv-row"><span>Журнал</span><b>запись при планировании</b></div>
-            <div className="kv-row"><span>Отправка</span><b>пока не подключена</b></div>
+            <div className="kv-row"><span>Отправка</span><b>{server ? 'через бота, в запланированное время' : 'в пилоте не уходит'}</b></div>
           </Card>
         </div>
       </div>
       {confirm && item && (
         <DangerDialog title="Запланировать рассылку?" confirmLabel="Запланировать" tone="primary" onClose={() => setConfirm(false)}
-          lead={<>«{name}» · ≈ {num(size)} получателей · {when.replace('T', ' ')} UTC. Пока сообщение не уйдёт в Telegram: отправка ещё не подключена.</>}
+          lead={<>«{name}» · ≈ {num(size)} получателей · {when.replace('T', ' ')} UTC. {server ? 'Бот отправит сообщение в это время.' : 'В пилоте сообщение не уйдёт в Telegram.'}</>}
           onConfirm={async (input) => {
             await api(`/api/admin/broadcasts/${item.id}/schedule`, { method: 'POST', body: { ...input, at: Math.floor(Date.parse(`${when}:00Z`) / 1000) } });
             setConfirm(false); setToast('Рассылка запланирована'); reload();
@@ -391,10 +395,12 @@ export function Dialogs() {
   return (
     <>
       <PageHead title="Диалоги" subtitle="Ответы пользователей боту и переписка поддержки в одном окне" />
-      <div className="banner warn" style={{ marginBottom: 16 }}>Приём сообщений из бота ещё не подключён: нужно решение о хранении переписки (правило приватности проекта).{server ? '' : ' Ниже — демонстрация.'}</div>
+      {server
+        ? <div className="banner info" style={{ marginBottom: 16 }}>Сообщения пользователей боту (когда их приём включён в боте) показываются в разделе «Обращения» и хранятся по сроку из его настроек; ответ уходит через бота.</div>
+        : <div className="banner warn" style={{ marginBottom: 16 }}>Пилот: ниже — демонстрация.</div>}
       {error ? <ErrorBox error={error} onRetry={reload} /> : loading && !data ? <Loading rows={6} /> : !threads ? (
         server
-          ? <Card><Empty title="Переписка пока не собирается">Сообщения пользователей боту сюда не поступают, пока не подключён приём сообщений из бота и не принято решение о хранении переписки.</Empty></Card>
+          ? <Card><Empty title="Переписка — в «Обращениях»">Сообщения пользователей боту и ответы на них собраны в разделе <Link to="/inquiries">Обращения</Link>.</Empty></Card>
           : <Card><NotCollected what="Переписка с пользователями" /></Card>
       ) : (
         <div className="inbox">

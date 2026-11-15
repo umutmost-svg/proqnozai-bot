@@ -7,7 +7,7 @@ football-data-key,owner-id} and, when present, {odds-feed,anthropic-key}. Talks 
 Idempotent configuration: finds the project/application by exact name, checks it BEFORE any change (no
 published ports), re-saves image, environment, resources, Swarm update config, the data volume and the domain
 (each only once). Without --deploy it configures and stops; every run WITH --deploy starts one Dokploy
-deployment. Closed mode: MINIAPP_ALLOWED_USER_IDS = the bot's ADMIN_ID, re-read from the running bot and
+deployment. Closed mode (unless /root/miniapp-secrets/public exists): MINIAPP_ALLOWED_USER_IDS = the bot's ADMIN_ID, re-read from the running bot and
 compared with the stored value. On the FIRST deployment there is no previous revision to roll back to: health is
 verified explicitly afterwards (release-same-server.md, B3); later updates roll back automatically.
 Errors print the procedure, HTTP status and the API's error code only — never a body or a value.
@@ -140,7 +140,6 @@ env_vars = {
     "MINIAPP_DB_PATH": "/data/miniapp.db",
     "MINIAPP_CSP_MODE": "enforce",
     "MINIAPP_COOKIE_SAMESITE": "none",
-    "MINIAPP_ALLOWED_USER_IDS": OWNER,
     "MINIAPP_FOOTBALL_DATA_KEY": secret("/root/miniapp-secrets/football-data-key"),
     "MINIAPP_FOOTBALL_DATA_LIVE_PLAN": "true",
     "MINIAPP_FOOTBALL_DATA_PER_MINUTE": "60",
@@ -157,6 +156,20 @@ env_vars = {
 }
 if not OWNER.isdigit():
     sys.exit("STOP: owner id is not a Telegram id")
+# Public launch (owner 15.11): the presence of /root/miniapp-secrets/public opens the Mini App to everyone; without it
+# the closed mode stays (only the owner). The blocked list (MINIAPP_BLOCKED_USER_IDS, file blocked-ids) applies always.
+PUBLIC = Path("/root/miniapp-secrets/public").exists()
+if not PUBLIC:
+    env_vars["MINIAPP_ALLOWED_USER_IDS"] = OWNER
+_BLOCKED = Path("/root/miniapp-secrets/blocked-ids")
+if _BLOCKED.exists():
+    ids = [x for x in secret(str(_BLOCKED)).replace("\n", ",").split(",") if x.strip()]
+    if not all(x.strip().isdigit() and 1 <= int(x) < 2**53 for x in ids):  # the app's own rule (settings.py)
+        sys.exit("STOP: blocked-ids holds something that is not a Telegram id")
+    if ids:
+        env_vars["MINIAPP_BLOCKED_USER_IDS"] = ",".join(x.strip() for x in ids)
+print("access:", "PUBLIC (everyone)" if PUBLIC else "closed (owner only)",
+      f"blocked={len(env_vars.get('MINIAPP_BLOCKED_USER_IDS', '').split(',')) if env_vars.get('MINIAPP_BLOCKED_USER_IDS') else 0}")
 if ODDS_SECRET:
     env_vars["MINIAPP_ODDS_FEED_SECRET"] = ODDS_SECRET
 if POLICY_KEY:
