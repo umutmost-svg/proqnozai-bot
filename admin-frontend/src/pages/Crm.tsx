@@ -34,7 +34,7 @@ export function Broadcasts() {
       <PageHead title="Рассылки" subtitle="Кампании в Telegram: аудитория, расписание, доставка и клики"
         actions={<button type="button" className="btn primary" disabled={!manage} onClick={() => navigate('/broadcasts/new')}>Новая рассылка</button>} />
       {server
-        ? <div className="banner info" style={{ marginBottom: 16 }}>Рассылки уходят в Telegram через бота в запланированное время.</div>
+        ? <div className="banner info" style={{ marginBottom: 16 }}>Рассылки отправляет бот: в запланированное время он начинает отправку.</div>
         : <div className="banner warn" style={{ marginBottom: 16 }}>Пилот: рассылки сохраняются и планируются, но в Telegram не уходят.</div>}
       <Metrics>
         <Metric label="Всего кампаний" value={num(data?.items.length)} caption="в админке" />
@@ -224,7 +224,7 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
       </div>
       {confirm && item && (
         <DangerDialog title="Запланировать рассылку?" confirmLabel="Запланировать" tone="primary" onClose={() => setConfirm(false)}
-          lead={<>«{name}» · ≈ {num(size)} получателей · {when.replace('T', ' ')} UTC. {server ? 'Бот отправит сообщение в это время.' : 'В пилоте сообщение не уйдёт в Telegram.'}</>}
+          lead={<>«{name}» · ≈ {num(size)} получателей · {when.replace('T', ' ')} UTC. {server ? 'В это время бот начнёт отправку.' : 'В пилоте сообщение не уйдёт в Telegram.'}</>}
           onConfirm={async (input) => {
             await api(`/api/admin/broadcasts/${item.id}/schedule`, { method: 'POST', body: { ...input, at: Math.floor(Date.parse(`${when}:00Z`) / 1000) } });
             setConfirm(false); setToast('Рассылка запланирована'); reload();
