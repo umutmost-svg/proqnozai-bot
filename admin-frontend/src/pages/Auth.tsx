@@ -2,6 +2,9 @@ import { useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEve
 import { api, ApiError, errorText } from '../api';
 import { useAuth } from '../state';
 
+// Before sign-in the mode is not known yet: the local pilot is served on loopback names only.
+const LOOPBACK = new Set(['127.0.0.1', 'localhost']);
+
 function Frame({ children, foot }: { children: React.ReactNode; foot: string }) {
   return (
     <div className="auth">
@@ -42,7 +45,9 @@ function Login({ onNext, notice }: { onNext: () => void; notice: string | null }
     }
   };
   return (
-    <Frame foot="Локальный пилот: доступен только с этого компьютера (127.0.0.1). Вход не связан с Telegram.">
+    <Frame foot={LOOPBACK.has(window.location.hostname)
+      ? 'Локальный пилот: доступен только с этого компьютера (127.0.0.1). Вход не связан с Telegram.'
+      : 'Вход только для администраторов: пароль и код 2FA. Вход не связан с Telegram.'}>
       <form onSubmit={submit} noValidate>
         <h1>Вход в систему</h1>
         <p className="lead">Используйте личную учётную запись администратора</p>

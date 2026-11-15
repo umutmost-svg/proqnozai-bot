@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, describeRules, errorText, RULE_LABELS, type Broadcast, type CreditsPage, type DialogThread, type Rules, type Segment, type TagCount } from '../api';
 import { num, utc } from '../format';
-import { can, useLoad, useMe, usePrefs } from '../state';
+import { can, useLoad, useMe, usePrefs, useServerMode } from '../state';
 import { Avatar, Card, DangerDialog, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, PageHead, Tag, tagTone, Toast } from '../ui';
 import { CreditsDialog } from './dialogs';
 
@@ -32,7 +32,7 @@ export function Broadcasts() {
     <>
       <PageHead title="Рассылки" subtitle="Кампании в Telegram: аудитория, расписание, доставка и клики"
         actions={<button type="button" className="btn primary" disabled={!manage} onClick={() => navigate('/broadcasts/new')}>Новая рассылка</button>} />
-      <div className="banner warn" style={{ marginBottom: 16 }}>Пилот: рассылки сохраняются и планируются, но в Telegram не уходят — отправка появится через внутренний канал бота.</div>
+      <div className="banner warn" style={{ marginBottom: 16 }}>Рассылки сохраняются и планируются, но в Telegram пока не уходят — отправка появится через внутренний канал бота.</div>
       <Metrics>
         <Metric label="Всего кампаний" value={num(data?.items.length)} caption="в админке" />
         <Metric label="Запланированы" value={num(count('scheduled'))} caption="ждут отправки" />
@@ -214,13 +214,13 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
             <div className="kv-row"><span>Получателей</span><b>{size === null ? '…' : `≈ ${num(size)}`}</b></div>
             <div className="kv-row"><span>Подтверждение</span><b>причина + 2FA</b></div>
             <div className="kv-row"><span>Журнал</span><b>запись при планировании</b></div>
-            <div className="kv-row"><span>В пилоте</span><b>не отправляется</b></div>
+            <div className="kv-row"><span>Отправка</span><b>пока не подключена</b></div>
           </Card>
         </div>
       </div>
       {confirm && item && (
         <DangerDialog title="Запланировать рассылку?" confirmLabel="Запланировать" tone="primary" onClose={() => setConfirm(false)}
-          lead={<>«{name}» · ≈ {num(size)} получателей · {when.replace('T', ' ')} UTC. В пилоте сообщение не уйдёт в Telegram.</>}
+          lead={<>«{name}» · ≈ {num(size)} получателей · {when.replace('T', ' ')} UTC. Пока сообщение не уйдёт в Telegram: отправка ещё не подключена.</>}
           onConfirm={async (input) => {
             await api(`/api/admin/broadcasts/${item.id}/schedule`, { method: 'POST', body: { ...input, at: Math.floor(Date.parse(`${when}:00Z`) / 1000) } });
             setConfirm(false); setToast('Рассылка запланирована'); reload();
@@ -359,7 +359,7 @@ export function Credits() {
                 <button type="button" className="btn primary" disabled={!manage || !users.data?.items.length} onClick={() => setDialog(users.data!.items.map((u) => u.id))}>
                   Начислить группе{users.data ? ` (${users.data.items.length})` : ''}
                 </button>
-                {users.data && users.data.total > users.data.items.length && <p className="small muted">В пилоте групповая операция — до 100 человек за раз.</p>}
+                {users.data && users.data.total > users.data.items.length && <p className="small muted">Пока групповая операция — до 100 человек за раз.</p>}
               </Card>
               <Card title="Правила" action={<Tag tone="warning">выкл</Tag>}>
                 {[['Стоимость AI-разбора', `${data.rules.aiPrice} кредитов`], ['Быстрый прогноз', data.rules.quickPrice ? `${data.rules.quickPrice}` : 'бесплатно'],
@@ -383,6 +383,7 @@ export function Credits() {
 
 export function Dialogs() {
   const { demo } = usePrefs();
+  const server = useServerMode();
   const { data, error, loading, reload } = useLoad<{ source: 'not_collected' } | { source: 'demo'; threads: DialogThread[] }>(`/api/admin/dialogs${demo ? '?demo=1' : ''}`);
   const [current, setCurrent] = useState(0);
   const threads = data && data.source === 'demo' ? data.threads : null;
@@ -390,8 +391,12 @@ export function Dialogs() {
   return (
     <>
       <PageHead title="Диалоги" subtitle="Ответы пользователей боту и переписка поддержки в одном окне" />
-      <div className="banner warn" style={{ marginBottom: 16 }}>Приём сообщений из бота ещё не подключён: нужно решение о хранении переписки (правило приватности проекта). Ниже — демонстрация.</div>
-      {error ? <ErrorBox error={error} onRetry={reload} /> : loading && !data ? <Loading rows={6} /> : !threads ? <Card><NotCollected what="Переписка с пользователями" /></Card> : (
+      <div className="banner warn" style={{ marginBottom: 16 }}>Приём сообщений из бота ещё не подключён: нужно решение о хранении переписки (правило приватности проекта).{server ? '' : ' Ниже — демонстрация.'}</div>
+      {error ? <ErrorBox error={error} onRetry={reload} /> : loading && !data ? <Loading rows={6} /> : !threads ? (
+        server
+          ? <Card><Empty title="Переписка пока не собирается">Сообщения пользователей боту сюда не поступают, пока не подключён приём сообщений из бота и не принято решение о хранении переписки.</Empty></Card>
+          : <Card><NotCollected what="Переписка с пользователями" /></Card>
+      ) : (
         <div className="inbox">
           <div className="threads" role="list" aria-label="Диалоги">
             <div style={{ padding: '12px 16px' }} className="tags"><Tag tone="accent">Новые · {threads.filter((x) => x.unread).length}</Tag><Tag tone="violet">ДЕМО</Tag></div>

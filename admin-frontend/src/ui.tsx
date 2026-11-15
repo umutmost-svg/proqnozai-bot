@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { ApiError, errorText, newIdempotencyKey } from './api';
-import { PERIOD_LABELS, useAuth, useMe, usePrefs, type Period } from './state';
+import { PERIOD_LABELS, useAuth, useMe, usePrefs, useServerMode, type Period } from './state';
 
 const NAV = [
-  ['/', 'Аналитика'], ['/users', 'Пользователи'], ['/inquiries', 'Обращения'], ['/dialogs', 'Диалоги (демо)'], ['/broadcasts', 'Рассылки'],
+  ['/', 'Аналитика'], ['/users', 'Пользователи'], ['/inquiries', 'Обращения'], ['/dialogs', 'Диалоги'], ['/broadcasts', 'Рассылки'],
   ['/segments', 'Сегменты'], ['/credits', 'Кредиты'], ['/referrals', 'Ссылки'], ['/outbox', 'Очередь'], ['/ads', 'Реклама'],
 ] as const;
 const NAV_DATA = [['/product', 'Продукт'], ['/forecasts', 'Прогнозы'], ['/ai', 'AI и расходы'], ['/sports-api', 'Спортивные API']] as const;
@@ -82,7 +82,8 @@ export function Layout() {
           <div><div className="brand-name">SporBot</div><div className="brand-sub">CRM · админ</div></div>
         </div>
         {/* The queue lists recipients (personal data): hidden for roles without read_personal (the API refuses too). */}
-        <nav className="nav" aria-label="Разделы" style={{ marginTop: 24 }}>{NAV.filter(([to]) => to !== '/outbox' || me.admin.role !== 'analyst').map(link)}</nav>
+        <nav className="nav" aria-label="Разделы" style={{ marginTop: 24 }}>{NAV.filter(([to]) => to !== '/outbox' || me.admin.role !== 'analyst')
+          .map(([to, label]) => [to, to === '/dialogs' && me.pilot.demoTelemetry ? 'Диалоги (демо)' : label] as const).map(link)}</nav>
         <div className="nav-caption">ДАННЫЕ</div>
         <nav className="nav" aria-label="Данные">{NAV_DATA.map(link)}</nav>
         <div className="nav-grow" />
@@ -106,6 +107,7 @@ export function Layout() {
 export function Topbar({ crumb }: { crumb?: string }) {
   const me = useMe();
   const { demo, setDemo } = usePrefs();
+  const server = useServerMode();
   const navigate = useNavigate();
   const [q, setQ] = useState('');
   return (
@@ -117,11 +119,17 @@ export function Topbar({ crumb }: { crumb?: string }) {
         </form>
         <div className="topbar-right">
           {me.pilot.dataset === 'demo' && <span className="tag violet" title="Пользователи и прогнозы — демонстрационный набор, созданный локально">Демо-набор</span>}
-          <label className="tag" style={{ gap: 6, cursor: 'pointer', height: 30 }}>
-            <input type="checkbox" checked={demo} onChange={(e) => setDemo(e.target.checked)} />
-            Демо-телеметрия
-          </label>
-          <span className="tag">Локальный пилот</span>
+          {server ? (
+            <span className="tag" title="Реальные данные Mini App; демо-данных на сервере нет">Рабочая панель</span>
+          ) : (
+            <>
+              <label className="tag" style={{ gap: 6, cursor: 'pointer', height: 30 }}>
+                <input type="checkbox" checked={demo} onChange={(e) => setDemo(e.target.checked)} />
+                Демо-телеметрия
+              </label>
+              <span className="tag">Локальный пилот</span>
+            </>
+          )}
         </div>
       </div>
       {crumb && <div className="crumbs" style={{ marginTop: 18 }}>{crumb}</div>}
@@ -279,13 +287,15 @@ export function Pager({ page, size, total, onPage }: { page: number; size: numbe
 
 export function NotCollected({ what }: { what: string }) {
   const { setDemo } = usePrefs();
+  const server = useServerMode();
   return (
     <Empty
       title={`${what} пока не собирается`}
-      action={<button type="button" className="btn" onClick={() => setDemo(true)}>Показать демо-данные</button>}
+      action={server ? undefined : <button type="button" className="btn" onClick={() => setDemo(true)}>Показать демо-данные</button>}
     >
-      Сбор начнётся после этапа D1 (телеметрия Mini App). До этого здесь нет реальных данных — показатели не
-      подставляются. Для оценки интерфейса можно включить помеченную демо-телеметрию.
+      {server
+        ? 'Сбор ещё не подключён в Mini App. Показатели не подставляются: здесь появятся реальные данные, когда сбор включат.'
+        : 'Сбор начнётся после этапа D1 (телеметрия Mini App). До этого здесь нет реальных данных — показатели не подставляются. Для оценки интерфейса можно включить помеченную демо-телеметрию.'}
     </Empty>
   );
 }

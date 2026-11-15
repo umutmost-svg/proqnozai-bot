@@ -104,8 +104,17 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
 
 export function usePrefs(): Prefs {
   const ctx = useContext(PrefsContext);
+  const auth = useContext(AuthContext);
   if (!ctx) throw new Error('PrefsProvider missing');
-  return ctx;
+  // The server never serves demo data: there the switch does not exist (a stored "on" from a pilot is ignored).
+  const demoAllowed = auth?.state.status === 'signed-in' && auth.state.me.pilot.demoTelemetry;
+  return demoAllowed ? ctx : { ...ctx, demo: false, setDemo: () => undefined };
+}
+
+/** The panel runs on the server (real data, no demo switch) rather than as the local pilot. */
+export function useServerMode(): boolean {
+  const auth = useContext(AuthContext);
+  return auth?.state.status === 'signed-in' && !auth.state.me.pilot.demoTelemetry;
 }
 
 // ---- data loading ----

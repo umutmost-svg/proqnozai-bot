@@ -204,7 +204,7 @@ export function System() {
       {error ? <ErrorBox error={error} onRetry={reload} /> : loading && !data ? <Loading rows={6} /> : data && (
         <>
           <Metrics>
-            <Metric label="Health" value={<Status value={data.health} />} caption="проверка miniapp.db (пилот)" />
+            <Metric label="Health" value={<Status value={data.health} />} caption="проверка miniapp.db" />
             <Metric label="Версия сборки" value="—" caption="после D7" />
             <Metric demo={Boolean(events)} label="Фоновые задания" value={data.source === 'demo' ? `${data.tasks.filter((t) => t.state === 'ok').length} / ${data.tasks.length}` : '—'} caption={events ? 'в норме / всего' : 'после D1'} />
             <Metric demo={Boolean(events)} label="Ошибки" value={events ? num(events.filter((e) => e.level === 'error').reduce((s, e) => s + e.count, 0)) : '—'} caption={events ? 'за 3 дня' : 'история после D1'} />

@@ -14,7 +14,7 @@ export function UserCardRoute() {
 
 const TABS = ['Хронология', 'Активность', 'Сообщения', 'Кредиты', 'Сессии', 'Заметки'] as const;
 const DOT: Record<string, string> = { registered: '★', login: '→', message: '✉', credits: '∞', note: 'З', admin: '#', ai: 'AI' };
-const MSG_STATUS: Record<string, string> = { not_sent_pilot: 'не отправлено (пилот)', queued: 'в очереди', sent: 'отправлено', failed: 'ошибка' };
+const MSG_STATUS: Record<string, string> = { not_sent_pilot: 'не отправлено (отправка не подключена)', queued: 'в очереди', sent: 'отправлено', failed: 'ошибка' };
 
 function UserCard({ id }: { id: string }) {
   const me = useMe();
