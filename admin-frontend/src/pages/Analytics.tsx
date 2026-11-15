@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { Analytics as AnalyticsData, Broadcast, Overview } from '../api';
+import type { Analytics as AnalyticsData, Broadcast, Overview, ValueData } from '../api';
 import { num, utc } from '../format';
 import { useLoad, usePrefs } from '../state';
-import { BarList, Bars, Card, ErrorBox, Loading, Metric, Metrics, NotCollected, PageHead, PeriodSelect, Tag, tagTone } from '../ui';
+import { BarList, Bars, Card, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, PageHead, PeriodSelect, Tag, tagTone } from '../ui';
 
-const TABS = ['Обзор', 'Аудитория и гео', 'Время активности', 'Контент и лиги', 'Удержание', 'Источники'] as const;
+const TABS = ['Обзор', 'Ценность и топ', 'Аудитория и гео', 'Время активности', 'Контент и лиги', 'Удержание', 'Источники'] as const;
 type TabName = typeof TABS[number];
 const DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const LANG_NAMES: Record<string, string> = { ru: 'Русский', az: 'Азербайджанский', tr: 'Турецкий', uz: 'Узбекский', en: 'Английский', 'pt-BR': 'Португальский', es: 'Испанский' };
@@ -28,6 +28,95 @@ function bestSlot(data: number[][]): string {
   let best = { d: 0, h: 0, v: -1 };
   data.forEach((row, d) => row.forEach((v, h) => { if (v > best.v) best = { d, h, v }; }));
   return best.v > 0 ? `${DAYS[best.d]}, ${String(best.h).padStart(2, '0')}:00–${String((best.h + 1) % 24).padStart(2, '0')}:00` : '—';
+}
+
+function who(name: string, username: string, id: number): string {
+  return name || (username ? `@${username}` : `id ${id}`);
+}
+
+function UserCell({ u }: { u: { userId: number | null; name: string; username: string } }) {
+  return u.userId === null ? <span className="muted">скрыто</span> : <Link to={`/users/${u.userId}`}>{who(u.name, u.username, u.userId)}</Link>;
+}
+
+/** User value and top users: the bot (hourly snapshot of its database) and the Mini App (its telemetry). */
+function ValueTab() {
+  const v = useLoad<ValueData>('/api/admin/value');
+  if (v.error) return <ErrorBox error={v.error} onRetry={v.reload} />;
+  if (!v.data) return <Loading rows={4} />;
+  const { bot, miniapp } = v.data;
+  return (
+    <>
+      <h2 className="card-title" style={{ margin: '4px 0 12px' }}>Бот</h2>
+      {bot.source === 'unavailable' ? (
+        <Card><Empty title="Снимок данных бота не читается">Файл снимка повреждён или недоступен. Следующее обновление — в течение часа.</Empty></Card>
+      ) : bot.source !== 'snapshot' ? (
+        <Card><Empty title="Снимок данных бота ещё не получен">Итоги из базы бота обновляются раз в час. Если бот остановлен, остаётся последний снимок.</Empty></Card>
+      ) : (
+        <>
+          <Metrics>
+            <Metric label="Срок жизни" value={`${num(bot.value.avgLifespanDays, 1)} дн.`} caption="среднее у вернувшихся хотя бы раз"
+              hint="Сколько дней в среднем проходит от регистрации до последнего визита — среди тех, кто вернулся хотя бы через день. Одноразовые визиты не учитываются." />
+            <Metric label="Прогнозов на пользователя" value={num(bot.value.forecastsPerUser, 1)} caption={`за всё время, на зарегистрированного (${num(bot.value.users)})`}
+              hint="Все прогнозы бота за всё время, делённые на число зарегистрированных пользователей." />
+            <Metric label="Кликов на пользователя" value={num(bot.value.clicksPerUser, 2)} caption={`дошли до партнёра ${bot.value.clickConversion}% людей`}
+              hint="Переходы по партнёрским ссылкам, делённые на число зарегистрированных. Процент — доля людей, перешедших хотя бы раз." />
+            <Metric label="Взяли промокод" value={`${bot.value.promoConversion}%`} caption="от зарегистрированных"
+              hint="Доля зарегистрированных пользователей, получивших хотя бы один промокод." />
+            <Metric label="Доход на пользователя" value={bot.value.cpa && bot.value.revenuePerUser !== null ? num(bot.value.revenuePerUser, 2) : '—'}
+              caption={bot.value.cpa ? `всего ${num(bot.value.revenueTotal ?? 0, 2)} · ставка ${num(bot.value.cpa, 2)} за клик` : 'ставка за клик (PARTNER_CPA) не задана'}
+              hint="Оценка, а не измеренный доход: клики на пользователя × ставка за клик партнёра (PARTNER_CPA в настройках бота)." />
+          </Metrics>
+          <Card title="Топ пользователей бота" sub={`по числу запросов · снимок ${utc(bot.generatedAt, true)} UTC`}>
+            <table className="table">
+              <thead><tr><th>#</th><th>Пользователь</th><th>Запросов</th><th>Прогнозов</th><th>Кликов</th><th>Промокод</th><th>Последний визит</th></tr></thead>
+              <tbody>{bot.topUsers.map((u, i) => (
+                <tr key={i}>
+                  <td>{i + 1}</td>
+                  <td><UserCell u={u} /></td>
+                  <td>{num(u.requests)}</td><td>{num(u.forecasts)}</td><td>{num(u.clicks)}</td><td>{u.promo ? 'да' : '—'}</td>
+                  <td className="muted">{u.lastActive ? u.lastActive.slice(0, 16) : '—'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </Card>
+        </>
+      )}
+      <h2 className="card-title" style={{ margin: '24px 0 12px' }}>Mini App</h2>
+      {miniapp.source === 'unavailable' ? (
+        <Card><Empty title="Телеметрия Mini App сейчас не читается">Файл занят или недоступен; обновите страницу позже.</Empty></Card>
+      ) : miniapp.source !== 'telemetry' ? (
+        <Card><NotCollected what="Активность Mini App" /></Card>
+      ) : (
+        <>
+          <Metrics>
+            <Metric label="Активных пользователей" value={num(miniapp.activeUsers)} caption={`из ${num(miniapp.totalUsers)} в базе · за ${miniapp.windowDays} дней`}
+              hint="Сколько разных людей открывали Mini App за последние 90 дней (с начала сбора, если он моложе). Остальные — в базе (например, перенесены из бота), но не заходили." />
+            <Metric label="Срок жизни" value={`${num(miniapp.value.avgLifespanDays, 1)} дн.`} caption="среднее у вернувшихся хотя бы раз"
+              hint="Дней от первого до последнего дня активности — среди тех, кто заходил в разные дни." />
+            <Metric label="Прогнозов на пользователя" value={num(miniapp.value.forecastsPerUser, 1)} caption="быстрые, купоны и AI-разборы"
+              hint="Выданные быстрые прогнозы, купоны и созданные AI-разборы, делённые на активных пользователей." />
+            <Metric label="Кликов на пользователя" value={num(miniapp.value.clicksPerUser, 2)} caption={`дошли до партнёра ${miniapp.value.clickConversion}% людей`}
+              hint="Клики по партнёрским предложениям в Mini App, делённые на активных пользователей." />
+          </Metrics>
+          <Card title="Топ пользователей Mini App" sub={`по выданным прогнозам, затем по активности · за ${miniapp.windowDays} дней`}>
+            {miniapp.topUsers.length === 0 ? <p className="small muted">Пока никто не открывал Mini App с начала сбора.</p> : (
+              <table className="table">
+                <thead><tr><th>#</th><th>Пользователь</th><th>Прогнозов</th><th>Действий</th><th>Дней активности</th><th>Кликов</th><th>Последний день</th></tr></thead>
+                <tbody>{miniapp.topUsers.map((u, i) => (
+                  <tr key={i}>
+                    <td>{i + 1}</td>
+                    <td><UserCell u={u} /></td>
+                    <td>{num(u.forecasts)}</td><td>{num(u.requests)}</td><td>{num(u.activeDays)}</td><td>{num(u.clicks)}</td>
+                    <td className="muted">{u.lastDay || '—'}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            )}
+          </Card>
+        </>
+      )}
+    </>
+  );
 }
 
 function DemoOnly({ what }: { what: string }) {
@@ -92,7 +181,7 @@ export function Analytics() {
             <>
               <Metrics>
                 <Metric label="Пользователи всего" value={<Link className="metric-link" to="/users">{num(real.totalUsers)}</Link>} caption={`+${num(real.newUsers)} за период · ${src}`} />
-                <Metric demo={Boolean(d)} label="Активные (DAU)" value={d ? num(d.activeByDay.at(-1)?.dau) : '—'} caption={d ? 'демо-телеметрия' : 'после D1'} />
+                <Metric demo={Boolean(d)} hint="DAU (Daily Active Users) — сколько разных людей открыли Mini App сегодня (по UTC). Один человек считается один раз, сколько бы раз он ни заходил." label="Активные сегодня (DAU)" value={d ? num(d.activeByDay.at(-1)?.dau) : '—'} caption={d ? 'демо-телеметрия' : 'после D1'} />
                 <Metric label="Прогнозы модели" value={<Link className="metric-link" to="/forecasts">{num(ov.data?.forecasts.total)}</Link>} caption={`сверено: ${num(ov.data?.forecasts.settled)}`} />
                 <Metric demo={Boolean(d)} label="Средняя сессия" value={d ? `${Math.floor(d.summary.avgSessionS / 60)} мин ${d.summary.avgSessionS % 60} с` : '—'} caption={d ? 'демо-телеметрия' : 'после D1'} />
               </Metrics>
@@ -132,6 +221,7 @@ export function Analytics() {
               </div>
             </>
           )}
+          {tab === 'Ценность и топ' && <ValueTab />}
           {tab === 'Аудитория и гео' && (
             <>
               {edge && (

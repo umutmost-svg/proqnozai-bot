@@ -46,6 +46,18 @@ There are four layers. A request arriving another way, such as the server's publ
    The password is asked twice (at least 14 characters). The 2FA secret and the `otpauth://` link are shown once. Add them to an authenticator app straight away and never paste them into a chat.
 6. Open `https://admin.proqnozai.com` and sign in through Access, then with the e-mail, password and 6-digit code.
 
+## Bot snapshot (value and top users)
+
+Install it once on the host, after the admin is deployed. It must be reinstalled when the scripts change.
+
+```sh
+git show <commit>:deploy/admin/bot-snapshot.sh | ssh root@164.90.180.208 'install -m 700 /dev/stdin /root/bot-snapshot.sh'
+git show <commit>:deploy/admin/bot_snapshot.py | ssh root@164.90.180.208 'install -m 600 /dev/stdin /root/bot_snapshot.py'
+ssh root@164.90.180.208 '/root/bot-snapshot.sh && (crontab -l 2>/dev/null | grep -v bot-snapshot; echo "17 * * * * /usr/bin/flock -n /run/bot-snapshot.lock /root/bot-snapshot.sh >/dev/null 2>&1") | crontab -'
+```
+
+The snapshot reads the bot database read-only, inside the bot container, and writes `bot-snapshot.json` (0600, uid 10001) to the admin's volume. While the bot is stopped, the last snapshot stays.
+
 ## Checks
 
 - Without Access: 302 to `patient-mode-acdb.cloudflareaccess.com`.

@@ -163,13 +163,20 @@ export function Product() {
           {p && p.source === 'telemetry' ? (
             <>
               <Metrics>
-                <Metric label="DAU (сегодня)" value={num(p.dau)} caption="уникальные за UTC-день" />
-                <Metric label="WAU" value={num(p.wau)} caption="уникальные за 7 дней" />
-                <Metric label="MAU" value={num(p.mau)} caption="уникальные за 30 дней" />
+                <Metric label="Активные сегодня (DAU)" value={num(p.dau)} caption="разные пользователи за сегодня"
+                  hint="DAU (Daily Active Users) — сколько разных людей открыли Mini App сегодня (по UTC). Один человек считается один раз, сколько бы раз он ни заходил." />
+                <Metric label="Активные за неделю (WAU)" value={num(p.wau)} caption="разные пользователи за 7 дней"
+                  hint="WAU (Weekly Active Users) — сколько разных людей открывали Mini App хотя бы раз за последние 7 дней." />
+                <Metric label="Активные за месяц (MAU)" value={num(p.mau)} caption="разные пользователи за 30 дней"
+                  hint="MAU (Monthly Active Users) — сколько разных людей открывали Mini App хотя бы раз за последние 30 дней." />
                 <Metric label="Прогнозов выдано" value={num(p.totals.forecasts)} caption={`быстрые ${num(p.totals.quick)} · купоны ${num(p.totals.coupons)} · AI ${num(p.totals.aiCreated)}`} />
               </Metrics>
+              <p className="small muted" style={{ margin: '4px 0 16px' }}>
+                «Активный» — открыл Mini App хотя бы раз за период; каждый человек считается один раз. Отношение
+                «сегодня / за месяц» показывает, как часто возвращаются: {p.mau ? `${Math.round((p.dau / p.mau) * 100)}%` : '—'} аудитории месяца заходили сегодня.
+              </p>
               <div className="grid card-2">
-                <Card title="Активные пользователи по дням">
+                <Card title="Активные пользователи по дням" sub="Сколько разных людей открывали Mini App в каждый день (DAU)">
                   <Bars title="DAU" values={p.series.map((d) => d.dau)} labels={[p.series[0]?.day ?? '', p.series.at(-1)?.day ?? '']} format={(v) => String(v)} />
                 </Card>
                 <Card title="AI-разборы" sub={`создано ${num(p.totals.aiCreated)} · открыто ${num(p.totals.aiOpened)}`}>

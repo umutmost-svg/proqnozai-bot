@@ -315,3 +315,21 @@ export function describeRules(rules: Rules): string[] {
     return `${label}: ${String(v)}`;
   });
 }
+
+// ---- user value and top users (bot snapshot + Mini App telemetry) ----
+export interface BotValue {
+  users: number; forecastsPerUser: number; clicksPerUser: number; clickConversion: number; avgLifespanDays: number;
+  promoConversion: number; cpa: number; revenuePerUser: number | null; revenueTotal: number | null;
+}
+export interface ValueData {
+  personal: boolean;
+  bot: { source: 'not_collected' | 'unavailable' } | {
+    source: 'snapshot'; generatedAt: string; value: BotValue;
+    topUsers: { userId: number | null; name: string; username: string; requests: number; forecasts: number; clicks: number; promo: boolean; lastActive: string }[];
+  };
+  miniapp: { source: 'not_collected' | 'unavailable' } | {
+    source: 'telemetry'; windowDays: number; totalUsers: number; activeUsers: number;
+    value: { forecastsPerUser: number; clicksPerUser: number; clickConversion: number; avgLifespanDays: number };
+    topUsers: { userId: number | null; name: string; username: string; requests: number; forecasts: number; activeDays: number; lastDay: string; clicks: number }[];
+  };
+}

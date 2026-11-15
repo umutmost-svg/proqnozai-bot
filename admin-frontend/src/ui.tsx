@@ -177,10 +177,23 @@ export function Metrics({ children }: { children: ReactNode }) {
   return <div className="metrics">{children}</div>;
 }
 
-export function Metric({ label, value, caption, demo }: { label: string; value: ReactNode; caption: ReactNode; demo?: boolean }) {
+export function Metric({ label, value, caption, demo, hint }: {
+  label: string; value: ReactNode; caption: ReactNode; demo?: boolean;
+  /** A plain-language explanation, shown on hover / long press of the "?" next to the label. */
+  hint?: string;
+}) {
+  const [open, setOpen] = useState(false);
   return (
     <div className="metric">
-      <div className="metric-label">{label}{demo && <span className="chip demo sm">ДЕМО</span>}</div>
+      <div className="metric-label">
+        {label}
+        {hint && (
+          <button type="button" className="metric-hint" title={hint} aria-label={`Что это: ${label}`} aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}>?</button>
+        )}
+        {demo && <span className="chip demo sm">ДЕМО</span>}
+      </div>
+      {hint && open && <div className="metric-hint-text" role="note">{hint}</div>}
       <div className="metric-value">{value}</div>
       <div className="metric-caption">{caption}</div>
     </div>
