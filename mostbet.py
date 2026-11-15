@@ -451,6 +451,11 @@ async def mostbet_get_odds(line_id: int, *, retry_on_429: bool = True, page_spac
                 # / "1x2" keywords below don't swallow them into full-time fields.
                 is_half = any(k in group for k in ("1st half", "first half", "halftime",
                                                    "half time", "ht ", "1st period"))
+                # Second-half markets ("2nd Half - Total", "2nd Half - 1x2") are never shown; without this skip
+                # they came after the full-time ones in the feed and OVERWROTE them (15.11: a match's over 2.5
+                # read as 2.85, the second half's, instead of 1.40).
+                if any(k in group for k in ("2nd half", "second half", "2nd period")):
+                    continue
 
                 # ── 1st-half 1X2 ──────────────────────────────────────────────
                 if is_half and any(k in group for k in ("result", "1x2", "winner", "1x 2")):
@@ -477,7 +482,7 @@ async def mostbet_get_odds(line_id: int, *, retry_on_429: bool = True, page_spac
                         result["dc_1x"] = odd_f
                     elif "12" in title or "home or away" in title:
                         result["dc_12"] = odd_f
-                    elif "x2" in title or "draw or away" in title:
+                    elif "x2" in title or "2x" in title or "draw or away" in title:
                         result["dc_x2"] = odd_f
 
                 # ── Draw no bet ───────────────────────────────────────────────
@@ -490,15 +495,15 @@ async def mostbet_get_odds(line_id: int, *, retry_on_429: bool = True, page_spac
                 # ── Handicap ──────────────────────────────────────────────────
                 elif (not is_half) and any(k in group for k in
                                            ("handicap", "asian handicap", "european handicap")):
-                    m = _re.search(r'\(([+-]?\d+\.?\d*)\)', title)
-                    if m:
-                        val = float(m.group(1))
-                        if val != 0:
-                            slot = handicaps.setdefault(abs(val), {})
-                            if title.startswith("1") or "home" in title or "w1" in title:
-                                slot["w1"] = (val, odd_f)
-                            elif title.startswith("2") or "away" in title or "w2" in title:
-                                slot["w2"] = (val, odd_f)
+                    # "1 (-1.5)" / "Handicap 1 (-1.5)" is the home side of the line whose away side is
+                    # "2 (+1.5)": one line, keyed by the HOME value, so "1 (+1.5)" (another line) never mixes in.
+                    m = _re.fullmatch(r'(?:handicap )?(1|2|home|away|w1|w2) \(([+-]?\d+(?:\.\d+)?)\)', title)
+                    if m and float(m.group(2)) != 0:
+                        side = "1" if m.group(1) in ("1", "home", "w1") else "2"
+                        val = float(m.group(2))
+                        home_value = val if side == "1" else -val
+                        slot = handicaps.setdefault(home_value, {})
+                        slot["w1" if side == "1" else "w2"] = (home_value, odd_f)
 
                 # ── Totals ────────────────────────────────────────────────────
                 elif any(k in group for k in ("total", "goals", "total goals", "over/under")):
@@ -531,7 +536,7 @@ async def mostbet_get_odds(line_id: int, *, retry_on_429: bool = True, page_spac
                 both = {v: s for v, s in handicaps.items() if "w1" in s and "w2" in s}
                 pool = both or {v: s for v, s in handicaps.items() if "w1" in s}
                 if pool:
-                    slot = pool[min(pool)]
+                    slot = pool[min(pool, key=lambda v: (abs(v), v))]  # the most balanced line
                     result["hcp_val"] = slot["w1"][0]
                     result["hcp_w1"] = slot["w1"][1]
                     if "w2" in slot:
