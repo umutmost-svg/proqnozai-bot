@@ -496,6 +496,57 @@ describe('quick prediction errors', () => {
     expect(readQuick(answer({ ...noBet, preview: [item({ event: tennis })] }), SINGLE, RANGE, asEvent)).toBeNull();
   });
 
+  it('without a pick the estimate is shown, labelled, never as a selected bet; a malformed one is left out', async () => {
+    const user = userEvent.setup();
+    const later = ev(7, 'Germany', 'Netherlands', { startsAt: '2026-11-08T19:45:00Z', tournamentId: 'fd:PD' });
+    const estimate = {
+      legs: [{ event: later, market: '1', family: '1x2', probability: 62, source: 'market', price: { odds: 1.55, fetchedAt: '2026-11-08T05:58:00Z', validFor: 3000 } }],
+      suitable: 4,
+      combined: null,
+    };
+    const noBet = { status: 'no_bet', legs: [], suitable: 0, reasons: { unvalidated_competition: 25 } };
+    const { data } = backend(() => answer({ ...noBet, estimate }));
+    renderApp('#/quick', { data });
+    await user.click(await screen.findByTestId('quick-submit'));
+    const card = await screen.findByTestId('quick-estimate');
+    expect(card).toHaveTextContent('Оценка на матч');
+    expect(card).toHaveTextContent('это оценка, а не отобранная ставка');
+    const item = within(card).getByTestId('quick-estimate-leg');
+    expect(item).toHaveAttribute('data-source', 'market');
+    expect(item).toHaveTextContent('По коэффициентам');
+    expect(item).toHaveTextContent('Germany');
+    expect(item).toHaveTextContent('Вероятность: 62%');
+    expect(screen.queryByTestId('quick-leg')).toBeNull();
+    expect(screen.queryByTestId('quick-no-bet')).toBeNull();
+  });
+
+  it('an estimate is read strictly and never next to a pick', () => {
+    const later = (id: number, home: string, away: string) => ev(id, home, away, { startsAt: '2026-11-08T19:00:00Z' });
+    const el = (id: number, home = `H${id}`, away = `A${id}`, over: Record<string, unknown> = {}) =>
+      ({ event: later(id, home, away), market: '1X', family: 'double', probability: 70, source: 'model', price: null, ...over });
+    const noBet = { status: 'no_bet', legs: [], suitable: 0 };
+    const single = (legs: unknown[], over: Record<string, unknown> = {}) => answer({ ...noBet, estimate: { legs, suitable: 3, combined: null, ...over } });
+    expect(readQuick(single([el(1)]), SINGLE, RANGE, asEvent)?.estimate?.legs).toHaveLength(1);
+    expect(readQuick(answer({ estimate: { legs: [el(1)], suitable: 3, combined: null } }), SINGLE, RANGE, asEvent)?.estimate).toBeNull();
+    expect(readQuick(single([el(1, 'a', 'b', { source: 'guess' })]), SINGLE, RANGE, asEvent)?.estimate).toBeNull();
+    expect(readQuick(single([el(1, 'a', 'b', { source: 'market' })]), SINGLE, RANGE, asEvent)?.estimate).toBeNull(); // no odds behind it
+    expect(readQuick(single([el(1, 'a', 'b', { family: '1x2' })]), SINGLE, RANGE, asEvent)?.estimate).toBeNull();
+    expect(readQuick(single([el(1), el(2)]), SINGLE, RANGE, asEvent)?.estimate).toBeNull();
+    expect(readQuick(single([el(1)]), SINGLE, RANGE, asEvent)).not.toBeNull(); // the answer itself always stands
+    expect(readQuick(single([el(1, 'a', 'b', { probability: 52 })]), SINGLE, RANGE, asEvent)?.estimate).toBeNull(); // below the band
+    expect(readQuick(single([el(1, 'a', 'b', { probability: 90 })]), SINGLE, RANGE, asEvent)?.estimate).toBeNull(); // above it
+    const outside = { ...el(1), event: ev(1, 'a', 'b', { startsAt: '2026-11-21T12:30:00Z' }) };
+    expect(readQuick(single([outside]), SINGLE, RANGE, asEvent)?.estimate).toBeNull(); // outside the asked period
+    const unavailable = answer({ status: 'unavailable', legs: [], suitable: 0, estimate: { legs: [el(1)], suitable: 3, combined: null } });
+    expect(readQuick(unavailable, SINGLE, RANGE, asEvent)?.estimate).toBeNull(); // only after a conclusive "nothing"
+    const notEnough = { status: 'not_enough', legs: [], suitable: 1, mode: 'coupon', size: 2 };
+    const coupon = (legs: unknown[], combined: unknown) => answer({ ...notEnough, estimate: { legs, suitable: 3, combined } });
+    expect(readQuick(coupon([el(1), el(2)], [40, 70]), COUPON, RANGE, asEvent)?.estimate?.combined).toEqual([40, 70]);
+    expect(readQuick(coupon([el(1), el(2)], [49, 70]), COUPON, RANGE, asEvent)?.estimate).toBeNull();
+    const shared = { ...el(2), event: { ...later(2, 'X', 'Y'), home: later(1, 'H1', 'A1').home } };
+    expect(readQuick(coupon([el(1), shared], [40, 70]), COUPON, RANGE, asEvent)?.estimate).toBeNull();
+  });
+
   it('a next-match time outside the asked period is a broken answer', () => {
     expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-12T20:00:00Z' }), SINGLE, RANGE, asEvent)).toBeNull();
     expect(readQuick(answer({ status: 'no_bet', legs: [], suitable: 0, nextMatchAt: '2026-11-31T15:00:00Z' }), SINGLE, RANGE, asEvent)).toBeNull();
@@ -593,6 +644,28 @@ describe('quick prediction freshness', () => {
       now = new Date('2026-11-08T05:00:00Z'); // the device clock jumps an hour back
       await vi.advanceTimersByTimeAsync(6_000);
       expect(await screen.findByTestId('quick-expired')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('an estimate taken from the odds goes when those odds expire', async () => {
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const later = ev(7, 'Germany', 'Netherlands', { startsAt: '2026-11-08T19:45:00Z' });
+      const estimate = {
+        legs: [{ event: later, market: '1', family: '1x2', probability: 62, source: 'market', price: { odds: 1.55, fetchedAt: '2026-11-08T05:58:00Z', validFor: 3 } }],
+        suitable: 1,
+        combined: null,
+      };
+      const { data } = backend(() => answer({ status: 'no_bet', legs: [], suitable: 0, reasons: { unvalidated_competition: 1 }, estimate }));
+      renderApp('#/quick', { data });
+      await user.click(await screen.findByTestId('quick-submit'));
+      expect(await screen.findByTestId('quick-estimate')).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await waitFor(() => expect(screen.queryByTestId('quick-estimate')).toBeNull());
+      expect(screen.getByTestId('quick-no-bet')).toBeInTheDocument(); // the strict result's explanation is back
     } finally {
       vi.useRealTimers();
     }

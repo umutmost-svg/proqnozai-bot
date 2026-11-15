@@ -140,3 +140,13 @@
 - **Лимит AI на стенде.** `MINIAPP_AI_PER_USER_DAILY=6` задан в `run_backend.sh` тестового стенда
   по решению владельца от 2026-11-08 (было 3). Общий потолок стенда — 10 в сутки. Значение по
   умолчанию в коде — 10 на пользователя и 200 в сутки (`miniapp/settings.py`).
+
+## Estimate without a pick (owner, 15.11)
+
+The strict pick is unchanged and always comes first. It covers the 9 validated leagues, on match day, under the frozen rules. When it conclusively finds nothing (`no_bet` or `not_enough`, never `unavailable`), the answer also carries an `estimate`. It is built from matches of the period in any competition and on any day, but only the nearest 80 (`ESTIMATE_MAX_MATCHES`), which bounds model time. It runs on its own worker and engine, alongside the preview, so it never delays a strict pick:
+
+- **Source of the probability:** the model when the competition's history is already cached, otherwise the market's own probability (Mostbet prices with the margin removed). An estimate never makes a provider request.
+- **Choice:** the most probable outcome inside the risk level's band (`ESTIMATE_BANDS`), limited to 1X2, double chance, totals and BTTS. The bands are: conservative 70–85%, balanced 60–75%, elevated 55–65%. The upper bound keeps near-certain outcomes (odds of about 1.15 and below) out.
+- **Coupon:** legs are found by the strict coupon's own search, team-disjoint and searching past conflicts. Bounds are the exact Fréchet bounds rounded outward, as for a strict coupon. When there are fewer suitable matches than requested, no estimate is given.
+- **Screen:** a card titled "Оценка на матч" or "Оценочный купон". Each leg is labelled "Оценка модели" or "По коэффициентам", and the card says it is not a selected bet. Its price is the odds of that outcome, shown while valid. This is allowed by the owner's rule: odds appear only inside an analysis.
+- **Robustness:** a malformed estimate is dropped on the client without breaking the answer. A failing or slow estimate (over `ESTIMATE_WAIT_S`) is left out on the server.

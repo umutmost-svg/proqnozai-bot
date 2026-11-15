@@ -479,4 +479,26 @@ export interface QuickAnswer {
    * and the UTC day a recommendation becomes possible. Never a pick (the rules are unchanged).
    */
   preview: readonly QuickPreview[];
+  /**
+   * Without a pick only: an estimate over every match of the period, any competition and day (owner, 15.11) — the
+   * model's probability when it has the data, else the market's (odds, margin removed). Never a selected bet.
+   */
+  estimate: QuickEstimate | null;
+}
+
+export interface QuickEstimateLeg {
+  event: FootballEvent;
+  market: MarketKey;
+  family: MarketFamily;
+  /** Whole percent. */
+  probability: number;
+  source: 'model' | 'market';
+  price: { odds: number; fetchedAt: string; expires: PriceDeadline } | null;
+}
+
+export interface QuickEstimate {
+  legs: readonly QuickEstimateLeg[];
+  suitable: number;
+  /** Coupon: assumption-free bounds of the shown percents; null for a single. */
+  combined: readonly [low: number, high: number] | null;
 }

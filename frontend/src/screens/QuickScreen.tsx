@@ -8,7 +8,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { ALL_TOURNAMENTS } from '../data/filter';
 import { quickPicks } from '../data/tournaments';
 import { DataError } from '../data/provider';
-import type { PriceDeadline, QuickAnswer, QuickCriteria, QuickLeg, QuickPreview, QuickReason } from '../data/models';
+import type { PriceDeadline, QuickAnswer, QuickCriteria, QuickEstimate, QuickLeg, QuickPreview, QuickReason } from '../data/models';
 import { QUICK_REASONS } from '../data/models';
 import {
   COUPON_SIZES,
@@ -59,8 +59,17 @@ function successState(answer: QuickAnswer, sentAt: number, receivedAt: number) {
   // (delivery included); already past it, the preview is not shown at all.
   const left = nextUtcMidnight(answer.computedAt) - (receivedAt + skewMs);
   if (answer.preview.length && left <= 0) answer = { ...answer, preview: [] };
-  const keep = answer.preview.length ? Math.min(EMPTY_RESULT_KEEP_MS, left) : EMPTY_RESULT_KEEP_MS;
+  // An estimate goes at its first kickoff (server-adjusted, as above); already past it, it is not shown.
+  const estimateLeft = estimateFirst(answer) - (receivedAt + skewMs);
+  if (answer.estimate && estimateLeft <= 0) answer = { ...answer, estimate: null };
+  let keep = answer.preview.length ? Math.min(EMPTY_RESULT_KEEP_MS, left) : EMPTY_RESULT_KEEP_MS;
+  if (answer.estimate) keep = Math.min(keep, estimateLeft);
   return { status: 'success' as const, answer, skewMs, deadline, keepUntil: monotonic.now() + keep };
+}
+
+/** The estimate's first kickoff (epoch ms), Infinity without one. */
+function estimateFirst(answer: QuickAnswer): number {
+  return answer.estimate ? Math.min(...answer.estimate.legs.map((l) => Date.parse(l.event.startsAt))) : Infinity;
 }
 
 /** "No matches" / "no pick" answers are about the moment they were computed: kept briefly only. */
@@ -71,6 +80,7 @@ function staleness(state: Extract<Run['state'], { status: 'success' }>, deviceNo
   const { answer, skewMs, deadline, keepUntil } = state;
   if (answer.legs.length === 0) {
     if (monotonic.now() >= keepUntil) return 'old';
+    if (answer.estimate && deviceNow + skewMs >= estimateFirst(answer)) return 'old';
     // A preview is about later UTC days: past the next UTC midnight (server-adjusted wall clock — the
     // monotonic one may stop while the device sleeps) it is yesterday's and goes.
     return answer.preview.length && deviceNow + skewMs >= nextUtcMidnight(answer.computedAt) ? 'old' : null;
@@ -418,20 +428,103 @@ function firstDeadline(answer: QuickAnswer): PriceDeadline | undefined {
 /** An answer kept from an earlier visit loses prices that expired meanwhile (before it is shown again). */
 function withoutExpiredPrices(answer: QuickAnswer): QuickAnswer {
   const deadline = firstDeadline(answer);
-  if (!deadline || !pricesExpired(deadline)) return answer;
-  return { ...answer, couponOdds: null, legs: answer.legs.map((l) => ({ ...l, price: null })) };
+  const estimate = answer.estimate;
+  const estimateDeadline = estimate ? estimatePriceDeadline(estimate) : undefined;
+  let out = answer;
+  if (deadline && pricesExpired(deadline)) out = { ...out, couponOdds: null, legs: out.legs.map((l) => ({ ...l, price: null })) };
+  if (estimate && estimateDeadline && pricesExpired(estimateDeadline)) {
+    // A leg taken from the odds is only as good as those odds: with them gone, the estimate goes as a whole.
+    out = estimate.legs.some((l) => l.source === 'market')
+      ? { ...out, estimate: null }
+      : { ...out, estimate: { ...estimate, legs: estimate.legs.map((l) => ({ ...l, price: null })) } };
+  }
+  return out;
+}
+
+function estimatePriceDeadline(estimate: QuickEstimate): PriceDeadline | undefined {
+  return estimate.legs.map((l) => l.price?.expires).filter((d): d is PriceDeadline => !!d).sort((a, b) => a.mono - b.mono)[0];
+}
+
+/**
+ * Without a pick: the estimate over every match of the period (owner, 15.11). Labelled per leg — the model's
+ * figure or the market's — and never called a selected bet; its prices go together at their first deadline.
+ */
+function EstimateCard({ estimate, coupon }: { estimate: QuickEstimate; coupon: boolean }) {
+  const { t, timeZone, settings } = useSettings();
+  const { data } = useServices();
+  const navigate = useNavigate();
+  const priced = usePricesLive(estimatePriceDeadline(estimate));
+  // Its odds expired while shown: a leg taken from those odds is no longer an estimate of anything.
+  if (!priced && estimate.legs.some((l) => l.source === 'market')) return null;
+  return (
+    <section className={`${s.card} ${s.result}`} data-testid="quick-estimate" data-mode={coupon ? 'coupon' : 'single'}>
+      <div className={s.resultHead}>
+        <h2 className={s.resultTitle}>
+          {coupon ? t('quick.estimate.coupon', { n: estimate.legs.length }) : t('quick.estimate.single')}
+        </h2>
+      </div>
+      <p className={s.hint}>{t('quick.estimate.note')}</p>
+      {estimate.legs.map((leg, i) => {
+        const { event } = leg;
+        const start = new Date(event.startsAt);
+        return (
+          <article key={event.id} className={s.leg} data-testid="quick-estimate-leg" data-event={event.id} data-market={leg.market} data-source={leg.source}>
+            <button type="button" className={s.legMatch} onClick={() => navigate(`/event/${event.id}`)}>
+              {coupon && <span className={s.legIndex}>{i + 1}</span>}
+              <span className={s.legTeams}>
+                <span className={s.legTeam}>
+                  <Emblem competitor={event.home} size={28} crestBox={22} variant="plain" />
+                  {event.home.name}
+                </span>
+                <span className={s.legTeam}>
+                  <Emblem competitor={event.away} size={28} crestBox={22} variant="plain" />
+                  {event.away.name}
+                </span>
+              </span>
+              <span className={s.legMeta}>
+                {data.getTournament(event.tournamentId)?.name}
+                <br />
+                {`${formatDayMonth(t, dayKeyOf(start, timeZone))} · ${timeOf(start, timeZone)}`}
+              </span>
+            </button>
+            <p className={s.legKicker}>{t(leg.source === 'model' ? 'quick.estimate.model' : 'quick.estimate.market')}</p>
+            <p className={s.legOutcome}>{marketText(t, leg.market, event.home.name, event.away.name)}</p>
+            <p className={s.legProbability}>{t('quick.estimate.probability', { value: leg.probability })}</p>
+            {priced && leg.price && (
+              <p className={s.legProbability} data-testid="quick-estimate-odds">
+                {t('quick.estimate.odds', { odds: decimal(settings.lang, leg.price.odds) })}
+              </p>
+            )}
+          </article>
+        );
+      })}
+      {coupon && estimate.combined && (
+        <div className={s.combined} data-testid="quick-estimate-combined">
+          <p className={s.combinedValue}>
+            {estimate.combined[0] === 0
+              ? t('quick.combinedUpTo', { n: estimate.legs.length, high: estimate.combined[1] })
+              : t('quick.combined', { n: estimate.legs.length, low: estimate.combined[0], high: estimate.combined[1] })}
+          </p>
+          <p className={s.hint}>{t('quick.combinedNote')}</p>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function Result({ answer, period, onWeek }: { answer: QuickAnswer; period: QuickCriteria['period']; onWeek: () => void }) {
   const { t, timeZone, settings } = useSettings();
   const priced = usePricesLive(firstDeadline(answer));
+  const estimatePriced = usePricesLive(answer.estimate ? estimatePriceDeadline(answer.estimate) : undefined);
+  // An estimate taken from odds goes with them; the strict result's own explanation is shown again then.
+  const estimate = answer.estimate && (estimatePriced || answer.estimate.legs.every((l) => l.source === 'model')) ? answer.estimate : null;
   if (answer.status !== 'ok') {
     const empty = answer.counts.matches === 0;
     return (
       <>
         {answer.status === 'unavailable' ? (
           <EmptyState title={t('quick.empty.unavailableTitle')} text={t('quick.empty.unavailableText')} icon="error" testId="quick-unavailable-state" />
-        ) : empty ? (
+        ) : estimate ? null /* the estimate card says the strict selection found nothing */ : empty ? (
           <EmptyState title={t('quick.empty.noMatchesTitle')} text={t('quick.empty.noMatchesText')} testId="quick-empty" />
         ) : answer.status === 'not_enough' ? (
           <EmptyState
@@ -442,6 +535,7 @@ function Result({ answer, period, onWeek }: { answer: QuickAnswer; period: Quick
         ) : (
           <EmptyState title={t('quick.empty.noBetTitle')} text={t('quick.empty.noBetText')} testId="quick-no-bet" />
         )}
+        {estimate && <EstimateCard estimate={estimate} coupon={answer.mode === 'coupon'} />}
         {answer.status !== 'unavailable' && <NextSteps answer={answer} period={period} onWeek={onWeek} />}
         {answer.preview.length > 0 && <Preview items={answer.preview} />}
         {!empty || answer.status === 'unavailable' || answer.uncheckedDays > 0 ? (

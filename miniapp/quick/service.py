@@ -22,6 +22,12 @@ analysis reads. Nothing is ever guessed:
   never a provider request) with the model's 1/X/2 and the UTC day their recommendation becomes
   possible. A preview is never a pick: the match-day rule and the validated-competition rule are
   unchanged. It is optional: bounded by PREVIEW_WAIT_S (model time), else left out.
+- Without a pick, an ESTIMATE (owner, 15.11: every match may get a forecast): the period's matches of ANY competition
+  and ANY day, nearest first — the model's probabilities when the competition's history is already cached (never a
+  provider request), else the market's own (Mostbet prices, margin removed). The most probable outcome within the
+  risk level's band (ESTIMATE_BANDS: the floor of the level, and a ceiling so a near-certain 1.10 outcome is never
+  offered), team-disjoint for a coupon. Always labelled an estimate, never a selected bet; the strict pick and its
+  rules are unchanged and always come first.
 """
 
 from __future__ import annotations
@@ -38,12 +44,13 @@ from datetime import UTC, date, datetime, timedelta
 
 from miniapp.ai.analysis import ModelForecaster
 from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast
-from miniapp.forecast.markets import FAMILY
-from miniapp.forecast.quick import STATUS_UNAVAILABLE, Criteria, Leg, Option, QuickResult, choose
+from miniapp.forecast.markets import FAMILY, KEYS
+from miniapp.forecast.quick import (STATUS_NO_BET, STATUS_NOT_ENOUGH, STATUS_UNAVAILABLE, Criteria, Leg, Option,
+                                    QuickResult, choose, coupon, frechet)
 from miniapp.forecast.selection import LIMITED_COMPETITIONS, NO_BET_EARLY, NO_BET_UNVALIDATED
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.odds.store import OddsStore
-from miniapp.odds.value import MarketQuote, compare
+from miniapp.odds.value import MarketQuote, compare, market_book
 from miniapp.sports.client import LOW_PRIORITY_RESERVE, UpstreamError
 from miniapp.sports.models import FootballEvent
 from miniapp.sports.service import ModelHistory, RequestError, SportsService, parse_instant
@@ -62,6 +69,40 @@ UPSTREAM_RESERVE = 3
 PREVIEW_MAX = 5
 PREVIEW_DAYS = 14
 PREVIEW_WAIT_S = 8.0
+# The estimate: (lowest, highest) probability per risk level. The floor is the strict rules' own level; the ceiling
+# keeps near-certain outcomes (odds ~1.15 and below) out, which are no forecast worth giving.
+ESTIMATE_BANDS = {"conservative": (0.70, 0.85), "balanced": (0.60, 0.75), "elevated": (0.55, 0.65)}
+ESTIMATE_FAMILIES = frozenset({"1x2", "double", "total", "btts"})
+ESTIMATE_MAX_MATCHES = 80  # the period's nearest matches the estimate looks at (bounded model time; documented)
+ESTIMATE_WAIT_S = 8.0
+
+
+@dataclass(frozen=True)
+class EstimateLeg:
+    event: FootballEvent
+    market: str
+    probability: float  # exact, for ranking and bounds
+    display: int  # the whole percent shown
+    source: str  # "model" | "market"
+    price: tuple[float, float, float] | None  # odds, fetched at, valid for
+
+
+@dataclass(frozen=True)
+class Estimate:
+    legs: tuple[EstimateLeg, ...]
+    suitable: int  # matches with an outcome inside the band
+
+    def to_json(self, coupon: bool) -> dict:
+        exact = [leg.probability for leg in self.legs]
+        return {
+            "legs": [{"event": leg.event.to_json(), "market": leg.market, "family": FAMILY[leg.market],
+                      "probability": leg.display, "source": leg.source,
+                      "price": ({"odds": round(leg.price[0], 2), "fetchedAt": _iso(leg.price[1]),
+                                 "validFor": int(leg.price[2])} if leg.price else None)} for leg in self.legs],
+            "suitable": self.suitable,
+            # Assumption-free (Fréchet) bounds of the exact probabilities, rounded outward as for a strict coupon.
+            "combined": _outward(frechet(exact)) if coupon and exact else None,
+        }
 
 
 class QuickBusy(Exception):
@@ -86,6 +127,8 @@ class QuickAnswer:
     prices: dict[str, tuple[MarketQuote, float, float]] = field(default_factory=dict)  # quote, fetched at, valid for
     # Without a pick: nearest later matches of validated competitions with the model's 1/X/2 (never a pick).
     preview: tuple[tuple[FootballEvent, MatchForecast], ...] = ()
+    # Without a pick: the estimate over every match of the period (labelled, never a selected bet).
+    estimate: Estimate | None = None
 
     def to_json(self) -> dict:
         combined = self.result.combined
@@ -115,12 +158,12 @@ class QuickAnswer:
                 # The UTC day the match-day rule allows a recommendation for it (and only if it passes the rules).
                 "recommendationDay": e.starts_at[:10],
             } for e, f in self.preview],
+            "estimate": self.estimate.to_json(self.criteria.mode == "coupon") if self.estimate else None,
         }
 
     def _bounds(self) -> list[int]:
         """Exact Fréchet bounds rounded outward to whole percents (still valid bounds)."""
-        low, high = self.result.combined  # type: ignore[misc]
-        return [max(0, math.floor(low * 100 + 1e-9)), min(100, math.ceil(high * 100 - 1e-9))]
+        return _outward(self.result.combined)  # type: ignore[arg-type]
 
     def _coupon_odds(self) -> dict | None:
         legs = self.result.legs
@@ -153,7 +196,7 @@ class QuickAnswer:
 class QuickService:
     def __init__(self, sports: SportsService, *, clock: Callable[[], float] = time.time,
                  forecaster: ModelForecaster | None = None, reserve: int = UPSTREAM_RESERVE,
-                 odds: OddsStore | None = None) -> None:
+                 odds: OddsStore | None = None, estimator: ModelForecaster | None = None) -> None:
         self.sports = sports
         self.odds = odds
         self._clock = clock
@@ -161,6 +204,9 @@ class QuickService:
         self.forecaster = forecaster or ModelForecaster(sports, ForecastEngine(), clock=clock)
         self.reserve = reserve
         self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="quick-model")
+        # The estimate has its own worker and engine: a slow or timed-out estimate never delays a strict pick.
+        self._estimator = estimator or ModelForecaster(sports, ForecastEngine(), clock=clock)  # never shared
+        self._estimate_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="quick-estimate")
         self._running: set[int] = set()
         self._recent: dict[int, deque[float]] = {}
 
@@ -323,15 +369,36 @@ class QuickService:
         if result.status != "ok" and partial:
             result = QuickResult(STATUS_UNAVAILABLE, (), result.suitable, None)
         preview: tuple[tuple[FootballEvent, MatchForecast], ...] = ()
+        estimate: Estimate | None = None
         if result.status != "ok":
-            try:
-                preview = await asyncio.wait_for(self._preview(tournaments, today), PREVIEW_WAIT_S)
-            except TimeoutError:
-                logger.info("quick.preview_skipped reason=timeout")
+            async def previewed() -> tuple[tuple[FootballEvent, MatchForecast], ...]:
+                try:
+                    return await asyncio.wait_for(self._preview(tournaments, today), PREVIEW_WAIT_S)
+                except TimeoutError:
+                    logger.info("quick.preview_skipped reason=timeout")
+                except Exception:  # optional: a failing preview never breaks the answer
+                    logger.exception("quick.preview_failed")
+                return ()
+
+            async def estimated() -> Estimate | None:
+                # Only after a conclusive "nothing qualifies": with data missing ("unavailable") the strict
+                # selection could not decide, and the estimate would read as if it had.
+                if result.status not in (STATUS_NO_BET, STATUS_NOT_ENOUGH) or unchecked:
+                    return None  # an unchecked day: the estimate would not cover the period it names
+                try:
+                    return await asyncio.wait_for(self._estimate(list(events.values()), histories, criteria),
+                                                  ESTIMATE_WAIT_S)
+                except TimeoutError:
+                    logger.info("quick.estimate_skipped reason=timeout")
+                except Exception:  # optional: a failing estimate never breaks the answer
+                    logger.exception("quick.estimate_failed")
+                return None
+
+            preview, estimate = await asyncio.gather(previewed(), estimated())
         # Read the clock again after the preview: a day change during it would make a "later" match today's.
         now = max(now, self._clock())
         if datetime.fromtimestamp(now, UTC).date() != today:
-            preview = ()
+            preview, estimate = (), None
             # The UTC day changed while the data loaded: "today's" picks and "later" matches were
             # judged against the previous day. Never a mixed answer; asked again it is consistent.
             result, next_match_at = QuickResult(STATUS_UNAVAILABLE, (), 0, None), None
@@ -340,7 +407,7 @@ class QuickService:
         return QuickAnswer(criteria, result, by_id, matches, forecasts, reasons,
                            tuple(unavailable), unchecked,
                            datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), next_match_at,
-                           self._prices(result, by_id), preview)
+                           self._prices(result, by_id), preview, _started(estimate, now))
 
     async def _preview(self, tournaments: frozenset[str] | None, today: date,
                        ) -> tuple[tuple[FootballEvent, MatchForecast], ...]:
@@ -368,6 +435,52 @@ class QuickService:
         outcomes = await asyncio.get_running_loop().run_in_executor(self._worker, self._forecast_all, events, histories)
         return tuple((e, f) for e, f in zip(events, outcomes, strict=True) if isinstance(f, MatchForecast))[:PREVIEW_MAX]
 
+    async def _estimate(self, events: list[FootballEvent], histories: dict[str, ModelHistory | None],
+                        criteria: Criteria) -> Estimate | None:
+        """The most probable outcome of each upcoming match within the risk band (model when its history is
+        cached, else the market's own probability); the best ones, team-disjoint. Never a provider request."""
+        now = self._clock()
+        nearest = sorted((e for e in events if parse_instant(e.starts_at).timestamp() > now),
+                         key=lambda e: (e.starts_at, e.id))[:ESTIMATE_MAX_MATCHES]
+        if not nearest:
+            return None
+        known = dict(histories)
+        for e in nearest:
+            if e.tournament_id not in known:
+                known[e.tournament_id] = self.sports.cached_model_history(e.tournament_id)
+        modelled = [e for e in nearest if known.get(e.tournament_id) is not None]
+        forecasts = await asyncio.get_running_loop().run_in_executor(
+            self._estimate_worker, lambda: [self._estimator.compute(e, known[e.tournament_id]) for e in modelled])
+        by_event = {e.id: f for e, f in zip(modelled, forecasts, strict=True) if isinstance(f, MatchForecast)}
+        low, high = ESTIMATE_BANDS[criteria.risk]
+        best: list[EstimateLeg] = []
+        for e in nearest:
+            found = self.odds.lookup(e) if self.odds is not None else None
+            book = market_book(found.book) if found is not None else {}
+            forecast = by_event.get(e.id)
+            if forecast is not None:
+                probs, source = forecast.exact, "model"
+            elif book:
+                probs, source = {k: fair for k, (_, fair, _) in book.items()}, "market"
+            else:
+                continue
+            fits = [k for k, p in probs.items()
+                    if k in FAMILY and FAMILY[k] in ESTIMATE_FAMILIES and low <= p <= high
+                    and (criteria.market == "any" or FAMILY[k] == criteria.market)]
+            if not fits:
+                continue
+            market = max(fits, key=lambda k: (probs[k], -KEYS.index(k)))
+            shown = forecast.display[market] if forecast is not None else round(probs[market] * 100)
+            price = (book[market][0], found.fetched_at, found.valid_for) if found is not None and market in book else None
+            best.append(EstimateLeg(e, market, probs[market], shown, source, price))
+        best.sort(key=lambda leg: (-leg.probability, leg.event.starts_at, leg.event.id))
+        # The strict coupon's own search (best-ranked first, past team conflicts), on the estimate's legs.
+        ranked = [_Teams(leg) for leg in best]
+        chosen = [t.leg for t in coupon(ranked, criteria.size)]  # type: ignore[arg-type]
+        if len(chosen) < criteria.size:
+            return None
+        return Estimate(tuple(chosen), len(best))
+
     def _prices(self, result: QuickResult, events: dict[str, FootballEvent]) -> dict[str, tuple[MarketQuote, float, float]]:
         """The chosen legs' prices: no request, only what the bot has pushed (matched strictly)."""
         prices: dict[str, tuple[MarketQuote, float, float]] = {}
@@ -392,6 +505,27 @@ def _utc_days(start: datetime, end: datetime) -> list[date]:
         days.append(day)
         day += timedelta(days=1)
     return days
+
+
+def _outward(bounds: tuple[float, float]) -> list[int]:
+    low, high = bounds
+    return [max(0, math.floor(low * 100 + 1e-9)), min(100, math.ceil(high * 100 - 1e-9))]
+
+
+class _Teams:
+    """An estimate leg in the shape forecast.quick.coupon searches (option.teams)."""
+
+    def __init__(self, leg: EstimateLeg) -> None:
+        self.leg = leg
+        self.option = self
+        self.teams = (leg.event.home.id, leg.event.away.id)
+
+
+def _started(estimate: Estimate | None, now: float) -> Estimate | None:
+    """No estimate leg after its kickoff (the clock is read again at the end of a pick)."""
+    if estimate is None or any(parse_instant(leg.event.starts_at).timestamp() <= now for leg in estimate.legs):
+        return None
+    return estimate
 
 
 def _iso(ts: float) -> str:

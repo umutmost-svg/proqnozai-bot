@@ -10,6 +10,8 @@ import type {
   AiFactor,
   QuickAnswer,
   QuickCriteria,
+  QuickEstimate,
+  QuickEstimateLeg,
   QuickLeg,
   QuickPreview,
   QuickReason,
@@ -1504,5 +1506,65 @@ export function readQuick(
     experimental: b.experimental,
     computedAt,
     preview,
+    // An extra: a malformed estimate is left out (never shown), the answer itself stands.
+    estimate: status === 'no_bet' || status === 'not_enough' ? readEstimate(b.estimate, criteria, range, readEvent, sent, computedAt) : null,
   };
+}
+
+const ESTIMATE_FAMILIES = new Set(['1x2', 'double', 'total', 'btts']);
+/** The estimate's probability band per risk level, whole percents (backend: miniapp/quick/service.py ESTIMATE_BANDS). */
+const ESTIMATE_BANDS: Record<QuickCriteria['risk'], [number, number]> = { conservative: [70, 85], balanced: [60, 75], elevated: [55, 65] };
+
+/** The quick estimate (without a pick): the asked number of team-disjoint upcoming matches; else null. */
+export function readEstimate(
+  v: unknown,
+  criteria: QuickCriteria,
+  range: { from: Date; to: Date },
+  readEvent: (raw: unknown) => SportEvent | null,
+  sent: PriceDeadline,
+  computedAt: string,
+): QuickEstimate | null {
+  const [bandLow, bandHigh] = ESTIMATE_BANDS[criteria.risk];
+  if (!isObj(v) || !Array.isArray(v.legs)) return null;
+  const want = criteria.mode === 'single' ? 1 : criteria.size;
+  const suitable = int(v.suitable);
+  if (v.legs.length !== want || suitable === null || suitable < want) return null;
+  const legs: QuickEstimateLeg[] = [];
+  for (const raw of v.legs) {
+    if (!isObj(raw) || !isMarketKey(raw.market) || raw.family !== FAMILY[raw.market] || !ESTIMATE_FAMILIES.has(raw.family as string)) return null;
+    if (raw.source !== 'model' && raw.source !== 'market') return null;
+    const event = readEvent(raw.event);
+    const probability = percent(raw.probability);
+    if (!event || event.sport !== 'football' || event.status !== 'upcoming' || probability === null) return null;
+    const kickoff = Date.parse(event.startsAt);
+    if (kickoff <= Date.parse(computedAt)) return null;
+    // Inside the asked period, and inside the risk level's band (the shown percent may be a point off the exact one).
+    if (kickoff < range.from.getTime() - CLOCK_SLACK_MS || kickoff >= range.to.getTime()) return null;
+    if (probability < bandLow - SHOWN_TOLERANCE || probability > bandHigh + SHOWN_TOLERANCE) return null;
+    if (criteria.tournaments.length && !criteria.tournaments.includes(event.tournamentId)) return null;
+    if (criteria.market !== 'any' && raw.family !== criteria.market) return null;
+    let price: QuickEstimateLeg['price'] = null;
+    if (raw.price !== null) {
+      const p = raw.price;
+      const odds = isObj(p) ? finite(p.odds, 1.01, 100) : null;
+      const fetchedAt = isObj(p) ? str(p.fetchedAt) : null;
+      const expires = isObj(p) ? priceDeadline(p.validFor, sent) : null;
+      if (odds === null || !fetchedAt || !ZONED_INSTANT.test(fetchedAt) || !expires) return null;
+      price = { odds, fetchedAt, expires };
+    }
+    if (raw.source === 'market' && price === null) return null; // its probability IS those odds
+    legs.push({ event: event as FootballEvent, market: raw.market, family: raw.family as MarketFamily, probability, source: raw.source, price });
+  }
+  if (new Set(legs.map((l) => l.event.id)).size !== legs.length) return null;
+  const teams = legs.flatMap((l) => [l.event.home.id, l.event.away.id]);
+  if (new Set(teams).size !== teams.length) return null;
+  let combined: QuickEstimate['combined'] = null;
+  if (criteria.mode === 'coupon') {
+    // Exact Fréchet bounds rounded outward, checked against the shown percents as for a strict coupon.
+    const [low, high] = Array.isArray(v.combined) && v.combined.length === 2 ? (v.combined as unknown[]) : [];
+    const pair: [number, number] | null = percent(low) !== null && percent(high) !== null ? [low as number, high as number] : null;
+    if (!pair || !boundsFit(pair, legs.map((l) => l.probability))) return null;
+    combined = pair;
+  } else if (v.combined !== null) return null;
+  return { legs, suitable, combined };
 }

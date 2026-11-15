@@ -157,7 +157,8 @@ class StubForecaster:
 
 def service(events, by_id, failing=(), clock=lambda: NOW, **costs) -> tuple[QuickService, StubSports]:
     sports = StubSports(events, failing, **costs)
-    return QuickService(sports, clock=clock, forecaster=StubForecaster(by_id)), sports  # type: ignore[arg-type]
+    stub = StubForecaster(by_id)
+    return QuickService(sports, clock=clock, forecaster=stub, estimator=stub), sports  # type: ignore[arg-type]
 
 
 def at(value: str) -> datetime:
@@ -510,3 +511,123 @@ def test_an_old_cached_calendar_is_not_used_for_the_preview(tmp_path) -> None:
     assert svc.cached_model_history("fd:PL") is not None
     clock.advance(MAX_AGE_S + 1)
     assert svc.cached_model_history("fd:PL") is None and len(t.calls) == 1
+
+
+# --- estimate: without a pick, every match of the period (owner 15.11), labelled, never a provider request -------
+
+class StubOdds:
+    def __init__(self, books: dict) -> None:
+        self.books = books
+
+    def lookup(self, event):
+        from miniapp.odds.store import MatchOdds
+        book = self.books.get(event.id)
+        return MatchOdds(1, NOW - 60, book, 600.0) if book else None
+
+
+def tsl_event(mid: int, utc: str = f"{DAY}T19:00:00Z", home=(70, "Home SK"), away=(71, "Away SK")):
+    from miniapp.sports.football_data import normalize_match as nm
+    from miniapp.tests.test_sports import match as raw_match
+    e = nm(raw_match(mid, "TIMED", code="TSL", utc=utc, home=home, away=away), FETCHED, frozenset({"PL", "TSL"}))
+    assert e is not None
+    return e
+
+
+def estimating(events, by_id, books=None, cached=None):
+    sports = StubSports(events)
+    sports.cached = cached or {}
+    stub = StubForecaster(by_id)
+    return QuickService(sports, clock=lambda: NOW, forecaster=stub, estimator=stub,  # type: ignore[arg-type]
+                        odds=StubOdds(books or {})), sports
+
+
+def test_without_a_pick_an_unvalidated_match_gets_a_market_estimate_with_its_price() -> None:
+    svc, sports = estimating([tsl_event(2)], {}, books={"fd:2": {"1": 1.5, "X": 4.2, "2": 6.5}})
+    body = pick(svc, f"{DAY}T23:59:00Z")
+    assert body["status"] == STATUS_NO_BET and body["legs"] == []      # the strict answer is unchanged
+    est = body["estimate"]
+    assert est is not None and len(est["legs"]) == 1
+    leg = est["legs"][0]
+    assert leg["source"] == "market" and leg["market"] == "1" and leg["family"] == "1x2"
+    assert 60 <= leg["probability"] <= 75 and leg["price"]["odds"] == 1.5
+    assert sports.history_calls == []                                   # no provider request for it
+
+
+def test_a_cached_history_gives_a_model_estimate_for_a_later_day_too() -> None:
+    later = ev(10, utc="2027-01-17T15:00:00Z", home=(20, "H FC"), away=(40, "A FC"))
+    f = fake_forecast(home_rate=1.9, away_rate=0.8)
+    svc, sports = estimating([later], {"fd:10": f}, cached={"fd:PL": ModelHistory([later], "2026-08-01", True)})
+    body = pick(svc, "2027-01-20T08:00:00Z")
+    leg = body["estimate"]["legs"][0]
+    assert leg["source"] == "model" and leg["price"] is None
+    assert 0.60 <= f.exact[leg["market"]] <= 0.75
+    assert leg["probability"] == f.display[leg["market"]]
+    assert all(not (0.60 <= p <= 0.75) or p <= f.exact[leg["market"]] for k, p in f.exact.items()
+               if k in ("1", "X", "2", "1X", "X2", "12", "O1.5", "U1.5", "O2.5", "U2.5", "O3.5", "U3.5", "BTTS_Y", "BTTS_N"))
+
+
+def test_near_certain_outcomes_are_never_an_estimate() -> None:
+    svc, _ = estimating([tsl_event(2)], {}, books={"fd:2": {"1": 1.08, "X": 12.0, "2": 25.0}})
+    assert pick(svc, f"{DAY}T23:59:00Z")["estimate"] is None
+
+
+def test_an_estimate_coupon_uses_different_teams_and_gives_bounds() -> None:
+    a = tsl_event(2, home=(70, "A1"), away=(71, "A2"))
+    b = tsl_event(3, home=(70, "A1"), away=(72, "B2"))                 # shares a team with the first
+    c = tsl_event(4, home=(73, "C1"), away=(74, "C2"))
+    books = {k: {"1": 1.5, "X": 4.2, "2": 6.5} for k in ("fd:2", "fd:3", "fd:4")}
+    svc, _ = estimating([a, b, c], {}, books=books)
+    body = pick(svc, f"{DAY}T23:59:00Z", criteria=Criteria("coupon", "any", "balanced", 2))
+    est = body["estimate"]
+    ids = {leg["event"]["id"] for leg in est["legs"]}
+    assert len(ids) == 2 and "fd:4" in ids and est["combined"] is not None
+    low, high = est["combined"]
+    assert 0 <= low <= high <= min(leg["probability"] for leg in est["legs"]) + 1   # exact, rounded outward
+    svc2, _ = estimating([a, b], {}, books=books)                      # only one team-disjoint match: none
+    assert pick(svc2, f"{DAY}T23:59:00Z", criteria=Criteria("coupon", "any", "balanced", 2))["estimate"] is None
+
+
+def test_the_market_filter_and_risk_band_apply_to_the_estimate() -> None:
+    books = {"fd:2": {"1": 1.5, "X": 4.2, "2": 6.5}}
+    svc, _ = estimating([tsl_event(2)], {}, books=books)
+    assert pick(svc, f"{DAY}T23:59:00Z", criteria=Criteria("single", "total", "balanced", 1))["estimate"] is None
+    svc, _ = estimating([tsl_event(2)], {}, books=books)
+    assert pick(svc, f"{DAY}T23:59:00Z", criteria=Criteria("single", "any", "conservative", 1))["estimate"] is None
+
+
+def test_no_estimate_next_to_a_strict_pick() -> None:
+    svc, _ = estimating([ev(1)], {"fd:1": forecast(("1", 0.64, 0.45))}, books={"fd:1": {"1": 1.5, "X": 4.2, "2": 6.5}})
+    body = pick(svc, f"{DAY}T23:59:00Z")
+    assert body["status"] == STATUS_OK and body["estimate"] is None
+
+
+def test_an_estimate_coupon_searches_past_a_team_conflict() -> None:
+    ab = tsl_event(2, home=(70, "A"), away=(71, "B"))                  # ranked first, blocks both others
+    ac = tsl_event(3, home=(70, "A"), away=(72, "C"))
+    bd = tsl_event(4, home=(71, "B"), away=(73, "D"))
+    books = {"fd:2": {"1": 1.42, "X": 4.6, "2": 7.5}, "fd:3": {"1": 1.5, "X": 4.2, "2": 6.5},
+             "fd:4": {"1": 1.5, "X": 4.2, "2": 6.5}}
+    svc, _ = estimating([ab, ac, bd], {}, books=books)
+    est = pick(svc, f"{DAY}T23:59:00Z", criteria=Criteria("coupon", "any", "balanced", 2))["estimate"]
+    assert est is not None and {leg["event"]["id"] for leg in est["legs"]} == {"fd:3", "fd:4"}
+
+
+def test_no_estimate_when_data_is_missing() -> None:
+    svc, sports = estimating([ev(1), tsl_event(2)], {}, books={"fd:2": {"1": 1.5, "X": 4.2, "2": 6.5}})
+    sports.failing = {"fd:PL"}                                          # today's PL history cannot be loaded
+    body = pick(svc, f"{DAY}T23:59:00Z")
+    assert body["status"] == "unavailable" and body["estimate"] is None
+
+
+def test_no_estimate_when_a_day_of_the_period_is_unchecked() -> None:
+    later = tsl_event(5, utc="2027-01-16T19:00:00Z", home=(80, "L1"), away=(81, "L2"))
+    svc, sports = estimating([tsl_event(2), later], {}, books={"fd:2": {"1": 1.5, "X": 4.2, "2": 6.5}})
+    original = sports.events
+
+    async def flaky(sport, start, end, tournament):
+        if start.date().isoformat() == "2027-01-16":
+            raise UpstreamError("rate_limited")
+        return await original(sport, start, end, tournament)
+    sports.events = flaky
+    body = pick(svc, "2027-01-17T00:00:00Z")
+    assert body["uncheckedDays"] == 1 and body["estimate"] is None
