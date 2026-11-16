@@ -538,6 +538,7 @@ export const en: Dictionary = {
   'ai.pick.reason.strongerRating': '{team} is stronger in the model: attack {attack}, defence {defence} versus {otherAttack} and {otherDefence} for {other} (1 = the competition average).',
   'ai.pick.reason.homeAdvantage': 'Home advantage: in the model, with equal opponents home teams in this competition score {value} times as many goals as away teams.',
   'ai.sentence.rating': '{team}: attack {attack}, defence {defence} in the model (1 = the competition average; defence below 1 concedes less).',
+  'ai.sentence.ratingPool': '{team}: attack {attack}, defence {defence} in the model (1 = the average national team; defence below 1 concedes less).',
   'ai.sentence.homeAdvantage': 'The competition’s home advantage in the model: with equal opponents, home teams score {value} times as many goals as away teams.',
   'ai.sentence.homeAdvantagePool': 'Home advantage in the national-team model: with equal opponents, home teams score {value} times as many goals as away teams.',
   'ai.pick.noBet.limitedCompetition': 'In the Champions League the model has few matches per team: the probabilities are shown, but there is no recommendation.',

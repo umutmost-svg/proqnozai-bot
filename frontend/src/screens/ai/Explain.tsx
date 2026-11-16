@@ -21,7 +21,7 @@ export function factorSentence(t: Translate, lang: Lang, factor: AiFactor, basis
   }
   if (factor.endsWith('Rating')) {
     const rating = forecast!.ratings[factor === 'homeRating' ? 'home' : 'away'];
-    return t('ai.sentence.rating', { team: team.name, attack: decimal(lang, rating.attack), defence: decimal(lang, rating.defence) });
+    return t(forecast!.pool ? 'ai.sentence.ratingPool' : 'ai.sentence.rating', { team: team.name, attack: decimal(lang, rating.attack), defence: decimal(lang, rating.defence) });
   }
   if (factor.endsWith('Form')) {
     return t('ai.sentence.form', {

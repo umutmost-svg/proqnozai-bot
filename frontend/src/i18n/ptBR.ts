@@ -538,6 +538,7 @@ export const ptBR: Dictionary = {
   'ai.pick.reason.strongerRating': '{team} é mais forte no modelo: ataque {attack}, defesa {defence}, contra {otherAttack} e {otherDefence} do {other} (1 = média do campeonato).',
   'ai.pick.reason.homeAdvantage': 'Fator casa: no modelo, com adversários equivalentes, os mandantes deste campeonato marcam {value} vezes mais gols que os visitantes.',
   'ai.sentence.rating': '{team}: ataque {attack}, defesa {defence} no modelo (1 = média do campeonato; defesa abaixo de 1 sofre menos gols).',
+  'ai.sentence.ratingPool': '{team}: ataque {attack}, defesa {defence} no modelo (1 = média das seleções; defesa abaixo de 1 sofre menos gols).',
   'ai.sentence.homeAdvantage': 'Fator casa do campeonato no modelo: com adversários equivalentes, os mandantes marcam {value} vezes mais gols que os visitantes.',
   'ai.sentence.homeAdvantagePool': 'Fator casa no modelo de seleções: com adversários equivalentes, os mandantes marcam {value} vezes mais gols que os visitantes.',
   'ai.pick.noBet.limitedCompetition': 'Na Champions League o modelo tem poucos jogos por time: as probabilidades aparecem, mas não há recomendação.',

@@ -538,6 +538,7 @@ export const tr: Dictionary = {
   'ai.pick.reason.strongerRating': 'Modele göre {team} daha güçlü: hücum {attack}, savunma {defence}; {other} için {otherAttack} ve {otherDefence} (1 = turnuva ortalaması).',
   'ai.pick.reason.homeAdvantage': 'Ev sahibi avantajı: modele göre eşit rakiplerde bu turnuvada ev sahipleri deplasman takımlarından {value} kat fazla gol atar.',
   'ai.sentence.rating': '{team}: modelde hücum {attack}, savunma {defence} (1 = turnuva ortalaması; 1’in altındaki savunma daha az gol yer).',
+  'ai.sentence.ratingPool': '{team}: modelde hücum {attack}, savunma {defence} (1 = ortalama milli takım; 1’in altındaki savunma daha az gol yer).',
   'ai.sentence.homeAdvantage': 'Modele göre turnuvadaki ev sahibi avantajı: eşit rakiplerde ev sahipleri deplasman takımlarından {value} kat fazla gol atar.',
   'ai.sentence.homeAdvantagePool': 'Milli takım modeline göre ev sahibi avantajı: eşit rakiplerde ev sahipleri deplasman takımlarından {value} kat fazla gol atar.',
   'ai.pick.noBet.limitedCompetition': 'Şampiyonlar Ligi’nde modelin takım başına maçı az: olasılıklar gösteriliyor ama öneri yok.',

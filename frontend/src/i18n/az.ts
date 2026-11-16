@@ -540,6 +540,7 @@ export const az: Dictionary = {
   'ai.pick.reason.strongerRating': '{team} modelə görə daha güclüdür: hücum {attack}, müdafiə {defence}, {other} komandasında isə {otherAttack} və {otherDefence} (1 — turnirin orta səviyyəsi).',
   'ai.pick.reason.homeAdvantage': 'Ev üstünlüyü: modelə görə bərabər rəqiblər olduqda bu turnirdə ev sahibləri qonaqlardan {value} dəfə çox qol vurur.',
   'ai.sentence.rating': '{team}: modelə görə hücum {attack}, müdafiə {defence} (1 — turnirin orta səviyyəsi; 1-dən aşağı müdafiə daha az qol buraxır).',
+  'ai.sentence.ratingPool': '{team}: modelə görə hücum {attack}, müdafiə {defence} (1 — millilərin orta səviyyəsi; 1-dən aşağı müdafiə daha az qol buraxır).',
   'ai.sentence.homeAdvantage': 'Modelə görə turnirdə ev üstünlüyü: bərabər rəqiblər olduqda ev sahibləri qonaqlardan {value} dəfə çox qol vurur.',
   'ai.sentence.homeAdvantagePool': 'Millilər modelinə görə ev üstünlüyü: bərabər rəqiblər olduqda ev sahibləri qonaqlardan {value} dəfə çox qol vurur.',
   'ai.pick.noBet.limitedCompetition': 'Çempionlar Liqasında modelin hər komanda üzrə matçı azdır: ehtimallar göstərilir, lakin tövsiyə verilmir.',

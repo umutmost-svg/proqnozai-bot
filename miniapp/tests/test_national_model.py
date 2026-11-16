@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import random
 
+import pytest
+
 from miniapp.forecast import version
 from miniapp.forecast.data import MatchResult
 from miniapp.forecast.engine import ForecastEngine, MatchForecast, model_gap
@@ -12,6 +14,7 @@ from miniapp.forecast.selection import NO_BET_UNVALIDATED
 from miniapp.sports import service as sports_service
 from miniapp.sports.cache import SportsCache
 from miniapp.sports.client import HttpResponse
+from miniapp.sports import football_data
 from miniapp.sports.football_data import FootballDataAdapter
 from miniapp.sports.service import SportsService
 from miniapp.tests.conftest import NOW, FakeClock
@@ -64,9 +67,15 @@ def routes(qufa_past=None) -> dict:
     }
 
 
-def make(transport, clock: FakeClock) -> SportsService:
+@pytest.fixture(autouse=True)
+def two_nations(monkeypatch) -> None:
+    """The fixtures serve two national-team competitions; the pool requires every one of them served."""
+    monkeypatch.setattr(football_data, "NATIONAL_CODES", frozenset({"UNL", "QUFA"}))
+
+
+def make(transport, clock: FakeClock, codes=("UNL", "QUFA", "PL")) -> SportsService:
     client = make_client(transport, clock, per_minute=100, per_day=10000)
-    adapter = FootballDataAdapter(client, ("UNL", "QUFA", "PL"), clock)
+    adapter = FootballDataAdapter(client, codes, clock)
     return SportsService(adapter, cache=SportsCache(clock=clock), clock=clock)
 
 
@@ -102,6 +111,19 @@ def test_a_season_the_source_lacks_is_no_gap_but_one_that_failed_to_load_is(cloc
     assert other._national_pool("UNL") is None  # a partial pool would rate a confederation from a fraction
 
 
+def test_a_subset_of_the_national_competitions_or_an_outdated_entry_never_makes_a_pool(clock: FakeClock) -> None:
+    subset = make(RoutedTransport(routes()), clock, codes=("UNL", "PL"))
+    run(subset._search_warm_load("fd:UNL"))
+    assert subset._national_pool("UNL") is None  # QUFA not served: whole confederations would be missing
+
+    service = make(RoutedTransport(routes()), clock)
+    run(service._search_warm_load("fd:UNL"))
+    run(service._search_warm_load("fd:QUFA"))
+    assert service._national_pool("UNL") is not None
+    clock.advance(sports_service.SEARCH_MAX_AGE_S + 1)  # the warm-up could not refresh the calendars since
+    assert service._national_pool("UNL") is None
+
+
 def test_the_sports_layer_repeats_the_window_of_the_forecast_layer() -> None:
     assert sports_service.NATIONAL_WINDOW_DAYS == version.NATIONAL_WINDOW_DAYS
 
@@ -125,10 +147,13 @@ def test_a_pooled_forecast_uses_the_national_parameters_on_its_window_and_never_
     assert isinstance(pooled, MatchForecast)
     assert pooled.sample == len(results)  # older than the window: never learned from
     assert pooled.pool == version.NATIONAL_POOL and pooled.parameters.endswith("+" + version.NATIONAL_POOL)
+    # Its own version: the forecast history evaluates it apart from the club model.
+    assert pooled.model_version == f"{version.MODEL_VERSION}+{version.NATIONAL_POOL}" == pooled.to_json()["version"]
     assert pooled.to_json()["pool"] == version.NATIONAL_POOL and pooled.limited and not pooled.gate_eligible
     assert pooled.selection.pick is None and pooled.selection.no_bet_reason == NO_BET_UNVALIDATED
     club = engine.forecast("UNL", results, None, 1, 2, NOW)
     assert isinstance(club, MatchForecast) and club.pool is None and club.expected_goals != pooled.expected_goals
+    assert club.model_version == version.MODEL_VERSION
 
 
 def test_the_lists_count_a_teams_matches_inside_the_pools_window_only() -> None:

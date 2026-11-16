@@ -27,6 +27,10 @@ from .models import SPORTS, FootballEvent, Provenance, Sport, SportEvent, Tourna
 # The national-team pool's window (forecast.version.NATIONAL_WINDOW_DAYS; the sports layer does not import the
 # forecast layer, so the number is repeated here and a test keeps the two equal).
 NATIONAL_WINDOW_DAYS = 3 * 365
+# The pool is built only from entries this fresh: a calendar as old as the search index still serves
+# (SEARCH_MAX_AGE_S), a season list or an earlier season within two of their daily refreshes. Older ones mean the
+# warm-up could not refresh them, and a pool that may miss recent results falls back to the club rule.
+NATIONAL_SEASON_MAX_AGE_S = 2 * 86400.0
 
 logger = logging.getLogger("miniapp.sports")
 
@@ -611,18 +615,27 @@ class SportsService:
     def _national_pool(self, code: str) -> tuple[SportEvent, ...] | None:
         """The pooled history of a national-team competition, from the cache only (never a request): the calendar
         of every served national-team competition and each of its earlier seasons inside the window. None until
-        all of them are cached (a season the source lacks is no gap) — a partial pool would rate a whole
-        confederation from a fraction of its matches."""
+        all of them are cached and fresh (a season the source lacks is no gap) — a partial pool would rate a whole
+        confederation from a fraction of its matches. Every national-team competition must be served: the pool
+        validated is all of them, never a configured subset."""
         if self.football is None or code not in football_data.NATIONAL_CODES:
             return None
+        if not football_data.NATIONAL_CODES <= set(self.football.codes):
+            return None
+        now = self._clock()
+
+        def fresh(key: str, max_age: float) -> Cached | None:
+            entry = self.cache.peek(key)
+            return entry if entry is not None and now - entry.fetched_at <= max_age else None
+
         events: list[SportEvent] = []
-        for other in sorted(c for c in self.football.codes if c in football_data.NATIONAL_CODES):
-            current = self.cache.peek(f"football:calendar:{other}")
-            listed = self.cache.peek(f"football:seasons:{other}")
+        for other in sorted(football_data.NATIONAL_CODES):
+            current = fresh(f"football:calendar:{other}", SEARCH_MAX_AGE_S)
+            listed = fresh(f"football:seasons:{other}", NATIONAL_SEASON_MAX_AGE_S)
             if current is None or listed is None:
                 return None
             for year in self._national_years(listed.value, current.value[1].start):
-                past = self.cache.peek(f"football:season:{other}:{year}")
+                past = fresh(f"football:season:{other}:{year}", NATIONAL_SEASON_MAX_AGE_S)
                 if past is not None:
                     events.extend(past.value[0])
                 elif self._past_failure.get((other, year)) != "absent":

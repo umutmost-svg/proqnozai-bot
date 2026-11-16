@@ -538,6 +538,7 @@ export const uz: Dictionary = {
   'ai.pick.reason.strongerRating': 'Modelga ko‘ra {team} kuchliroq: hujum {attack}, himoya {defence}, {other}da esa {otherAttack} va {otherDefence} (1 — turnirning o‘rtacha darajasi).',
   'ai.pick.reason.homeAdvantage': 'Uy afzalligi: modelga ko‘ra teng raqiblarda bu turnirda mezbonlar mehmonlardan {value} marta ko‘p gol uradi.',
   'ai.sentence.rating': '{team}: modelga ko‘ra hujum {attack}, himoya {defence} (1 — turnirning o‘rtacha darajasi; 1 dan past himoya kamroq gol o‘tkazadi).',
+  'ai.sentence.ratingPool': '{team}: modelga ko‘ra hujum {attack}, himoya {defence} (1 — terma jamoalarning o‘rtacha darajasi; 1 dan past himoya kamroq gol o‘tkazadi).',
   'ai.sentence.homeAdvantage': 'Modelga ko‘ra turnirdagi uy afzalligi: teng raqiblarda mezbonlar mehmonlardan {value} marta ko‘p gol uradi.',
   'ai.sentence.homeAdvantagePool': 'Terma jamoalar modeliga ko‘ra uy afzalligi: teng raqiblarda mezbonlar mehmonlardan {value} marta ko‘p gol uradi.',
   'ai.pick.noBet.limitedCompetition': 'Chempionlar ligasida modelda har bir jamoa bo‘yicha o‘yinlar kam: ehtimollar ko‘rsatiladi, lekin tavsiya berilmaydi.',

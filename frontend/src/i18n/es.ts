@@ -538,6 +538,7 @@ export const es: Dictionary = {
   'ai.pick.reason.strongerRating': '{team} es más fuerte según el modelo: ataque {attack}, defensa {defence}, frente a {otherAttack} y {otherDefence} de {other} (1 = media del torneo).',
   'ai.pick.reason.homeAdvantage': 'Ventaja local: según el modelo, con rivales iguales los locales de este torneo marcan {value} veces más goles que los visitantes.',
   'ai.sentence.rating': '{team}: ataque {attack}, defensa {defence} según el modelo (1 = media del torneo; una defensa por debajo de 1 encaja menos).',
+  'ai.sentence.ratingPool': '{team}: ataque {attack}, defensa {defence} según el modelo (1 = media de las selecciones; una defensa por debajo de 1 encaja menos).',
   'ai.sentence.homeAdvantage': 'Ventaja local del torneo según el modelo: con rivales iguales, los locales marcan {value} veces más goles que los visitantes.',
   'ai.sentence.homeAdvantagePool': 'Ventaja local según el modelo de selecciones: con rivales iguales, los locales marcan {value} veces más goles que los visitantes.',
   'ai.pick.noBet.limitedCompetition': 'En la Champions League el modelo tiene pocos partidos por equipo: se muestran las probabilidades, pero no hay recomendación.',

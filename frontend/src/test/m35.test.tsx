@@ -131,6 +131,8 @@ describe('AI screen with the goal model', () => {
     expect(stats).toHaveTextContent('В среднем по матчам сборных');
     expect(stats).not.toHaveTextContent('по турниру');
     expect(screen.getByTestId('ai-factors')).toHaveTextContent('Домашний фактор по модели сборных');
+    expect(screen.getByTestId('ai-factors')).toHaveTextContent('1 — средний уровень сборных');
+    expect(screen.getByTestId('ai-factors')).not.toHaveTextContent('уровень турнира');
   });
 
   it('shows the sections in order: the pick, alternatives, every market, factors and the numbers', async () => {

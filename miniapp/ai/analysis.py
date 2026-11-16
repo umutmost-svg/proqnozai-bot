@@ -447,7 +447,7 @@ class AiService:
                          stored["created_at"]), self._until_kickoff(event)
 
         result = await self._obtain(event, key, user_id, create, load,
-                                    restore=restore, prefix=f"{MODEL_VERSION}:{event.id}:{digest}:")
+                                    restore=restore, prefix=f"{forecast.model_version}:{event.id}:{digest}:")
         served = self._with_odds(result, event, forecast, has_form)
         if not has_form and served.kind == "partial" and served.market is None:
             # PARTIAL on the odds alone, and the line is gone (expired during the call or since):
@@ -705,9 +705,9 @@ class AiService:
         record = ForecastRecord(
             # The shown answer is part of the identity: a regenerated answer for the same evidence
             # (e.g. after a restart emptied the cache) is a row of its own, never silently dropped.
-            forecast_key=f"{MODEL_VERSION}:{event.id}:{digest}:{_answer_digest(result)}", event_id=event.id,
+            forecast_key=f"{forecast.model_version}:{event.id}:{digest}:{_answer_digest(result)}", event_id=event.id,
             tournament_id=event.tournament_id, home_team_id=event.home.id, away_team_id=event.away.id,
-            created_at=result.generated_at, kickoff_at=event.starts_at, model_version=MODEL_VERSION,
+            created_at=result.generated_at, kickoff_at=event.starts_at, model_version=forecast.model_version,
             parameters=forecast.parameters, data_until=forecast.data_until, sample=forecast.sample, inputs_digest=digest,
             probabilities={k: round(v, 6) for k, v in forecast.exact.items()},
             baseline={k: round(v, 6) for k, v in forecast.baseline_1x2.items()},

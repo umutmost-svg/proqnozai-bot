@@ -89,6 +89,11 @@ class MatchForecast:
     pool: str | None = None  # NATIONAL_POOL: fitted on every national-team competition at once
 
     @property
+    def model_version(self) -> str:
+        """Stored with the forecast: the history evaluates each version apart, so the pooled fit is its own."""
+        return MODEL_VERSION if self.pool is None else f"{MODEL_VERSION}+{self.pool}"
+
+    @property
     def parameters(self) -> str:
         """Identity of the fitted parameters stored with the forecast (the pooled fit has its own)."""
         return FROZEN.digest if self.pool is None else f"{FROZEN.digest}+{self.pool}"
@@ -100,7 +105,7 @@ class MatchForecast:
 
     def to_json(self) -> dict:
         return {
-            "version": MODEL_VERSION,
+            "version": self.model_version,
             "kind": "dixon_coles" if FROZEN.params.dixon_coles else "poisson",
             "parameters": self.parameters,
             "pool": self.pool,
