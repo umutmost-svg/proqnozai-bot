@@ -41,6 +41,8 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "quick.enabled": {"type": "bool", "default": True},
     "ai.per_user_daily": {"type": "int", "default": 5, "min": 0, "max": 50},
     "ai.daily_budget": {"type": "int", "default": 300, "min": 0, "max": 5000},
+    # Forecasts require and spend credits (docs/miniapp/credits.md); off until the owner switches it on.
+    "credits.enabled": {"type": "bool", "default": False},
 }
 
 _SCHEMA = """
@@ -205,6 +207,8 @@ PERMISSIONS: dict[str, tuple[str, ...]] = {
     "manage_partners": ("owner",),
     # Referral links: create and archive (owner, admin); per-link stats are aggregates (analysts too).
     "manage_referrals": ("owner", "admin", "promoter"),  # a promoter: only the links they created
+    # MB IDs users enter in the Mini App: the owner approves them personally (owner 16.11, docs/miniapp/credits.md).
+    "approve_mb": ("owner",),
     # Inquiries: reading them needs read_personal AND the explicit view_dialogs grant; the retention period of
     # stored inquiries is an owner decision.
     "manage_inquiry_settings": ("owner",),
@@ -239,6 +243,8 @@ def can(role: str, permission: str) -> bool:
 class AdminStore:
     def __init__(self, path: Path) -> None:
         self.path = path
+        # key -> fn(value, now, version), called inside the settings transaction (another process must follow)
+        self.setting_hooks: dict[str, Any] = {}
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -732,6 +738,8 @@ class AdminStore:
                 "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, version = excluded.version, "
                 "updated_at = excluded.updated_at, admin_id = excluded.admin_id",
                 (key, json.dumps(value), version, now, actor.id))
+            if (hook := self.setting_hooks.get(key)) is not None:
+                hook(value, now, version)  # e.g. the credits switch -> Mini App command; a failure rolls back
             after = {"key": key, "value": value}
             event = self._event(conn, now, actor.id, "settings.update", "setting", key,
                                 {"key": key, "value": before_value}, after, reason, idem, "done")

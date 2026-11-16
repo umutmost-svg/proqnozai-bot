@@ -36,8 +36,8 @@ COPY miniapp/requirements.lock miniapp/requirements.lock
 # Hash-checked, wheels only, no resolver surprises: the lock is the whole dependency set.
 RUN pip install --require-hashes --no-deps --only-binary=:all: -r miniapp/requirements.lock
 # Application code only: no tests, no .env, no bot modules.
-COPY miniapp/__init__.py miniapp/admin.py miniapp/app.py miniapp/asgi.py miniapp/security.py \
-     miniapp/settings.py miniapp/store.py miniapp/telegram_auth.py miniapp/
+COPY miniapp/__init__.py miniapp/admin.py miniapp/admin_commands.py miniapp/app.py miniapp/asgi.py \
+     miniapp/credits.py miniapp/security.py miniapp/settings.py miniapp/store.py miniapp/telegram_auth.py miniapp/
 COPY miniapp/sports/ miniapp/sports/
 COPY miniapp/ai/ miniapp/ai/
 COPY miniapp/forecast/ miniapp/forecast/

@@ -57,6 +57,58 @@ CREATE TABLE IF NOT EXISTS user_attribution (
     code       TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
+-- Credits (docs/miniapp/credits.md): one account per user, an append-only journal, the forecasts a user
+-- already paid for, the MB ID they entered and the owner's decision, and switches set from the admin panel.
+CREATE TABLE IF NOT EXISTS credit_accounts (
+    user_id         INTEGER PRIMARY KEY,
+    balance         INTEGER NOT NULL CHECK (balance >= 0),
+    unlimited_until INTEGER,
+    topup_month     TEXT,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS credit_ledger (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL,
+    at            INTEGER NOT NULL,
+    kind          TEXT NOT NULL,
+    delta         INTEGER NOT NULL,
+    balance_after INTEGER NOT NULL,
+    item          TEXT,
+    key           TEXT NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS credit_ledger_user ON credit_ledger(user_id, id);
+CREATE TRIGGER IF NOT EXISTS credit_ledger_no_update BEFORE UPDATE ON credit_ledger
+BEGIN SELECT RAISE(ABORT, 'the credit ledger is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS credit_ledger_no_delete BEFORE DELETE ON credit_ledger
+BEGIN SELECT RAISE(ABORT, 'the credit ledger is append-only'); END;
+CREATE TABLE IF NOT EXISTS credit_items (
+    user_id INTEGER NOT NULL,
+    item    TEXT NOT NULL,
+    at      INTEGER NOT NULL,
+    PRIMARY KEY (user_id, item)
+);
+CREATE TABLE IF NOT EXISTS mb_links (
+    user_id      INTEGER PRIMARY KEY,
+    mb_id        TEXT NOT NULL COLLATE NOCASE,
+    state        TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'rejected')),
+    submitted_at INTEGER NOT NULL,
+    decided_at   INTEGER,
+    reason       TEXT
+);
+-- One MB ID per user among the live links (a rejected one may be entered again by anyone).
+CREATE UNIQUE INDEX IF NOT EXISTS mb_links_live ON mb_links(mb_id) WHERE state != 'rejected';
+CREATE TABLE IF NOT EXISTS app_flags (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+-- Admin commands already applied (admin-commands.db keys): applying one twice is a no-op.
+CREATE TABLE IF NOT EXISTS applied_commands (
+    key        TEXT PRIMARY KEY,
+    result     TEXT NOT NULL,
+    applied_at INTEGER NOT NULL
+);
 -- Paid AI calls per UTC day (per user and in total): survives restarts.
 CREATE TABLE IF NOT EXISTS ai_usage (
     day      TEXT NOT NULL,
@@ -70,7 +122,9 @@ CREATE TABLE IF NOT EXISTS ai_usage (
 _USER_COLUMNS = ("telegram_user_id, first_name, last_name, username, language_code, lang, lang_source, "
                  "created_at, last_login_at")
 _SESSION_COLUMNS = "token_hash, user_id, created_at, expires_at, revoked_at, init_hash"
-_OWN_TABLES = frozenset({"users", "sessions", "consumed_init_data", "ai_usage", "user_attribution", "sqlite_sequence"})
+_OWN_TABLES = frozenset({"users", "sessions", "consumed_init_data", "ai_usage", "user_attribution", "sqlite_sequence",
+                         "credit_accounts", "credit_ledger", "credit_items", "mb_links", "app_flags",
+                         "applied_commands"})
 _REFERRAL = re.compile(r"^ref_([a-z0-9]{3,24})$")
 
 
@@ -508,6 +562,56 @@ class Store:
             active = conn.execute("SELECT COUNT(DISTINCT user_id) FROM sessions WHERE revoked_at IS NULL "
                                   "AND expires_at > ?", (now,)).fetchone()[0]
         return {"total": int(total), "new": int(new), "loggedIn": int(logged_in), "withActiveSession": int(active)}
+
+    # ---- credits and MB ID, read by the admin panel (docs/miniapp/credits.md) -------------------
+    # A database written by an older Mini App has no credit tables yet: empty answers, never an error.
+
+    def _credit_read(self, sql: str, args: tuple = ()) -> list[tuple]:
+        try:
+            with self._connect() as conn:
+                return conn.execute(sql, args).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc):
+                return []
+            raise
+
+    def credit_accounts_of(self, user_ids: Iterable[int] | None, now: int) -> dict[int, dict]:
+        wanted = set(user_ids) if user_ids is not None else None
+        return {u: {"balance": b, "unlimitedUntil": t if t and t > now else None}
+                for u, b, t in self._credit_read("SELECT user_id, balance, unlimited_until FROM credit_accounts")
+                if wanted is None or u in wanted}
+
+    def credit_history(self, user_id: int | None, limit: int = 50, kind: str | None = None) -> list[dict]:
+        where, args = [], []
+        if user_id is not None:
+            where.append("user_id = ?")
+            args.append(user_id)
+        if kind:
+            where.append("kind = ?")
+            args.append(kind)
+        sql = ("SELECT id, user_id, at, kind, delta, balance_after, item FROM credit_ledger "
+               f"{'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY id DESC LIMIT ?")
+        return [{"id": i, "userId": u, "at": a, "kind": k, "delta": d, "balanceAfter": b, "item": it}
+                for i, u, a, k, d, b, it in self._credit_read(sql, (*args, limit))]
+
+    def credit_totals(self, now: int, since: int) -> dict:
+        acc = self._credit_read("SELECT COALESCE(SUM(balance), 0), COUNT(*), "
+                                "COALESCE(SUM(unlimited_until > ?), 0) FROM credit_accounts", (now,))
+        led = self._credit_read("SELECT COALESCE(SUM(CASE WHEN delta > 0 THEN delta END), 0), "
+                                "COALESCE(-SUM(CASE WHEN kind = 'spend' THEN delta END), 0), "
+                                "COALESCE(SUM(kind = 'spend'), 0) FROM credit_ledger WHERE at >= ?", (since,))
+        total, accounts, unlimited = acc[0] if acc else (0, 0, 0)
+        granted, spent, forecasts = led[0] if led else (0, 0, 0)
+        return {"inCirculation": total, "accounts": accounts, "unlimited": unlimited, "granted": granted,
+                "spent": spent, "paidForecasts": forecasts}
+
+    def mb_links(self, state: str | None = None, user_ids: Iterable[int] | None = None) -> list[dict]:
+        wanted = set(user_ids) if user_ids is not None else None
+        rows = self._credit_read("SELECT user_id, mb_id, state, submitted_at, decided_at, reason FROM mb_links "
+                                 + ("WHERE state = ? " if state else "") + "ORDER BY submitted_at",
+                                 (state,) if state else ())
+        return [{"userId": u, "mbId": m, "state": st, "submittedAt": sa, "decidedAt": da, "reason": r}
+                for u, m, st, sa, da, r in rows if wanted is None or u in wanted]
 
     def backup(self, destination: Path) -> None:
         """Consistent online copy (SQLite backup API) into a new file."""

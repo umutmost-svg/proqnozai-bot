@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
+from miniapp.admin_commands import CommandQueue
 from miniapp.admin_web.demo import DEMO_ID_BASE
+from miniapp.credits import Credits
 from miniapp.store import Store
 from miniapp.tests.test_admin_web import ORIGIN, code, env, login, post  # noqa: F401 — env is a fixture
 
@@ -84,25 +86,66 @@ def test_broadcast_draft_then_scheduled_with_step_up(env):
     assert cancel.json()["after"] == {"status": "cancelled"}
 
 
-def test_credits_grant_debit_unlimited_and_ledger_is_append_only(env):
+def _apply_commands(config, clock) -> Credits:
+    """What the Mini App's background task does: applies the admin's queued commands once."""
+    credits = Credits(Store(config.miniapp_db), clock)
+    CommandQueue(Path(config.miniapp_db).with_name("admin-commands.db")).apply_pending(credits.apply, int(clock()))
+    return credits
+
+
+def test_credits_are_queued_to_the_mini_app_and_read_back_from_it(env):
     config, clock, client, accounts, secrets_ = env
     csrf = login(client, clock, secrets_, "admin@x.test")
     grant = post(client, "/api/admin/credits/change", csrf, {**dangerous(secrets_, clock), "userIds": [U1], "kind": "grant", "amount": 50})
-    assert grant.json()["after"]["results"][0]["balance"] == 50
+    assert grant.json()["after"]["queued"] == 1
     clock.t += 30
-    over = post(client, "/api/admin/credits/change", csrf, {**dangerous(secrets_, clock), "userIds": [U1], "kind": "debit", "amount": 60})
-    assert over.json()["error"] == "insufficient_balance"
+    over = post(client, "/api/admin/credits/change", csrf, {**dangerous(secrets_, clock), "userIds": [U1], "kind": "debit", "amount": 1000})
+    assert over.status_code == 200  # the Mini App floors a debit at zero
     clock.t += 30
     group = post(client, "/api/admin/credits/change", csrf,
                  {**dangerous(secrets_, clock), "userIds": [U1, U2], "kind": "unlimited", "days": 30})
-    assert group.status_code == 200
+    assert group.status_code == 200 and client.get("/api/admin/credits").json()["pendingCommands"] == 4
+    _apply_commands(config, clock)
     page = client.get("/api/admin/credits").json()
-    assert page["enabled"] is False and page["totals"]["unlimited"] == 2 and page["totals"]["granted"] == 50
-    assert [l["kind"] for l in page["ledger"]][:3] == ["unlimited", "unlimited", "grant"]
-    with sqlite3.connect(accounts.path) as conn, pytest.raises(sqlite3.IntegrityError, match="append-only"):
-        conn.execute("DELETE FROM credit_ledger")
+    assert page["enabled"] is False and page["pendingCommands"] == 0 and page["totals"]["unlimited"] == 2
+    assert [l["kind"] for l in page["ledger"] if l["userId"] == U1][:4] == ["unlimited", "monthly", "debit", "grant"]  # 0 -> the month's top-up
+    card = client.get(f"/api/admin/users/{U1}").json()
+    assert card["credits"]["balance"] == 50 and card["credits"]["unlimitedUntil"]
     assert post(client, "/api/admin/credits/change", csrf,
                 {**dangerous(secrets_, clock), "userIds": [123], "kind": "grant", "amount": 1}).status_code == 404
+
+
+def test_the_credits_switch_reaches_the_mini_app(env):
+    config, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    r = post(client, "/api/admin/settings/credits.enabled", csrf, {**dangerous(secrets_, clock), "value": True})
+    assert r.status_code == 200, r.text
+    assert _apply_commands(config, clock).enabled()
+
+
+def test_owner_approves_mb_ids_entered_in_the_mini_app(env):
+    config, clock, client, accounts, secrets_ = env
+    credits = Credits(Store(config.miniapp_db), clock)
+    credits.submit_mb(U1, "MBX1")
+    credits.submit_mb(U2, "MBX2")
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    assert client.get("/api/admin/mb").json()["counts"]["pending"] == 2
+    assert post(client, f"/api/admin/mb/{U1}/decide", csrf, {"decision": "approve", "mbId": "MBX1", "submittedAt": 1}).status_code == 403
+    client.cookies.clear()
+    csrf = login(client, clock, secrets_, "owner@x.test")
+    items = {i["userId"]: i for i in client.get("/api/admin/mb").json()["items"]}
+    ok = post(client, f"/api/admin/mb/{U1}/decide", csrf,
+              {"decision": "approve", "mbId": "MBX1", "submittedAt": items[U1]["submittedAt"]})
+    assert ok.json() == {"decision": "approved"}
+    assert post(client, f"/api/admin/mb/{U2}/decide", csrf,
+                {"decision": "reject", "mbId": "MBX2", "submittedAt": items[U2]["submittedAt"]}).json()["error"] == "reason_required"
+    post(client, f"/api/admin/mb/{U2}/decide", csrf,
+         {"decision": "reject", "mbId": "MBX2", "submittedAt": items[U2]["submittedAt"], "reason": "нет аккаунта"})
+    _apply_commands(config, clock)
+    assert client.get("/api/admin/mb").json()["counts"] == {"pending": 0, "approved": 1, "rejected": 1}
+    card = client.get(f"/api/admin/users/{U1}").json()
+    assert card["mbId"] == "MBX1" and card["mbLink"]["state"] == "approved"  # also the ads' MB ID
+    assert credits.summary(U2)["mb"]["reason"] == "нет аккаунта"
 
 
 def test_block_needs_step_up_and_signs_the_user_out(env):

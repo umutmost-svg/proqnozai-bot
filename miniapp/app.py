@@ -5,6 +5,7 @@ module creates no database, reads no env and starts nothing.
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -20,6 +21,8 @@ from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 
+from miniapp.admin_commands import FILE_NAME as COMMANDS_FILE, CommandQueue
+from miniapp.credits import COST, Credits, MbError, NoCredits
 from miniapp.security import ACCESS_POLICY_FILE, AccessPolicy, CsrfTokens, LoginRateLimiter, origin_allowed
 from miniapp.settings import Settings
 from miniapp.ai.analysis import AI_ERROR_CODES, AiError, AiService, build_ai_service
@@ -45,6 +48,7 @@ CSRF_HEADER = "X-CSRF-Token"
 REQUEST_ID_HEADER = "X-Request-ID"
 EDGE_SECRET_HEADER = "X-Edge-Auth"
 HEALTH_CACHE_S = 5
+COMMANDS_POLL_S = 5  # admin panel commands (credits, MB ID): applied within a few seconds
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
@@ -208,6 +212,11 @@ def create_app(
     logger.info("startup access_mode=%s blocked=%s", "public" if settings.allowed_user_ids is None
                 else f"allowlist({len(settings.allowed_user_ids)})", len(settings.blocked_user_ids))
     csrf = CsrfTokens(settings.csrf_key_material)
+    credits = Credits(store, clock)
+    commands = CommandQueue(settings.db_path.with_name(COMMANDS_FILE))
+
+    def no_credits(balance: int) -> JSONResponse:
+        return JSONResponse({"error": "no_credits", "balance": balance, "cost": COST}, status_code=402)
 
     def verify_launch(init_data: str):
         """initData by the deployment's algorithm: HMAC with the bot token, or Ed25519 without it."""
@@ -681,7 +690,8 @@ def create_app(
             logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
 
     register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session, user_limiter=user_limiter,
-                          on_pick=on_pick if telemetry else None)
+                          on_pick=on_pick if telemetry else None, credits=credits,
+                          csrf_ok=lambda token, presented: csrf.verify(token, presented))
 
     if telemetry is not None:
         from miniapp.ads.policy import load_public_key
@@ -760,6 +770,11 @@ def create_app(
         event_id = body["event_id"]
         if not isinstance(event_id, str) or not 0 < len(event_id) <= 40:
             raise ApiError(400, "bad_request")
+        item = f"ai:{event_id}"
+        try:
+            await run_in_threadpool(credits.precheck, session.user_id, item)
+        except NoCredits as exc:
+            return no_credits(exc.balance)
         cost, unknown = sports.analysis_cost(event_id)
         share = user_share(user_limiter, session.user_id)
         if no := refused(share, cost, unknown=unknown):
@@ -779,7 +794,51 @@ def create_app(
         if result is None:
             raise ApiError(404, "not_found")
         await run_in_threadpool(note_activity, session.user_id, "ai_created")  # delivered analysis (off: no-op)
+        if result.kind != "insufficient":  # a generated forecast: charged once per match (docs/miniapp/credits.md)
+            try:
+                await run_in_threadpool(credits.charge, session.user_id, item)
+            except NoCredits:
+                # Spent concurrently: the analysis exists and is free to view anyway (GET); nothing more to charge.
+                logger.info("credits.charge_skipped reason=no_credits")
         return JSONResponse(result.to_json())
+
+    # ---- credits and MB ID (docs/miniapp/credits.md) ------------------------------------------
+
+    @app.get("/api/credits")
+    async def credits_summary(request: Request) -> JSONResponse:
+        active = await active_session(request)
+        if active is None:
+            raise ApiError(401, "unauthenticated")
+        return JSONResponse(await run_in_threadpool(credits.summary, active[1].user_id))
+
+    @app.post("/api/credits/mb")
+    async def credits_mb(request: Request) -> JSONResponse:
+        require_origin(request)
+        active = await active_session(request)
+        if active is None:
+            raise ApiError(401, "unauthenticated")
+        token, session = active
+        if not csrf.verify(token, request.headers.get(CSRF_HEADER)):
+            raise ApiError(403, "csrf_failed")
+        body = await _read_json_object(request, 1024, {"mbId"})
+        try:
+            mb = await run_in_threadpool(credits.submit_mb, session.user_id, body["mbId"])
+        except MbError as exc:
+            raise ApiError(409 if str(exc) in ("mb_taken", "mb_locked") else 400, str(exc)) from None
+        return JSONResponse({"mb": mb})
+
+    async def apply_commands_forever() -> None:
+        """Admin panel -> Mini App commands (credits, MB ID decisions, the switch): applied every few seconds."""
+        while True:
+            try:
+                await run_in_threadpool(commands.apply_pending, credits.apply, int(clock()))
+            except sqlite3.Error as exc:
+                logger.warning("event=admin_commands_failed type=%s", type(exc).__name__)
+            await asyncio.sleep(COMMANDS_POLL_S)
+
+    async def start_commands() -> None:
+        app.state.commands_task = asyncio.create_task(apply_commands_forever())
+    app.router.on_startup.append(start_commands)
 
     static = StaticFiles(directory=settings.static_dir, html=True) if settings.static_dir is not None else None
 

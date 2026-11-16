@@ -17,6 +17,8 @@ from miniapp.ads.policy import public_key_hex as policy_public_key_hex
 from miniapp.admin_web.access import AccessPublisher
 from miniapp.admin_web.outbox import Outbox
 from miniapp.admin_web.accounts import ActionError
+from miniapp.admin_commands import FILE_NAME as COMMANDS_FILE, CommandQueue
+from miniapp.credits import COST as CREDIT_COST, MONTHLY, WELCOME
 from miniapp.admin_web.crm import EXTRA_PARTS, RULE_FIELDS, CrmStore, matches, validate_rules
 from miniapp.admin_web.insights import UserInsights, geo
 from miniapp.store import BurnWindow
@@ -30,9 +32,14 @@ _USER_SORT = {"id": "id", "created": "createdAt", "login": "lastLoginAt", "usern
 
 
 def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
-    crm = CrmStore(ctx.accounts)
-    crm.init_schema()
     store = ctx.store
+    # Admin -> Mini App commands next to the Mini App database (docs/miniapp/credits.md).
+    commands = CommandQueue(store.path.with_name(COMMANDS_FILE))
+    commands.init_schema()
+    crm = CrmStore(ctx.accounts, commands)
+    crm.init_schema()
+    ctx.accounts.setting_hooks["credits.enabled"] = lambda value, now, version: commands.enqueue(
+        f"flag:credits.enabled:{version}", "flag", None, {"key": "credits.enabled", "value": value}, now)
     insights = UserInsights(ctx.telemetry_file)
 
     # Finish revocations left half-done by a crash (block / session revoke: the request is journalled, the Mini
@@ -163,7 +170,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     def decorate(rows: list[dict]) -> list[dict]:
         ids = [r["id"] for r in rows]
         tags = crm.tags_by_user(ids)
-        credits = crm.credits_of(ids, ctx.now())
+        credits = store.credit_accounts_of(ids, ctx.now())  # the Mini App's balances
         blocked = crm.blocked()
         mb = crm.mb_ids(ids)
         sources = ctx.sources(ids)
@@ -257,6 +264,12 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         if profile is None:
             raise ActionError("not_found", 404)
         info = crm.user_crm(user_id, t)
+        # Credits live in the Mini App: its balance and journal replace the admin's old bookkeeping.
+        account = store.credit_accounts_of([user_id], t).get(user_id) or {"balance": None, "unlimitedUntil": None}
+        info["credits"] = {**account, "enabled": bool(ctx.accounts.settings().get("credits.enabled", {})
+                                                        .get("value", False))}
+        info["ledger"] = store.credit_history(user_id, 50)
+        info["mbLink"] = next(iter(store.mb_links(user_ids=[user_id])), None)
         collected = insights.available()
         activity = insights.activity([user_id], t).get(user_id) if collected else None
         profile["lastSeenAt"] = max(profile["lastLoginAt"] or 0, (activity or {}).get("lastSeenAt") or 0) or None
@@ -280,9 +293,10 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
                              "detail": m["body"], "by": m["by"], "status": m["status"]})
         for l in info["ledger"]:
             timeline.append({"at": l["at"], "kind": "credits", "title": {
-                "grant": f"Кредиты: начислено {l['delta']}", "debit": f"Кредиты: списано {-l['delta']}",
-                "unlimited": "Кредиты: включён безлимит", "unlimited_off": "Кредиты: безлимит выключен"}[l["kind"]],
-                "detail": l["reason"], "by": l["by"]})
+                "welcome": f"Кредиты: стартовые +{l['delta']}", "monthly": f"Кредиты: ежемесячные +{l['delta']}",
+                "spend": f"Кредиты: прогноз −{-l['delta']}", "grant": f"Кредиты: начислено {l['delta']}",
+                "debit": f"Кредиты: списано {-l['delta']}", "unlimited": "Кредиты: безлимит изменён",
+            }.get(l["kind"], f"Кредиты: {l['kind']}"), "detail": None, "by": None})
         for n in info["notes"]:
             timeline.append({"at": n["at"], "kind": "note", "title": "Заметка", "detail": n["body"], "by": n["by"]})
         for te in crm.tag_events(user_id):
@@ -484,10 +498,36 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     async def credits(request: Request) -> dict:
         ctx.admin_of(request, "read_personal")
         t = ctx.now()
-        return {"enabled": False, "totals": crm.credit_totals(t, t - 30 * 86400),
-                "ledger": crm.ledger(200, request.query_params.get("kind") or None),
-                "rules": {"aiPrice": 5, "quickPrice": 0, "freePerDay": 3, "signupBonus": 20, "inviteBonus": 10,
-                          "editable": False}}
+        kind = request.query_params.get("kind") or None
+        if kind is not None and kind not in ("welcome", "monthly", "spend", "grant", "debit", "unlimited"):
+            raise ActionError("bad_filter")
+        return {"enabled": bool(ctx.accounts.settings().get("credits.enabled", {}).get("value", False)),
+                "totals": store.credit_totals(t, t - 30 * 86400),
+                "ledger": store.credit_history(None, 200, kind),
+                "pendingCommands": commands.pending_count(),
+                "rules": {"cost": CREDIT_COST, "welcome": WELCOME, "monthly": MONTHLY, "editable": False}}
+
+    # ---- MB IDs entered in the Mini App: the owner's approval queue ----------------------------
+
+    @app.get("/api/admin/mb")
+    async def mb_queue(request: Request) -> dict:
+        ctx.admin_of(request, "read_personal")
+        state = request.query_params.get("state") or "pending"
+        if state not in ("pending", "approved", "rejected"):
+            raise ActionError("bad_filter")
+        links = store.mb_links(state)
+        users = {u["id"]: u for u in store.users_by_ids([link["userId"] for link in links], ctx.now())}
+        return {"items": [{**link, "user": users.get(link["userId"])} for link in reversed(links)][:500],
+                "counts": {s: len(store.mb_links(s)) for s in ("pending", "approved", "rejected")}}
+
+    @app.post("/api/admin/mb/{user_id}/decide")
+    async def mb_decide(user_id: int, request: Request) -> dict:
+        admin = ctx.admin_of(request, "approve_mb")
+        data = await ctx.body(request)
+        if data.get("decision") not in ("approve", "reject"):
+            raise ActionError("invalid_value")
+        return crm.decide_mb(admin, user_id, data.get("mbId"), data.get("submittedAt"),
+                             data["decision"] == "approve", data.get("reason"), ctx.now())
 
     @app.post("/api/admin/credits/change")
     async def credit_change(request: Request) -> dict:
