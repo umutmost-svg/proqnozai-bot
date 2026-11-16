@@ -416,6 +416,9 @@ def ttl_for(events: list[FootballEvent], day: date, today: date) -> float:
 _NOT_STARTED = frozenset({"SCHEDULED", "TIMED"})
 
 
+_CALLED_OFF = frozenset({"POSTPONED", "SUSPENDED", "CANCELLED"})
+
+
 def _undetermined(raw: object, allowed: frozenset[str]) -> bool:
     """A future fixture whose teams are not known yet (e.g. a knockout tie, even a final with
     both sides open): not broken, just not shown. Everything else must be valid — id, status,
@@ -425,7 +428,10 @@ def _undetermined(raw: object, allowed: frozenset[str]) -> bool:
     status, competition = raw.get("status"), raw.get("competition")
     code = competition.get("code") if isinstance(competition, dict) else None
     # isinstance first: an unhashable value (list/dict) must read as broken, never raise.
-    if not isinstance(status, str) or status not in _NOT_STARTED or not isinstance(code, str) or code not in allowed:
+    # A knockout tie with an open side may also be moved or called off before its teams are known (Fable audit
+    # 16.11): one such record must not break a whole day or calendar. A played match with an open side stays broken.
+    if (not isinstance(status, str) or status not in _NOT_STARTED | _CALLED_OFF
+            or not isinstance(code, str) or code not in allowed):
         return False
     if _iso_utc(raw.get("utcDate")) is None:
         return False

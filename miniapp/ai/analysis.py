@@ -150,9 +150,13 @@ Nothing here is a claim of value, profit or certainty."""
 class AiError(Exception):
     """The analysis could not be produced; ``code`` is safe to return and log."""
 
-    def __init__(self, code: str, usage: dict[str, int] | None = None) -> None:
+    def __init__(self, code: str, usage: dict[str, int] | None = None, unbilled: bool = False) -> None:
         super().__init__(code)
         self.usage = usage  # billed tokens of a model answer that was refused or unusable (cost accounting)
+        # The provider refused the request itself (429, an error status): nothing was generated or billed, so the
+        # attempt and the users' daily allowance are given back (Fable audit 16.11). Timeouts and lost
+        # connections stay counted: the model may have run and billed before the answer was lost.
+        self.unbilled = unbilled
         self.code = code  # not_created | not_configured | limit_reached | budget_exhausted | refused | bad_output | upstream_error | timeout | rate_limited
 
 
@@ -307,6 +311,9 @@ class QuotaLedger(Protocol):
     def record_ai_tokens(self, day: str, model: str, usage: dict[str, int]) -> None:
         """Adds one call's billed tokens to the day's totals per model (cost accounting only)."""
 
+    def release_ai_call(self, day: str, subjects: list[str]) -> None:
+        """Gives one reserved call back to each subject of that day (a call the provider refused unbilled)."""
+
 
 @dataclass
 class MemoryLedger:
@@ -329,6 +336,11 @@ class MemoryLedger:
         for subject in limits:
             self.used[(day, subject)] = self.used.get((day, subject), 0) + 1
         return None
+
+    def release_ai_call(self, day: str, subjects: list[str]) -> None:
+        for subject in subjects:
+            if self.used.get((day, subject), 0) > 0:
+                self.used[(day, subject)] -= 1
 
 
 class AiService:
@@ -559,7 +571,17 @@ class AiService:
         """The cached answer, the running load, or a charged new load (single flight per key).
         With `prefix` (goal-model answers): restored from the forecast history, and a new one is
         paid for only while that history is writable."""
-        loader = _as_upstream(load)
+        reserved: list[tuple[str, list[str]]] = []  # (day, subjects) of this request's paid reservation
+
+        async def paid_load() -> tuple[AnalysisResult, float]:
+            try:
+                return await load()
+            except AiError as exc:
+                if exc.unbilled:
+                    await self._give_back(key, reserved)
+                raise
+
+        loader = _as_upstream(paid_load)
         kickoff = parse_instant(event.starts_at).timestamp()
 
         async def stored_answer() -> dict | None:
@@ -617,8 +639,9 @@ class AiService:
                 # still counts. A failing count refuses before anything is paid.
                 if not await self._count_attempt(key, event.starts_at):
                     raise AiError("upstream_error")
+                day = self._today()
                 try:
-                    used_up = await asyncio.to_thread(self._ledger.reserve_ai_call, self._today(), limits)
+                    used_up = await asyncio.to_thread(self._ledger.reserve_ai_call, day, limits)
                 except Exception as exc:  # noqa: BLE001 — e.g. a locked database: nothing was paid
                     logger.warning("ai.reserve_failed type=%s", type(exc).__name__)
                     await self._uncount_attempt(key)  # no call followed: the attempt is given back
@@ -626,6 +649,7 @@ class AiService:
                 if used_up is not None:
                     await self._uncount_attempt(key)  # no call followed
                     raise AiError("limit_reached" if used_up == user else "budget_exhausted")
+                reserved.append((day, list(limits)))
                 return self._cache.start(key, loader)
 
         # Shielded: a request cancelled mid-way still either charges AND starts, or neither.
@@ -696,6 +720,17 @@ class AiService:
             logger.warning("ai.attempt_count_failed type=%s", type(exc).__name__)
             return False
         return True
+
+    async def _give_back(self, key: str, reserved: list[tuple[str, list[str]]]) -> None:
+        """A call the provider refused unbilled: its attempt and the reserved daily allowances are returned, so a
+        provider-side throttle never locks the analysis for everyone nor costs users their daily limit."""
+        await self._uncount_attempt(key)
+        for day, subjects in reserved:
+            try:
+                await asyncio.to_thread(self._ledger.release_ai_call, day, subjects)
+            except Exception as exc:  # noqa: BLE001 — the allowance stays spent: fail closed
+                logger.warning("ai.release_failed type=%s", type(exc).__name__)
+        reserved.clear()
 
     async def _uncount_attempt(self, key: str) -> None:
         if self.history is None:
@@ -814,12 +849,12 @@ class AnthropicModelClient:
                 fallbacks="default",
             )
         except a.RateLimitError:
-            raise AiError("rate_limited") from None
+            raise AiError("rate_limited", unbilled=True) from None
         except a.APITimeoutError:
             raise AiError("timeout") from None
         except a.APIStatusError as exc:
             logger.warning("event=ai_upstream_error status=%s", exc.status_code)
-            raise AiError("upstream_error") from None
+            raise AiError("upstream_error", unbilled=True) from None
         except a.APIConnectionError:
             raise AiError("timeout") from None
         served = getattr(response, "model", None)

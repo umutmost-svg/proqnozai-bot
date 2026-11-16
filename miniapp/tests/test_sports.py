@@ -1111,3 +1111,17 @@ def test_a_calendar_reports_scheduled_fixtures_with_unknown_teams(clock: FakeClo
     events, got = adapter._season_payload("PL", {"competition": {"code": "PL"}, "resultSet": {"count": 2}, "matches": [played, tbd]})
     assert [e.id for e in events] == ["fd:11"]
     assert isinstance(got, Season) and got.pending_fixtures == 1 and got.to_json()["pendingFixtures"] == 1
+
+    # A tie with an open side that was postponed or called off is no broken record either (one would break a whole
+    # day or calendar); a played match with an open side still is.
+    import pytest as _pytest
+
+    from miniapp.sports.client import UpstreamError
+    moved = dict(tbd, id=13, status="POSTPONED")
+    events, _ = adapter._season_payload("PL", {"competition": {"code": "PL"}, "resultSet": {"count": 2},
+                                               "matches": [played, moved]})
+    assert [e.id for e in events] == ["fd:11"]
+    broken = dict(tbd, id=14, status="FINISHED")
+    with _pytest.raises(UpstreamError):
+        adapter._season_payload("PL", {"competition": {"code": "PL"}, "resultSet": {"count": 2},
+                                       "matches": [played, broken]})

@@ -386,11 +386,21 @@ class SearchIndex:
         if len(tokens) < 2:
             return []
         found: dict[str, FootballEvent] = {}
+        # Which words name each team, worked out once per team (a few thousand) rather than once per event
+        # (~35k, both sides): the per-event check is then a lookup. The fuzzy pass per event blocked the event loop
+        # for 1-2 s on a full index (Fable audit 16.11).
+        named: dict[str, tuple[bool, ...]] = {}
+
+        def words_of(team: Competitor) -> tuple[bool, ...]:
+            got = named.get(team.id)
+            if got is None:
+                names = self._names(team)
+                got = named[team.id] = tuple(bool(self._score(t, names)) for t in tokens)
+            return got
+
         for events in self._fresh().values():
             for e in events:
-                home, away = self._names(e.home), self._names(e.away)
-                on_home = [bool(self._score(t, home)) for t in tokens]
-                on_away = [bool(self._score(t, away)) for t in tokens]
+                on_home, on_away = words_of(e.home), words_of(e.away)
                 # Every word names one of the two sides, and each side is named at least once.
                 if all(h or a for h, a in zip(on_home, on_away, strict=True)) and any(on_home) and any(on_away):
                     found[e.id] = e

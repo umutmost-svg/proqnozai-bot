@@ -461,6 +461,13 @@ class Store:
                 )
             return None
 
+    def release_ai_call(self, day: str, subjects: list[str]) -> None:
+        """Gives one reserved call back to each subject of that day (the provider refused it unbilled)."""
+        with self._write() as conn:
+            for subject in subjects:
+                conn.execute("UPDATE ai_usage SET used = used - 1 WHERE day = ? AND subject = ? AND used > 0",
+                             (day, subject))
+
     def record_ai_tokens(self, day: str, model: str, usage: dict[str, int]) -> None:
         with self._write() as conn:
             conn.execute(

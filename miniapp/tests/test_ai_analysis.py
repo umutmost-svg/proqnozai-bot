@@ -826,6 +826,37 @@ def test_an_analysis_that_keeps_failing_is_not_paid_for_again_and_again(clock: F
     assert len(model.calls) == 2 and ledger.used[(ai._today(), "all")] == 2
 
 
+def test_a_provider_refusal_never_locks_the_analysis_nor_costs_users_their_limit(tmp_path, clock: FakeClock) -> None:
+    class Throttled(FakeModel):
+        def __init__(self, failures: int) -> None:
+            super().__init__()
+            self.failures = failures
+
+        async def complete(self, system: str, user: str, schema: dict) -> Completion:
+            self.calls.append((system, user, schema))
+            if self.failures:
+                self.failures -= 1
+                raise AiError("rate_limited", unbilled=True)  # a 429 / error status: nothing billed
+            return Completion(GOOD, self.model)
+
+    store = Store(tmp_path / "miniapp.db")
+    store.init_schema()
+    model = Throttled(failures=3)
+    ai, _ = make_ai(clock, model, ledger=store, per_user=2,
+                    history=ForecastHistory(tmp_path / "h.db"))
+    ai.history.init_schema()
+    for user in (1, 2, 3):  # more refusals than MAX_PAID_ATTEMPTS, from three users
+        new_analysis(ai, clock)
+        with pytest.raises(Exception):
+            run(ai.analyse("fd:7", user_id=user))
+    new_analysis(ai, clock)
+    result = run(ai.analyse("fd:7", user_id=4))  # not locked: the model answers now
+    assert result.factors and len(model.calls) == 4
+    with store._write() as conn:
+        used = dict(conn.execute("SELECT subject, used FROM ai_usage").fetchall())
+    assert used == {"user:1": 0, "user:2": 0, "user:3": 0, "user:4": 1, "all": 1}
+
+
 def test_an_attempt_that_cannot_be_counted_is_refused_before_any_payment(tmp_path, clock: FakeClock) -> None:
     class NoCount(ForecastHistory):
         def add_attempt(self, key, kickoff_at):
