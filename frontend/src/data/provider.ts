@@ -45,6 +45,8 @@ export interface CreditsInfo {
   monthly: { amount: number; nextAt: number | null };
   history: { at: number; kind: string; delta: number; balance: number }[];
   mb: CreditsMb | null;
+  /** The calculator: partner deposits that earn one forecast; null until the owner sets the rate. */
+  deposit: { currency: string; perForecast: number } | null;
 }
 
 export interface SportsDataProvider {
@@ -74,7 +76,7 @@ export interface SportsDataProvider {
    * has not been created yet. Opening the AI screen uses only this.
    */
   getCachedAnalysis(eventId: string): Promise<AiAnalysis | null>;
-  /** The user's credits; null where there are none (the demo). */
+  /** The user's credits; null where there are none (the demo, or switched off by the owner: then hidden). */
   getCredits(): Promise<CreditsInfo | null>;
   /** Enters the user's MB ID for the owner to approve (DataError reason: invalid_mb_id | mb_taken | mb_locked). */
   submitMbId(mbId: string): Promise<CreditsMb>;

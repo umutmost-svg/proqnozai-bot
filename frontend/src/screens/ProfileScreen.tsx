@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { AuthStatus } from '../auth/controller';
 import { RETRYABLE } from '../auth/controller';
@@ -98,7 +98,7 @@ type Row = { label: MessageKey; to?: string };
 const GROUPS: { title: MessageKey; rows: Row[] }[] = [
   {
     title: 'profile.groupPersonal',
-    rows: [{ label: 'profile.credits', to: '/profile/credits' }, { label: 'profile.favorites' }, { label: 'profile.history' }, { label: 'profile.notifications' }],
+    rows: [{ label: 'profile.favorites' }, { label: 'profile.history' }, { label: 'profile.notifications' }],
   },
   {
     title: 'profile.groupSettings',
@@ -115,11 +115,31 @@ const GROUPS: { title: MessageKey; rows: Row[] }[] = [
 
 export function ProfileScreen() {
   const { t } = useSettings();
+  const { data } = useServices();
+  // Credits appear only while the owner has them switched on (null = off or the demo): nothing to show otherwise.
+  const [credits, setCredits] = useState(false);
+  useEffect(() => {
+    let live = true;
+    data.getCredits().then((info) => live && setCredits(info !== null), () => undefined);
+    return () => {
+      live = false;
+    };
+  }, [data]);
 
   return (
     <AppShell scrollKey="/profile">
       <Header variant="screen" title={t('profile.title')} backTo="/" />
       <AccountStatus />
+      {credits && (
+        <div className={s.group}>
+          <Link to="/profile/credits" className={s.row} data-testid="profile-credits">
+            <span className={s.rowLabel}>{t('profile.credits')}</span>
+            <span className={s.chevron} aria-hidden="true">
+              ›
+            </span>
+          </Link>
+        </div>
+      )}
       {GROUPS.map((group) => (
         <div key={group.title} style={{ display: 'contents' }}>
           <h2 className={s.groupTitle}>{t(group.title)}</h2>

@@ -405,3 +405,15 @@ def test_behaviour_filters_never_count_users_without_data(env):
     for rules in ({"opened_miniapp": False}, {"used_ai": False}, {"country_in": ["AZ"]}, {"clicked_ad": False}):
         assert post(client, "/api/admin/audience/preview", csrf, {"rules": rules}).json()["size"] == 0, rules
     assert post(client, "/api/admin/audience/preview", csrf, {"rules": {"country_in": ["az"]}}).status_code == 400
+
+
+def test_deposit_rates_by_country_reach_the_mini_app(env):
+    config, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    bad = post(client, "/api/admin/settings/credits.rates", csrf, {**dangerous(secrets_, clock), "value": [{"country": "AZE"}]})
+    assert bad.json()["error"] == "invalid_rates"
+    clock.t += 30
+    rates = [{"country": "TR", "currency": "TRY", "perForecast": 100}]
+    assert post(client, "/api/admin/settings/credits.rates", csrf, {**dangerous(secrets_, clock), "value": rates}).status_code == 200
+    assert client.get("/api/admin/credits").json()["rates"] == rates
+    assert _apply_commands(config, clock).summary(U1, "TR")["deposit"] == {"currency": "TRY", "perForecast": 100}

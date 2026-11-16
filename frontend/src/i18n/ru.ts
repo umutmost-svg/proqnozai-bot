@@ -711,6 +711,10 @@ export const ru = {
   'credits.noneTitle': 'Недостаточно кредитов',
   'credits.noneText': 'Для прогноза нужно {cost} кредитов.',
   'credits.open': 'Мои кредиты',
+  'credits.calcTitle': 'Сколько нужно для кредитов',
+  'credits.calcRate': 'Депозит {amount} {currency} у партнёра = 1 прогноз.',
+  'credits.calcForecasts': 'Количество прогнозов',
+  'credits.calcResult': '{n} прогнозов ({credits} кредитов) — депозит {amount} {currency}',
 };
 
 export type Dictionary = Record<keyof typeof ru, string>;

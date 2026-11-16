@@ -713,4 +713,8 @@ export const en: Dictionary = {
   'credits.noneTitle': 'Not enough credits',
   'credits.noneText': 'A forecast needs {cost} credits.',
   'credits.open': 'My credits',
+  'credits.calcTitle': 'How to earn credits',
+  'credits.calcRate': 'A {amount} {currency} deposit at our partner = 1 forecast.',
+  'credits.calcForecasts': 'Number of forecasts',
+  'credits.calcResult': '{n} forecasts ({credits} credits) — deposit {amount} {currency}',
 };

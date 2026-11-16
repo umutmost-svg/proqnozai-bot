@@ -713,4 +713,8 @@ export const uz: Dictionary = {
   'credits.noneTitle': 'Kredit yetarli emas',
   'credits.noneText': 'Prognoz uchun {cost} kredit kerak.',
   'credits.open': 'Kreditlarim',
+  'credits.calcTitle': 'Kredit uchun qancha kerak',
+  'credits.calcRate': 'Hamkorda {amount} {currency} depozit = 1 prognoz.',
+  'credits.calcForecasts': 'Prognozlar soni',
+  'credits.calcResult': '{n} prognoz ({credits} kredit) — depozit {amount} {currency}',
 };

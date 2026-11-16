@@ -713,4 +713,8 @@ export const ptBR: Dictionary = {
   'credits.noneTitle': 'Créditos insuficientes',
   'credits.noneText': 'Um palpite precisa de {cost} créditos.',
   'credits.open': 'Meus créditos',
+  'credits.calcTitle': 'Como ganhar créditos',
+  'credits.calcRate': 'Depósito de {amount} {currency} no parceiro = 1 palpite.',
+  'credits.calcForecasts': 'Número de palpites',
+  'credits.calcResult': '{n} palpites ({credits} créditos) — depósito de {amount} {currency}',
 };

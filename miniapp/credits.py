@@ -24,6 +24,36 @@ COST = 10
 WELCOME = 100
 MONTHLY = 50
 FLAG_ENABLED = "credits.enabled"
+# Partner deposits that earn one forecast, per country (owner 16.11): [{"country": "AZ" | "*", "currency": "AZN",
+# "perForecast": 5}], "*" = every other country. The calculator shows the viewer's row; the partner-report import
+# will credit by the same table.
+FLAG_RATES = "credits.rates"
+MAX_RATES = 100
+_COUNTRY = re.compile(r"^([A-Z]{2}|\*)$")
+_CURRENCY = re.compile(r"^[A-Z]{3}$")
+
+
+def valid_rates(value: object) -> list[dict] | None:
+    """The rates table if it is well-formed (one row per country, positive whole amounts), else None."""
+    if not isinstance(value, list) or len(value) > MAX_RATES:
+        return None
+    out, seen = [], set()
+    for row in value:
+        if not isinstance(row, dict) or set(row) != {"country", "currency", "perForecast"}:
+            return None
+        country, currency, per = row["country"], row["currency"], row["perForecast"]
+        if not (isinstance(country, str) and _COUNTRY.match(country) and isinstance(currency, str)
+                and _CURRENCY.match(currency) and isinstance(per, int) and not isinstance(per, bool)
+                and 0 < per <= 100_000_000) or country in seen:
+            return None
+        seen.add(country)
+        out.append({"country": country, "currency": currency, "perForecast": per})
+    return out
+
+
+def rate_for(rates: list[dict], country: str | None) -> dict | None:
+    by = {r["country"]: r for r in rates}
+    return by.get(country or "") or by.get("*")
 MB_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")  # the admin's own MB ID format (crm.py _MB_ID)
 HISTORY = 30
 
@@ -100,7 +130,8 @@ class Credits:
             topup = month
         return Account(balance, unlimited, topup)
 
-    def summary(self, user_id: int) -> dict:
+    def summary(self, user_id: int, country: str | None = None) -> dict:
+        """`country`: the viewer's ISO country from the trusted edge (never stored), for the calculator's rate."""
         now = int(self.clock())
         with self.store._write() as conn:
             account = self._account(conn, user_id, now)
@@ -110,6 +141,12 @@ class Credits:
             mb = conn.execute("SELECT mb_id, state, submitted_at, decided_at, reason FROM mb_links WHERE user_id = ?",
                               (user_id,)).fetchone()
             enabled = conn.execute("SELECT value FROM app_flags WHERE key = ?", (FLAG_ENABLED,)).fetchone()
+            stored = conn.execute("SELECT value FROM app_flags WHERE key = ?", (FLAG_RATES,)).fetchone()
+        try:
+            rates = valid_rates(json.loads(stored[0])) or [] if stored else []
+        except ValueError:
+            rates = []
+        rate = rate_for(rates, country)
         unlimited = account.unlimited_until if account.unlimited_until and account.unlimited_until > now else None
         return {
             "enabled": enabled is not None and enabled[0] == "1",
@@ -118,6 +155,8 @@ class Credits:
             "monthly": {"amount": MONTHLY, "nextAt": next_month_start(now) if account.topup_month == month_of(now)
                         and account.balance < COST else None},
             "history": [{"at": a, "kind": k, "delta": d, "balance": b, "item": i} for a, k, d, b, i in history],
+            # The calculator: partner deposits needed per forecast (None until the owner sets the rate).
+            "deposit": {"currency": rate["currency"], "perForecast": rate["perForecast"]} if rate else None,
             "mb": None if mb is None else {"id": mb[0], "state": mb[1], "submittedAt": mb[2], "decidedAt": mb[3],
                                            "reason": mb[4]},
         }
@@ -202,10 +241,15 @@ class Credits:
     def _apply(self, conn: sqlite3.Connection, key: str, kind: str, user_id: int | None, payload: dict,
                now: int) -> str:
         if kind == "flag":
-            if payload.get("key") != FLAG_ENABLED or not isinstance(payload.get("value"), bool):
-                return "invalid"
-            self._set_flag(conn, FLAG_ENABLED, payload["value"], now)
-            return "done"
+            key, value = payload.get("key"), payload.get("value")
+            if key == FLAG_ENABLED and isinstance(value, bool):
+                self._set_flag(conn, FLAG_ENABLED, value, now)
+                return "done"
+            if key == FLAG_RATES and (rates := valid_rates(value)) is not None:
+                conn.execute("INSERT INTO app_flags (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE "
+                             "SET value = excluded.value, updated_at = excluded.updated_at", (key, json.dumps(rates), now))
+                return "done"
+            return "invalid"
         if not isinstance(user_id, int) or user_id <= 0:
             return "invalid"
         if kind in ("grant", "debit"):

@@ -809,7 +809,17 @@ def create_app(
         active = await active_session(request)
         if active is None:
             raise ApiError(401, "unauthenticated")
-        return JSONResponse(await run_in_threadpool(credits.summary, active[1].user_id))
+        # Switched off (owner 16.11): credits are hidden from users entirely; nothing is created or shown.
+        if not await run_in_threadpool(credits.enabled):
+            return JSONResponse({"enabled": False})
+        # The calculator's rate follows the viewer's country (CF-IPCountry behind the verified edge only).
+        try:  # the ads package is optional (MINIAPP_ADS_ENABLED off may ship without it): then no country
+            from miniapp.ads.service import country_from
+        except ImportError:
+            country = None
+        else:
+            country = country_from(request.headers.get("cf-ipcountry"), settings.edge_secret is not None)
+        return JSONResponse(await run_in_threadpool(credits.summary, active[1].user_id, country))
 
     @app.post("/api/credits/mb")
     async def credits_mb(request: Request) -> JSONResponse:
@@ -821,6 +831,8 @@ def create_app(
         if not csrf.verify(token, request.headers.get(CSRF_HEADER)):
             raise ApiError(403, "csrf_failed")
         body = await _read_json_object(request, 1024, {"mbId"})
+        if not await run_in_threadpool(credits.enabled):
+            raise ApiError(409, "credits_off")
         try:
             mb = await run_in_threadpool(credits.submit_mb, session.user_id, body["mbId"])
         except MbError as exc:

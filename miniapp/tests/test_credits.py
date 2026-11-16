@@ -123,11 +123,14 @@ def test_api_balance_mb_and_ai_charging(settings: Settings, clock: FakeClock) ->
     ai = FakeAi()
     client = TestClient(create_app(settings, clock=clock, ai=ai), base_url="http://127.0.0.1:8000")
     csrf = session(client, clock)
-    assert client.get("/api/credits").json()["balance"] == WELCOME
     hdr = {"Origin": ORIGIN, "X-CSRF-Token": csrf}
+    # Switched off: hidden from users entirely (no account is created, no MB ID is taken).
+    assert client.get("/api/credits").json() == {"enabled": False}
+    assert client.post("/api/credits/mb", json={"mbId": "X1"}, headers=hdr).json()["error"] == "credits_off"
+    Credits(Store(settings.db_path), clock).apply("on", "flag", None, {"key": "credits.enabled", "value": True})
+    assert client.get("/api/credits").json()["balance"] == WELCOME
     assert client.post("/api/credits/mb", json={"mbId": "X1"}, headers={"Origin": ORIGIN}).status_code == 403
     assert client.post("/api/credits/mb", json={"mbId": "X1"}, headers=hdr).json() == {"mb": {"id": "X1", "state": "pending"}}
-    Credits(Store(settings.db_path), clock).apply("on", "flag", None, {"key": "credits.enabled", "value": True})
     for i in range(WELCOME // COST):
         assert client.post("/api/ai/analysis", json={"event_id": f"fd:{i}"}, headers=hdr).status_code == 200
     assert client.post("/api/ai/analysis", json={"event_id": "fd:0"}, headers=hdr).status_code == 200  # paid already
@@ -162,3 +165,18 @@ def test_quick_pick_needs_the_csrf_header_once_credits_are_on(settings: Settings
                      (datetime.fromtimestamp(clock(), UTC).strftime("%Y-%m"), UID))
     r = client.get(url, headers={"X-CSRF-Token": csrf})
     assert r.status_code == 402 and r.json()["error"] == "no_credits"
+
+
+def test_calculator_rate_follows_the_viewers_country(credits: Credits) -> None:
+    from miniapp.credits import valid_rates
+    rates = [{"country": "AZ", "currency": "AZN", "perForecast": 5}, {"country": "*", "currency": "USD", "perForecast": 3}]
+    assert valid_rates(rates) == rates
+    for bad in ([{"country": "az", "currency": "AZN", "perForecast": 5}], [{"country": "AZ", "currency": "AZN", "perForecast": 0}],
+                rates + [{"country": "AZ", "currency": "TRY", "perForecast": 1}], "x"):
+        assert valid_rates(bad) is None
+    assert credits.summary(UID)["deposit"] is None  # no rates yet: the calculator is hidden
+    assert credits.apply("r1", "flag", None, {"key": "credits.rates", "value": rates}) == "done"
+    assert credits.summary(UID, "AZ")["deposit"] == {"currency": "AZN", "perForecast": 5}
+    assert credits.summary(UID, "TR")["deposit"] == {"currency": "USD", "perForecast": 3}
+    assert credits.summary(UID, None)["deposit"] == {"currency": "USD", "perForecast": 3}
+    assert credits.apply("r2", "flag", None, {"key": "credits.rates", "value": [{"country": "AZ"}]}) == "invalid"

@@ -247,6 +247,7 @@ export interface LedgerRow {
   id: number; userId: number; kind: 'welcome' | 'monthly' | 'spend' | 'grant' | 'debit' | 'unlimited'; delta: number;
   balanceAfter: number; item: string | null; at: number;
 }
+export interface CreditRate { country: string; currency: string; perForecast: number }
 export interface MbLink {
   userId: number; mbId: string; state: 'pending' | 'approved' | 'rejected'; submittedAt: number; decidedAt: number | null;
   reason: string | null;
@@ -284,6 +285,8 @@ export interface CreditsPage {
   ledger: LedgerRow[];
   pendingCommands: number;
   rules: { cost: number; welcome: number; monthly: number };
+  /** Partner deposits per forecast by country ("*" = every other country). */
+  rates: CreditRate[];
 }
 export interface DemoAudience {
   source: 'demo';

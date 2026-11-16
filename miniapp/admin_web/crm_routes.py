@@ -38,8 +38,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     commands.init_schema()
     crm = CrmStore(ctx.accounts, commands)
     crm.init_schema()
-    ctx.accounts.setting_hooks["credits.enabled"] = lambda value, now, version: commands.enqueue(
-        f"flag:credits.enabled:{version}", "flag", None, {"key": "credits.enabled", "value": value}, now)
+    for flag in ("credits.enabled", "credits.rates"):  # settings the Mini App must follow
+        ctx.accounts.setting_hooks[flag] = lambda value, now, version, flag=flag: commands.enqueue(
+            f"flag:{flag}:{version}", "flag", None, {"key": flag, "value": value}, now)
     insights = UserInsights(ctx.telemetry_file)
 
     # Finish revocations left half-done by a crash (block / session revoke: the request is journalled, the Mini
@@ -505,6 +506,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
                 "totals": store.credit_totals(t, t - 30 * 86400),
                 "ledger": store.credit_history(None, 200, kind),
                 "pendingCommands": commands.pending_count(),
+                "rates": ctx.accounts.settings().get("credits.rates", {}).get("value", []),
                 "rules": {"cost": CREDIT_COST, "welcome": WELCOME, "monthly": MONTHLY, "editable": False}}
 
     # ---- MB IDs entered in the Mini App: the owner's approval queue ----------------------------

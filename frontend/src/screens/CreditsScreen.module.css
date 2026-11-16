@@ -57,3 +57,34 @@
 .minus {
   opacity: 0.8;
 }
+
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.step {
+  min-width: 44px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--separator, rgba(127, 127, 127, 0.3));
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+}
+
+.step[aria-pressed='true'] {
+  background: var(--accent, #2563eb);
+  border-color: var(--accent, #2563eb);
+  color: #fff;
+}
+
+.calcResult {
+  margin: 6px 0 0;
+  font-size: 17px;
+  font-weight: 600;
+}

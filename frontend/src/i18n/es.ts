@@ -713,4 +713,8 @@ export const es: Dictionary = {
   'credits.noneTitle': 'Créditos insuficientes',
   'credits.noneText': 'Un pronóstico necesita {cost} créditos.',
   'credits.open': 'Mis créditos',
+  'credits.calcTitle': 'Cómo conseguir créditos',
+  'credits.calcRate': 'Un depósito de {amount} {currency} en el socio = 1 pronóstico.',
+  'credits.calcForecasts': 'Número de pronósticos',
+  'credits.calcResult': '{n} pronósticos ({credits} créditos) — depósito de {amount} {currency}',
 };

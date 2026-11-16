@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Navigate } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { Header } from '../components/Header';
 import { ErrorState, LoadingState } from '../components/States';
@@ -67,7 +68,7 @@ export function CreditsScreen() {
   else if (state.status === 'error') {
     body = <ErrorState title={t('credits.title')} text={t('catalog.errorText')} onRetry={() => { setState({ status: 'loading' }); load(); }} />;
   } else if (!state.info) {
-    body = <p className={ui.body}>{t('credits.unavailable')}</p>;
+    return <Navigate to="/profile" replace />; // switched off (or the demo): the section does not exist
   } else {
     const info = state.info;
     const mb = info.mb;
@@ -82,6 +83,8 @@ export function CreditsScreen() {
           <p className={ui.footnote}>{t('credits.monthly', { n: info.monthly.amount })}</p>
           {info.monthly.nextAt && <p className={ui.footnote}>{t('credits.monthlyNext', { n: info.monthly.amount, date: at(info.monthly.nextAt) })}</p>}
         </section>
+
+        {info.deposit && <Calculator cost={info.cost} perForecast={info.deposit.perForecast} currency={info.deposit.currency} />}
 
         <section className={ui.section} data-testid="credits-mb">
           <h2 className={ui.sectionTitle}>{t('credits.mbTitle')}</h2>
@@ -148,5 +151,29 @@ export function CreditsScreen() {
       <Header variant="screen" title={t('credits.title')} backTo="/profile" />
       {body}
     </AppShell>
+  );
+}
+
+const CALC_STEPS = [1, 3, 5, 10, 20, 50];
+
+/** How much to deposit at the partner for N forecasts (the owner's rate). */
+function Calculator({ cost, perForecast, currency }: { cost: number; perForecast: number; currency: string }) {
+  const { t } = useSettings();
+  const [n, setN] = useState(5);
+  return (
+    <section className={ui.section} data-testid="credits-calculator">
+      <h2 className={ui.sectionTitle}>{t('credits.calcTitle')}</h2>
+      <p className={ui.body}>{t('credits.calcRate', { amount: perForecast, currency })}</p>
+      <div className={s.steps} role="group" aria-label={t('credits.calcForecasts')}>
+        {CALC_STEPS.map((x) => (
+          <button key={x} type="button" className={s.step} aria-pressed={n === x} onClick={() => setN(x)}>
+            {x}
+          </button>
+        ))}
+      </div>
+      <p className={s.calcResult} data-testid="credits-calc-result">
+        {t('credits.calcResult', { n, credits: n * cost, amount: n * perForecast, currency })}
+      </p>
+    </section>
   );
 }

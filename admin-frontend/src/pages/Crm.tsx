@@ -5,6 +5,7 @@ import { localTime, num, parseLocalInput, toLocalInput, zoneLabel } from '../for
 import { can, useLoad, useMe, usePrefs, useServerMode } from '../state';
 import { Avatar, Card, DangerDialog, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, PageHead, Tag, tagTone, Toast } from '../ui';
 import { CreditsDialog } from './dialogs';
+import { CreditRates } from './CreditRates';
 import { CREDIT_KIND } from '../credits';
 
 const STATUS: Record<Broadcast['status'], [string, 'neutral' | 'accent' | 'success' | 'warning']> = {
@@ -403,6 +404,7 @@ export function Credits() {
                 </button>
                 {users.data && users.data.total > users.data.items.length && <p className="small muted">Пока групповая операция — до 100 человек за раз.</p>}
               </Card>
+              <CreditRates key={JSON.stringify(data.rates)} rates={data.rates} cost={data.rules.cost} canEdit={can(me.admin.role, 'manage_settings')} onSaved={() => { setToast('Курсы сохранены'); reload(); }} />
               <Card title="Правила" action={<Tag tone={data.enabled ? 'success' : 'warning'}>{data.enabled ? 'списание вкл.' : 'списание выкл.'}</Tag>}>
                 {[['Любой прогноз (быстрый, купон, AI)', `${data.rules.cost} кредитов`], ['Стартовые новичку', `${data.rules.welcome} кредитов`],
                   ['Ежемесячно, если баланс < цены прогноза', `+${data.rules.monthly} кредитов`]].map(([k, v]) => (

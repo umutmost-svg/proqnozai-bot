@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from miniapp.admin_web import totp
+from miniapp.credits import valid_rates
 
 Role = Literal["owner", "admin", "analyst", "promoter"]
 # promoter (owner 16.11): a promotion manager — analytics aggregates and only the referral links they created.
@@ -43,6 +44,8 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "ai.daily_budget": {"type": "int", "default": 300, "min": 0, "max": 5000},
     # Forecasts require and spend credits (docs/miniapp/credits.md); off until the owner switches it on.
     "credits.enabled": {"type": "bool", "default": False},
+    # Partner deposits per forecast by country (credits.valid_rates): the calculator and, later, the report import.
+    "credits.rates": {"type": "rates", "default": []},
 }
 
 _SCHEMA = """
@@ -725,6 +728,10 @@ class AdminStore:
         if spec["type"] == "int" and (isinstance(value, bool) or not isinstance(value, int)
                                       or not spec["min"] <= value <= spec["max"]):
             raise ActionError("invalid_value")
+        if spec["type"] == "rates":
+            value = valid_rates(value)
+            if value is None:
+                raise ActionError("invalid_rates")
         with self._write() as conn:
             if (prior := self._replayed(conn, idem, actor.id, "settings.update", key,
                                         {"key": key, "value": value}, reason)) is not None:

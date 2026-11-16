@@ -713,4 +713,8 @@ export const tr: Dictionary = {
   'credits.noneTitle': 'Yetersiz kredi',
   'credits.noneText': 'Bir tahmin için {cost} kredi gerekir.',
   'credits.open': 'Kredilerim',
+  'credits.calcTitle': 'Kredi için ne gerekir',
+  'credits.calcRate': 'İş ortağında {amount} {currency} yatırım = 1 tahmin.',
+  'credits.calcForecasts': 'Tahmin sayısı',
+  'credits.calcResult': '{n} tahmin ({credits} kredi) — yatırım {amount} {currency}',
 };

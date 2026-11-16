@@ -502,6 +502,7 @@ export class BackendSportsDataProvider implements SportsDataProvider {
 
   async getCredits(): Promise<CreditsInfo | null> {
     const body = await this.request('credits', '/credits', { method: 'GET' }, false, DATA_TIMEOUT_MS);
+    if (body && body.enabled === false) return null; // switched off: credits are hidden from users entirely
     const info = body ? readCredits(body) : null;
     if (!info) throw new DataError('credits', 'bad_response');
     return info;
@@ -1629,5 +1630,11 @@ function readCredits(raw: Json): CreditsInfo | null {
       return at !== null && delta !== null && bal !== null && kind ? [{ at, kind, delta, balance: bal }] : [];
     }),
     mb: raw.mb === null || raw.mb === undefined ? null : readMb(raw.mb),
+    deposit: (() => {
+      const d = isObj(raw.deposit) ? raw.deposit : null;
+      const per = d ? num(d.perForecast) : null;
+      const currency = d ? str(d.currency) : null;
+      return per !== null && per > 0 && currency ? { currency, perForecast: per } : null;
+    })(),
   };
 }
