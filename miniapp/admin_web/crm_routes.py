@@ -45,11 +45,6 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         """A credits setting the Mini App follows, applied once per settings version."""
         credit_store.apply(f"flag:{key}:{version}", "flag", None, {"key": key, "value": value, "version": version})
 
-    # MB IDs the owner entered in the panel before the Mini App had them: approved there once (by key), so a user
-    # sees their ID and nobody else can claim it (Codex credits r5 P1). A clash with a newer link is logged only.
-    for uid, mb_id in crm.mb_ids().items():
-        if credit_store.apply(f"mbmigrate:{uid}:{mb_id.lower()}", "mb_set", uid, {"mbId": mb_id}) == "mb_taken":
-            logger.warning("event=mb_migrate_conflict")
     for flag in ("credits.enabled", "credits.rates"):
         ctx.accounts.setting_hooks[flag] = lambda value, now, version, flag=flag: push_setting(flag, value, version)
     # At startup: the current settings again (a crash after the settings commit never leaves the Mini App behind).
@@ -77,6 +72,17 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
             # The original attempt may have revoked sessions before crashing: the true count is unknown.
             ctx.accounts.complete_request(pending["action"], pending["adminId"], pending["targetId"], None, t,
                                           pending["requestId"])
+
+    # MB IDs the owner entered in the panel before the Mini App had them: approved there once (by key), so a user
+    # sees their ID and nobody else can claim it (Codex credits r5 P1). A clash with a newer link is logged only.
+    # Only users the Mini App has no link for: an existing link (approved, pending or rejected) is never overwritten,
+    # and unfinished MB requests are recovered before this runs (Codex credits r6 P1).
+    linked = {link["userId"] for link in store.mb_links()}
+    for uid, mb_id in crm.mb_ids().items():
+        if uid in linked:
+            continue
+        if credit_store.apply(f"mbmigrate:{uid}:{mb_id.lower()}", "mb_set", uid, {"mbId": mb_id}) == "mb_taken":
+            logger.warning("event=mb_migrate_conflict")
 
     outbox = Outbox(ctx.outbox_file)
     outbox.init_schema()

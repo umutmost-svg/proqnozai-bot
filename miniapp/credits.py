@@ -207,8 +207,8 @@ class Credits:
 
     def hold(self, user_id: int, item: str) -> bool:
         """Before a generation whose cost must not race (AI): takes COST now, atomically, and marks the item paid.
-        True = credits were taken (give them back with `refund` if nothing is generated); False = nothing to take
-        (switch off, unlimited, or already paid). Raises NoCredits when the balance is below the cost."""
+        True = a hold to settle (credits taken, or an unlimited-period ownership); False = nothing to settle (switch
+        off or already paid). Raises NoCredits when the balance is below the cost."""
         if not self.enabled():
             return False
         now = int(self.clock())
@@ -220,9 +220,12 @@ class Credits:
             if conn.execute("SELECT 1 FROM credit_items WHERE user_id = ? AND item = ?", (user_id, item)).fetchone():
                 return False
             if account.unlimited_until and account.unlimited_until > now:
-                # Owned like a paid one: the same analysis stays free after the unlimited period (Codex r5 P2).
+                # Owned like a paid one once generated (free after the unlimited period too); a hold without a spend
+                # (spend_id 0) so a failed generation leaves it unowned (Codex credits r5-r6).
                 conn.execute("INSERT INTO credit_items (user_id, item, at) VALUES (?, ?, ?)", (user_id, item, now))
-                return False
+                conn.execute("INSERT INTO credit_holds (user_id, item, spend_id, held_at) VALUES (?, ?, 0, ?)",
+                             (user_id, item, now))
+                return True
             if account.balance < COST:
                 raise NoCredits(account.balance)
             balance = account.balance - COST
@@ -255,6 +258,9 @@ class Credits:
                 return
             conn.execute("DELETE FROM credit_holds WHERE user_id = ? AND item = ?", (user_id, item))
             if generated:
+                return
+            if hold[0] == 0:  # unlimited: nothing was spent, only the ownership goes
+                conn.execute("DELETE FROM credit_items WHERE user_id = ? AND item = ?", (user_id, item))
                 return
             balance = conn.execute("SELECT balance FROM credit_accounts WHERE user_id = ?", (user_id,)).fetchone()[0]
             balance += COST

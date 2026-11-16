@@ -433,3 +433,8 @@ def test_mb_ids_entered_earlier_in_the_panel_are_approved_in_the_mini_app(env):
     assert (link["mbId"], link["state"]) == ("OLD7", "approved")
     create_admin_app(config, clock=clock)  # once: a second start changes nothing
     assert len(Store(config.miniapp_db).mb_links(user_ids=[U1])) == 1
+    # A user who already has a Mini App link keeps it: a CRM value is never pushed over it.
+    with accounts._connect() as conn:
+        conn.execute("UPDATE crm_external_ids SET mb_id = 'STALE7' WHERE user_id = ?", (U1,))
+    create_admin_app(config, clock=clock)
+    assert Store(config.miniapp_db).mb_links(user_ids=[U1])[0]["mbId"] == "OLD7"

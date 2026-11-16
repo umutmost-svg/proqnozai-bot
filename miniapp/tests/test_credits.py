@@ -222,3 +222,14 @@ def test_holds_left_by_a_dead_process_are_refunded_and_old_settings_never_win(cr
     assert credits.apply("v2", "flag", None, {"key": "credits.enabled", "value": False, "version": 2}) == "done"
     assert credits.apply("v1", "flag", None, {"key": "credits.enabled", "value": True, "version": 1}) == "stale"
     assert credits.enabled() is False
+
+
+def test_unlimited_analysis_is_owned_only_once_generated(credits: Credits) -> None:
+    on(credits)
+    credits.apply("u", "unlimited", UID, {"days": 3})
+    assert credits.hold(UID, "ai:fd:5") is True
+    credits.settle(UID, "ai:fd:5", generated=False)  # failed: not owned, nothing refunded (nothing was spent)
+    assert credits.hold(UID, "ai:fd:5") is True
+    credits.settle(UID, "ai:fd:5", generated=True)
+    assert credits.hold(UID, "ai:fd:5") is False  # owned now
+    assert credits.summary(UID)["balance"] == WELCOME
