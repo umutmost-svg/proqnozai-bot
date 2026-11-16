@@ -128,10 +128,11 @@ CREATE TABLE IF NOT EXISTS crm_credit_requests (
 -- MB ID decisions requested in the panel, applied to the Mini App in a second step.
 CREATE TABLE IF NOT EXISTS crm_mb_decisions (
     request_id TEXT PRIMARY KEY,
+    action     TEXT NOT NULL CHECK (action IN ('approve', 'reject', 'set')),
     user_id    INTEGER NOT NULL,
-    mb_id      TEXT NOT NULL,
-    submission TEXT NOT NULL,
-    approve    INTEGER NOT NULL,
+    mb_id      TEXT NOT NULL,            -- '' = clear (action 'set')
+    submission TEXT NOT NULL,            -- '' for 'set'
+    reason     TEXT,
     admin_id   INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
@@ -447,28 +448,15 @@ class CrmStore:
         return {"removed": bool(removed)}
 
     def set_mb_id(self, actor: Admin, user_id: int, value: object, now: int) -> dict:
-        """The owner sets (or clears, with an empty value) a user's MB ID directly: approved in the Mini App first
-        (refused there if another user holds it), then the CRM copy for ads audiences. The journal records only that
-        it changed, never the id itself (it identifies a person at a third party)."""
+        """The owner sets (or clears, with an empty value) a user's MB ID directly: approved in the Mini App, then the
+        CRM copy for ads audiences, as one two-step request (finished at startup after a crash). The journal records
+        only that it changed, never the id itself (it identifies a person at a third party)."""
         if not isinstance(value, str):
             raise ActionError("invalid_mb_id")
         mb_id = value.strip()
         if mb_id and not _MB_ID.match(mb_id):
             raise ActionError("invalid_mb_id")
-        with self.accounts._connect() as conn:
-            self.accounts._require_actor(conn, actor.id, "approve_mb")
-            owner = conn.execute("SELECT user_id FROM crm_external_ids WHERE mb_id = ? COLLATE NOCASE",
-                                 (mb_id,)).fetchone() if mb_id else None
-            if owner is not None and owner[0] != user_id:
-                raise ActionError("mb_id_taken", 409)
-        if self.credits is not None:
-            result = self.credits.apply(f"mbset:{user_id}:{now}:{mb_id.lower()}", "mb_set", user_id, {"mbId": mb_id})
-            if result == "mb_taken":
-                raise ActionError("mb_id_taken", 409)
-        with self.accounts._write() as conn:
-            self.accounts._require_actor(conn, actor.id, "approve_mb")
-            self._write_mb(conn, actor, user_id, mb_id, now)
-        return {"mbId": mb_id or None}
+        return self._mb_request(actor, "set", user_id, mb_id, "", None, now)
 
     def decide_mb(self, actor: Admin, user_id: int, mb_id: object, submission: object, approve: bool,
                   reason: object, now: int) -> dict:
@@ -484,38 +472,53 @@ class CrmStore:
             raise ActionError("reason_required")
         if self.credits is None:
             raise ActionError("credits_unavailable", 503)
+        return self._mb_request(actor, "approve" if approve else "reject", user_id, mb_id, submission, note or None,
+                                now)
+
+    def _mb_request(self, actor: Admin, action: str, user_id: int, mb_id: str, submission: str,
+                    reason: str | None, now: int) -> dict:
+        if self.credits is None:
+            raise ActionError("credits_unavailable", 503)
         request_id = secrets.token_hex(12)
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "approve_mb")
             # Checked before any write: an ID another user holds here would leave the two sides apart.
             owner = conn.execute("SELECT user_id FROM crm_external_ids WHERE mb_id = ? COLLATE NOCASE",
-                                 (mb_id,)).fetchone()
-            if approve and owner is not None and owner[0] != user_id:
+                                 (mb_id,)).fetchone() if mb_id else None
+            if action != "reject" and owner is not None and owner[0] != user_id:
                 raise ActionError("mb_id_taken", 409)
-            conn.execute("INSERT INTO crm_mb_decisions (request_id, user_id, mb_id, submission, approve, admin_id, "
-                         "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                         (request_id, user_id, mb_id, submission, int(approve), actor.id, now))
+            conn.execute("INSERT INTO crm_mb_decisions (request_id, action, user_id, mb_id, submission, reason, "
+                         "admin_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (request_id, action, user_id, mb_id, submission, reason, actor.id, now))
             self.accounts._event(conn, now, actor.id, "user.mb_decision", "user", str(user_id), None,
-                                 {"approved": approve}, note or None, None, "requested", request_id)
-        return self.finish_mb_decision(request_id, now, note or None)
+                                 {"action": action}, reason, None, "requested", request_id)
+        return self.finish_mb_decision(request_id, now)
 
-    def finish_mb_decision(self, request_id: str, now: int, reason: str | None = None) -> dict:
+    def finish_mb_decision(self, request_id: str, now: int) -> dict:
+        """Second step of an MB request (also run at startup for one a crash interrupted): the Mini App side, then the
+        CRM copy, then `completed`. Every step repeats safely."""
         assert self.credits is not None
         with self.accounts._connect() as conn:
-            row = conn.execute("SELECT user_id, mb_id, submission, approve, admin_id FROM crm_mb_decisions "
+            row = conn.execute("SELECT action, user_id, mb_id, submission, reason, admin_id FROM crm_mb_decisions "
                                "WHERE request_id = ?", (request_id,)).fetchone()
         if row is None:
             raise ActionError("not_found", 404)
-        user_id, mb_id, submission, approve, admin_id = row
-        result = self.credits.decide_mb(user_id, mb_id, submission, bool(approve), reason)
-        if result != "stale" and approve:
+        action, user_id, mb_id, submission, reason, admin_id = row
+        if action == "set":
+            result = self.credits.apply(f"mbset:{request_id}", "mb_set", user_id, {"mbId": mb_id})
+            result = "stale" if result == "mb_taken" else result
+        else:
+            result = self.credits.decide_mb(user_id, mb_id, submission, action == "approve", reason)
+        if result != "stale" and action in ("approve", "set"):
             with self.accounts._write() as conn:
-                actor = Admin(admin_id, "", "owner", "active")  # recorded owner: the CRM copy names who decided
+                actor = Admin(admin_id, "", "owner", "active")  # the recorded owner: the CRM copy names who decided
                 self._write_mb(conn, actor, user_id, mb_id, now)
         self.accounts.complete_request("user.mb_decision", admin_id, str(user_id), None, now, request_id)
         if result == "stale":
-            raise ActionError("mb_stale", 409)
-        return {"decision": "approved" if approve else "rejected"}
+            raise ActionError("mb_id_taken" if action == "set" else "mb_stale", 409)
+        if action == "set":
+            return {"mbId": mb_id or None}
+        return {"decision": "approved" if action == "approve" else "rejected"}
 
     def _write_mb(self, conn, actor: Admin, user_id: int, mb_id: str, now: int) -> None:
         prev = conn.execute("SELECT mb_id FROM crm_external_ids WHERE user_id = ?", (user_id,)).fetchone()
