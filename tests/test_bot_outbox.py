@@ -111,6 +111,26 @@ async def test_a_pause_by_another_bot_process_stops_this_one_mid_batch_and_is_ne
     assert BotOutbox(tmp_path / "bot-outbox.db").paused_until == NOW + 100
 
 
+async def test_an_unusable_pause_file_keeps_the_pause_in_the_queue(tmp_path):
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("msg:1", 11, "x", []), ("msg:2", 12, "y", [])], batch_id=None, not_before=NOW,
+                  admin_event_id=None, now=NOW)
+    (tmp_path / "bot-outbox.db.pause.lock").mkdir()  # the lock path cannot be opened as a file
+
+    async def flooded(job):
+        return Outcome("retry", "rate_limited", 60)
+
+    async def ok(job):
+        return Outcome("sent")
+
+    assert await bot.run_once(flooded, lambda: NOW) == {"retry": 1}
+    restarted = BotOutbox(tmp_path / "bot-outbox.db")
+    assert restarted.paused_until == 0  # nothing on disk...
+    assert await restarted.run_once(ok, lambda: NOW + 30) == {}  # ...yet every queued job still waits
+    assert await restarted.run_once(ok, lambda: NOW + 60) == {"sent": 2}
+    assert not list(tmp_path.glob("*.tmp"))
+
+
 async def test_a_network_error_costs_one_job_never_the_batch(tmp_path):
     admin, bot = setup(tmp_path)
     admin.enqueue([(f"msg:{i}", 10 + i, "x", []) for i in range(5)], batch_id=None, not_before=NOW,

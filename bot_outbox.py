@@ -227,8 +227,15 @@ class BotOutbox:
                 self.paused_until = max(self.paused_until, self._read_pause())
                 tmp.write_text(str(self.paused_until))
                 os.replace(tmp, self._pause_file)
-        except OSError as exc:  # the in-memory pause still holds for this process
+        except OSError as exc:
+            # The file is unusable: the pause is kept in the queue itself instead — every queued job waits for it,
+            # also after a restart (Codex wave1 r4) — and in memory for this process.
             logger.warning("event=outbox_pause_not_saved type=%s", type(exc).__name__)
+            with self._connect() as conn:
+                conn.execute("UPDATE jobs SET retry_at = ? WHERE status = 'queued' AND (retry_at IS NULL OR retry_at < ?)",
+                             (self.paused_until, self.paused_until))
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def finish(self, job: Job, outcome: Outcome, now: int) -> bool:
         """Records the outcome only for the claim that is still current (fenced by its token)."""
