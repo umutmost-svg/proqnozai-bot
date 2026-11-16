@@ -551,7 +551,7 @@ export const tr: Dictionary = {
   'ai.value.title': 'Model ve piyasa',
   'ai.value.best': 'En büyük fark — {outcome}: model %{model}, piyasa %{market} ({edge} puan).',
   'ai.value.none': 'Model ve piyasa aynı görüşte: 2 puandan büyük fark yok.',
-  'ai.value.referenceOnly': 'Model bu maç için bahis önermiyor: oranlar ve olasılıklar yalnızca bilgi amaçlıdır, değer tahmini yoktur.',
+  'ai.value.referenceOnly': 'Model bu piyasalar için değer tahmini yapmıyor: oranlar ve olasılıklar yalnızca bilgi amaçlıdır.',
   'ai.value.outcome': 'Sonuç',
   'ai.value.odds': 'Oran',
   'ai.value.market': 'Piyasa',

@@ -553,7 +553,7 @@ export const az: Dictionary = {
   'ai.value.title': 'Model və bazar',
   'ai.value.best': 'Ən böyük fərq — {outcome}: model {model}%, bazar {market}% ({edge} faiz bəndi).',
   'ai.value.none': 'Model və bazar matçı eyni qiymətləndirir: 2 faiz bəndindən böyük fərq yoxdur.',
-  'ai.value.referenceOnly': 'Model bu matça mərc tövsiyə etmir: əmsallar və ehtimallar yalnız məlumat üçündür, fayda qiymətləndirməsi yoxdur.',
+  'ai.value.referenceOnly': 'Model bu bazarlar üçün fayda qiymətləndirmir: əmsallar və ehtimallar yalnız məlumat üçündür.',
   'ai.value.outcome': 'Nəticə',
   'ai.value.odds': 'Əmsal',
   'ai.value.market': 'Bazar',

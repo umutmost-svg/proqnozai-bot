@@ -551,7 +551,7 @@ export const es: Dictionary = {
   'ai.value.title': 'Modelo frente al mercado',
   'ai.value.best': 'Mayor diferencia — {outcome}: modelo {model}%, mercado {market}% ({edge} p. p.).',
   'ai.value.none': 'El modelo y el mercado coinciden: ninguna diferencia supera 2 p. p.',
-  'ai.value.referenceOnly': 'El modelo no recomienda apuesta en este partido: cuotas y probabilidades solo de referencia, sin estimación de valor.',
+  'ai.value.referenceOnly': 'El modelo no estima valor para estos mercados: cuotas y probabilidades solo de referencia.',
   'ai.value.outcome': 'Resultado',
   'ai.value.odds': 'Cuota',
   'ai.value.market': 'Mercado',

@@ -87,8 +87,10 @@ async def test_the_pause_survives_a_restart(tmp_path):
 
     assert await bot.run_once(flooded, lambda: NOW) == {"retry": 1}
     restarted = BotOutbox(tmp_path / "bot-outbox.db")  # a new process: no pause in memory
+    # A job enqueued after the pause began waits for it too.
+    admin.enqueue([("msg:3", 13, "z", [])], batch_id=None, not_before=NOW + 10, admin_event_id=None, now=NOW + 10)
     assert await restarted.run_once(ok, lambda: NOW + 30) == {}  # Telegram's wait still holds for every job
-    assert await restarted.run_once(ok, lambda: NOW + 60) == {"sent": 2}
+    assert await restarted.run_once(ok, lambda: NOW + 60) == {"sent": 3}
 
 
 async def test_a_network_error_costs_one_job_never_the_batch(tmp_path):

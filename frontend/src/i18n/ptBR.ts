@@ -551,7 +551,7 @@ export const ptBR: Dictionary = {
   'ai.value.title': 'Modelo x mercado',
   'ai.value.best': 'Maior diferença — {outcome}: modelo {model}%, mercado {market}% ({edge} p.p.).',
   'ai.value.none': 'Modelo e mercado concordam: nenhuma diferença acima de 2 p.p.',
-  'ai.value.referenceOnly': 'O modelo não recomenda aposta neste jogo: odds e probabilidades são apenas referência, sem estimativa de valor.',
+  'ai.value.referenceOnly': 'O modelo não estima valor para estes mercados: odds e probabilidades são apenas referência.',
   'ai.value.outcome': 'Resultado',
   'ai.value.odds': 'Odd',
   'ai.value.market': 'Mercado',

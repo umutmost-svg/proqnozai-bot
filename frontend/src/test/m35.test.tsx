@@ -265,7 +265,7 @@ describe('the model against the market', () => {
     const quotes = [plain(quote('1', 4.2, 22.6)), plain(quote('X', 3.9, 24.3)), plain(quote('2', 1.85, 53.1))];
     renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3({ ...READY_OVER, market: { ...PRICES, quotes } })) });
     const verdict = await screen.findByTestId('ai-market-verdict');
-    expect(verdict).toHaveTextContent('коэффициенты и вероятности — для справки');
+    expect(verdict).toHaveTextContent('Для этих рынков модель выгоду не оценивает');
     const value = screen.getByTestId('ai-market-value');
     expect(value).toHaveTextContent('4,2');
     expect(value).not.toHaveTextContent('Наибольшее расхождение');

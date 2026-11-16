@@ -551,7 +551,7 @@ export const en: Dictionary = {
   'ai.value.title': 'Model vs market',
   'ai.value.best': 'Largest gap — {outcome}: model {model}%, market {market}% ({edge} pp).',
   'ai.value.none': 'The model and the market agree: no gap above 2 pp.',
-  'ai.value.referenceOnly': 'The model recommends no bet on this match: odds and probabilities are for reference, with no value estimate.',
+  'ai.value.referenceOnly': 'The model makes no value estimate for these markets: odds and probabilities are for reference.',
   'ai.value.outcome': 'Outcome',
   'ai.value.odds': 'Odds',
   'ai.value.market': 'Market',

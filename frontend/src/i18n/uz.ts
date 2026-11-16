@@ -551,7 +551,7 @@ export const uz: Dictionary = {
   'ai.value.title': 'Model va bozor',
   'ai.value.best': 'Eng katta farq — {outcome}: model {model}%, bozor {market}% ({edge} foiz punkti).',
   'ai.value.none': 'Model va bozor oʻyinni bir xil baholaydi: 2 foiz punktidan katta farq yoʻq.',
-  'ai.value.referenceOnly': 'Model bu oʻyinga stavka tavsiya qilmaydi: koeffitsiyentlar va ehtimollar faqat maʼlumot uchun, foyda bahosi yoʻq.',
+  'ai.value.referenceOnly': 'Model bu bozorlar uchun foydani baholamaydi: koeffitsiyentlar va ehtimollar faqat maʼlumot uchun.',
   'ai.value.outcome': 'Natija',
   'ai.value.odds': 'Koef.',
   'ai.value.market': 'Bozor',

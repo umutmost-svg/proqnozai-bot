@@ -157,7 +157,11 @@ def classify(exc: BaseException) -> Outcome:
 class BotOutbox:
     def __init__(self, path: Path) -> None:
         self.path = path
-        self.paused_until = 0  # no job is claimed before this moment (flood limit / network outage)
+        # No job is claimed before this moment (flood limit / network outage). Kept in a file of the bot's own next to
+        # the queue (the queue's schema is shared with the admin): a restart, a job enqueued or a batch released
+        # during the pause all wait for it too (Codex wave1 r2).
+        self._pause_file = path.with_name(path.name + ".pause")
+        self.paused_until = self._read_pause()
         self._network_pause = 0  # the current network back-off, doubled per failure in a row
 
     @contextmanager
@@ -203,13 +207,22 @@ class BotOutbox:
                 raise
         return job
 
+    def _read_pause(self) -> int:
+        try:
+            return int(self._pause_file.read_text().strip() or 0)
+        except (OSError, ValueError):
+            return 0  # no pause on record (or unreadable): the jobs' own retry_at still holds the refused one
+
     def _pause(self, until: int) -> None:
-        """No job before `until`, also after a restart: every queued job's retry_at is moved there (Codex wave1 r1;
-        the in-memory mark only spares the claim queries meanwhile)."""
-        self.paused_until = until
-        with self._connect() as conn:
-            conn.execute("UPDATE jobs SET retry_at = ? WHERE status = 'queued' AND (retry_at IS NULL OR retry_at < ?)",
-                         (until, until))
+        """No job before `until`, also after a restart. Written BEFORE the outcome is recorded: a stop between the two
+        leaves the pause in place, never a recorded failure without its pause."""
+        self.paused_until = max(self.paused_until, until)
+        tmp = self._pause_file.with_name(self._pause_file.name + ".tmp")
+        try:
+            tmp.write_text(str(self.paused_until))
+            os.replace(tmp, self._pause_file)
+        except OSError as exc:  # the in-memory pause still holds for this process
+            logger.warning("event=outbox_pause_not_saved type=%s", type(exc).__name__)
 
     def finish(self, job: Job, outcome: Outcome, now: int) -> bool:
         """Records the outcome only for the claim that is still current (fenced by its token)."""
@@ -235,6 +248,7 @@ class BotOutbox:
                        is_banned: Callable[[int], bool] = lambda user_id: False) -> dict[str, int]:
         """Claims due jobs and sends them through `send` (the bot's own sender). Returns counts by outcome."""
         counts: dict[str, int] = {}
+        self.paused_until = max(self.paused_until, self._read_pause())  # another bot process may have paused it
         if now() < self.paused_until:
             return counts
         for _ in range(BATCH):
@@ -248,15 +262,16 @@ class BotOutbox:
                     outcome = await send(job)
                 except Exception as exc:  # noqa: BLE001 — classified by type, never logged with its text
                     outcome = classify(exc)
-            self.finish(job, outcome, now())
-            counts[outcome.kind] = counts.get(outcome.kind, 0) + 1
+            stop = outcome.code in ("rate_limited", "unknown_outcome")
             if outcome.code == "rate_limited":
                 self._pause(now() + max(1, outcome.retry_after))
-                break
-            if outcome.code == "unknown_outcome":
+            elif outcome.code == "unknown_outcome":
                 self._network_pause = min(NETWORK_PAUSE_MAX_S, max(NETWORK_PAUSE_S, self._network_pause * 2))
                 self._pause(now() + self._network_pause)
                 logger.warning("event=outbox_paused reason=network seconds=%s", self._network_pause)
+            self.finish(job, outcome, now())
+            counts[outcome.kind] = counts.get(outcome.kind, 0) + 1
+            if stop:
                 break
             if outcome.kind == "sent":
                 self._network_pause = 0
