@@ -205,27 +205,28 @@ class Credits:
             self._entry(conn, user_id, now, "spend", -COST, balance, item, f"spend:{user_id}:{item}:{secrets.token_hex(6)}")
         return True
 
-    def hold(self, user_id: int, item: str) -> bool:
+    def hold(self, user_id: int, item: str) -> str | None:
         """Before a generation whose cost must not race (AI): takes COST now, atomically, and marks the item paid.
-        True = a hold to settle (credits taken, or an unlimited-period ownership); False = nothing to settle (switch
-        off or already paid). Raises NoCredits when the balance is below the cost."""
+        Returns the hold's id to settle (credits taken, or an unlimited-period ownership), or None when there is
+        nothing to settle (switch off or already paid). Raises NoCredits when the balance is below the cost."""
         if not self.enabled():
-            return False
+            return None
         now = int(self.clock())
+        hold_id = secrets.token_hex(8)
         with self.store._write() as conn:
             account = self._account(conn, user_id, now)
             if conn.execute("SELECT 1 FROM credit_holds WHERE user_id = ? AND item = ?", (user_id, item)).fetchone():
                 # Another request of this user is generating it: never a free ride on a hold that may be refunded.
                 raise Busy()
             if conn.execute("SELECT 1 FROM credit_items WHERE user_id = ? AND item = ?", (user_id, item)).fetchone():
-                return False
+                return None
             if account.unlimited_until and account.unlimited_until > now:
                 # Owned like a paid one once generated (free after the unlimited period too); a hold without a spend
                 # (spend_id 0) so a failed generation leaves it unowned (Codex credits r5-r6).
                 conn.execute("INSERT INTO credit_items (user_id, item, at) VALUES (?, ?, ?)", (user_id, item, now))
-                conn.execute("INSERT INTO credit_holds (user_id, item, spend_id, held_at) VALUES (?, ?, 0, ?)",
-                             (user_id, item, now))
-                return True
+                conn.execute("INSERT INTO credit_holds (user_id, item, spend_id, held_at, hold_id) VALUES (?, ?, 0, ?, ?)",
+                             (user_id, item, now, hold_id))
+                return hold_id
             if account.balance < COST:
                 raise NoCredits(account.balance)
             balance = account.balance - COST
@@ -235,25 +236,25 @@ class Credits:
             spend = conn.execute("INSERT INTO credit_ledger (user_id, at, kind, delta, balance_after, item, key) "
                                  "VALUES (?, ?, 'spend', ?, ?, ?, ?)",
                                  (user_id, now, -COST, balance, item, f"spend:{user_id}:{item}:{secrets.token_hex(6)}")).lastrowid
-            conn.execute("INSERT INTO credit_holds (user_id, item, spend_id, held_at) VALUES (?, ?, ?, ?)",
-                         (user_id, item, spend, now))
-        return True
+            conn.execute("INSERT INTO credit_holds (user_id, item, spend_id, held_at, hold_id) VALUES (?, ?, ?, ?, ?)",
+                         (user_id, item, spend, now, hold_id))
+        return hold_id
 
     def release_all_holds(self) -> int:
         """At Mini App startup (one replica, stop-first deploys): a hold left by a process that ended mid-generation
         produced nothing for the user, so it is refunded (Codex credits r2 P1). Returns how many."""
         with self.store._connect() as conn:
-            holds = conn.execute("SELECT user_id, item FROM credit_holds").fetchall()
-        for user_id, item in holds:
-            self.settle(user_id, item, generated=False)
+            holds = conn.execute("SELECT user_id, item, hold_id FROM credit_holds").fetchall()
+        for user_id, item, hold_id in holds:
+            self.settle(user_id, item, hold_id, generated=False)
         return len(holds)
 
-    def settle(self, user_id: int, item: str, generated: bool) -> None:
+    def settle(self, user_id: int, item: str, hold_id: str, generated: bool) -> None:
         """After a held generation: kept when something was generated, else refunded once (the item unpaid again)."""
         now = int(self.clock())
         with self.store._write() as conn:
-            hold = conn.execute("SELECT spend_id FROM credit_holds WHERE user_id = ? AND item = ?",
-                                (user_id, item)).fetchone()
+            hold = conn.execute("SELECT spend_id FROM credit_holds WHERE user_id = ? AND item = ? AND hold_id = ?",
+                                (user_id, item, hold_id)).fetchone()
             if hold is None:
                 return
             conn.execute("DELETE FROM credit_holds WHERE user_id = ? AND item = ?", (user_id, item))

@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS credit_holds (
     item     TEXT NOT NULL,
     spend_id INTEGER NOT NULL,
     held_at  INTEGER NOT NULL,
+    hold_id  TEXT NOT NULL,  -- this hold's own id: a late settlement never touches a newer hold of the item
     PRIMARY KEY (user_id, item)
 );
 -- Admin actions already applied (by their keys): applying one twice is a no-op.

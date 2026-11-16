@@ -787,7 +787,7 @@ def create_app(
         # gets a free analysis (refund before the shielded model call completes) nor pays for one that then fails
         # (Codex credits r2-r3). A process that dies meanwhile: refunded at the next startup.
         work = asyncio.ensure_future(_analysis_response(event_id, session.user_id, share))
-        if not held:
+        if held is None:
             return (await asyncio.shield(work))[0]
         user_id, settled = session.user_id, {"done": False}
 
@@ -795,7 +795,7 @@ def create_app(
             if settled["done"]:
                 return  # settled inline below, before the answer went out
             generated = not task.cancelled() and task.exception() is None and task.result()[1]
-            settling = asyncio.ensure_future(run_in_threadpool(credits.settle, user_id, item, generated))
+            settling = asyncio.ensure_future(run_in_threadpool(credits.settle, user_id, item, held, generated))
             settling.add_done_callback(lambda t: t.cancelled() or t.exception())  # logged by asyncio if any
 
         work.add_done_callback(settle_when_done)  # only for a request cancelled while the work runs on
@@ -805,12 +805,12 @@ def create_app(
             raise
         except Exception:
             settled["done"] = True
-            await run_in_threadpool(credits.settle, user_id, item, False)
+            await run_in_threadpool(credits.settle, user_id, item, held, False)
             raise
         # Settled before answering: a retry right after never sees the hold, and a stop now cannot refund a
         # delivered analysis (Codex credits r7 P2).
         settled["done"] = True
-        await run_in_threadpool(credits.settle, user_id, item, generated)
+        await run_in_threadpool(credits.settle, user_id, item, held, generated)
         return response
 
     async def _analysis_response(event_id: str, user_id: int, share: Any) -> tuple[JSONResponse, bool]:
