@@ -18,6 +18,8 @@ cache load it started have ended. A request that chooses its steps by what it ca
 pick) reserves each step with `take()` and skips steps that do not fit.
 Nothing here refuses inside a load, so the shared cache and its remembered failures never see a
 per-user refusal. Never-listed match ids are counted separately per hour, before the lookup.
+The same charges also count against a per-user UTC-day cap (audit wave 2): within the minute share alone a
+script could still spend more than the app's whole daily budget (15/min x 1440 > 14 400).
 """
 
 from __future__ import annotations
@@ -33,18 +35,25 @@ MAX_USERS = 10_000
 
 
 IN_FLIGHT_MAX_AGE_S = 300   # an admission never released (a crash between gate and call) stops counting
+DAY_S = 86400
+DAY_USERS_MAX = 4 * MAX_USERS   # users with a day count kept at once
 
 
 class UserUpstreamLimiter:
     """Sliding windows per user: provider requests per minute (plus what admitted requests in progress
-    still reserve), never-listed match ids per hour."""
+    still reserve), never-listed match ids per hour; provider requests per UTC day (`per_day`, None: no cap)."""
 
-    def __init__(self, per_minute: int, unknown_per_hour: int, clock: Callable[[], float]) -> None:
+    def __init__(self, per_minute: int, unknown_per_hour: int, clock: Callable[[], float],
+                 per_day: int | None = None) -> None:
         self.per_minute = per_minute
         self.unknown_per_hour = unknown_per_hour
+        self.per_day = per_day
         self._clock = clock
         self._minute: dict[int, deque[float]] = {}
         self._unknown: dict[int, deque[float]] = {}
+        # user -> [UTC day number, requests charged that day]; earlier days are dropped once a day starts.
+        self._day: dict[int, list[int]] = {}
+        self._day_number = 0
         # user -> {ticket: [admitted at, requests still reserved]}
         self._in_flight: dict[int, dict[object, list[float]]] = {}
         self._lock = threading.Lock()
@@ -73,6 +82,12 @@ class UserUpstreamLimiter:
                     # for a cost above the whole share).
                     k = min(len(minute), used + cost - self.per_minute) if cost <= self.per_minute else len(minute)
                     waits.append(minute[k - 1] + 60 - now if k > 0 else 5.0)
+            if self.per_day is not None:
+                today = self._day_used(user_id, now)
+                if today and today + cost > self.per_day:
+                    waits.append(DAY_S - now % DAY_S)       # the day's share is spent: until 00:00 UTC
+                elif reserved and today + reserved + cost > self.per_day:
+                    waits.append(5.0)                        # what is in progress may still leave room
             if unknown:
                 hour = self._window(self._unknown, user_id, now, 3600)
                 if len(hour) >= self.unknown_per_hour:
@@ -93,7 +108,10 @@ class UserUpstreamLimiter:
         with self._lock:
             minute = self._window(self._minute, user_id, now, 60)
             running = self._in_flight.setdefault(user_id, {})
-            if len(minute) + sum(left for _, left in running.values()) + cost > self.per_minute:
+            reserved = sum(left for _, left in running.values())
+            if len(minute) + reserved + cost > self.per_minute:
+                return False
+            if self.per_day is not None and self._day_used(user_id, now) + reserved + cost > self.per_day:
                 return False
             admission = running.setdefault(ticket, [now, 0.0])
             admission[1] += cost
@@ -115,9 +133,28 @@ class UserUpstreamLimiter:
             minute = self._window(self._minute, user_id, now, 60)
             # More than two shares in the window never changes the wait: the memory stays bounded.
             minute.extend([now] * min(requests, 2 * self.per_minute - len(minute)))
+            if self.per_day is not None:
+                self._day_used(user_id, now)
+                self._day[user_id][1] += requests
             admission = self._in_flight.get(user_id, {}).get(ticket) if ticket is not None else None
             if admission is not None:
                 admission[1] = max(0.0, admission[1] - requests)
+
+    def _day_used(self, user_id: int, now: float) -> int:
+        day = int(now // DAY_S)
+        if day != self._day_number:
+            self._day_number = day
+            self._day = {k: v for k, v in self._day.items() if v[0] == day}
+        entry = self._day.get(user_id)
+        if entry is None:
+            if len(self._day) >= DAY_USERS_MAX:
+                # Bounded memory: the lighter half is forgotten (their count restarts — never a refusal).
+                keep = sorted(self._day.items(), key=lambda kv: kv[1][1], reverse=True)[: DAY_USERS_MAX // 2]
+                self._day = dict(keep)
+            entry = self._day[user_id] = [day, 0]
+        if entry[0] != day:
+            entry[:] = [day, 0]
+        return entry[1]
 
     @staticmethod
     def _window(store: dict[int, deque[float]], user_id: int, now: float, span: float) -> deque[float]:
@@ -132,6 +169,7 @@ class UserUpstreamLimiter:
                 del store[key]
         for key in [k for k, v in self._in_flight.items() if not v or max(at for at, _ in v.values()) <= now - IN_FLIGHT_MAX_AGE_S]:
             del self._in_flight[key]
+
         # Still crowded (that many users active within the hour): forget the oldest-active ones.
         for store in (self._minute, self._unknown):
             if len(store) > MAX_USERS // 2:

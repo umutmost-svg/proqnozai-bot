@@ -149,6 +149,10 @@ class Settings:
     # gives 15, enough for a cold AI analysis plus browsing right after a restart (empty cache). Use
     # `user_share_per_minute`.
     sports_user_per_minute: int | None = None
+    # The same share per UTC day (audit wave 2: the minute share alone lets one account spend more than the app's whole
+    # day). None (default): a twentieth of the day's budget, never below the minute share — production's 14 400 gives 720.
+    # Use `user_share_per_day`.
+    sports_user_per_day: int | None = None
     sports_user_unknown_per_hour: int = 5
     # Odds pushed by the bot (HMAC-signed, POST /api/internal/odds). Unset: the route is off
     # and no odds are shown anywhere.
@@ -298,6 +302,8 @@ class Settings:
             raise SettingsError("sports_user_per_minute must be 1..football_data_per_minute")
         if not 1 <= self.odds_source_max_per_cycle <= 40:
             raise SettingsError("odds_source_max_per_cycle must be 1..40")
+        if self.sports_user_per_day is not None and not 1 <= self.sports_user_per_day <= self.football_data_per_day:
+            raise SettingsError("sports_user_per_day must be 1..football_data_per_day")
         if not 0 <= self.sports_user_unknown_per_hour <= 600:
             raise SettingsError("sports_user_unknown_per_hour must be 0..600")
         if self.anthropic_api_key is not None and (
@@ -334,6 +340,12 @@ class Settings:
         if self.sports_user_per_minute is not None:
             return self.sports_user_per_minute
         return min(self.football_data_per_minute, max(USER_SHARE_MIN, self.football_data_per_minute // 4))
+
+    @property
+    def user_share_per_day(self) -> int:
+        if self.sports_user_per_day is not None:
+            return self.sports_user_per_day
+        return min(self.football_data_per_day, max(self.user_share_per_minute, self.football_data_per_day // 20))
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Settings:
@@ -402,6 +414,7 @@ class Settings:
             football_data_shared_reserve=integer("MINIAPP_FOOTBALL_DATA_SHARED_RESERVE", 0),
             sports_unknown_lookups_per_hour=integer("MINIAPP_SPORTS_UNKNOWN_LOOKUPS_PER_HOUR", 20),
             sports_user_per_minute=optional_integer("MINIAPP_SPORTS_USER_PER_MINUTE"),
+            sports_user_per_day=optional_integer("MINIAPP_SPORTS_USER_PER_DAY"),
             sports_user_unknown_per_hour=integer("MINIAPP_SPORTS_USER_UNKNOWN_PER_HOUR", 5),
             odds_feed_secret=optional("MINIAPP_ODDS_FEED_SECRET"),
             odds_feed_enabled=boolean("MINIAPP_ODDS_FEED_ENABLED", True),

@@ -8,9 +8,13 @@ application by exact name, refuses one that is not ours or publishes host ports,
 resources and Swarm update config, mounts the Mini App's data volume (/data) and the admin's OWN state volume
 (/state, accounts and 2FA secrets) once each, adds the domain once. See docs/ops/admin-server.md.
 Errors print the procedure, HTTP status and the API's error code only — never a body or a value.
+One run at a time (a lock); with --deploy it waits for the new image to run healthy and exits non-zero otherwise.
 """
+import fcntl
 import json
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,6 +35,11 @@ def secret(name: str) -> str:
 
 
 KEY = secret("/root/.dokploy-api-key")
+_LOCK = open("/run/proqnozai-admin-deploy.lock", "w")   # one deploy at a time
+try:
+    fcntl.flock(_LOCK, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit("STOP: another admin deploy is running")
 EDGE = secret("/root/admin-secrets/edge")
 # Same rule as miniapp.admin_web.config (else the app would refuse to start after the change).
 if len(EDGE) < 32 or not EDGE.isascii() or not EDGE.isprintable() or " " in EDGE:
@@ -151,6 +160,28 @@ if publishes(full):
     sys.exit("STOP: the application publishes host ports")
 
 if deploy:
+    name = str(full.get("appName") or APP)
+    # Containers before the deploy: success needs a NEW one (the same tag again would match the old task).
+    before = set(subprocess.run(["docker", "ps", "-aq", "--no-trunc", "-f", f"name={name}"],
+                                capture_output=True, text=True).stdout.split())
     call("application.deploy", {"applicationId": app_id})
     print("deploy: started")
+    image = f"{REGISTRY}:{tag}"
+    deadline = time.monotonic() + 360
+    while time.monotonic() < deadline:
+        rows = subprocess.run(["docker", "ps", "--no-trunc", "-f", f"name={name}", "--format", "{{.ID}} {{.Image}} {{.Status}}"],
+                              capture_output=True, text=True).stdout.splitlines()
+        # Swarm's own verdict on this update: a rollback also starts a new healthy container of the same tag.
+        state = subprocess.run(["docker", "service", "inspect", name, "--format",
+                                "{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}"],
+                               capture_output=True, text=True).stdout.strip()
+        if state.startswith("rollback") or state == "paused":
+            sys.exit(f"STOP: Swarm update state '{state}': the new configuration was rolled back or paused")
+        if state in ("completed", "") and any(
+                r.split(" ", 1)[0] not in before and f" {image} " in r and "(healthy)" in r for r in rows):
+            print("health:", image, "healthy")
+            break
+        time.sleep(5)
+    else:
+        sys.exit(f"STOP: {image} is not running healthy with the update completed after 6 minutes (Swarm rolls a failed update back)")
 print("OK")

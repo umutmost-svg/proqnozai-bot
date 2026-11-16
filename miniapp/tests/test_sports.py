@@ -1125,3 +1125,20 @@ def test_a_calendar_reports_scheduled_fixtures_with_unknown_teams(clock: FakeClo
     with _pytest.raises(UpstreamError):
         adapter._season_payload("PL", {"competition": {"code": "PL"}, "resultSet": {"count": 2},
                                        "matches": [played, broken]})
+
+
+def test_an_exhausted_daily_quota_is_logged_once_a_day_for_the_watchdog(clock, caplog) -> None:
+    t = FakeTransport()
+    t.default = t.ok({})
+    c = make_client(t, clock, per_minute=5, per_day=1)
+    run(c.get_json("/a"))
+    with caplog.at_level("WARNING", logger="miniapp.sports"):
+        for path in ("/b", "/c"):
+            with pytest.raises(UpstreamError):
+                run(c.get_json(path))
+        assert sum("event=sports_quota_exhausted" in r.getMessage() for r in caplog.records) == 1
+        clock.advance(24 * 3600)
+        run(c.get_json("/d"))
+        with pytest.raises(UpstreamError):
+            run(c.get_json("/e"))
+        assert sum("event=sports_quota_exhausted" in r.getMessage() for r in caplog.records) == 2

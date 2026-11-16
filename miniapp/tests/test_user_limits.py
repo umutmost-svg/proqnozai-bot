@@ -483,3 +483,66 @@ def test_the_quick_first_cost_is_only_the_first_utc_day(clock: FakeClock) -> Non
     quick = QuickService(sports, clock=clock)
     start, end = datetime(2027, 1, 15, 8, tzinfo=UTC), datetime(2027, 1, 16, 8, tzinfo=UTC)
     assert quick.first_cost(start, end) == 0       # tomorrow's cold day is not part of the first step
+
+
+def test_a_day_cap_stops_one_account_until_utc_midnight_without_touching_others() -> None:
+    clock = FakeClock()
+    lim = UserUpstreamLimiter(10, 2, clock, per_day=12)
+    for _ in range(2):              # two minutes of a full minute share: 20 > 12 would pass without the day cap
+        assert lim.admit(1, ticket="t", cost=6) is None
+        lim.charge(1, 6, ticket="t")
+        lim.release(1, "t")
+        clock.advance(61)
+    wait = lim.admit(1, cost=1)
+    assert wait is not None and wait == pytest.approx(86400 - clock() % 86400)
+    assert lim.admit(2, cost=1) is None                      # another user's day is untouched
+    assert lim.reserve(1, "step", 1) is False                # a step-by-step request gets no more either
+    clock.advance(wait)
+    assert lim.admit(1, cost=1) is None                      # a new UTC day
+
+
+def test_a_day_cap_counts_what_requests_in_progress_still_reserve() -> None:
+    clock = FakeClock()
+    lim = UserUpstreamLimiter(10, 2, clock, per_day=8)
+    assert lim.admit(1, ticket="a", cost=5) is None
+    assert lim.admit(1, ticket="b", cost=5) == 5.0           # 5 reserved + 5 > 8: retry once "a" has ended
+    lim.charge(1, 1, ticket="a")
+    lim.release(1, "a")
+    clock.advance(61)
+    assert lim.admit(1, ticket="b", cost=5) is None          # 1 used today + 5 <= 8
+    assert lim.reserve(1, "b", 3) is False                   # 1 + 5 + 3 > 8
+    assert lim.reserve(1, "b", 2) is True
+
+
+def test_the_day_share_defaults_to_a_twentieth_of_the_budget(tmp_path) -> None:
+    from miniapp.settings import SettingsError
+
+    prod = base_settings(tmp_path, football_data_per_minute=60, football_data_per_day=14400, football_data_live_plan=True)
+    assert prod.user_share_per_day == 720
+    assert base_settings(tmp_path, football_data_per_day=40).user_share_per_day == 6    # never below the minute share
+    assert base_settings(tmp_path, sports_user_per_day=50).user_share_per_day == 50
+    with pytest.raises(SettingsError):
+        base_settings(tmp_path, sports_user_per_day=3001)    # above the app's own day (3000)
+
+
+def test_a_request_above_the_whole_day_share_runs_only_on_an_untouched_day() -> None:
+    # The minute share's rule: one request costing more than the whole share is not refused forever.
+    clock = FakeClock()
+    lim = UserUpstreamLimiter(10, 2, clock, per_day=3)
+    assert lim.admit(1, ticket="big", cost=5) is None
+    lim.charge(1, 5, ticket="big")
+    lim.release(1, "big")
+    clock.advance(61)
+    assert lim.admit(1, cost=1) is not None                  # nothing more that day
+
+
+def test_the_day_counts_stay_bounded_and_keep_the_heaviest_users(monkeypatch) -> None:
+    from miniapp.sports import user_limits
+
+    monkeypatch.setattr(user_limits, "DAY_USERS_MAX", 4)
+    lim = UserUpstreamLimiter(100, 2, FakeClock(), per_day=10)
+    lim.charge(1, 9)
+    for user in (2, 3, 4, 5, 6):
+        lim.charge(user, 1)
+    assert len(lim._day) <= 4
+    assert lim.admit(1, cost=2) is not None                  # the heavy user is never forgotten

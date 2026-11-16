@@ -676,7 +676,8 @@ def create_app(
         return found
 
     # One share per user of the shared football-data budget, for every route that may read it.
-    user_limiter = UserUpstreamLimiter(settings.user_share_per_minute, settings.sports_user_unknown_per_hour, clock)
+    user_limiter = UserUpstreamLimiter(settings.user_share_per_minute, settings.sports_user_unknown_per_hour, clock,
+                                       per_day=settings.user_share_per_day)
     # Lists and top matches: only matches the goal model can forecast (owner 16.11), judged from cached calendars.
     coverage = ModelCoverage(lambda tid: sports.cached_model_history(tid, any_age=True), clock)
     register_sports_routes(app, sports, active_session,

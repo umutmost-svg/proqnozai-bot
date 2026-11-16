@@ -11,11 +11,17 @@ deployment. Closed mode (unless /root/miniapp-secrets/public exists): MINIAPP_AL
 compared with the stored value. On the FIRST deployment there is no previous revision to roll back to: health is
 verified explicitly afterwards (release-same-server.md, B3); later updates roll back automatically.
 Errors print the procedure, HTTP status and the API's error code only — never a body or a value.
+Guards (audit wave 2): one run at a time (a lock); a feature the running app has (public access, AI, odds feed, admin
+policy, blocked list) is never switched off because its file went missing — that needs --allow-off; with --deploy
+the run waits for the new image to be healthy and for the public health check, and exits non-zero otherwise (Swarm
+rolls a failed update back by itself).
 See docs/miniapp/release-same-server.md.
 """
+import fcntl
 import json
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -35,6 +41,13 @@ def secret(name: str) -> str:
 
 
 KEY = secret("/root/.dokploy-api-key")
+
+# One deploy at a time: two runs would interleave saveEnvironment/deploy of different tags.
+_LOCK = open("/run/proqnozai-miniapp-deploy.lock", "w")
+try:
+    fcntl.flock(_LOCK, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit("STOP: another Mini App deploy is running")
 
 
 def call(proc: str, body: dict | None = None, method: str = "POST"):
@@ -97,6 +110,7 @@ print("admin features (telemetry, ads, referrals, blocking):", "on" if POLICY_KE
 if len(sys.argv) < 2 or not sys.argv[1].isalnum():
     sys.exit("usage: python3 - <IMAGE_TAG> [--deploy] < dokploy_deploy.py")
 tag, deploy = sys.argv[1], "--deploy" in sys.argv[2:]
+allow_off = "--allow-off" in sys.argv[2:]
 
 # 1) project + its production environment
 projects = call("project.all", method="GET")
@@ -122,6 +136,10 @@ if app is not None:
         sys.exit("STOP: the existing application is not image-based")
     if cur.get("ports") or ((cur.get("endpointSpecSwarm") or {}).get("Ports")):
         sys.exit("STOP: the application publishes host ports")
+    # Names only (values are never read into anything printed).
+    RUNNING_KEYS = {line.split("=", 1)[0] for line in str(cur.get("env") or "").splitlines() if "=" in line}
+else:
+    RUNNING_KEYS = set()
 if app is None:
     app = call("application.create", {"name": APP, "appName": APP, "environmentId": environment_id,
                                        "description": "ProqnozAI Mini App (closed mode)"})
@@ -183,6 +201,21 @@ if AI_KEY:
 for k, v in env_vars.items():
     if "\n" in v or not v:
         sys.exit(f"STOP: bad value for {k}")
+# A missing secrets file must not silently switch off what the running app has (audit wave 2).
+if RUNNING_KEYS:
+    lost = [name for name, was, now in (
+        ("public access (/root/miniapp-secrets/public)", "MINIAPP_ALLOWED_USER_IDS" not in RUNNING_KEYS, PUBLIC),
+        ("AI forecasts (anthropic-key)", "MINIAPP_ANTHROPIC_API_KEY" in RUNNING_KEYS, bool(AI_KEY)),
+        ("odds feed (odds-feed)", "MINIAPP_ODDS_FEED_SECRET" in RUNNING_KEYS, bool(ODDS_SECRET)),
+        ("admin features (admin-policy-public-key)", "MINIAPP_ADS_POLICY_PUBLIC_KEY" in RUNNING_KEYS, bool(POLICY_KEY)),
+        ("blocked users (blocked-ids)", "MINIAPP_BLOCKED_USER_IDS" in RUNNING_KEYS,
+         "MINIAPP_BLOCKED_USER_IDS" in env_vars),
+    ) if was and not now]
+    if lost and not allow_off:
+        sys.exit("STOP: this run would switch off " + "; ".join(lost) + " (its file is missing). "
+                 "Restore the file, or pass --allow-off to switch it off on purpose")
+    for name in lost:
+        print("switching OFF on purpose:", name)
 # 3) image from the loopback registry (no login)
 call("application.saveDockerProvider", {"applicationId": app_id, "dockerImage": f"{REGISTRY}:{tag}",
                                          "username": "", "password": "", "registryUrl": ""})
@@ -219,6 +252,43 @@ if full.get("ports") or ((full.get("endpointSpecSwarm") or {}).get("Ports")):
     sys.exit("STOP: the application publishes host ports")
 
 if deploy:
+    name = str(full.get("appName") or APP)
+    # Containers before the deploy: success needs a NEW one (the same tag again would match the old task).
+    before = set(subprocess.run(["docker", "ps", "-aq", "--no-trunc", "-f", f"name={name}"],
+                                capture_output=True, text=True).stdout.split())
     call("application.deploy", {"applicationId": app_id})
     print("deploy: started")
+    # Done only when the NEW image runs healthy and the public address answers (through Cloudflare and Traefik).
+    image = f"{REGISTRY}:{tag}"
+    deadline, healthy = time.monotonic() + 360, False
+    while time.monotonic() < deadline:
+        rows = subprocess.run(["docker", "ps", "--no-trunc", "-f", f"name={name}", "--format", "{{.ID}} {{.Image}} {{.Status}}"],
+                              capture_output=True, text=True).stdout.splitlines()
+        # Swarm's own verdict on this update: a rollback also starts a new healthy container of the same tag.
+        state = subprocess.run(["docker", "service", "inspect", name, "--format",
+                                "{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}"],
+                               capture_output=True, text=True).stdout.strip()
+        if state.startswith("rollback") or state == "paused":
+            sys.exit(f"STOP: Swarm update state '{state}': the new configuration was rolled back or paused")
+        if state in ("completed", "") and any(
+                r.split(" ", 1)[0] not in before and f" {image} " in r and "(healthy)" in r for r in rows):
+            healthy = True
+            break
+        time.sleep(5)
+    if not healthy:
+        sys.exit(f"STOP: {image} is not running healthy with the update completed after 6 minutes (Swarm rolls a failed update back)")
+    print("health:", image, "healthy")
+    for attempt in range(6):
+        try:
+            # Cloudflare answers Python's default User-Agent with 403.
+            probe = urllib.request.Request(f"https://{DOMAIN}/api/health", headers={"User-Agent": "proqnozai-deploy-check"})
+            with urllib.request.urlopen(probe, timeout=15) as r:
+                if r.status == 200:
+                    break
+        except (urllib.error.URLError, OSError):
+            pass
+        time.sleep(5)
+    else:
+        sys.exit(f"STOP: https://{DOMAIN}/api/health does not answer 200 (container healthy: check the tunnel)")
+    print("public health: ok")
 print("OK")

@@ -212,6 +212,7 @@ class ProviderClient:
         self._minute: deque[float] = deque()
         self._day_key = ""
         self._day_used = 0
+        self._quota_logged = ""
         self._cooldown_until = 0.0
         self.last_error: str | None = None
         self.last_success_at: float | None = None
@@ -257,6 +258,9 @@ class ProviderClient:
         if self._day_key != today:
             self._day_key, self._day_used = today, 0
         if self._day_used >= self._limits.per_day:
+            if self._quota_logged != today:  # once a day: the watchdog alerts on it (deploy/ops/watchdog.sh)
+                self._quota_logged = today
+                logger.warning("event=sports_quota_exhausted provider=%s code=quota_exhausted", self.name)
             self.last_error = "quota_exhausted"  # coverage must not keep saying "connected"
             raise UpstreamError("quota_exhausted")
         share = LOW_PRIORITY_DAY_SHARE.get()
