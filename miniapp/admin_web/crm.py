@@ -194,6 +194,10 @@ def _text(value: Any, field: str, limit: int = MAX_TEXT, minimum: int = 1) -> st
     return value.strip()
 
 
+
+# Hours after sending at which a broadcast's messages are deleted in the users' chats (None = never; <= 47 h).
+DELETE_AFTER_HOURS = (1, 6, 12, 24, 47)
+
 class CrmStore:
     def __init__(self, accounts: AdminStore) -> None:
         self.accounts = accounts
@@ -203,6 +207,10 @@ class CrmStore:
             conn.executescript(_SCHEMA)
             try:  # pilot databases created before the column existed (additive)
                 conn.execute("ALTER TABLE crm_messages ADD COLUMN idempotency_key TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:  # auto-delete of a broadcast's messages in the users' chats (15.11, additive)
+                conn.execute("ALTER TABLE crm_broadcasts ADD COLUMN delete_after_h INTEGER")
             except sqlite3.OperationalError:
                 pass
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS crm_messages_key ON crm_messages(idempotency_key) "
@@ -313,11 +321,11 @@ class CrmStore:
         with self.accounts._connect() as conn:
             rows = conn.execute(
                 "SELECT b.id, b.name, b.rules_json, b.body, b.buttons_json, b.status, b.scheduled_at, b.recipients, "
-                "b.created_at, b.updated_at, u.email FROM crm_broadcasts b LEFT JOIN admin_users u ON u.id = b.admin_id "
-                "ORDER BY b.id DESC").fetchall()
+                "b.created_at, b.updated_at, u.email, b.delete_after_h FROM crm_broadcasts b "
+                "LEFT JOIN admin_users u ON u.id = b.admin_id ORDER BY b.id DESC").fetchall()
         return [{"id": r[0], "name": r[1], "rules": json.loads(r[2]), "body": r[3], "buttons": json.loads(r[4]),
                  "status": r[5], "scheduledAt": r[6], "recipients": r[7], "createdAt": r[8], "updatedAt": r[9],
-                 "by": r[10]} for r in rows]
+                 "by": r[10], "deleteAfterHours": r[11]} for r in rows]
 
     def ledger(self, limit: int = 200, kind: str | None = None) -> list[dict]:
         where, args = "", []
@@ -494,13 +502,17 @@ class CrmStore:
                 and len(b["url"]) <= 300 for b in buttons):
             raise ActionError("invalid_buttons")
         buttons = [{"text": b["text"], "url": b["url"]} for b in buttons]
+        # Auto-delete in the users' chats: Telegram allows it within 48 h of sending, hence these choices.
+        delete_after = data.get("deleteAfterHours")
+        if delete_after is not None and (isinstance(delete_after, bool) or delete_after not in DELETE_AFTER_HOURS):
+            raise ActionError("invalid_delete_after")
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "manage_users")
             if broadcast_id is None:
                 broadcast_id = conn.execute(
                     "INSERT INTO crm_broadcasts (name, rules_json, body, buttons_json, status, created_at, updated_at, "
-                    "admin_id) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?)",
-                    (name, json.dumps(rules), body, json.dumps(buttons), now, now, actor.id)).lastrowid
+                    "admin_id, delete_after_h) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?)",
+                    (name, json.dumps(rules), body, json.dumps(buttons), now, now, actor.id, delete_after)).lastrowid
             else:
                 status = conn.execute("SELECT status FROM crm_broadcasts WHERE id = ?", (broadcast_id,)).fetchone()
                 if status is None:
@@ -508,8 +520,9 @@ class CrmStore:
                 if status[0] != "draft":
                     raise ActionError("not_a_draft", 409)
                 conn.execute("UPDATE crm_broadcasts SET name = ?, rules_json = ?, body = ?, buttons_json = ?, "
-                             "updated_at = ?, admin_id = ? WHERE id = ?",
-                             (name, json.dumps(rules), body, json.dumps(buttons), now, actor.id, broadcast_id))
+                             "updated_at = ?, admin_id = ?, delete_after_h = ? WHERE id = ?",
+                             (name, json.dumps(rules), body, json.dumps(buttons), now, actor.id, delete_after,
+                              broadcast_id))
             self.accounts._event(conn, now, actor.id, "broadcast.save", "broadcast", str(broadcast_id), None,
                                  {"status": "draft"}, None, None, "done")
         return {"id": broadcast_id}

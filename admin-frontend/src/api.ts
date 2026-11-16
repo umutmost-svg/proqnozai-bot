@@ -262,6 +262,8 @@ export interface Broadcast {
   id: number; name: string; rules: Rules; body: string; buttons: { text: string; url: string }[];
   status: 'draft' | 'scheduled' | 'cancelled' | 'sent'; scheduledAt: number | null; recipients: number | null;
   createdAt: number; updatedAt: number; by: string | null; audience?: number;
+  /** Hours after sending at which the bot deletes the message in each chat (null = never). */
+  deleteAfterHours?: number | null;
 }
 export interface CreditsPage {
   enabled: false;

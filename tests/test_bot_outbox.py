@@ -158,3 +158,85 @@ def test_a_queued_job_of_a_marked_batch_is_never_claimed(tmp_path):
     with sqlite3.connect(tmp_path / "bot-outbox.db") as conn:  # marked, its queued rows not yet updated
         conn.execute("INSERT INTO cancelled_batches VALUES ('bc:6', ?)", (NOW,))
     assert bot.claim(NOW + 10) is None
+
+
+# --- auto-delete: the bot deletes a broadcast's messages after the admin's chosen time (within Telegram's 48 h) ---
+
+async def test_sent_messages_are_deleted_once_after_their_time(tmp_path):
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("bc:1:21", 21, "a", []), ("bc:1:22", 22, "b", []), ("msg:9", 23, "c", [])], batch_id=None,
+                  not_before=NOW, admin_event_id=None, now=NOW, delete_after_s=3600)
+    admin.enqueue([("msg:10", 24, "keep", [])], batch_id=None, not_before=NOW, admin_event_id=None, now=NOW)
+    ids = iter(range(500, 600))
+
+    async def send(job):
+        return Outcome("sent", message_id=next(ids))
+    await bot.run_once(send, lambda: NOW)
+    deleted = []
+
+    async def delete(chat, message):
+        if chat == 22:
+            raise RuntimeError("chat gone")
+        deleted.append((chat, message))
+    assert await bot.run_deletes(delete, lambda: NOW + 1800) == {}           # not yet
+    assert await bot.run_deletes(delete, lambda: NOW + 3600) == {"deleted": 2, "failed": 1}
+    assert sorted(c for c, _ in deleted) == [21, 23]                          # 24 has no auto-delete
+    assert await bot.run_deletes(delete, lambda: NOW + 7200) == {}           # each one tried once
+
+
+async def test_a_message_older_than_telegrams_limit_is_never_tried(tmp_path):
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("bc:2:31", 31, "a", [])], batch_id=None, not_before=NOW, admin_event_id=None, now=NOW,
+                  delete_after_s=3600)
+
+    async def send(job):
+        return Outcome("sent", message_id=7)
+    await bot.run_once(send, lambda: NOW)
+    tried = []
+
+    async def delete(chat, message):
+        tried.append(chat)
+    assert await bot.run_deletes(delete, lambda: NOW + 49 * 3600) == {"too_old": 1} and tried == []
+
+
+def test_the_new_columns_are_added_to_an_existing_file(tmp_path):
+    path = tmp_path / "bot-outbox.db"
+    with sqlite3.connect(path) as conn:                                       # a file from before the feature
+        conn.executescript(bot_outbox.SCHEMA.replace(",\n    delete_after_s  INTEGER,\n    message_id      INTEGER,\n"
+                                                     "    delete_status   TEXT,\n    deleted_at      INTEGER", ""))
+    admin_outbox.Outbox(path).init_schema()
+    with sqlite3.connect(path) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+    assert {"delete_after_s", "message_id", "delete_status", "deleted_at"} <= cols
+
+
+
+async def test_a_claimed_deletion_is_never_tried_again_and_old_jobs_are_marked(tmp_path):
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("bc:3:41", 41, "a", []), ("bc:3:42", 42, "b", [])], batch_id=None, not_before=NOW,
+                  admin_event_id=None, now=NOW, delete_after_s=60)
+
+    async def send(job):
+        return Outcome("sent", message_id=None if job.user_id == 42 else 9)  # 42: sent by an older bot
+    await bot.run_once(send, lambda: NOW)
+    with sqlite3.connect(tmp_path / "bot-outbox.db") as conn:              # a crash right after claiming 41
+        conn.execute("UPDATE jobs SET delete_status = 'deleting' WHERE user_id = 41")
+    tried = []
+
+    async def delete(chat, message):
+        tried.append(chat)
+    await bot.run_deletes(delete, lambda: NOW + 120)
+    with sqlite3.connect(tmp_path / "bot-outbox.db") as conn:
+        states = dict(conn.execute("SELECT user_id, delete_status FROM jobs"))
+    assert tried == [] and states == {41: "deleting", 42: "no_message_id"}
+
+
+def test_both_sides_may_add_the_columns_at_once(tmp_path):
+    path = tmp_path / "bot-outbox.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(bot_outbox.SCHEMA.replace(",\n    delete_after_s  INTEGER,\n    message_id      INTEGER,\n"
+                                                     "    delete_status   TEXT,\n    deleted_at      INTEGER", ""))
+    with sqlite3.connect(path, isolation_level=None) as a, sqlite3.connect(path, isolation_level=None) as b:
+        bot_outbox.add_columns(a)
+        admin_outbox.add_columns(b)                                           # already there: no error
+    assert bot_outbox.ADDED_COLUMNS == admin_outbox.ADDED_COLUMNS

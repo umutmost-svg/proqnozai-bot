@@ -186,6 +186,10 @@ async def _run_outbox(application) -> None:
     while True:
         try:
             await outbox.run_once(send, lambda: int(time.time()), is_banned=db_is_blocked)
+
+            async def delete(chat_id: int, message_id: int) -> None:
+                await application.bot.delete_message(chat_id=chat_id, message_id=message_id)
+            await outbox.run_deletes(delete, lambda: int(time.time()))
             if time.time() - last_purge > 86400:
                 outbox.purge(int(time.time()))
                 last_purge = time.time()

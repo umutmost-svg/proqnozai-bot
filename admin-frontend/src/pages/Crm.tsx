@@ -156,6 +156,7 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
   const [rules, setRules] = useState<Rules>(item?.rules ?? initialRules);
   const [button, setButton] = useState(item?.buttons[0]?.text ?? 'Открыть Mini App');
   const [withButton, setWithButton] = useState(item ? item.buttons.length > 0 : true);
+  const [deleteAfter, setDeleteAfter] = useState<number | null>(item?.deleteAfterHours ?? null);
   const [when, setWhen] = useState(() => { const d = new Date(Date.now() + 3600_000); d.setUTCSeconds(0, 0); return d.toISOString().slice(0, 16); });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -167,7 +168,8 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
     setBusy(true); setError(null);
     try {
       const r = await api<{ id: number }>('/api/admin/broadcasts', { method: 'POST', body: {
-        id: item?.id, name, body, rules, buttons: withButton ? [{ text: button, url: 'miniapp' }] : [] } });
+        id: item?.id, name, body, rules, buttons: withButton ? [{ text: button, url: 'miniapp' }] : [],
+        deleteAfterHours: deleteAfter } });
       setToast('Черновик сохранён'); reload(); return r.id;
     } catch (e) { setError(errorText(e)); return null; } finally { setBusy(false); }
   };
@@ -202,6 +204,14 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
               <div className="field"><label htmlFor="b-when" className="sm">Когда (UTC)</label>
                 <input id="b-when" type="datetime-local" className="control" value={when} disabled={!editable} onChange={(e) => setWhen(e.target.value)} /></div>
               <div className="field"><label className="sm">Скорость</label><input className="control" disabled value="Авто (лимит Telegram)" /></div>
+              <div className="field"><label htmlFor="b-del" className="sm">Удалить у получателей через</label>
+                <select id="b-del" className="control" value={deleteAfter ?? ''} disabled={!editable}
+                  onChange={(e) => setDeleteAfter(e.target.value ? Number(e.target.value) : null)}>
+                  <option value="">Не удалять</option>
+                  {[1, 6, 12, 24, 47].map((h) => <option key={h} value={h}>{h} ч</option>)}
+                </select>
+                <div className="small muted" style={{ marginTop: 4 }}>Telegram позволяет боту удалить сообщение только в течение 48 ч после отправки.</div>
+              </div>
             </div>
           </Card>
         </div>
@@ -218,6 +228,7 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
             <div className="kv-row"><span>Получателей</span><b>{size === null ? '…' : `≈ ${num(size)}`}</b></div>
             <div className="kv-row"><span>Подтверждение</span><b>причина + 2FA</b></div>
             <div className="kv-row"><span>Журнал</span><b>запись при планировании</b></div>
+            <div className="kv-row"><span>Автоудаление</span><b>{deleteAfter ? `через ${deleteAfter} ч после отправки` : 'нет'}</b></div>
             <div className="kv-row"><span>Отправка</span><b>{server ? 'через бота, в запланированное время' : 'в пилоте не уходит'}</b></div>
           </Card>
         </div>

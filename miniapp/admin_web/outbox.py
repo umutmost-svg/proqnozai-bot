@@ -47,7 +47,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at      INTEGER NOT NULL,
     claimed_at      INTEGER,
     claim_token     TEXT,
-    sent_at         INTEGER
+    sent_at         INTEGER,
+    delete_after_s  INTEGER,
+    message_id      INTEGER,
+    delete_status   TEXT,
+    deleted_at      INTEGER
 );
 CREATE INDEX IF NOT EXISTS jobs_due ON jobs(status, not_before);
 CREATE INDEX IF NOT EXISTS jobs_batch ON jobs(batch_id);
@@ -57,6 +61,30 @@ CREATE TABLE IF NOT EXISTS cancelled_batches (
     cancelled_at INTEGER NOT NULL
 );
 """
+
+# Columns added after the first release (auto-delete, 15.11): added to existing files by both sides' init_schema.
+ADDED_COLUMNS = (("delete_after_s", "INTEGER"), ("message_id", "INTEGER"), ("delete_status", "TEXT"),
+                 ("deleted_at", "INTEGER"))
+
+
+def add_columns(conn) -> None:
+    """The admin and the bot may start together on an older file: the check and the ALTERs run under one write lock,
+    and a column the other side added meanwhile is not an error."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        have = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+        for name, kind in ADDED_COLUMNS:
+            if name not in have:
+                try:
+                    conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+
 
 
 class Outbox:
@@ -77,11 +105,12 @@ class Outbox:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            add_columns(conn)
         if fresh:
             os.chmod(self.path, 0o660)  # admin writes jobs, the bot writes outcomes (one group on the volume)
 
     def enqueue(self, jobs: Iterable[tuple[str, int, str, list[dict]]], *, batch_id: str | None, not_before: int,
-                admin_event_id: int | None, now: int, hold: bool = False) -> int:
+                admin_event_id: int | None, now: int, hold: bool = False, delete_after_s: int | None = None) -> int:
         """jobs: (idempotency_key, user_id, text, buttons). One transaction; existing keys are left as they are.
         `hold`: the new jobs stay unclaimable until `release_batch`. Returns how many new jobs were queued."""
         added = 0
@@ -97,10 +126,11 @@ class Outbox:
                         raise ValueError("text")
                     added += conn.execute(
                         "INSERT OR IGNORE INTO jobs (id, idempotency_key, user_id, batch_id, text, buttons_json, "
-                        "not_before, expires_at, status, retry_at, admin_event_id, created_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
+                        "not_before, expires_at, status, retry_at, admin_event_id, created_at, delete_after_s) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
                         (str(uuid.uuid4()), key, user_id, batch_id, text, json.dumps(buttons), not_before,
-                         not_before + JOB_TTL_S, HOLD if hold else None, admin_event_id, now)).rowcount
+                         not_before + JOB_TTL_S, HOLD if hold else None, admin_event_id, now,
+                         delete_after_s)).rowcount
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")

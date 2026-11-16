@@ -48,6 +48,9 @@ BATCH = 25  # per run: below Telegram's ~30 messages/s; the caller runs it about
 TEXT_RETENTION_DAYS = 30
 ROW_RETENTION_DAYS = 400
 DAY = 86400
+# Telegram: a bot may delete its own message in a private chat only within 48 h (kept below with a margin).
+DELETE_LIMIT_S = 47 * 3600 + 30 * 60
+MAX_DELETE_AFTER_S = 47 * 3600
 
 # Same schema as miniapp/admin_web/outbox.py (whichever side starts first creates it; a test keeps them equal).
 # cancelled_batches is written by the admin's cancel; claim and retry honour it.
@@ -69,7 +72,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at      INTEGER NOT NULL,
     claimed_at      INTEGER,
     claim_token     TEXT,
-    sent_at         INTEGER
+    sent_at         INTEGER,
+    delete_after_s  INTEGER,
+    message_id      INTEGER,
+    delete_status   TEXT,
+    deleted_at      INTEGER
 );
 CREATE INDEX IF NOT EXISTS jobs_due ON jobs(status, not_before);
 CREATE INDEX IF NOT EXISTS jobs_batch ON jobs(batch_id);
@@ -79,6 +86,30 @@ CREATE TABLE IF NOT EXISTS cancelled_batches (
     cancelled_at INTEGER NOT NULL
 );
 """
+
+# Columns added after the first release (auto-delete, 15.11): added to existing files by both sides' init_schema.
+ADDED_COLUMNS = (("delete_after_s", "INTEGER"), ("message_id", "INTEGER"), ("delete_status", "TEXT"),
+                 ("deleted_at", "INTEGER"))
+
+
+def add_columns(conn) -> None:
+    """The admin and the bot may start together on an older file: the check and the ALTERs run under one write lock,
+    and a column the other side added meanwhile is not an error."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        have = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+        for name, kind in ADDED_COLUMNS:
+            if name not in have:
+                try:
+                    conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+
 
 
 @dataclass(frozen=True)
@@ -137,6 +168,7 @@ class BotOutbox:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            add_columns(conn)
 
     def claim(self, now: int) -> Job | None:
         """The next due job, claimed for sending now (one at a time: a claim never waits behind other sends)."""
@@ -169,8 +201,8 @@ class BotOutbox:
         fence = "WHERE id = ? AND status = 'sending' AND claim_token = ?"
         with self._connect() as conn:
             if outcome.kind == "sent":
-                cur = conn.execute(f"UPDATE jobs SET status = 'sent', sent_at = ?, last_error_code = NULL, "
-                                   f"claim_token = NULL {fence}", (now, job.id, job.token))
+                cur = conn.execute(f"UPDATE jobs SET status = 'sent', sent_at = ?, message_id = ?, last_error_code = NULL, "
+                                   f"claim_token = NULL {fence}", (now, outcome.message_id, job.id, job.token))
             elif outcome.kind == "retry" and job.attempts < MAX_ATTEMPTS:
                 # A batch cancelled while this job was being sent: never queued again.
                 cur = conn.execute(f"UPDATE jobs SET status = CASE WHEN batch_id IN (SELECT batch_id FROM "
@@ -201,6 +233,44 @@ class BotOutbox:
             counts[outcome.kind] = counts.get(outcome.kind, 0) + 1
         if counts:
             logger.info("event=outbox_run %s", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+        return counts
+
+    async def run_deletes(self, delete: Callable[[int, int], Awaitable[None]], now: Callable[[], int]) -> dict[str, int]:
+        """Auto-delete (the admin's "delete after"): sent messages whose time has come are deleted in the user's chat,
+        AT MOST ONCE — a row is claimed (`deleting`) before Telegram is called, so neither a second loop nor a restart
+        after a crash tries it again. Telegram lets a bot delete its own message only within 48 h: one older than
+        DELETE_LIMIT_S at the moment of the call is `too_old`, never tried; a sent job without a message id (sent by an
+        older bot) is `no_message_id`. Outcomes: deleted / failed. Texts are never logged."""
+        counts: dict[str, int] = {}
+        with self._connect() as conn:
+            conn.execute("UPDATE jobs SET delete_status = 'no_message_id', deleted_at = ? WHERE status = 'sent' "
+                         "AND delete_after_s IS NOT NULL AND delete_status IS NULL AND message_id IS NULL", (now(),))
+            rows = conn.execute(
+                "SELECT id, user_id, message_id, sent_at FROM jobs WHERE status = 'sent' AND delete_after_s IS NOT NULL "
+                "AND delete_status IS NULL AND message_id IS NOT NULL AND sent_at + delete_after_s <= ? "
+                "ORDER BY sent_at LIMIT ?", (now(), BATCH)).fetchall()
+        for job_id, user_id, message_id, sent_at in rows:
+            t = now()
+            state = "too_old" if t - sent_at > DELETE_LIMIT_S else "deleting"
+            with self._connect() as conn:
+                claimed = conn.execute("UPDATE jobs SET delete_status = ?, deleted_at = ? WHERE id = ? "
+                                       "AND delete_status IS NULL", (state, t, job_id)).rowcount
+            if not claimed or state == "too_old":
+                if claimed:
+                    counts[state] = counts.get(state, 0) + 1
+                continue
+            try:
+                await delete(user_id, message_id)
+                state = "deleted"
+            except Exception as exc:  # noqa: BLE001 — the user may have deleted the chat; one try only
+                state = "failed"
+                logger.info("event=outbox_delete_failed type=%s", type(exc).__name__)
+            with self._connect() as conn:
+                conn.execute("UPDATE jobs SET delete_status = ?, deleted_at = ? WHERE id = ? AND delete_status = 'deleting'",
+                             (state, now(), job_id))
+            counts[state] = counts.get(state, 0) + 1
+        if counts:
+            logger.info("event=outbox_deletes %s", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
         return counts
 
     def purge(self, now: int) -> None:

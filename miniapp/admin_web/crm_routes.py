@@ -68,8 +68,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         # batch in bot-outbox.db; enqueue and release check that mark in the same file, so SQLite orders all three.
         # The jobs go in HELD (unclaimable) and the admin status is read again first, so a cancel already committed
         # in admin.db (its cancel_batch still to come) never has its jobs released either.
+        hours = item.get("deleteAfterHours")
         added = outbox.enqueue(jobs, batch_id=batch, not_before=item["scheduledAt"], admin_event_id=None,
-                               now=ctx.now(), hold=True)
+                               now=ctx.now(), hold=True, delete_after_s=hours * 3600 if hours else None)
         if next((b["status"] for b in crm.broadcasts() if b["id"] == broadcast_id), None) != "scheduled":
             outbox.cancel_batch(batch, ctx.now())
             return 0

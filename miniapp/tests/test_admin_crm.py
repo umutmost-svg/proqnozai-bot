@@ -337,3 +337,17 @@ def test_mb_id_set_search_unique_and_kept_out_of_the_journal(env):
     analyst = TestClient(client.app, base_url=ORIGIN)
     login(analyst, clock, secrets_, "analyst@x.test")
     assert post(analyst, f"/api/admin/users/{U1}/mb-id", analyst.get("/api/admin/auth/me").json()["csrf"], {"mbId": "1"}).status_code == 403
+
+
+def test_a_broadcast_can_ask_the_bot_to_delete_it_later(env):
+    """Auto-delete (owner 15.11): 1, 6, 12, 24 or 47 hours after sending (Telegram allows a bot 48 h); stored with the
+    draft and passed to every queued job."""
+    _, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    for bad in (2, 48, 0, True, "6"):
+        r = post(client, "/api/admin/broadcasts", csrf, {"name": "x", "body": "t", "deleteAfterHours": bad})
+        assert r.json()["error"] == "invalid_delete_after"
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "Временная", "body": "Текст", "rules": {"lang_in": ["ru"]},
+                                                      "deleteAfterHours": 6}).json()["id"]
+    draft = next(b for b in client.get("/api/admin/broadcasts").json()["items"] if b["id"] == bid)
+    assert draft["deleteAfterHours"] == 6
