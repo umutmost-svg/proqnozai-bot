@@ -236,3 +236,12 @@ def test_unlimited_analysis_is_owned_only_once_generated(credits: Credits) -> No
     credits.settle(UID, "ai:fd:5", h, generated=True)
     assert credits.hold(UID, "ai:fd:5") is None  # owned now
     assert credits.summary(UID)["balance"] == WELCOME
+
+
+def test_refunded_holds_are_neither_grants_nor_paid_forecasts(credits: Credits) -> None:
+    on(credits)
+    h = credits.hold(UID, "ai:fd:1")
+    credits.settle(UID, "ai:fd:1", h, generated=False)
+    credits.charge(UID, "quick:x")
+    totals = credits.store.credit_totals(int(credits.clock()), 0)
+    assert (totals["granted"], totals["spent"], totals["paidForecasts"]) == (WELCOME, COST, 1)

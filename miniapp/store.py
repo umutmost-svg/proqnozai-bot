@@ -635,9 +635,11 @@ class Store:
     def credit_totals(self, now: int, since: int) -> dict:
         acc = self._credit_read("SELECT COALESCE(SUM(balance), 0), COUNT(*), "
                                 "COALESCE(SUM(unlimited_until > ?), 0) FROM credit_accounts", (now,))
-        led = self._credit_read("SELECT COALESCE(SUM(CASE WHEN delta > 0 THEN delta END), 0), "
-                                "COALESCE(-SUM(CASE WHEN kind = 'spend' THEN delta END), 0), "
-                                "COALESCE(SUM(kind = 'spend'), 0) FROM credit_ledger WHERE at >= ?", (since,))
+        # A refund only undoes a spend (a failed AI generation): neither a grant nor a paid forecast (Codex r9 P2).
+        led = self._credit_read("SELECT COALESCE(SUM(CASE WHEN delta > 0 AND kind != 'refund' THEN delta END), 0), "
+                                "COALESCE(-SUM(CASE WHEN kind IN ('spend', 'refund') THEN delta END), 0), "
+                                "COALESCE(SUM(kind = 'spend'), 0) - COALESCE(SUM(kind = 'refund'), 0) "
+                                "FROM credit_ledger WHERE at >= ?", (since,))
         total, accounts, unlimited = acc[0] if acc else (0, 0, 0)
         granted, spent, forecasts = led[0] if led else (0, 0, 0)
         return {"inCirculation": total, "accounts": accounts, "unlimited": unlimited, "granted": granted,
