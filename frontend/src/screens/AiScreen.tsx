@@ -12,6 +12,7 @@ import { MarketValue, quoteOf, usePricesLive } from './ai/Market';
 import { Alternatives, MarketsBlock, ModelStats } from './ai/Model';
 import { LeanPick, PickCard } from './ai/PickCard';
 import { ProbabilityBlock } from './ai/ProbabilityBlock';
+import { NoCredits } from '../components/NoCredits';
 import { DataError } from '../data/provider';
 import { useAsync } from '../hooks/useAsync';
 import { useGoBack } from '../hooks/useGoBack';
@@ -231,6 +232,15 @@ export function AiScreen() {
     const wait = event.error instanceof DataError && event.error.reason === 'source_unavailable' ? event.error.retryAfter : undefined;
     const text = wait !== undefined ? t('ai.sourceBusyText', { n: wait }) : t('catalog.errorText');
     body = <ErrorState title={t('event.errorTitle')} text={text} onRetry={event.retry} />;
+  } else if (analysis.status === 'error' && analysis.error instanceof DataError && analysis.error.reason === 'no_credits') {
+    body = (
+      <>
+        <NoCredits />
+        <button type="button" className={ui.secondary} onClick={goBack}>
+          {t('ai.backToMatch')}
+        </button>
+      </>
+    );
   } else if (analysis.status === 'error') {
     const reason = analysis.error instanceof DataError ? analysis.error.reason : undefined;
     // The football data source's limit (shared or this user's share) carries its wait: never "AI busy".

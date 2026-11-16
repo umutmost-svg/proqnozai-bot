@@ -50,7 +50,7 @@ import type {
 import { MARKET_KEYS, QUICK_REASONS } from './models';
 import { FAMILIES, FAMILY, isMarketKey, marketsConsistent } from './markets';
 import { pickProbability } from './probabilities';
-import { DataError, type SportCoverage, type SportsDataProvider } from './provider';
+import { DataError, type CreditsInfo, type CreditsMb, type SportCoverage, type SportsDataProvider } from './provider';
 
 /** One API exchange may not hang the app (the loading screen waits on first data). */
 export const DATA_TIMEOUT_MS = 10_000;
@@ -304,7 +304,10 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     // The backend's work is bounded (a few provider requests, each with its own timeout, then
     // the model): a longer wait than an ordinary listing, never an endless one.
     const sent = clocksNow();
-    const body = await this.request(op, `/quick/pick?${params.toString()}`, { method: 'GET' }, false, QUICK_TIMEOUT_MS);
+    // With credits on, a pick spends credits: the server then wants the session's anti-CSRF header.
+    const csrf = this.options.getCsrfToken?.() ?? null;
+    const init: RequestInit = { method: 'GET', ...(csrf ? { headers: { 'X-CSRF-Token': csrf } } : {}) };
+    const body = await this.request(op, `/quick/pick?${params.toString()}`, init, false, QUICK_TIMEOUT_MS);
     const coverage = this.coverage('football');
     const answer = body ? readQuick(body, criteria, { from, to }, (raw) => this.readEvent(raw, { ...coverage, delayed: false }), sent) : null;
     if (!answer) throw new DataError(op, 'bad_response');
@@ -497,6 +500,28 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     return analysis;
   }
 
+  async getCredits(): Promise<CreditsInfo | null> {
+    const body = await this.request('credits', '/credits', { method: 'GET' }, false, DATA_TIMEOUT_MS);
+    const info = body ? readCredits(body) : null;
+    if (!info) throw new DataError('credits', 'bad_response');
+    return info;
+  }
+
+  async submitMbId(mbId: string): Promise<CreditsMb> {
+    const csrf = this.options.getCsrfToken?.() ?? null;
+    if (!csrf) throw new DataError('credits', 'unauthenticated');
+    const body = await this.request(
+      'credits',
+      '/credits/mb',
+      { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify({ mbId }) },
+      false,
+      DATA_TIMEOUT_MS,
+    );
+    const mb = body && isObj(body) ? readMb(body.mb) : null;
+    if (!mb) throw new DataError('credits', 'bad_response');
+    return mb;
+  }
+
   async getCachedAnalysis(eventId: string): Promise<AiAnalysis | null> {
     const event = await this.getEvent(eventId);
     if (!event) throw new DataError('ai', 'not_found');
@@ -565,6 +590,13 @@ export class BackendSportsDataProvider implements SportsDataProvider {
     if (response.status === 404 && nullOn404) return null;
     if (response.status === 401) throw new DataError(op, 'unauthenticated');
     if (response.status === 429) throw new DataError(op, 'limit_reached', retryAfterHeader(response));
+    // Credits (docs/miniapp/credits.md): not enough for one forecast; nothing was generated or charged.
+    if (response.status === 402) throw new DataError(op, 'no_credits');
+    // An MB ID the server refused carries its own code (invalid_mb_id / mb_taken / mb_locked).
+    if ((response.status === 400 || response.status === 409) && op === 'credits') {
+      const code = await errorCode(response);
+      throw new DataError(op, code ?? 'bad_response');
+    }
     if (response.status === 503) {
       const { reason, retryAfter } = await unavailable(response);
       throw new DataError(op, reason, retryAfter);
@@ -1567,4 +1599,35 @@ export function readEstimate(
     combined = pair;
   } else if (v.combined !== null) return null;
   return { legs, suitable, combined };
+}
+
+
+function readMb(raw: unknown): CreditsMb | null {
+  if (!isObj(raw)) return null;
+  const id = str(raw.id);
+  const state = raw.state;
+  if (!id || (state !== 'pending' && state !== 'approved' && state !== 'rejected')) return null;
+  return { id, state, reason: str(raw.reason) ?? null };
+}
+
+function readCredits(raw: Json): CreditsInfo | null {
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const balance = num(raw.balance);
+  const cost = num(raw.cost);
+  if (typeof raw.enabled !== 'boolean' || balance === null || cost === null) return null;
+  const monthly = isObj(raw.monthly) ? raw.monthly : {};
+  const history = Array.isArray(raw.history) ? raw.history : [];
+  return {
+    enabled: raw.enabled,
+    balance,
+    cost,
+    unlimitedUntil: num(raw.unlimitedUntil),
+    monthly: { amount: num(monthly.amount) ?? 0, nextAt: num(monthly.nextAt) },
+    history: history.flatMap((h) => {
+      if (!isObj(h)) return [];
+      const at = num(h.at), delta = num(h.delta), bal = num(h.balance), kind = str(h.kind);
+      return at !== null && delta !== null && bal !== null && kind ? [{ at, kind, delta, balance: bal }] : [];
+    }),
+    mb: raw.mb === null || raw.mb === undefined ? null : readMb(raw.mb),
+  };
 }

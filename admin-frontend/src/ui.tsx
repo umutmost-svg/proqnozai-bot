@@ -5,7 +5,7 @@ import { PERIOD_LABELS, useAuth, useMe, usePrefs, useServerMode, type Period } f
 
 const NAV = [
   ['/', 'Аналитика'], ['/users', 'Пользователи'], ['/inquiries', 'Обращения'], ['/dialogs', 'Диалоги'], ['/broadcasts', 'Рассылки'],
-  ['/segments', 'Сегменты'], ['/credits', 'Кредиты'], ['/referrals', 'Ссылки'], ['/outbox', 'Очередь'], ['/ads', 'Реклама'],
+  ['/segments', 'Сегменты'], ['/credits', 'Кредиты'], ['/mb', 'MB ID'], ['/referrals', 'Ссылки'], ['/outbox', 'Очередь'], ['/ads', 'Реклама'],
 ] as const;
 const NAV_DATA = [['/product', 'Продукт'], ['/forecasts', 'Прогнозы'], ['/ai', 'AI и расходы'], ['/sports-api', 'Спортивные API']] as const;
 const NAV_ADMIN = [['/system', 'Система'], ['/settings', 'Настройки']] as const;
@@ -85,7 +85,8 @@ export function Layout() {
           <div><div className="brand-name">SporBot</div><div className="brand-sub">CRM · админ</div></div>
         </div>
         {/* The queue lists recipients (personal data): hidden for roles without read_personal (the API refuses too). */}
-        <nav className="nav" aria-label="Разделы" style={{ marginTop: 24 }}>{NAV.filter(([to]) => to !== '/outbox' || me.admin.role !== 'analyst')
+        {/* The queue and MB IDs are personal data: hidden for roles without read_personal (the API refuses too). */}
+        <nav className="nav" aria-label="Разделы" style={{ marginTop: 24 }}>{NAV.filter(([to]) => (to !== '/outbox' && to !== '/mb') || me.admin.role !== 'analyst')
           .filter(([to]) => !promoter || PROMOTER_PAGES.has(to))
           .map(([to, label]) => [to, to === '/dialogs' && me.pilot.demoTelemetry ? 'Диалоги (демо)' : label] as const).map(link)}</nav>
         <div className="nav-caption">ДАННЫЕ</div>

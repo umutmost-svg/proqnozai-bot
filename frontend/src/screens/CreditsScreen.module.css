@@ -1,0 +1,59 @@
+.balance {
+  margin: 4px 0 6px;
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.mbState {
+  margin: 8px 0;
+  font-weight: 600;
+}
+
+.mbState[data-state='approved'] {
+  color: var(--success, #16a34a);
+}
+
+.mbState[data-state='rejected'] {
+  color: var(--danger, #dc2626);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.entry {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--separator, rgba(127, 127, 127, 0.2));
+}
+
+.entry:last-child {
+  border-bottom: 0;
+}
+
+.when {
+  display: block;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.plus,
+.minus {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.minus {
+  opacity: 0.8;
+}

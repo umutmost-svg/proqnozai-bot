@@ -3,7 +3,7 @@ import { buildDemoEvents, TOURNAMENTS } from './fixtures';
 import { ALL_TOURNAMENTS, filterEvents, namesMatch, pickTop, type EventQuery } from './filter';
 import { dayKeyOf, type DayKey } from '../time/zoned';
 import type { AiAnalysis, QuickAnswer, TopMatch, Competitor, SearchResults, Sport, SportEvent, TeamHit, TeamMatches, Tournament, TournamentCalendar, TournamentStandings } from './models';
-import { DataError, type SportCoverage, type SportsDataProvider } from './provider';
+import { DataError, type CreditsInfo, type CreditsMb, type SportCoverage, type SportsDataProvider } from './provider';
 
 export type DemoOperation = 'events' | 'search' | 'ai';
 
@@ -181,6 +181,15 @@ export class DemoDataProvider implements SportsDataProvider {
 
   getEvent(id: string): Promise<SportEvent | null> {
     return this.respond('events', () => this.events().find((e) => e.id === id) ?? null, this.latencyMs / 2);
+  }
+
+  /** The demo has no credits (no account): the credits screen says so. */
+  getCredits(): Promise<CreditsInfo | null> {
+    return Promise.resolve(null);
+  }
+
+  submitMbId(): Promise<CreditsMb> {
+    return Promise.reject(new DataError('credits', 'unavailable'));
   }
 
   /** The demo keeps the real flow: nothing exists until "Create AI analysis" is tapped; then it is kept. */

@@ -6,6 +6,7 @@ import { can, useLoad, useMe, usePrefs } from '../state';
 import { Avatar, Card, DangerDialog, Empty, ErrorBox, Loading, Status, Tag, tagTone, Toast, Topbar } from '../ui';
 import { CreditsDialog, TagDialog } from './dialogs';
 import { DayBars } from '../charts';
+import { CREDIT_KIND } from '../credits';
 
 /** Keyed by the id: moving to another user remounts the card, so no data or open dialog carries over. */
 export function UserCardRoute() {
@@ -118,10 +119,10 @@ function UserCard({ id }: { id: string }) {
                   <div className="bubble-box" key={m.id}>{m.body}<div className="small muted" style={{ marginTop: 4 }}>{localTime(m.at)} · {m.by} · {MSG_STATUS[m.status]}</div></div>
                 )))}
                 {tab === 'Кредиты' && (data.ledger.length === 0 ? <Empty title="Операций с кредитами не было" /> : (
-                  <table className="table"><thead><tr><th>Время</th><th>Операция</th><th className="num">Сумма</th><th className="num">Баланс</th><th>Причина</th></tr></thead>
+                  <table className="table"><thead><tr><th>Время</th><th>Операция</th><th className="num">Сумма</th><th className="num">Баланс</th></tr></thead>
                     <tbody>{data.ledger.map((l) => (
-                      <tr key={l.id}><td>{localTime(l.at)}</td><td><Tag tone={l.kind === 'debit' ? 'danger' : l.kind.startsWith('unlimited') ? 'violet' : 'success'}>{{ grant: 'Начисление', debit: 'Списание', unlimited: 'Безлимит', unlimited_off: 'Безлимит выкл.' }[l.kind]}</Tag></td>
-                        <td className="num">{l.kind.startsWith('unlimited') ? '∞' : l.delta > 0 ? `+${l.delta}` : l.delta}</td><td className="num">{l.balanceAfter}</td><td>{l.reason}<span className="sub">{l.by}</span></td></tr>
+                      <tr key={l.id}><td>{localTime(l.at)}</td><td><Tag tone={CREDIT_KIND[l.kind]?.[1] ?? 'neutral'}>{CREDIT_KIND[l.kind]?.[0] ?? l.kind}</Tag>{l.item && <span className="sub mono">{l.item}</span>}</td>
+                        <td className="num">{l.kind === 'unlimited' ? '∞' : l.delta > 0 ? `+${l.delta}` : l.delta}</td><td className="num">{l.balanceAfter}</td></tr>
                     ))}</tbody></table>
                 ))}
                 {tab === 'Сессии' && (data.sessions.length === 0 ? <Empty title="Сессий нет" /> : (
@@ -167,6 +168,12 @@ function UserCard({ id }: { id: string }) {
                 </div>
               </Card>
               <Card title="ID MB">
+                {data.mbLink && (
+                  <p className="small" style={{ marginTop: 0 }}>
+                    В Mini App: <b className="mono">{data.mbLink.mbId}</b> · {{ pending: 'на проверке', approved: 'подтверждён', rejected: 'отклонён' }[data.mbLink.state]}
+                    {data.mbLink.state === 'pending' && <> · <Link to="/mb">к проверке</Link></>}
+                  </p>
+                )}
                 {mbEdit === null ? (
                   <div className="row" style={{ justifyContent: 'space-between' }}>
                     {data.mbId ? <b className="mono">{data.mbId}</b> : <span className="muted">Не указан</span>}

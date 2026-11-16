@@ -242,16 +242,22 @@ export interface CrmUsersPage extends Page<CrmUserRow> {
 export interface TimelineItem {
   at: number; kind: string; title: string; detail: string | null; by?: string | null; status?: string; demo?: boolean;
 }
+/** A row of the Mini App's credit journal (docs/miniapp/credits.md). */
 export interface LedgerRow {
-  id: number; userId?: number; kind: 'grant' | 'debit' | 'unlimited' | 'unlimited_off'; delta: number; balanceAfter: number;
-  unlimitedUntil: number | null; reason: string; at: number; by: string | null; batch?: string | null;
+  id: number; userId: number; kind: 'welcome' | 'monthly' | 'spend' | 'grant' | 'debit' | 'unlimited'; delta: number;
+  balanceAfter: number; item: string | null; at: number;
 }
-export interface CrmProfile extends UserProfile {
+export interface MbLink {
+  userId: number; mbId: string; state: 'pending' | 'approved' | 'rejected'; submittedAt: number; decidedAt: number | null;
+  reason: string | null;
+}
+export interface CrmProfile extends Omit<UserProfile, 'credits'> {
   tags: string[];
   notes: { id: number; body: string; at: number; by: string | null }[];
   messages: { id: number; body: string; status: string; at: number; by: string | null }[];
   ledger: LedgerRow[];
-  credits: { balance: number; unlimitedUntil: number | null; enabled: false; unlimited: boolean };
+  credits: { balance: number | null; unlimitedUntil: number | null; enabled: boolean };
+  mbLink: MbLink | null;
   blocked: { reason: string; at: number } | null;
   mbId: string | null;
   timeline: TimelineItem[];
@@ -273,10 +279,11 @@ export interface Broadcast {
   deleteAfterHours?: number | null;
 }
 export interface CreditsPage {
-  enabled: false;
-  totals: { inCirculation: number; accounts: number; unlimited: number; granted: number; debited: number };
+  enabled: boolean;
+  totals: { inCirculation: number; accounts: number; unlimited: number; granted: number; spent: number; paidForecasts: number };
   ledger: LedgerRow[];
-  rules: { aiPrice: number; quickPrice: number; freePerDay: number; signupBonus: number; inviteBonus: number };
+  pendingCommands: number;
+  rules: { cost: number; welcome: number; monthly: number };
 }
 export interface DemoAudience {
   source: 'demo';

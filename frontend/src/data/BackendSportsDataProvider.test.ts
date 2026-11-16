@@ -433,3 +433,42 @@ describe('data mode', () => {
     expect(() => resolveDataMode('live')).toThrow();
   });
 });
+
+describe('BackendSportsDataProvider: credits', () => {
+  const credits = {
+    enabled: true,
+    balance: 40,
+    cost: 10,
+    unlimitedUntil: null,
+    monthly: { amount: 50, nextAt: null },
+    history: [{ at: 1, kind: 'spend', delta: -10, balance: 40, item: 'ai:fd:1' }, { at: 0, kind: 'welcome' }],
+    mb: { id: 'MB1', state: 'pending', submittedAt: 1, decidedAt: null, reason: null },
+  };
+
+  it('reads the balance, history and MB ID (malformed history rows are dropped)', async () => {
+    const { data } = provider([json(200, credits)]);
+    const info = await data.getCredits();
+    expect(info).toMatchObject({ enabled: true, balance: 40, cost: 10, mb: { id: 'MB1', state: 'pending' } });
+    expect(info!.history).toEqual([{ at: 1, kind: 'spend', delta: -10, balance: 40 }]);
+  });
+
+  it('sends the MB ID with the anti-CSRF header and passes the refusal code on', async () => {
+    const { data, fetchImpl } = provider([json(409, { error: 'mb_taken' })]);
+    await expect(data.submitMbId('MB1')).rejects.toMatchObject({ reason: 'mb_taken' });
+    const init = fetchImpl.mock.calls[0]![1]!;
+    expect((init.headers as Record<string, string>)['X-CSRF-Token']).toBe('csrf-test');
+  });
+
+  it('turns HTTP 402 into "no_credits" for an analysis and a quick pick, which carries the CSRF header', async () => {
+    const { data, fetchImpl } = provider([json(402, { error: 'no_credits', balance: 0, cost: 10 })]);
+    const pick = data.quickPick(
+      { mode: 'single', market: 'any', risk: 'balanced', size: 1, period: 'today', tournaments: [] } as never,
+      new Date('2026-11-08T10:00:00Z'),
+      'Asia/Baku',
+    );
+    await expect(pick).rejects.toBeInstanceOf(DataError);
+    await expect(pick).rejects.toMatchObject({ reason: 'no_credits' });
+    const init = fetchImpl.mock.calls[0]![1]!;
+    expect((init.headers as Record<string, string>)['X-CSRF-Token']).toBe('csrf-test');
+  });
+});

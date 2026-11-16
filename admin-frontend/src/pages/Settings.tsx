@@ -19,6 +19,7 @@ export function SettingsTabs() {
 const FEATURES: { key: string; name: string; desc: string }[] = [
   { key: 'ai.enabled', name: 'AI-разборы', desc: 'Включение и отключение новых платных запросов модели' },
   { key: 'quick.enabled', name: 'Быстрый прогноз', desc: 'Доступность действия и купонов в Mini App' },
+  { key: 'credits.enabled', name: 'Кредиты за прогнозы', desc: 'Любой прогноз стоит 10 кредитов; без кредитов — экран «Мои кредиты». Выключено: прогнозы бесплатны' },
 ];
 const LIMITS: { key: string; name: string }[] = [
   { key: 'ai.per_user_daily', name: 'AI-разборов на пользователя в сутки' },

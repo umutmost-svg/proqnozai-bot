@@ -8,6 +8,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { PartnerOffer } from '../components/PartnerOffer';
 import { ALL_TOURNAMENTS } from '../data/filter';
 import { quickPicks } from '../data/tournaments';
+import { NoCredits } from '../components/NoCredits';
 import { DataError } from '../data/provider';
 import type { PriceDeadline, QuickAnswer, QuickCriteria, QuickEstimate, QuickLeg, QuickPreview, QuickReason } from '../data/models';
 import { QUICK_REASONS } from '../data/models';
@@ -603,6 +604,7 @@ function PickError({ reason, onRetry }: { reason: string | undefined; onRetry: (
   if (reason === 'unauthenticated') return <ErrorState title={t('quick.errorTitle')} text={t('auth.sessionExpired')} onRetry={onRetry} />;
   if (reason === 'bad_range') return <ErrorState title={t('quick.clockTitle')} text={t('quick.clockText')} onRetry={onRetry} />;
   if (reason === 'limit_reached') return <ErrorState title={t('quick.busyTitle')} text={t('quick.busyText')} onRetry={onRetry} />;
+  if (reason === 'no_credits') return <NoCredits />;
   if (reason && reason !== 'network' && reason !== 'bad_response' && reason !== 'bad_range') {
     return <ErrorState title={t('quick.sourceTitle')} text={t('quick.sourceText')} onRetry={onRetry} />;
   }

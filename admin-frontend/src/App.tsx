@@ -8,6 +8,7 @@ import { AiCosts, SportsApi, System } from './pages/Telemetry';
 import { UserCardRoute } from './pages/UserCard';
 import { Users } from './pages/Users';
 import { Referrals } from './pages/Referrals';
+import { MbQueue } from './pages/MbQueue';
 import { Inquiries } from './pages/Inquiries';
 import { AdsPlaceholder, Outbox, Product, SettingsRoles } from './pages/Ops';
 import { AuthProvider, PrefsProvider, useAuth } from './state';
@@ -40,6 +41,7 @@ function Gate() {
         <Route path="settings/journal" element={<SettingsJournal />} />
         <Route path="credits" element={<Credits />} />
         <Route path="referrals" element={<Referrals />} />
+        <Route path="mb" element={<MbQueue />} />
         <Route path="inquiries" element={<Inquiries />} />
         <Route path="outbox" element={<Outbox />} />
         <Route path="product" element={<Product />} />

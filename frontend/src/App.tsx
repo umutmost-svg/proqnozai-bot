@@ -6,6 +6,7 @@ import { AppLoadingGate } from './loading/AppLoadingGate';
 import { AiScreen } from './screens/AiScreen';
 import { TournamentScreen } from './screens/TournamentScreen';
 import { TeamScreen } from './screens/TeamScreen';
+import { CreditsScreen } from './screens/CreditsScreen';
 import { SupportScreen } from './screens/SupportScreen';
 import { CatalogScreen } from './screens/CatalogScreen';
 import { EventScreen } from './screens/EventScreen';
@@ -66,6 +67,7 @@ export function AppRoutes() {
       <Route path="/team/:id" element={<TeamScreen />} />
       <Route path="/quick" element={<QuickScreen />} />
       <Route path="/profile/support" element={<SupportScreen />} />
+      <Route path="/profile/credits" element={<CreditsScreen />} />
       <Route path="/profile" element={<ProfileScreen />} />
       <Route path="/profile/language" element={<LanguageScreen />} />
       <Route path="/profile/timezone" element={<TimezoneScreen />} />

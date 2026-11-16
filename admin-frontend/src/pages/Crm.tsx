@@ -5,6 +5,7 @@ import { localTime, num, parseLocalInput, toLocalInput, zoneLabel } from '../for
 import { can, useLoad, useMe, usePrefs, useServerMode } from '../state';
 import { Avatar, Card, DangerDialog, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, PageHead, Tag, tagTone, Toast } from '../ui';
 import { CreditsDialog } from './dialogs';
+import { CREDIT_KIND } from '../credits';
 
 const STATUS: Record<Broadcast['status'], [string, 'neutral' | 'accent' | 'success' | 'warning']> = {
   draft: ['Черновик', 'neutral'], scheduled: ['Запланирована', 'accent'], sent: ['Отправлена', 'success'], cancelled: ['Отменена', 'warning'],
@@ -344,9 +345,6 @@ export function Segments() {
 
 // ---------------- credits ----------------
 
-const KIND: Record<string, [string, 'success' | 'danger' | 'violet']> = {
-  grant: ['Начисление', 'success'], debit: ['Списание', 'danger'], unlimited: ['Безлимит', 'violet'], unlimited_off: ['Безлимит выкл.', 'violet'],
-};
 
 export function Credits() {
   const me = useMe();
@@ -360,35 +358,35 @@ export function Credits() {
   const manage = can(me.admin.role, 'manage_users');
   return (
     <>
-      <PageHead title="Кредиты" subtitle="Балансы, ручные операции и правила — подготовлено к запуску" />
-      <div className="banner warn" style={{ marginBottom: 16 }}>Кредиты выключены: прогнозы бесплатны и без ограничений. Операции записываются в журнал, но не списываются в Mini App и не ограничивают доступ.</div>
+      <PageHead title="Кредиты" subtitle="Балансы и операции пользователей Mini App; ручные начисления уходят в Mini App за несколько секунд" />
+      {data && !data.enabled && <div className="banner warn" style={{ marginBottom: 16 }}>Списание выключено: прогнозы бесплатны. Балансы, стартовые и ежемесячные кредиты и MB ID уже работают. Включить — в Настройках → «Кредиты за прогнозы».</div>}
+      {data && data.pendingCommands > 0 && <p className="small muted">В очереди для Mini App: {num(data.pendingCommands)} операций (применяются в течение нескольких секунд).</p>}
       {error ? <ErrorBox error={error} onRetry={reload} /> : loading && !data ? <Loading rows={6} /> : data && (
         <>
           <Metrics>
             <Metric label="В обороте" value={num(data.totals.inCirculation)} caption={`на ${num(data.totals.accounts)} счетах`} />
-            <Metric label="Начислено за 30 дней" value={num(data.totals.granted)} caption="ручные и бонусы" />
-            <Metric label="Списано за 30 дней" value={num(data.totals.debited)} caption="только вручную" />
+            <Metric label="Начислено за 30 дней" value={num(data.totals.granted)} caption="стартовые, ежемесячные, вручную" />
+            <Metric label="Потрачено на прогнозы за 30 дней" value={num(data.totals.spent)} caption={`${num(data.totals.paidForecasts)} прогнозов`} />
             <Metric label="Безлимит" value={num(data.totals.unlimited)} caption="пользователей сейчас" />
           </Metrics>
           <div className="grid card-3" style={{ gridTemplateColumns: 'minmax(0,1fr) 380px' }}>
             <section className="table-card" aria-label="Журнал операций">
               <div className="card-head" style={{ padding: '14px 16px', margin: 0 }}>
                 <h2 className="card-title">Журнал операций</h2>
-                <div className="tags">{[['', 'Все'], ['grant', 'Начисления'], ['debit', 'Списания'], ['unlimited', 'Безлимит']].map(([k, l]) => (
+                <div className="tags">{[['', 'Все'], ['spend', 'Прогнозы'], ['welcome', 'Стартовые'], ['monthly', 'Ежемесячные'], ['grant', 'Начисления'], ['debit', 'Списания'], ['unlimited', 'Безлимит']].map(([k, l]) => (
                   <button key={k} type="button" className={`tag ${kind === k ? 'accent' : ''}`} style={{ cursor: 'pointer' }} aria-pressed={kind === k} onClick={() => setKind(k ?? '')}>{l}</button>
                 ))}</div>
               </div>
               {data.ledger.length === 0 ? <Empty title="Операций пока нет" /> : (
                 <table className="table">
-                  <thead><tr><th>Время</th><th>Пользователь</th><th>Операция</th><th className="num">Сумма</th><th className="num">Баланс</th><th>Кто и почему</th></tr></thead>
+                  <thead><tr><th>Время</th><th>Пользователь</th><th>Операция</th><th className="num">Сумма</th><th className="num">Баланс</th></tr></thead>
                   <tbody>{data.ledger.map((l) => (
                     <tr key={l.id}>
                       <td>{localTime(l.at)}</td>
-                      <td><Link to={`/users/${l.userId}`} className="mono">{l.userId}</Link>{l.batch && <span className="sub">групповая</span>}</td>
-                      <td><Tag tone={KIND[l.kind]![1]}>{KIND[l.kind]![0]}</Tag></td>
-                      <td className="num strong">{l.kind.startsWith('unlimited') ? '∞' : l.delta > 0 ? `+${l.delta}` : l.delta}</td>
+                      <td><Link to={`/users/${l.userId}`} className="mono">{l.userId}</Link></td>
+                      <td><Tag tone={CREDIT_KIND[l.kind]?.[1] ?? 'neutral'}>{CREDIT_KIND[l.kind]?.[0] ?? l.kind}</Tag></td>
+                      <td className="num strong">{l.kind === 'unlimited' ? '∞' : l.delta > 0 ? `+${l.delta}` : l.delta}</td>
                       <td className="num">{l.balanceAfter}</td>
-                      <td>{l.reason}<span className="sub">{l.by}</span></td>
                     </tr>
                   ))}</tbody>
                 </table>
@@ -405,13 +403,12 @@ export function Credits() {
                 </button>
                 {users.data && users.data.total > users.data.items.length && <p className="small muted">Пока групповая операция — до 100 человек за раз.</p>}
               </Card>
-              <Card title="Правила" action={<Tag tone="warning">выкл</Tag>}>
-                {[['Стоимость AI-разбора', `${data.rules.aiPrice} кредитов`], ['Быстрый прогноз', data.rules.quickPrice ? `${data.rules.quickPrice}` : 'бесплатно'],
-                  ['Бесплатно в день', `${data.rules.freePerDay} разбора`], ['Бонус за регистрацию', `${data.rules.signupBonus} кредитов`], ['Бонус за приглашение', `${data.rules.inviteBonus} кредитов`]].map(([k, v]) => (
-                  <div className="kv-row" key={k}><span>{k}</span><b className="muted">{v}</b></div>
+              <Card title="Правила" action={<Tag tone={data.enabled ? 'success' : 'warning'}>{data.enabled ? 'списание вкл.' : 'списание выкл.'}</Tag>}>
+                {[['Любой прогноз (быстрый, купон, AI)', `${data.rules.cost} кредитов`], ['Стартовые новичку', `${data.rules.welcome} кредитов`],
+                  ['Ежемесячно, если баланс < цены прогноза', `+${data.rules.monthly} кредитов`]].map(([k, v]) => (
+                  <div className="kv-row" key={k}><span>{k}</span><b>{v}</b></div>
                 ))}
-                <div className="kv-row" style={{ marginTop: 6 }}><span>Списывать кредиты в Mini App</span><button type="button" className="toggle" role="switch" aria-checked={false} disabled aria-label="Списывать кредиты" /></div>
-                <p className="small muted" style={{ marginBottom: 0 }}>Включение — отдельный этап и решение владельца: цены, лимиты, уведомления пользователей.</p>
+                <p className="small muted" style={{ marginBottom: 0 }}>Списание — только после успешной генерации; повтор того же прогноза бесплатен.</p>
               </Card>
             </div>
           </div>

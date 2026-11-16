@@ -30,6 +30,23 @@ export interface SportCoverage {
  * Data boundary of the Mini App: the offline demo provider (M1) and the backend
  * provider (M3, real data) implement the same interface.
  */
+/** Credits of the signed-in user (docs/miniapp/credits.md). */
+export interface CreditsMb {
+  id: string;
+  state: 'pending' | 'approved' | 'rejected';
+  reason?: string | null;
+}
+export interface CreditsInfo {
+  /** Forecasts require and spend credits (the owner's switch). */
+  enabled: boolean;
+  balance: number;
+  cost: number;
+  unlimitedUntil: number | null;
+  monthly: { amount: number; nextAt: number | null };
+  history: { at: number; kind: string; delta: number; balance: number }[];
+  mb: CreditsMb | null;
+}
+
 export interface SportsDataProvider {
   readonly isDemo: boolean;
   /** Last known coverage for a sport (synchronous; updated by every response). */
@@ -57,6 +74,10 @@ export interface SportsDataProvider {
    * has not been created yet. Opening the AI screen uses only this.
    */
   getCachedAnalysis(eventId: string): Promise<AiAnalysis | null>;
+  /** The user's credits; null where there are none (the demo). */
+  getCredits(): Promise<CreditsInfo | null>;
+  /** Enters the user's MB ID for the owner to approve (DataError reason: invalid_mb_id | mb_taken | mb_locked). */
+  submitMbId(mbId: string): Promise<CreditsMb>;
   /** The AI analysis can be requested for real events (always true for the demo). */
   aiAvailable(): boolean;
   /** The sport has a data source here (real mode: football only; the demo shows every sport). */

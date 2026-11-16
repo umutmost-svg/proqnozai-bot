@@ -98,7 +98,7 @@ type Row = { label: MessageKey; to?: string };
 const GROUPS: { title: MessageKey; rows: Row[] }[] = [
   {
     title: 'profile.groupPersonal',
-    rows: [{ label: 'profile.favorites' }, { label: 'profile.history' }, { label: 'profile.notifications' }],
+    rows: [{ label: 'profile.credits', to: '/profile/credits' }, { label: 'profile.favorites' }, { label: 'profile.history' }, { label: 'profile.notifications' }],
   },
   {
     title: 'profile.groupSettings',
