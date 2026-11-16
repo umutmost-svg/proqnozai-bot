@@ -235,7 +235,7 @@ volume `sporbot-miniapp-data` **только на чтение** (`/data:ro`) п
 | `MINIAPP_FOOTBALL_DATA_COMPETITIONS` | `all` | |
 | `MINIAPP_ODDS_CATALOG` / `MINIAPP_ODDS_SOURCE_MAX_PER_CYCLE` | `true` / `20` — коэффициенты по всему каталогу из собственного источника Mostbet (`docs/miniapp/odds-catalog.md`); 20 запросов цен за 5 мин, пока бот работает с того же IP, до 40 после его отключения | |
 | `MINIAPP_ANTHROPIC_API_KEY` | **на публичном запуске НЕ задавать**: AI-разбор выключен (кнопки нет, вызова модели нет) до проверки качества 20–22.11 и исправления условий из `tech-debt.md` («Условия включения AI-разбора»). Потом — ключ Anthropic **только для Mini App** (не `ANTHROPIC_API_KEY` бота) с лимитом расходов | да (позже) |
-| `MINIAPP_AI_PER_USER_DAILY` / `MINIAPP_AI_DAILY_BUDGET` | `10` / `200` (≈ $0,007 за анализ → до ~$1,5 в сутки) | |
+| `MINIAPP_AI_PER_USER_DAILY` / `MINIAPP_AI_DAILY_BUDGET` | прод: `10` / `100000` — решение владельца 16.11: только личный лимит, общего потолка нет (≈ $0,03–0,10 за разбор; расход — Админка → AI и расходы) | |
 | `MINIAPP_ODDS_FEED_ENABLED` | `true` — общий выключатель показа коэффициентов: `false` выключает и собственный источник Mostbet, и приём от бота | |
 | `MINIAPP_LOGINS_ENABLED` | `true` (аварийно — `false`) | |
 

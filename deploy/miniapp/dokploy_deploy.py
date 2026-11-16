@@ -177,8 +177,9 @@ if POLICY_KEY:
     env_vars |= {"MINIAPP_ADS_ENABLED": "true", "MINIAPP_ADS_POLICY_PUBLIC_KEY": POLICY_KEY,
                  "MINIAPP_ACCESS_POLICY_PUBLIC_KEY": POLICY_KEY, "MINIAPP_REFERRALS_ENABLED": "true"}
 if AI_KEY:
-    # Closed pilot limits (model calls; cache hits are free): per Telegram user and for the whole app, per UTC day.
-    env_vars |= {"MINIAPP_ANTHROPIC_API_KEY": AI_KEY, "MINIAPP_AI_PER_USER_DAILY": "10", "MINIAPP_AI_DAILY_BUDGET": "100"}
+    # Model calls per UTC day (cache hits are free). Owner 16.11: 10 per Telegram user and no app-wide cap — the budget
+    # is set to the settings' maximum (100000), i.e. only the per-user limit applies.
+    env_vars |= {"MINIAPP_ANTHROPIC_API_KEY": AI_KEY, "MINIAPP_AI_PER_USER_DAILY": "10", "MINIAPP_AI_DAILY_BUDGET": "100000"}
 for k, v in env_vars.items():
     if "\n" in v or not v:
         sys.exit(f"STOP: bad value for {k}")
