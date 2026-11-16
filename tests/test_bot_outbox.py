@@ -93,6 +93,24 @@ async def test_the_pause_survives_a_restart(tmp_path):
     assert await restarted.run_once(ok, lambda: NOW + 60) == {"sent": 3}
 
 
+async def test_a_pause_by_another_bot_process_stops_this_one_mid_batch_and_is_never_shortened(tmp_path):
+    admin, bot = setup(tmp_path)
+    other = BotOutbox(tmp_path / "bot-outbox.db")
+    admin.enqueue([(f"msg:{i}", 10 + i, "x", []) for i in range(4)], batch_id=None, not_before=NOW,
+                  admin_event_id=None, now=NOW)
+    sent = []
+
+    async def send(job):
+        sent.append(job.user_id)
+        if len(sent) == 1:
+            other._pause(NOW + 100)  # the other process meets a flood limit meanwhile
+        return Outcome("sent")
+
+    assert await bot.run_once(send, lambda: NOW) == {"sent": 1}
+    other._pause(NOW + 10)  # an older, shorter deadline never replaces the longer one
+    assert BotOutbox(tmp_path / "bot-outbox.db").paused_until == NOW + 100
+
+
 async def test_a_network_error_costs_one_job_never_the_batch(tmp_path):
     admin, bot = setup(tmp_path)
     admin.enqueue([(f"msg:{i}", 10 + i, "x", []) for i in range(5)], batch_id=None, not_before=NOW,

@@ -17,6 +17,7 @@ jobs are cleared after TEXT_RETENTION_DAYS, rows deleted after ROW_RETENTION_DAY
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -216,11 +217,16 @@ class BotOutbox:
     def _pause(self, until: int) -> None:
         """No job before `until`, also after a restart. Written BEFORE the outcome is recorded: a stop between the two
         leaves the pause in place, never a recorded failure without its pause."""
+        # Only ever extended, under an exclusive lock: the file's deadline (another bot process may have written a
+        # longer one) is read and kept inside the same critical section, so no writer can shorten it.
         self.paused_until = max(self.paused_until, until)
-        tmp = self._pause_file.with_name(self._pause_file.name + ".tmp")
+        tmp = self._pause_file.with_name(f"{self._pause_file.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
         try:
-            tmp.write_text(str(self.paused_until))
-            os.replace(tmp, self._pause_file)
+            with open(self._pause_file.with_name(self._pause_file.name + ".lock"), "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                self.paused_until = max(self.paused_until, self._read_pause())
+                tmp.write_text(str(self.paused_until))
+                os.replace(tmp, self._pause_file)
         except OSError as exc:  # the in-memory pause still holds for this process
             logger.warning("event=outbox_pause_not_saved type=%s", type(exc).__name__)
 
@@ -248,10 +254,11 @@ class BotOutbox:
                        is_banned: Callable[[int], bool] = lambda user_id: False) -> dict[str, int]:
         """Claims due jobs and sends them through `send` (the bot's own sender). Returns counts by outcome."""
         counts: dict[str, int] = {}
-        self.paused_until = max(self.paused_until, self._read_pause())  # another bot process may have paused it
-        if now() < self.paused_until:
-            return counts
         for _ in range(BATCH):
+            # Before every claim: another bot process may have paused the outbox since the last one.
+            self.paused_until = max(self.paused_until, self._read_pause())
+            if now() < self.paused_until:
+                break
             job = self.claim(now())
             if job is None:
                 break
