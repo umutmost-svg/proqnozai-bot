@@ -54,6 +54,8 @@ export function Users() {
   const [selectedIn, setSelectedIn] = useState(listKey);
   if (selectedIn !== listKey) { setSelectedIn(listKey); setSelected(new Set()); }
   const filtered = Boolean(params.get('q') || chip || tag || segment || lang || ref);
+  // The search text is not an audience rule: with only a search, a segment or broadcast would mean "everyone".
+  const onlySearch = Boolean(params.get('q')) && !(chip || tag || segment || lang || ref);
   const toggle = (id: number) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const allOnPage = data ? data.items.length > 0 && data.items.every((u) => selected.has(u.id)) : false;
   const audienceRules = () => {
@@ -72,8 +74,8 @@ export function Users() {
     <>
       <PageHead title="Пользователи" subtitle={`${num(data?.counts.total)} человек · карточки, теги, сегменты и массовые действия`}
         actions={<>
-          <button type="button" className="btn" onClick={() => navigate(`/segments?draft=${encodeURIComponent(JSON.stringify(audienceRules()))}`)} disabled={!filtered || !manage || Boolean(ref)} title={ref ? 'Фильтр по ссылке нельзя сохранить в сегмент' : undefined}>Сохранить как сегмент</button>
-          <button type="button" className="btn primary" onClick={() => navigate(`/broadcasts/new?rules=${encodeURIComponent(JSON.stringify(audienceRules()))}`)} disabled={!manage || Boolean(ref)} title={ref ? 'Фильтр по ссылке не переносится в рассылку' : undefined}>Рассылка по фильтру</button>
+          <button type="button" className="btn" onClick={() => navigate(`/segments?draft=${encodeURIComponent(JSON.stringify(audienceRules()))}`)} disabled={!filtered || !manage || Boolean(ref) || onlySearch} title={ref ? 'Фильтр по ссылке нельзя сохранить в сегмент' : onlySearch ? 'Поиск по тексту не сохраняется в сегмент' : undefined}>Сохранить как сегмент</button>
+          <button type="button" className="btn primary" onClick={() => navigate(`/broadcasts/new?rules=${encodeURIComponent(JSON.stringify(audienceRules()))}`)} disabled={!manage || Boolean(ref) || Boolean(params.get('q'))} title={ref ? 'Фильтр по ссылке не переносится в рассылку' : params.get('q') ? 'Поиск по тексту не переносится в рассылку: уберите его или сохраните сегмент' : undefined}>Рассылка по фильтру</button>
         </>} />
       <div className="chips" role="group" aria-label="Быстрые сегменты">
         {CHIPS.map(([key, label]) => (

@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     delete_after_s  INTEGER,
     message_id      INTEGER,
     delete_status   TEXT,
-    deleted_at      INTEGER
+    deleted_at      INTEGER,
+    parse_mode      TEXT
 );
 CREATE INDEX IF NOT EXISTS jobs_due ON jobs(status, not_before);
 CREATE INDEX IF NOT EXISTS jobs_batch ON jobs(batch_id);
@@ -95,7 +96,7 @@ CREATE TABLE IF NOT EXISTS cancelled_batches (
 
 # Columns added after the first release (auto-delete, 15.11): added to existing files by both sides' init_schema.
 ADDED_COLUMNS = (("delete_after_s", "INTEGER"), ("message_id", "INTEGER"), ("delete_status", "TEXT"),
-                 ("deleted_at", "INTEGER"))
+                 ("deleted_at", "INTEGER"), ("parse_mode", "TEXT"))  # parse_mode: 'HTML' for broadcasts, 17.11
 
 
 def add_columns(conn) -> None:
@@ -126,6 +127,7 @@ class Job:
     buttons: list[dict]
     attempts: int
     token: str
+    parse_mode: str | None = None  # 'HTML' (broadcasts) or None (plain text)
 
 
 @dataclass(frozen=True)
@@ -193,7 +195,7 @@ class BotOutbox:
                              "WHERE status = 'sending' AND claimed_at <= ?", (now - STUCK_S,))
                 conn.execute("UPDATE jobs SET status = 'expired' WHERE status = 'queued' AND expires_at <= ?", (now,))
                 row = conn.execute(
-                    "SELECT id, user_id, text, buttons_json, attempts FROM jobs WHERE status = 'queued' "
+                    "SELECT id, user_id, text, buttons_json, attempts, parse_mode FROM jobs WHERE status = 'queued' "
                     "AND not_before <= ? AND expires_at > ? AND (retry_at IS NULL OR retry_at <= ?) "
                     "AND (batch_id IS NULL OR batch_id NOT IN (SELECT batch_id FROM cancelled_batches)) "
                     "ORDER BY not_before, created_at LIMIT 1", (now, now, now)).fetchone()
@@ -201,7 +203,8 @@ class BotOutbox:
                 if row is not None and conn.execute(
                         "UPDATE jobs SET status = 'sending', claimed_at = ?, claim_token = ?, attempts = attempts + 1 "
                         "WHERE id = ? AND status = 'queued'", (now, token, row[0])).rowcount:
-                    job = Job(row[0], row[1], row[2], json.loads(row[3]), row[4] + 1, token)
+                    job = Job(row[0], row[1], row[2], json.loads(row[3]), row[4] + 1, token,
+                              row[5] if row[5] == "HTML" else None)
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
@@ -303,7 +306,13 @@ class BotOutbox:
         DELETE_LIMIT_S at the moment of the call is `too_old`, never tried; a sent job without a message id (sent by an
         older bot) is `no_message_id`. Outcomes: deleted / failed. Texts are never logged."""
         counts: dict[str, int] = {}
+        self.paused_until = max(self.paused_until, self._read_pause())
+        if now() < self.paused_until:
+            return counts  # a flood limit or an outage pauses deletes too (CRM audit P1: they were lost for good)
         with self._connect() as conn:
+            # A claim left by a crash mid-call: tried again (deleting a deleted message only fails, harmlessly).
+            conn.execute("UPDATE jobs SET delete_status = NULL WHERE delete_status = 'deleting' AND deleted_at <= ?",
+                         (now() - STUCK_S,))
             conn.execute("UPDATE jobs SET delete_status = 'no_message_id', deleted_at = ? WHERE status = 'sent' "
                          "AND delete_after_s IS NOT NULL AND delete_status IS NULL AND message_id IS NULL", (now(),))
             rows = conn.execute(
@@ -320,16 +329,28 @@ class BotOutbox:
                 if claimed:
                     counts[state] = counts.get(state, 0) + 1
                 continue
+            transient = None
             try:
                 await delete(user_id, message_id)
                 state = "deleted"
-            except Exception as exc:  # noqa: BLE001 — the user may have deleted the chat; one try only
-                state = "failed"
+            except Exception as exc:  # noqa: BLE001 — classified by type, never logged with its text
+                transient = classify(exc)
+                if transient.code in ("rate_limited", "unknown_outcome"):
+                    state = None  # Telegram's limit or the network: tried again after the pause (before 48 h ends)
+                else:
+                    transient, state = None, "failed"  # the user deleted the chat, the message is gone, …
                 logger.info("event=outbox_delete_failed type=%s", type(exc).__name__)
             with self._connect() as conn:
                 conn.execute("UPDATE jobs SET delete_status = ?, deleted_at = ? WHERE id = ? AND delete_status = 'deleting'",
                              (state, now(), job_id))
-            counts[state] = counts.get(state, 0) + 1
+            counts[state or "retry"] = counts.get(state or "retry", 0) + 1
+            if transient is not None:
+                if transient.code == "rate_limited":
+                    self._pause(now() + max(1, transient.retry_after))
+                else:
+                    self._network_pause = min(NETWORK_PAUSE_MAX_S, max(NETWORK_PAUSE_S, self._network_pause * 2))
+                    self._pause(now() + self._network_pause)
+                break
         if counts:
             logger.info("event=outbox_deletes %s", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
         return counts

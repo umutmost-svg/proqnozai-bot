@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     delete_after_s  INTEGER,
     message_id      INTEGER,
     delete_status   TEXT,
-    deleted_at      INTEGER
+    deleted_at      INTEGER,
+    parse_mode      TEXT
 );
 CREATE INDEX IF NOT EXISTS jobs_due ON jobs(status, not_before);
 CREATE INDEX IF NOT EXISTS jobs_batch ON jobs(batch_id);
@@ -64,7 +65,7 @@ CREATE TABLE IF NOT EXISTS cancelled_batches (
 
 # Columns added after the first release (auto-delete, 15.11): added to existing files by both sides' init_schema.
 ADDED_COLUMNS = (("delete_after_s", "INTEGER"), ("message_id", "INTEGER"), ("delete_status", "TEXT"),
-                 ("deleted_at", "INTEGER"))
+                 ("deleted_at", "INTEGER"), ("parse_mode", "TEXT"))  # parse_mode: 'HTML' for broadcasts, 17.11
 
 
 def add_columns(conn) -> None:
@@ -110,7 +111,8 @@ class Outbox:
             os.chmod(self.path, 0o660)  # admin writes jobs, the bot writes outcomes (one group on the volume)
 
     def enqueue(self, jobs: Iterable[tuple[str, int, str, list[dict]]], *, batch_id: str | None, not_before: int,
-                admin_event_id: int | None, now: int, hold: bool = False, delete_after_s: int | None = None) -> int:
+                admin_event_id: int | None, now: int, hold: bool = False, delete_after_s: int | None = None,
+                parse_mode: str | None = None) -> int:
         """jobs: (idempotency_key, user_id, text, buttons). One transaction; existing keys are left as they are.
         `hold`: the new jobs stay unclaimable until `release_batch`. Returns how many new jobs were queued."""
         added = 0
@@ -126,11 +128,11 @@ class Outbox:
                         raise ValueError("text")
                     added += conn.execute(
                         "INSERT OR IGNORE INTO jobs (id, idempotency_key, user_id, batch_id, text, buttons_json, "
-                        "not_before, expires_at, status, retry_at, admin_event_id, created_at, delete_after_s) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
+                        "not_before, expires_at, status, retry_at, admin_event_id, created_at, delete_after_s, parse_mode) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
                         (str(uuid.uuid4()), key, user_id, batch_id, text, json.dumps(buttons), not_before,
                          not_before + JOB_TTL_S, HOLD if hold else None, admin_event_id, now,
-                         delete_after_s)).rowcount
+                         delete_after_s, parse_mode)).rowcount
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
@@ -160,6 +162,26 @@ class Outbox:
                 conn.execute("ROLLBACK")
                 raise
         return n
+
+    def unreachable_users(self) -> set[int]:
+        """Users whose LAST finished job failed because they blocked the bot or never started it (Telegram 403):
+        broadcasts leave them out until a later message reaches them."""
+        if not self.path.exists():
+            return set()
+        with self._connect() as conn:
+            return {r[0] for r in conn.execute(
+                "SELECT user_id FROM jobs j WHERE status = 'failed' AND last_error_code = 'blocked_by_user' "
+                "AND NOT EXISTS (SELECT 1 FROM jobs k WHERE k.user_id = j.user_id AND k.status = 'sent' "
+                "AND k.sent_at >= COALESCE(j.claimed_at, j.created_at))")}
+
+    def cancel_user_broadcasts(self, user_id: int) -> int:
+        """A user blocked in the panel: their broadcast jobs not yet claimed are cancelled (a job already being sent
+        still goes out). Personal messages are left alone."""
+        if not self.path.exists():
+            return 0
+        with self._connect() as conn:
+            return conn.execute("UPDATE jobs SET status = 'cancelled' WHERE user_id = ? AND status = 'queued' "
+                                "AND batch_id IS NOT NULL", (user_id,)).rowcount
 
     def status_by_keys(self, keys: list[str]) -> dict[str, dict]:
         if not keys or not self.path.exists():

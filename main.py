@@ -173,13 +173,16 @@ async def _run_outbox(application) -> None:
         rows = []
         for b in buttons[:3]:
             if b.get("url") == "miniapp":
+                if not MINIAPP_URL:
+                    continue  # no Mini App configured: the button is left out instead of failing every message
                 rows.append([InlineKeyboardButton(str(b.get("text"))[:64], web_app=WebAppInfo(url=MINIAPP_URL))])
             elif str(b.get("url", "")).startswith("https://"):
                 rows.append([InlineKeyboardButton(str(b.get("text"))[:64], url=str(b["url"]))])
         return InlineKeyboardMarkup(rows) if rows else None
 
     async def send(job) -> Outcome:
-        msg = await application.bot.send_message(chat_id=job.user_id, text=job.text, reply_markup=markup(job.buttons))
+        msg = await application.bot.send_message(chat_id=job.user_id, text=job.text, reply_markup=markup(job.buttons),
+                                                 parse_mode=job.parse_mode)
         return Outcome("sent", message_id=msg.message_id)
 
     last_purge = 0

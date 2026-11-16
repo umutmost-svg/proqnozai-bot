@@ -450,3 +450,35 @@ env-список (вход и каждая сессия). Данные поль�
 - Диалоги: таблица `admin_grants`, право `view_dialogs` (owner/admin при наличии явного права; выдаёт owner с 2FA,
   причиной и ключом идемпотентности, журнал `admin.grant`); без права `/api/admin/dialogs` → 403, понижение роли
   делает право недействующим.
+
+## CRM audit fixes (17.11.2026, part A)
+
+- **Broadcast text is Telegram HTML with `{имя}`.**
+  - Saving refuses unbalanced or unknown markup (`invalid_html`). Allowed tags: b, i, u, s, code, pre, a href, blockquote, tg-spoiler.
+  - Every other `<`, `>` and `&` is escaped, so stray characters in plain text are sent as typed.
+  - `{имя}` becomes each recipient's Telegram first name, HTML-escaped, when the jobs are queued.
+  - Jobs carry `parse_mode='HTML'` (a new `jobs` column). Personal messages stay plain text.
+- **Buttons:** an https link needs a real host. A Mini App button is left out when the bot has no `MINIAPP_URL`.
+- **A broadcast becomes `sent`** once the bot has nothing left to send, or once its jobs are past their lifetime.
+  - The list shows delivery per broadcast and in total.
+  - A broadcast that has gone out can no longer be cancelled (`not_cancellable`).
+  - At startup only broadcasts within their jobs' lifetime are queued again.
+- **Recipients:**
+  - Users whose last message failed with 403 (they blocked the bot or never started it) are left out of new broadcasts until a later message reaches them.
+  - Blocking a user in the panel cancels their queued broadcast jobs.
+- **Inquiries:**
+  - A user who wrote to the bot but never opened the Mini App can be answered.
+  - The bot stores at most 30 inquiries per user per hour and 200 per day.
+- **Auto-delete:** a flood limit or a network error pauses deletes and retries them; Telegram's 48 h limit still applies. A delete left `deleting` by a crash is retried after 10 minutes.
+- **Sign-in:**
+  - A wrong password never locks the account. It is throttled per client address (`CF-Connecting-IP` behind the edge): 5 per e-mail and address, 20 per address, in 15 minutes.
+  - There is no cap per e-mail across addresses, because one would close the owner's login everywhere. Cloudflare Access and the mandatory TOTP bound guessing from many addresses.
+  - Only wrong TOTP codes lock the account. They need the right password.
+  - Step-up on a live session is never blocked by someone else's wrong passwords.
+- **Settings:** switches and limits the Mini App does not read yet (AI on/off, quick forecast, AI limits) are shown disabled and labelled. Only the credits switch is live.
+- **Rollout order:** deploy the bot before the admin. An older bot ignores `parse_mode` and would show the tags as text.
+- **Old broadcasts:** a broadcast scheduled before markup was checked is sent as plain text when its body is not valid markup or would outgrow the limit once escaped. The text goes out exactly as typed, with no parse mode, `{имя}` filled in, cut to 4000 characters.
+- **Blocking and the queue:**
+  - At every start the admin cancels queued broadcast jobs of blocked users. This covers a crash between the block and the queue.
+  - Queuing a broadcast leaves out users blocked after it was scheduled.
+- **Cancelling:** a cancel first checks delivery. A broadcast that has already gone out is refused. Narrow race, accepted: a cancel within milliseconds of the last send still marks the broadcast cancelled, with 0 jobs cancelled.

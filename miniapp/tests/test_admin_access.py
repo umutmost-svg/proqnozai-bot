@@ -150,3 +150,16 @@ def test_a_block_that_could_not_be_published_is_reported_as_not_enforced(env, mo
     clock.t -= 30  # the same request again (same key): replayed and now published
     r = block(client, csrf, secrets_, clock, U1, True, "block-key-1")
     assert r.status_code == 200 and snapshot(config)[1] == {U1}
+
+
+def test_a_restored_admin_db_without_its_signing_key_refuses_to_start(env):
+    # CRM audit P1: a new key would make the Mini App silently refuse every later block and ads stop.
+    from miniapp.admin_web.app import create_admin_app
+
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    block(client, csrf, secrets_, clock, U1, True, "restore-key-1")      # a signed publication exists now
+    (config.admin_db.parent / "ads-signing.key").unlink()
+    with pytest.raises(RuntimeError, match="ads-signing.key"):
+        create_admin_app(config, clock=clock)
+    assert not (config.admin_db.parent / "ads-signing.key").exists()      # no new key was minted

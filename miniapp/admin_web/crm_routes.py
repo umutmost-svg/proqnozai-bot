@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 import json
+import re
 import sqlite3
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -17,7 +18,9 @@ from fastapi.responses import JSONResponse, Response
 from miniapp.admin_web import demo, inquiry_routes
 from miniapp.ads.policy import public_key_hex as policy_public_key_hex
 from miniapp.admin_web.access import AccessPublisher
-from miniapp.admin_web.outbox import Outbox
+from miniapp.admin_web.bot_crm import BotCrmFile
+from miniapp.admin_web.crm import html_fits, render_broadcast, render_plain
+from miniapp.admin_web.outbox import JOB_TTL_S, Outbox
 from miniapp.admin_web.accounts import ActionError
 from miniapp.credits import COST as CREDIT_COST, MONTHLY, WELCOME, Credits
 from miniapp.admin_web.crm import EXTRA_PARTS, RULE_FIELDS, CrmStore, matches, validate_rules
@@ -101,8 +104,22 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         item = next((b for b in crm.broadcasts() if b["id"] == broadcast_id), None)
         if item is None or item["status"] != "scheduled":
             return 0
-        jobs = [(f"bc:{broadcast_id}:{uid}", uid, item["body"], item["buttons"])
-                for uid in crm.frozen_recipients(broadcast_id)]
+        blocked_now = crm.blocked()  # blocked after the schedule froze the list: left out (audit P2)
+        recipients = [uid for uid in crm.frozen_recipients(broadcast_id) if uid not in blocked_now]
+        if not recipients:
+            return 0
+        # Scheduled before markup was checked and not valid HTML (or too long once escaped): plain text, as typed —
+        # never a failed startup.
+        html_mode = html_fits(item["body"])
+        render = render_broadcast if html_mode else render_plain
+        # {имя} per recipient (their Telegram first name from the Mini App) and Telegram HTML (render_broadcast).
+        _, known = store.list_users(ctx.now(), sort="created", descending=True, limit=MAX_SCAN)
+        names = {u["id"]: u.get("firstName") for u in known}
+        texts = {uid: render(item["body"], names.get(uid)) for uid in recipients}
+        # A text with nothing left (an old body that was only {имя}, a recipient without a name) is skipped: one such
+        # recipient must never stop the whole batch from queueing.
+        jobs = [(f"bc:{broadcast_id}:{uid}", uid, text, item["buttons"])
+                for uid, text in texts.items() if re.sub(r"<[^>]*>", "", text).strip()]
         batch = f"bc:{broadcast_id}"
         # Cancel vs enqueue across the two databases. A cancel takes effect for the bot when cancel_batch marks the
         # batch in bot-outbox.db; enqueue and release check that mark in the same file, so SQLite orders all three.
@@ -110,7 +127,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         # in admin.db (its cancel_batch still to come) never has its jobs released either.
         hours = item.get("deleteAfterHours")
         added = outbox.enqueue(jobs, batch_id=batch, not_before=item["scheduledAt"], admin_event_id=None,
-                               now=ctx.now(), hold=True, delete_after_s=hours * 3600 if hours else None)
+                               now=ctx.now(), hold=True, delete_after_s=hours * 3600 if hours else None,
+                               parse_mode="HTML" if html_mode else None)
         if next((b["status"] for b in crm.broadcasts() if b["id"] == broadcast_id), None) != "scheduled":
             outbox.cancel_batch(batch, ctx.now())
             return 0
@@ -175,11 +193,38 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
                 if matches(u, rules, set(tags.get(u["id"], [])), u["id"] in blocked, t, extras.get(u["id"]))]
 
     def broadcast_audience(rules: dict) -> list[dict]:
-        """Recipients of a broadcast: blocked users are always excluded."""
-        return audience({**rules, "blocked": False})  # always: a rule cannot opt blocked users into a broadcast
+        """Recipients of a broadcast: blocked users are always excluded, and so are users Telegram refused last time
+        (they blocked the bot or never started it: CRM audit P2)."""
+        unreachable = outbox.unreachable_users()
+        return [u for u in audience({**rules, "blocked": False})  # a rule cannot opt blocked users into a broadcast
+                if u["id"] not in unreachable]
+
+    def settle(item: dict) -> dict | None:
+        """Delivery of a scheduled broadcast; marks it `sent` once nothing is left to send (or its jobs are past their
+        TTL). Returns the counts by job status (None for drafts)."""
+        if item["status"] not in ("scheduled", "sent", "cancelled"):
+            return None
+        counts = outbox.batch_counts(f"bc:{item['id']}")
+        at = item.get("scheduledAt") or 0
+        t = ctx.now()
+        # No job at all well after the due time (an empty audience, or every recipient skipped or blocked): the
+        # schedule and every startup queue before that, so nothing will ever be sent.
+        nothing_to_send = not counts and at + 300 < t
+        if item["status"] == "scheduled" and at <= t and (
+                (counts and not counts.get("queued") and not counts.get("sending")) or nothing_to_send
+                or at + JOB_TTL_S < t):
+            if crm.mark_broadcast_sent(item["id"], t):
+                item["status"] = "sent"
+        return counts
+
+    # A block whose crash fell between admin.db and the queue (crm_routes.block): blocked users get no broadcast job.
+    for uid in crm.blocked():
+        outbox.cancel_user_broadcasts(uid)
 
     for item in crm.broadcasts():  # after a crash: queue (or release held jobs of) a schedule, cancel a cancelled one
-        if item["status"] == "scheduled":
+        if item["status"] == "scheduled" and (item.get("scheduledAt") or 0) + JOB_TTL_S < ctx.now():
+            settle(item)  # past its jobs' lifetime: never queued again (audit: re-queuing all history at every start)
+        elif item["status"] == "scheduled":
             queue_broadcast(item["id"])  # idempotent by key
         elif item["status"] == "cancelled":
             outbox.cancel_batch(f"bc:{item['id']}", ctx.now())
@@ -254,8 +299,16 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
             raise ActionError("invalid_users")
         return ids
 
+    inbox = BotCrmFile(ctx.bot_crm_file)
+
     def exists(user_id: int) -> None:
         if store.user_profile(user_id, ctx.now()) is None:
+            raise ActionError("not_found", 404)
+
+    def reachable(user_id: int) -> None:
+        """A message may go to a Mini App user or to anyone who wrote to the bot (CRM audit P1: such inquiries could
+        not be answered)."""
+        if store.user_profile(user_id, ctx.now()) is None and not inbox.has_inquiries(user_id):
             raise ActionError("not_found", 404)
 
     # ---- users -------------------------------------------------------------------------------
@@ -397,7 +450,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     async def message(user_id: int, request: Request) -> dict:
         """Queued for the bot (admin -> bot outbox); the admin process never calls Telegram itself."""
         admin = ctx.admin_of(request, "manage_users")
-        exists(user_id)
+        reachable(user_id)
         data = await ctx.body(request)
         body = data.get("body")
         result = crm.send_message(admin, user_id, body, data.get("idempotencyKey"), ctx.now(), request.state.request_id)
@@ -427,6 +480,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         # No await between the checks above and this write (single pilot process). Sessions are revoked once per
         # request; a crash here is finished by the next retry or at startup (pending_requests).
         t = ctx.now()
+        if flag:
+            outbox.cancel_user_broadcasts(user_id)  # frozen recipients: a broadcast scheduled earlier skips them now
         revoked = store.revoke_user_sessions(user_id, t, BurnWindow.for_policy(t, 300, 30))
         result = ctx.accounts.revoke_completed(admin, user_id, revoked, t, step["requestId"], action="user.block")
         return enforced({**result, "after": {"blocked": True, "revoked": result["after"]["revoked"]},
@@ -484,8 +539,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
             if b["status"] == "draft":
                 b["audience"] = len(broadcast_audience(b["rules"]))
         for b in items:
-            if b["status"] in ("scheduled", "cancelled"):
-                b["delivery"] = outbox.batch_counts(f"bc:{b['id']}")  # queued / sent / failed … from the bot
+            if (delivery := settle(b)) is not None:
+                b["delivery"] = delivery  # queued / sent / failed … from the bot
         return {"items": items, "sending": "bot_outbox", "segments": crm.segments()}
 
     @app.post("/api/admin/broadcasts")
@@ -520,6 +575,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     async def cancel(broadcast_id: int, request: Request) -> dict:
         admin = ctx.admin_of(request, "manage_users")
         reason, code, key = ctx.dangerous(await ctx.body(request))
+        if (item := next((b for b in crm.broadcasts() if b["id"] == broadcast_id), None)) is not None:
+            settle(item)  # delivered since the list was loaded: `sent`, so the cancel below is refused
         result = ctx.step_up_guard(admin, lambda: crm.cancel_broadcast(admin, broadcast_id, reason, key, code,
                                                                        ctx.now()))
         # Jobs the bot has not claimed yet are cancelled (also on a replay: idempotent).

@@ -93,8 +93,8 @@ def test_outbox_buttons_open_the_app_or_a_https_link(temp_db, tmp_path, monkeypa
     sent = []
 
     class Bot:
-        async def send_message(self, chat_id, text, reply_markup=None):
-            sent.append((chat_id, text, reply_markup))
+        async def send_message(self, chat_id, text, reply_markup=None, parse_mode=None):
+            sent.append((chat_id, text, reply_markup, parse_mode))
             return SimpleNamespace(message_id=7)
 
     db_file = tmp_path / "bot-outbox.db"
@@ -111,7 +111,8 @@ def test_outbox_buttons_open_the_app_or_a_https_link(temp_db, tmp_path, monkeypa
         row = {"id": "j1", "idempotency_key": "k1", "user_id": 987705, "text": "Hi",
                "buttons_json": json.dumps([{"text": "App", "url": "miniapp"}, {"text": "Site", "url": "https://x.example"},
                                            {"text": "Bad", "url": "http://x"}]),
-               "status": "queued", "not_before": 0, "expires_at": int(t.time()) + 3600, "created_at": int(t.time())}
+               "status": "queued", "not_before": 0, "expires_at": int(t.time()) + 3600, "created_at": int(t.time()),
+               "parse_mode": "HTML"}
         keys = [k for k in row if k in cols]
         conn.execute(f"INSERT INTO jobs ({','.join(keys)}) VALUES ({','.join('?' * len(keys))})", [row[k] for k in keys])
 
@@ -126,6 +127,7 @@ def test_outbox_buttons_open_the_app_or_a_https_link(temp_db, tmp_path, monkeypa
     assert len(sent) == 1
     rows = sent[0][2].inline_keyboard
     assert rows[0][0].web_app is not None and rows[1][0].url == "https://x.example" and len(rows) == 2
+    assert sent[0][3] == "HTML"   # broadcasts are Telegram HTML (CRM audit P1)
 
 
 def test_shared_sidecars_are_handed_to_the_database_owner(tmp_path, monkeypatch):

@@ -158,6 +158,10 @@ class BotCrmFile:
                           "ORDER BY MAX(at) DESC", strict=True)
         return [{"userId": int(u), "count": int(n), "lastAt": int(a), "lastId": int(i)} for u, n, a, i in rows]
 
+    def has_inquiries(self, user_id: int) -> bool:
+        """This user wrote to the bot (retained): the panel may answer them although they never opened the Mini App."""
+        return bool(self._read("SELECT 1 FROM inquiries WHERE user_id = ? LIMIT 1", (user_id,)))
+
     def messages(self, user_id: int, limit: int = 200) -> list[dict]:
         rows = self._read("SELECT id, at, text FROM inquiries WHERE user_id = ? ORDER BY id DESC LIMIT ?",
                           (user_id, limit), strict=True)

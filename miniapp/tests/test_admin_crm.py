@@ -438,3 +438,202 @@ def test_mb_ids_entered_earlier_in_the_panel_are_approved_in_the_mini_app(env):
         conn.execute("UPDATE crm_external_ids SET mb_id = 'STALE7' WHERE user_id = ?", (U1,))
     create_admin_app(config, clock=clock)
     assert Store(config.miniapp_db).mb_links(user_ids=[U1])[0]["mbId"] == "OLD7"
+
+
+# ---- CRM audit (17.11): broadcast text, delivery status, reachability ----------------------------------------------
+
+def test_broadcast_html_is_checked_and_rendered_per_recipient():
+    from miniapp.admin_web.crm import render_broadcast
+
+    assert render_broadcast("<b>{имя}</b>, a < b & c > d &amp; <a href=\"https://x.example/p\">тут</a>", "Ali <&>") == \
+        "<b>Ali &lt;&amp;&gt;</b>, a &lt; b &amp; c &gt; d &amp; <a href=\"https://x.example/p\">тут</a>"
+    assert render_broadcast("Привет, {имя}!", None) == "Привет, !"
+    for bad in ("<b>open", "<i>x</b>", "<a>no href</a>", "<b href=\"https://x.example\">x</b>", "x</b>",
+                "<a href=\"https://x.example:bad\">x</a>", "<code><b>x</b></code>", "<pre><i>x</i></pre>",
+                "<a href=\"https://x.example\"><a href=\"https://y.example\">x</a></a>"):
+        try:
+            render_broadcast(bad, "A")
+        except ValueError:
+            continue
+        raise AssertionError(bad)
+    assert render_broadcast("<script>x</script>", "A") == "&lt;script&gt;x&lt;/script&gt;"   # unknown tags are text
+
+
+def test_broadcast_jobs_carry_the_name_and_html_and_the_list_settles_as_sent(env):
+    import sqlite3 as sq
+    from bot_outbox import BotOutbox, Outcome
+    import asyncio
+
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    assert post(client, "/api/admin/broadcasts", csrf, {"name": "x", "body": "<b>open"}).json()["error"] == "invalid_html"
+    assert post(client, "/api/admin/broadcasts", csrf, {"name": "x", "body": "t", "buttons": [
+        {"text": "a", "url": "https://"}]}).json()["error"] == "invalid_buttons"
+    first = client.get(f"/api/admin/users/{U1}").json()["firstName"]
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "Имя", "body": "<b>{имя}</b>, привет",
+                                                      "rules": {"tag_has": "Получатели"}}).json()["id"]
+    post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "Получатели"})
+    at = int(clock()) + 60
+    assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": at}).status_code == 200
+    with sq.connect(config.data_dir / "bot-outbox.db") as conn:
+        text, mode = conn.execute("SELECT text, parse_mode FROM jobs WHERE batch_id = ?", (f"bc:{bid}",)).fetchone()
+    assert text.startswith("<b>") and "{имя}" not in text and (first or "") in text and mode == "HTML"
+    item = lambda: next(b for b in client.get("/api/admin/broadcasts").json()["items"] if b["id"] == bid)  # noqa: E731
+    assert item()["status"] == "scheduled" and item()["delivery"] == {"queued": 1}
+    bot = BotOutbox(config.data_dir / "bot-outbox.db")
+
+    async def send(job):
+        return Outcome("sent", message_id=1)
+    asyncio.run(bot.run_once(send, lambda: at))
+    clock.t = at + 1
+    sent = item()
+    assert sent["status"] == "sent" and sent["delivery"] == {"sent": 1}
+    cancel = post(client, f"/api/admin/broadcasts/{bid}/cancel", csrf, {**dangerous(secrets_, clock), "idempotencyKey": "late-cancel-1"})
+    assert cancel.json()["error"] == "not_cancellable"
+
+
+def test_users_telegram_refused_and_users_blocked_later_get_no_broadcast(env):
+    import sqlite3 as sq
+
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    everyone = post(client, "/api/admin/audience/preview", csrf, {"rules": {}, "forBroadcast": True}).json()["size"]
+    with sq.connect(config.data_dir / "bot-outbox.db") as conn:   # Telegram answered 403 for U2 last time
+        conn.execute("INSERT INTO jobs (id, idempotency_key, user_id, text, not_before, expires_at, status, "
+                     "last_error_code, created_at, claimed_at) VALUES ('x', 'msg:x', ?, 't', 0, 1, 'failed', "
+                     "'blocked_by_user', 1, 1)", (U2,))
+    assert post(client, "/api/admin/audience/preview", csrf, {"rules": {}, "forBroadcast": True}).json()["size"] == everyone - 1
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "B", "body": "t"}).json()["id"]
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 3600})
+    clock.t += 31
+    post(client, f"/api/admin/users/{U1}/block", csrf, {**dangerous(secrets_, clock), "blocked": True})
+    with sq.connect(config.data_dir / "bot-outbox.db") as conn:
+        assert conn.execute("SELECT status FROM jobs WHERE idempotency_key = ?", (f"bc:{bid}:{U1}",)).fetchone() == ("cancelled",)
+        assert conn.execute("SELECT COUNT(*) FROM jobs WHERE batch_id = ? AND status = 'queued'", (f"bc:{bid}",)).fetchone()[0] > 0
+
+
+def test_an_inquiry_from_a_bot_only_user_can_be_answered(env):
+    from miniapp.admin_web.bot_crm import BotCrmFile
+
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    stranger = 555_000_111
+    body = {"body": "Ответ", "idempotencyKey": "reply-key-01"}
+    assert post(client, f"/api/admin/users/{stranger}/messages", csrf, body).status_code == 404
+    f = BotCrmFile(config.bot_crm_db)
+    f.init_schema()
+    with f._connect() as conn:
+        conn.execute("INSERT INTO inquiry_notices (user_id, at, days) VALUES (?, 1, 90)", (stranger,))
+        conn.execute("INSERT INTO inquiries (user_id, at, text) VALUES (?, ?, 'не открывается')", (stranger, int(clock())))
+    assert post(client, f"/api/admin/users/{stranger}/messages", csrf, body).json()["status"] == "queued"
+
+
+def test_odd_digit_searches_are_text_not_a_server_error(env):
+    _, clock, client, _, secrets_ = env
+    login(client, clock, secrets_, "admin@x.test")
+    for q in ("²", "1" * 25):
+        assert client.get(f"/api/admin/users?q={q}").status_code == 200
+
+
+def test_buttons_with_a_malformed_port_are_refused():
+    from miniapp.admin_web.crm import valid_button_url
+
+    assert not valid_button_url("https://x.example:bad") and valid_button_url("https://x.example:8443/p")
+    assert not valid_button_url("https://..") and not valid_button_url("https://x..example")
+    assert render_ok("<pre><code>x</code></pre>")
+
+
+def render_ok(body: str) -> bool:
+    from miniapp.admin_web.crm import render_broadcast
+    try:
+        render_broadcast(body, "A")
+        return True
+    except ValueError:
+        return False
+
+
+def test_a_body_that_is_only_the_name_is_refused_and_never_blocks_a_queue(env):
+    import sqlite3 as sq
+    from miniapp.admin_web.app import create_admin_app
+
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    assert post(client, "/api/admin/broadcasts", csrf, {"name": "n", "body": "<b>{имя}</b>"}).json()["error"] == "invalid_body"
+    post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "N"})
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "n", "body": "ok", "rules": {"tag_has": "N"}}).json()["id"]
+    with sq.connect(config.admin_db) as conn:          # an old body: only the placeholder; the recipient has no name
+        conn.execute("UPDATE crm_broadcasts SET body = '{имя}', status = 'scheduled', scheduled_at = ? WHERE id = ?",
+                     (int(clock()) + 60, bid))
+        conn.execute("INSERT INTO crm_broadcast_recipients (broadcast_id, user_id) VALUES (?, ?)", (bid, 999_999_991))
+        conn.execute("INSERT INTO crm_broadcast_recipients (broadcast_id, user_id) VALUES (?, ?)", (bid, U1))
+    create_admin_app(config, clock=clock)              # must not raise
+    with sq.connect(config.data_dir / "bot-outbox.db") as conn:
+        users = [r[0] for r in conn.execute("SELECT user_id FROM jobs WHERE batch_id = ?", (f"bc:{bid}",))]
+    assert 999_999_991 not in users
+
+
+def test_a_legacy_scheduled_body_never_stops_the_admin_and_is_sent_as_typed(env):
+    import sqlite3 as sq
+    from miniapp.admin_web.app import create_admin_app
+
+    config, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "L"})
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "old", "body": "ok", "rules": {"tag_has": "L"}}).json()["id"]
+    with sq.connect(config.admin_db) as conn:          # saved before 17.11: not valid markup
+        conn.execute("UPDATE crm_broadcasts SET body = ?, status = 'scheduled', scheduled_at = ? WHERE id = ?",
+                     ("1 < 2 <b> {имя}", int(clock()) + 60, bid))
+        conn.execute("INSERT INTO crm_broadcast_recipients (broadcast_id, user_id) VALUES (?, ?)", (bid, U1))
+    create_admin_app(config, clock=clock)              # startup queues it: must not raise
+    with sq.connect(config.data_dir / "bot-outbox.db") as conn:
+        text, mode = conn.execute("SELECT text, parse_mode FROM jobs WHERE batch_id = ?", (f"bc:{bid}",)).fetchone()
+    assert mode is None and text.startswith("1 < 2 <b> ") and "{имя}" not in text   # plain text, exactly as typed
+
+    from miniapp.admin_web.crm import MAX_TEXT, html_fits, render_plain
+    long_body = "<b>" + "&" * 1000                     # valid once, 5x longer escaped: plain, never a failed queue
+    assert not html_fits(long_body) and len(render_plain(long_body, "N")) <= MAX_TEXT
+    assert len(render_plain("{имя}" * 1000, "x" * 64)) == MAX_TEXT
+
+
+def test_a_cancel_after_delivery_is_refused_without_a_list_refresh(env):
+    import asyncio
+    from bot_outbox import BotOutbox, Outcome
+
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "C"})
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "c", "body": "t", "rules": {"tag_has": "C"}}).json()["id"]
+    at = int(clock()) + 60
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": at})
+
+    async def send(job):
+        return Outcome("sent", message_id=1)
+    asyncio.run(BotOutbox(config.data_dir / "bot-outbox.db").run_once(send, lambda: at))
+    clock.t = at + 1
+    r = post(client, f"/api/admin/broadcasts/{bid}/cancel", csrf, {**dangerous(secrets_, clock), "idempotencyKey": "c-after-1"})
+    assert r.json()["error"] == "not_cancellable"
+
+
+def test_startup_cancels_queued_broadcast_jobs_of_blocked_users(env):
+    import sqlite3 as sq
+    from miniapp.admin_web.app import create_admin_app
+
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "B", "body": "t"}).json()["id"]
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 3600})
+    with sq.connect(config.admin_db) as conn:          # the block committed, then a crash before the queue was touched
+        conn.execute("INSERT INTO crm_blocks (user_id, reason, created_at, admin_id) VALUES (?, 'x', 1, 1)", (U1,))
+    create_admin_app(config, clock=clock)
+    with sq.connect(config.data_dir / "bot-outbox.db") as conn:
+        assert conn.execute("SELECT status FROM jobs WHERE idempotency_key = ?", (f"bc:{bid}:{U1}",)).fetchone() == ("cancelled",)
+
+
+def test_a_due_broadcast_with_no_recipients_settles_as_sent(env):
+    _, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    bid = post(client, "/api/admin/broadcasts", csrf, {"name": "e", "body": "t", "rules": {"tag_has": "nobody"}}).json()["id"]
+    at = int(clock()) + 60
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": at})
+    clock.t = at + 301
+    assert next(b for b in client.get("/api/admin/broadcasts").json()["items"] if b["id"] == bid)["status"] == "sent"

@@ -19,8 +19,8 @@ There are four layers. A request arriving another way, such as the server's publ
 - Image: `deploy/admin/Dockerfile`, with the same pinned bases and hash-checked lock as the Mini App. Entrypoint: `deploy/admin/entrypoint.sh`.
 - The container runs as uid 10001 (the Mini App's uid), so it can read the Mini App's SQLite files.
 - Volumes:
-  - `proqnozai-miniapp-data` → `/data`: the Mini App's data. The admin reads `miniapp.db` and `miniapp.forecasts.db`. It writes its published files here: `access-policy.json`, `ads-policy.json` and `bot-outbox.db`.
-  - `proqnozai-admin-state` → `/state`: the admin's own data (`admin.db` with accounts, sessions, TOTP secrets and signing keys). Mode 0700. **Never mounted into the Mini App.** The Mini App's entrypoint runs `chown -R` on its whole volume, so the admin's secrets cannot live there.
+  - `proqnozai-miniapp-data` → `/data`: the Mini App's data. The admin reads `miniapp.db` and `miniapp.forecasts.db`, and also writes to `miniapp.db` (session revocation, credits, MB IDs). It writes its published files here: `access-policy.json`, `ads-policy.json` and `bot-outbox.db`.
+  - `proqnozai-admin-state` → `/state`: the admin's own data (`admin.db` with accounts, sessions and TOTP secrets; the signing key is the separate file `ads-signing.key`, backed up with `admin.db`). Mode 0700. **Never mounted into the Mini App.** The Mini App's entrypoint runs `chown -R` on its whole volume, so the admin's secrets cannot live there.
 - Environment: `ADMIN_WEB_MODE=server`, `ADMIN_DATA_DIR=/data`, `ADMIN_STATE_DIR=/state`, `ADMIN_PUBLIC_HOST=admin.proqnozai.com` and `ADMIN_EDGE_SECRET`. The last comes from `/root/admin-secrets/edge`, is at least 32 characters, and is never printed. `ADMIN_BOT_USERNAME=ProqnozAI_bot` (public) gives full referral links; with no `ADMIN_MINIAPP_SHORT_NAME`, Mini App links use the bot's main Mini App (`t.me/ProqnozAI_bot?startapp=ref_…`), which must be set in BotFather.
 - The server mode refuses:
   - demo data (`?demo=1` is ignored);

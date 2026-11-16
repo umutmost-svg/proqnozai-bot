@@ -16,6 +16,8 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
+from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -34,6 +36,14 @@ ABSOLUTE_S = 12 * 3600
 PRE_AUTH_S = 5 * 60
 MAX_FAILURES = 5
 LOCK_S = 15 * 60
+# Wrong PASSWORDS never lock the account (CRM audit P1: anyone past Access could lock the owner out, step-up included).
+# They are throttled in memory instead: per e-mail and source (CF-Connecting-IP behind the edge) and per source. No
+# per-e-mail cap across sources (Codex CRM-A r4: spread failures would close the owner's login everywhere): guessing
+# from many addresses is bounded by Cloudflare Access in front and by the mandatory TOTP after the password. Only TOTP
+# failures, which need the right password, lock the account (failed_logins/locked_until).
+PW_WINDOW_S = 15 * 60
+PW_PER_SOURCE_EMAIL = 5
+PW_PER_SOURCE = 20
 _TOUCH_EVERY_S = 30
 
 # Settings an administrator may change (§3.3 v1 keys) with their bounds; credits are display-only.
@@ -248,6 +258,8 @@ def can(role: str, permission: str) -> bool:
 class AdminStore:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self._pw_fails: dict[tuple[str, str], deque[int]] = {}
+        self._pw_lock = threading.Lock()
         # key -> fn(value, now, version), called inside the settings transaction (another process must follow)
         self.setting_hooks: dict[str, Any] = {}
 
@@ -344,21 +356,48 @@ class AdminStore:
             key = conn.execute("SELECT value FROM meta WHERE key = 'csrf_key'").fetchone()[0]
         return hmac.new(bytes.fromhex(key), token.encode(), hashlib.sha256).hexdigest()
 
-    def login_password(self, email: str, password: str, now: int) -> str:
-        """First factor. Returns a pre-auth token valid only for the TOTP step."""
+    def _pw_counts(self, keys: list[tuple[str, str]], now: int) -> list[int]:
+        out = []
+        for key in keys:
+            hits = self._pw_fails.get(key)
+            while hits and hits[0] <= now - PW_WINDOW_S:
+                hits.popleft()
+            out.append(len(hits) if hits else 0)
+        return out
+
+    def _pw_throttled(self, email: str, source: str, now: int) -> bool:
+        with self._pw_lock:
+            pair, by_source = self._pw_counts([(email, source), ("", source)], now)
+        return pair >= PW_PER_SOURCE_EMAIL or by_source >= PW_PER_SOURCE
+
+    def _pw_failed(self, email: str, source: str, now: int) -> None:
+        with self._pw_lock:
+            if len(self._pw_fails) > 10_000:
+                self._pw_fails = {k: v for k, v in self._pw_fails.items() if v and v[-1] > now - PW_WINDOW_S}
+            for key in ((email, source), ("", source)):
+                self._pw_fails.setdefault(key, deque()).append(now)
+
+    def login_password(self, email: str, password: str, now: int, source: str = "") -> str:
+        """First factor. Returns a pre-auth token valid only for the TOTP step. `source`: the client address
+        (only from the verified edge); failures are throttled per source and e-mail, never lock the account."""
+        email_key = email.strip().lower()
+        if self._pw_throttled(email_key, source, now):
+            verify_password(password, None)  # same work and answer as any wrong login
+            raise AuthError("invalid_credentials")
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT id, state, password_hash, locked_until FROM admin_users WHERE email = ?",
                 (email.strip(),)).fetchone()
         ok = verify_password(password, row[2] if row else None)
         if row is None or row[1] != "active":
+            self._pw_failed(email_key, source, now)
             raise AuthError("invalid_credentials")
         admin_id, _, _, locked_until = row
         if locked_until > now:
             # Same answer as a wrong e-mail/password: a lock must not reveal that the account exists.
             raise AuthError("invalid_credentials")
         if not ok:
-            self._fail(admin_id, now)
+            self._pw_failed(email_key, source, now)
             raise AuthError("invalid_credentials")
         token = secrets.token_urlsafe(32)
         with self._write() as conn:

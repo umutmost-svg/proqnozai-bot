@@ -223,7 +223,10 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
     async def login(request: Request) -> Response:
         data = await body(request)
         try:
-            pre = accounts.login_password(str(data.get("email") or ""), str(data.get("password") or ""), now())
+            # The client address only from Cloudflare, behind the verified edge secret (server mode); else the peer.
+            source = (request.headers.get("cf-connecting-ip", "")[:64] if edge_secret is not None
+                      else (request.client.host if request.client else ""))
+            pre = accounts.login_password(str(data.get("email") or ""), str(data.get("password") or ""), now(), source)
         except AuthError as exc:
             return _err(str(exc), 401, request)
         response = JSONResponse({"next": "totp"})

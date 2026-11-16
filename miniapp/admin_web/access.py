@@ -39,7 +39,7 @@ class AccessPublisher:
         self.accounts = accounts
         self.path = path
         admin_dir = accounts.path.parent
-        self.signing_key = load_signing_key(admin_dir / "ads-signing.key")
+        self.signing_key = load_signing_key(admin_dir / "ads-signing.key", accounts)
         self.public_key = self.signing_key.public_key()
         self.lock_file = admin_dir / "access-publish.lock"
         self._thread_lock = threading.Lock()

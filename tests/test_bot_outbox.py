@@ -329,3 +329,61 @@ def test_both_sides_may_add_the_columns_at_once(tmp_path):
         bot_outbox.add_columns(a)
         admin_outbox.add_columns(b)                                           # already there: no error
     assert bot_outbox.ADDED_COLUMNS == admin_outbox.ADDED_COLUMNS
+
+
+async def test_a_flood_limit_or_outage_while_deleting_is_retried_after_the_pause(tmp_path):
+    # CRM audit P1: a transient error used to mark the delete failed for good, leaving the promo in the chat.
+    from telegram.error import NetworkError, RetryAfter
+
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("bc:3:41", 41, "a", []), ("bc:3:42", 42, "b", [])], batch_id=None, not_before=NOW,
+                  admin_event_id=None, now=NOW, delete_after_s=3600)
+
+    async def send(job):
+        return Outcome("sent", message_id=job.user_id + 100)
+    await bot.run_once(send, lambda: NOW)
+    errors = [RetryAfter(30), NetworkError("down")]
+    deleted = []
+
+    async def delete(chat, message):
+        if errors:
+            raise errors.pop(0)
+        deleted.append(chat)
+    t = NOW + 3600
+    assert await bot.run_deletes(delete, lambda: t) == {"retry": 1}           # flood: stop, pause 30 s
+    assert await bot.run_deletes(delete, lambda: t + 10) == {}                 # paused: nothing tried
+    assert await bot.run_deletes(delete, lambda: t + 31) == {"retry": 1}       # network: stop, pause again
+    assert await bot.run_deletes(delete, lambda: t + 31 + bot_outbox.NETWORK_PAUSE_S) == {"deleted": 2}
+    assert sorted(deleted) == [41, 42]
+
+
+async def test_a_delete_left_by_a_crash_is_tried_again(tmp_path):
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("bc:4:51", 51, "a", [])], batch_id=None, not_before=NOW, admin_event_id=None, now=NOW,
+                  delete_after_s=3600)
+
+    async def send(job):
+        return Outcome("sent", message_id=9)
+    await bot.run_once(send, lambda: NOW)
+    with sqlite3.connect(tmp_path / "bot-outbox.db") as conn:              # claimed, then the process died
+        conn.execute("UPDATE jobs SET delete_status = 'deleting', deleted_at = ?", (NOW + 3600,))
+    done = []
+
+    async def delete(chat, message):
+        done.append(chat)
+    assert await bot.run_deletes(delete, lambda: NOW + 3700) == {}
+    assert await bot.run_deletes(delete, lambda: NOW + 3600 + bot_outbox.STUCK_S) == {"deleted": 1} and done == [51]
+
+
+async def test_a_broadcast_is_claimed_with_its_parse_mode(tmp_path):
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("bc:5:61", 61, "<b>Hi</b>", [])], batch_id="bc:5", not_before=NOW, admin_event_id=None, now=NOW,
+                  parse_mode="HTML")
+    admin.enqueue([("msg:1", 62, "<plain>", [])], batch_id=None, not_before=NOW, admin_event_id=None, now=NOW)
+    modes = {}
+
+    async def send(job):
+        modes[job.user_id] = job.parse_mode
+        return Outcome("sent", message_id=1)
+    await bot.run_once(send, lambda: NOW)
+    assert modes == {61: "HTML", 62: None}

@@ -63,6 +63,11 @@ EOF2
   docker cp "$ADMIN:$tmp/$name" "$dest/$name" || fail "docker cp $name"
   store "$dest/$name"
 done
+# The admin's signing key (not a database): without it a restored admin.db cannot sign blocks or ads stops the
+# Mini App accepts (CRM audit P1); the admin refuses to start with publications and no key.
+docker exec -u 10001 "$ADMIN" cat /state/ads-signing.key > "$dest/ads-signing.key" && [ -s "$dest/ads-signing.key" ] \
+  || fail "copy ads-signing.key"
+store "$dest/ads-signing.key"
 docker exec -u 10001 "$ADMIN" rm -rf "$tmp" || fail "container cleanup"
 
 # Retention: only directories named exactly like a stamp, older than KEEP_DAYS by the time in the name.

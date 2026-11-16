@@ -167,7 +167,7 @@ class AdsStore:
         self.applied_file = applied_file
         admin_dir = accounts.path.parent  # admin-only directory (never mounted into the Mini App)
         self.lock_file = admin_dir / "ads-publish.lock"
-        self.signing_key = load_signing_key(admin_dir / "ads-signing.key")
+        self.signing_key = load_signing_key(admin_dir / "ads-signing.key", accounts)
         self.public_key = self.signing_key.public_key()
         self._thread_lock = threading.Lock()
 
@@ -696,9 +696,23 @@ def bump_revision(conn: sqlite3.Connection) -> None:
                  "value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")
 
 
-def load_signing_key(path: Path) -> Ed25519PrivateKey:
+def _has_publications(accounts: AdminStore) -> bool:
+    with accounts._connect() as conn:
+        for table in ("ad_publications", "access_publications"):
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone() \
+                    and conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+                return True
+    return False
+
+
+def load_signing_key(path: Path, accounts: AdminStore | None = None) -> Ed25519PrivateKey:
     """The admin's snapshot signing key: created once (0600, in the admin-only directory), never logged or
     returned by the API; only its public half is shown (to configure MINIAPP_ADS_POLICY_PUBLIC_KEY)."""
+    if not path.exists() and accounts is not None and _has_publications(accounts):
+        # CRM audit P1: a restored admin.db without its key would mint a new one, and the Mini App (holding the
+        # old public key) would silently refuse every later block, unblock and ads stop. Refuse to start instead:
+        # restore the key from the backup (prod-backup.sh copies it), or rotate on purpose (docs/ops/backups.md).
+        raise RuntimeError("ads-signing.key is missing but admin.db has signed publications: restore the key")
     if not path.exists():
         if not path.parent.exists():
             path.parent.mkdir(parents=True, mode=0o700)

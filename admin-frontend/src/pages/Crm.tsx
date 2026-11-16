@@ -20,6 +20,17 @@ function parseRules(raw: string | null): Rules {
 
 // ---------------- broadcasts ----------------
 
+const pendingJobs = (b: Broadcast) => (b.delivery?.queued ?? 0) + (b.delivery?.sending ?? 0);
+
+function deliveryText(b: Broadcast): string {
+  const d = b.delivery;
+  if (!d) return '—';
+  const parts = [d.sent ? `${num(d.sent)} доставлено` : '', pendingJobs(b) ? `${num(pendingJobs(b))} в очереди` : '',
+    d.failed ? `${num(d.failed)} не доставлено` : '', d.expired ? `${num(d.expired)} просрочено` : '',
+    d.cancelled ? `${num(d.cancelled)} отменено` : ''].filter(Boolean);
+  return parts.join(' · ') || '—';
+}
+
 export function Broadcasts() {
   const server = useServerMode();
   const navigate = useNavigate();
@@ -31,6 +42,12 @@ export function Broadcasts() {
   const items = (data?.items ?? []).filter((b) => filter === 'all' || b.status === filter);
   const count = (s: Broadcast['status']) => data?.items.filter((b) => b.status === s).length ?? 0;
   const manage = can(me.admin.role, 'manage_users');
+  const delivered = (data?.items ?? []).reduce((acc, b) => {
+    const d = b.delivery ?? {};
+    const total = (d.sent ?? 0) + (d.failed ?? 0) + (d.expired ?? 0) + (d.queued ?? 0) + (d.sending ?? 0);
+    if (b.status === 'cancelled') return acc;  // neither side counts a cancelled campaign
+    return { sent: acc.sent + (d.sent ?? 0), total: acc.total + total };
+  }, { sent: 0, total: 0 });
   return (
     <>
       <PageHead title="Рассылки" subtitle="Кампании в Telegram: аудитория, расписание, доставка и клики"
@@ -42,7 +59,7 @@ export function Broadcasts() {
         <Metric label="Всего кампаний" value={num(data?.items.length)} caption="в админке" />
         <Metric label="Запланированы" value={num(count('scheduled'))} caption="ждут отправки" />
         <Metric label="Черновики" value={num(count('draft'))} caption="можно редактировать" />
-        <Metric label="Доставляемость и клики" value="—" caption="после подключения отправки" />
+        <Metric label="Доставлено" value={delivered.total ? `${num(delivered.sent)} из ${num(delivered.total)}` : '—'} caption="по отправленным и идущим рассылкам" />
       </Metrics>
       <div className="chips">
         {(['all', 'draft', 'scheduled', 'sent', 'cancelled'] as const).map((s) => (
@@ -58,7 +75,7 @@ export function Broadcasts() {
       ) : (
         <div className="table-card">
           <table className="table">
-            <thead><tr><th>Кампания</th><th>Аудитория</th><th>Когда</th><th className="num">Получатели</th><th>Автор</th><th>Статус</th><th /></tr></thead>
+            <thead><tr><th>Кампания</th><th>Аудитория</th><th>Когда</th><th className="num">Получатели</th><th>Доставка</th><th>Автор</th><th>Статус</th><th /></tr></thead>
             <tbody>
               {items.map((b) => (
                 <tr key={b.id} className="clickable" onClick={() => navigate(`/broadcasts/${b.id}`)}>
@@ -66,10 +83,11 @@ export function Broadcasts() {
                   <td>{describeRules(b.rules).join(' · ') || 'Все пользователи'}</td>
                   <td>{b.scheduledAt ? localTime(b.scheduledAt) : b.status === 'draft' ? 'черновик' : '—'}</td>
                   <td className="num">{num(b.recipients ?? b.audience)}</td>
+                  <td>{deliveryText(b)}</td>
                   <td>{b.by ?? '—'}</td>
                   <td><Tag tone={STATUS[b.status][1]}>{STATUS[b.status][0]}</Tag></td>
                   <td onClick={(e) => e.stopPropagation()}>
-                    {(b.status === 'draft' || b.status === 'scheduled') && manage && (
+                    {(b.status === 'draft' || (b.status === 'scheduled' && (pendingJobs(b) > 0 || !b.delivery?.sent))) && manage && (
                       <button type="button" className="btn link" onClick={() => setCancelling(b)}>Отменить</button>
                     )}
                   </td>
@@ -83,8 +101,9 @@ export function Broadcasts() {
         <DangerDialog title="Отменить рассылку?" confirmLabel="Отменить рассылку" onClose={() => setCancelling(null)}
           lead={<>«{cancelling.name}» будет отменена без возможности восстановления. Действие запишется в журнал.</>}
           onConfirm={async (input) => {
-            await api(`/api/admin/broadcasts/${cancelling.id}/cancel`, { method: 'POST', body: input });
-            setCancelling(null); setToast('Рассылка отменена'); reload();
+            const r = await api<{ cancelledJobs?: number }>(`/api/admin/broadcasts/${cancelling.id}/cancel`, { method: 'POST', body: input });
+            setCancelling(null);
+            setToast(typeof r?.cancelledJobs === 'number' ? `Рассылка отменена: не ушло ${r.cancelledJobs} сообщ.` : 'Рассылка отменена'); reload();
           }} />
       )}
       {toast && <Toast text={toast} onDone={() => setToast(null)} />}

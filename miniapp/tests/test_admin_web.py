@@ -116,9 +116,12 @@ def test_totp_code_is_single_use(env):
 
 
 def test_lockout_survives_restart(env):
+    # The account lock comes from wrong TOTP codes (they need the right password); wrong passwords only throttle.
     config, clock, client, accounts, _ = env
+    h = {"Origin": ORIGIN}
+    client.post("/api/admin/auth/login", json={"email": "admin@x.test", "password": "pw-admin"}, headers=h)
     for _ in range(5):
-        client.post("/api/admin/auth/login", json={"email": "admin@x.test", "password": "bad"}, headers={"Origin": ORIGIN})
+        client.post("/api/admin/auth/totp", json={"code": "000000"}, headers=h)
     fresh = AdminStore(config.admin_db)  # a new process sees the same lock
     with pytest.raises(AuthError, match="invalid_credentials"):
         fresh.login_password("admin@x.test", "pw-admin", int(clock()))
@@ -573,3 +576,38 @@ def test_non_ascii_digits_are_a_wrong_code_not_a_crash(env):
     client.post("/api/admin/auth/login", json={"email": "owner@x.test", "password": "pw-owner"}, headers=h)
     r = client.post("/api/admin/auth/totp", json={"code": "١٢٣٤٥٦"}, headers=h)  # Arabic-Indic digits
     assert r.status_code == 401 and r.json()["error"] == "invalid_code"
+
+
+def test_wrong_passwords_never_lock_the_account_they_throttle_the_source(env):
+    # CRM audit P1: five wrong passwords for the owner's e-mail must not lock the owner (nor their step-up) out.
+    from miniapp.admin_web import accounts as accounts_mod
+
+    _, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "owner@x.test")     # the owner's live session
+    t = int(clock())
+    for _ in range(accounts_mod.PW_PER_SOURCE_EMAIL):
+        with pytest.raises(AuthError):
+            accounts.login_password("owner@x.test", "wrong", t, "203.0.113.9")
+    # That source is throttled, even with the right password …
+    with pytest.raises(AuthError, match="invalid_credentials"):
+        accounts.login_password("Owner@x.test", "pw-owner", t, "203.0.113.9")
+    # … but the owner, elsewhere, signs in, and the live session's step-up still works.
+    assert accounts.login_password("owner@x.test", "pw-owner", t, "198.51.100.7")
+    assert not any(e["action"] == "auth.locked" for e in accounts.events())
+    r = post(client, "/api/admin/settings/ai.enabled", csrf,
+             {"value": False, "reason": "r-x", "idempotencyKey": "after-attack-1", "code": "000000"})
+    assert r.status_code == 403 and r.json()["error"] == "invalid_code"   # a wrong code: not 423 locked
+    clock.t += accounts_mod.PW_WINDOW_S + 1
+    assert accounts.login_password("owner@x.test", "pw-owner", int(clock()), "203.0.113.9")  # the window passes
+
+
+def test_one_source_is_throttled_across_e_mails(env):
+    from miniapp.admin_web import accounts as accounts_mod
+
+    _, clock, _, accounts, _ = env
+    t = int(clock())
+    for i in range(accounts_mod.PW_PER_SOURCE):
+        with pytest.raises(AuthError):
+            accounts.login_password(f"x{i}@x.test", "wrong", t, "203.0.113.9")
+    with pytest.raises(AuthError):
+        accounts.login_password("owner@x.test", "pw-owner", t, "203.0.113.9")

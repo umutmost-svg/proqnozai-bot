@@ -16,10 +16,12 @@ export function SettingsTabs() {
   );
 }
 
-const FEATURES: { key: string; name: string; desc: string }[] = [
+// `live`: the Mini App follows the switch. The others are still only recorded (the Mini App reads them from its
+// environment): shown disabled and labelled, never "saved" as if they changed something (CRM audit P1).
+const FEATURES: { key: string; name: string; desc: string; live?: boolean }[] = [
   { key: 'ai.enabled', name: 'AI-разборы', desc: 'Включение и отключение новых платных запросов модели' },
   { key: 'quick.enabled', name: 'Быстрый прогноз', desc: 'Доступность действия и купонов в Mini App' },
-  { key: 'credits.enabled', name: 'Кредиты за прогнозы', desc: 'Любой прогноз стоит 10 кредитов; без кредитов — экран «Мои кредиты». Выключено: прогнозы бесплатны' },
+  { key: 'credits.enabled', name: 'Кредиты за прогнозы', desc: 'Любой прогноз стоит 10 кредитов; без кредитов — экран «Мои кредиты». Выключено: прогнозы бесплатны', live: true },
 ];
 const LIMITS: { key: string; name: string }[] = [
   { key: 'ai.per_user_daily', name: 'AI-разборов на пользователя в сутки' },
@@ -32,7 +34,6 @@ export function SettingsFeatures() {
   const me = useMe();
   const { data, error, loading, reload } = useLoad<{ settings: Record<string, SettingValue> }>('/api/admin/settings');
   const [pending, setPending] = useState<Pending | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<string | null>(null);
   const editable = can(me.admin.role, 'manage_settings');
 
@@ -50,11 +51,11 @@ export function SettingsFeatures() {
                 <div className="feature" key={f.key}>
                   <div>
                     <div className="feature-name" id={`f-${f.key}`}>{f.name}</div>
-                    <div className="feature-desc">{f.desc}</div>
+                    <div className="feature-desc">{f.desc}{!f.live && <> · <span className="muted">пока не применяется в Mini App</span></>}</div>
                   </div>
                   <button type="button" className="toggle" role="switch" aria-checked={on} aria-labelledby={`f-${f.key}`}
                     // A setting with its own permission (the credits switch: the owner's) is editable only with it.
-                    disabled={!editable || (data.settings[f.key]?.permission === 'manage_credits' && me.admin.role !== 'owner')}
+                    disabled={!editable || !f.live || (data.settings[f.key]?.permission === 'manage_credits' && me.admin.role !== 'owner')}
                     title={data.settings[f.key]?.permission === 'manage_credits' && me.admin.role !== 'owner' ? 'Только владелец' : undefined}
                     onClick={() => setPending({ key: f.key, value: !on, label: `${f.name}: ${on ? 'выключить' : 'включить'}` })} />
                 </div>
@@ -62,19 +63,13 @@ export function SettingsFeatures() {
             })}
             {LIMITS.map((l) => {
               const s = data.settings[l.key];
-              const draft = drafts[l.key] ?? String(s?.value ?? '');
-              const n = Number(draft);
-              const valid = draft !== '' && Number.isInteger(n) && n >= (s?.min ?? 0) && n <= (s?.max ?? 0);
               return (
                 <div className="feature" key={l.key} style={{ alignItems: 'flex-end' }}>
                   <div className="field" style={{ margin: 0, flex: 1 }}>
                     <label htmlFor={`l-${l.key}`} style={{ fontWeight: 500, fontSize: 13, color: 'var(--text)' }}>{l.name}</label>
-                    <input id={`l-${l.key}`} className="control" style={{ maxWidth: 360 }} inputMode="numeric" value={draft} disabled={!editable}
-                      onChange={(e) => setDrafts((d) => ({ ...d, [l.key]: e.target.value.replace(/\D/g, '') }))} />
-                    <span className={valid ? 'field-hint' : 'field-error'}>Допустимо {s?.min}–{s?.max}; не выше потолка окружения</span>
+                    <input id={`l-${l.key}`} className="control" style={{ maxWidth: 360 }} value={String(s?.value ?? '')} disabled readOnly />
+                    <span className="field-hint">Пока не применяется в Mini App: лимит задаётся окружением и меняется деплоем</span>
                   </div>
-                  <button type="button" className="btn" disabled={!editable || !valid || n === s?.value}
-                    onClick={() => setPending({ key: l.key, value: n, label: `${l.name}: ${String(s?.value)} → ${n}` })}>Сохранить</button>
                 </div>
               );
             })}
@@ -89,11 +84,10 @@ export function SettingsFeatures() {
           <aside>
             <SectionHead title="Подтверждение изменений" />
             <p style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.35, marginTop: 30 }}>
-              Публикация настроек требует повторной 2FA и указания причины. В рабочей версии Mini App применяет новую
-              конфигурацию не позже чем через 30 секунд.
+              Изменение настройки требует повторной 2FA и указания причины.
             </p>
             <Note title="Что применяется в Mini App">«Кредиты за прогнозы» и курсы депозитов применяются в Mini App сразу после
-              сохранения. Остальные переключатели и лимиты пока сохраняются только в admin.db с записью в журнал.</Note>
+              сохранения. Остальные переключатели и лимиты пока не применяются и заблокированы.</Note>
             <Note title="Ограничение безопасности">Недоступность копии настроек выключает управляемые функции (закрытый режим).</Note>
             <div style={{ marginTop: 28 }}><span className="chip info">Изменение с аудитом</span></div>
           </aside>
@@ -105,7 +99,6 @@ export function SettingsFeatures() {
           onConfirm={async (input) => {
             await api(`/api/admin/settings/${encodeURIComponent(pending.key)}`, { method: 'POST', body: { ...input, value: pending.value } });
             setPending(null);
-            setDrafts({});
             setToast('Настройка сохранена и записана в журнал');
             reload();
           }} />

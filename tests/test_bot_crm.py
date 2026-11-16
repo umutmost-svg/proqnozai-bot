@@ -232,3 +232,21 @@ def test_messages_sent_before_activation_are_never_collected(temp_db, tmp_path, 
     asyncio.run(inquiries.inquiry_hook(queued, None))
     queued.message.reply_text.assert_not_awaited()  # no notice, nothing stored
     assert not (tmp_path / "bot-crm.db").exists()
+
+
+def test_inquiries_are_capped_per_user(tmp_path):
+    # CRM audit P1: one scripted account must not fill the shared volume.
+    crm = BotCrm(tmp_path / "bot-crm.db")
+    crm.init_schema()
+    crm.mark_notice(7, 0, 90)
+    crm.mark_notice(8, 0, 90)
+    t = 10_000_000
+    for i in range(bot_crm.INQUIRIES_PER_HOUR + 5):
+        crm.record_inquiry(7, f"m{i}", t + i)
+    crm.record_inquiry(8, "other user", t)
+    with sqlite3.connect(tmp_path / "bot-crm.db") as conn:
+        per_user = dict(conn.execute("SELECT user_id, COUNT(*) FROM inquiries GROUP BY user_id"))
+    assert per_user == {7: bot_crm.INQUIRIES_PER_HOUR, 8: 1}
+    crm.record_inquiry(7, "an hour later", t + 3601)
+    with sqlite3.connect(tmp_path / "bot-crm.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM inquiries WHERE user_id = 7").fetchone()[0] == bot_crm.INQUIRIES_PER_HOUR + 1

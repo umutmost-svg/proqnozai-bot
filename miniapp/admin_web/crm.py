@@ -12,16 +12,95 @@ Local pilot limitations (docs/miniapp/admin-pilot.md):
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import secrets
 import re
 import sqlite3
 from collections.abc import Iterable
 from typing import Any
+from urllib.parse import urlsplit
 
 from miniapp.credits import Credits
 from miniapp.admin_web.accounts import REASON_OF_E, ActionError, Admin, AdminStore, reason_digest
 from miniapp.admin_web.ads import bump_revision as bump_ads_revision
+
+# Broadcast text (CRM audit P1, owner "да, делай" 17.11): Telegram HTML plus the {имя} placeholder, as the editor
+# promises. Only Telegram's tags are kept as tags; every other "<", ">" and "&" is escaped, so a stray "<" in plain
+# text is shown as typed instead of failing the whole batch. Unbalanced or unknown markup is refused at save time.
+NAME_PLACEHOLDER = "{имя}"
+_TAG = re.compile(r'<(/?)(b|strong|i|em|u|ins|s|strike|del|code|pre|tg-spoiler|blockquote|a)'
+                  r'(\s+href="(?:https://|tg://user\?id=)[^"<>\s]{1,280}")?\s*>', re.IGNORECASE)
+_ENTITY = re.compile(r"&(?:lt|gt|amp|quot|#\d{1,7}|#x[0-9a-fA-F]{1,6});")
+# Longest possible name after escaping (Telegram first names are at most 64 characters; "&" -> "&amp;").
+_WORST_NAME = "&" * 64
+
+
+def render_broadcast(body: str, first_name: str | None) -> str:
+    """The text one recipient gets (parse mode HTML): allowed tags kept, everything else escaped, {имя} filled in.
+    Raises ValueError("invalid_html") for unbalanced tags, a link tag without an https/tg href or attributes elsewhere."""
+    out, stack, pos = [], [], 0
+    name = html.escape(first_name or "", quote=False)
+    while pos < len(body):
+        ch = body[pos]
+        if ch == "<" and (m := _TAG.match(body, pos)):
+            closing, tag, href = m.group(1) == "/", m.group(2).lower(), m.group(3)
+            if closing:
+                if href or not stack or stack.pop() != tag:
+                    raise ValueError("invalid_html")
+            else:
+                if (tag == "a") != bool(href):
+                    raise ValueError("invalid_html")
+                # Telegram's nesting rules: nothing inside code, only code inside pre, no link inside a link.
+                if "code" in stack or ("pre" in stack and tag != "code") or (tag == "a" and "a" in stack):
+                    raise ValueError("invalid_html")
+                if href and "https://" in href and not valid_button_url(href.split('"')[1]):
+                    raise ValueError("invalid_html")  # the same URL rule as buttons (host, port)
+                stack.append(tag)
+            out.append(m.group(0))
+            pos = m.end()
+        elif ch == "&" and (m := _ENTITY.match(body, pos)):
+            out.append(m.group(0))
+            pos = m.end()
+        elif body.startswith(NAME_PLACEHOLDER, pos):
+            out.append(name)
+            pos += len(NAME_PLACEHOLDER)
+        else:
+            out.append(html.escape(ch, quote=False))
+            pos += 1
+    if stack:
+        raise ValueError("invalid_html")
+    return "".join(out)
+
+
+def html_fits(body: str) -> bool:
+    """Valid markup whose longest per-recipient text still fits one queued message."""
+    try:
+        return len(render_broadcast(body, _WORST_NAME)) <= MAX_TEXT
+    except ValueError:
+        return False
+
+
+def render_plain(body: str, first_name: str | None) -> str:
+    """A body saved before markup was checked (17.11) that is not valid markup or would outgrow the limit once
+    escaped: sent as PLAIN text (no parse mode), exactly as typed, {имя} filled in, cut to the limit."""
+    return body.replace(NAME_PLACEHOLDER, first_name or "")[:MAX_TEXT]
+
+
+def valid_button_url(url: Any) -> bool:
+    if url == "miniapp":
+        return True
+    if not isinstance(url, str) or len(url) > 300 or not url.startswith("https://"):
+        return False
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018 — raises on a malformed port ("https://x.example:bad")
+    except ValueError:
+        return False
+    labels = (parts.hostname or "").split(".")
+    return (parts.scheme == "https" and len(labels) >= 2 and all(lb and lb.replace("-", "").isalnum() for lb in labels)
+            and not parts.username and not any(c.isspace() for c in url))
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS crm_tags (
@@ -591,6 +670,12 @@ class CrmStore:
                 self.accounts._event(conn, now, admin_id, "user.message", "user", str(user_id), None,
                                      {"messageId": msg_id, "queued": True}, None, None, "completed", request_id)
 
+    def mark_broadcast_sent(self, broadcast_id: int, now: int) -> bool:
+        """A scheduled broadcast the bot has finished (no job left to send): `sent`, no longer cancellable."""
+        with self.accounts._write() as conn:
+            return conn.execute("UPDATE crm_broadcasts SET status = 'sent', updated_at = ? WHERE id = ? "
+                                "AND status = 'scheduled'", (now, broadcast_id)).rowcount > 0
+
     def frozen_recipients(self, broadcast_id: int) -> list[int]:
         with self.accounts._connect() as conn:
             return [r[0] for r in conn.execute("SELECT user_id FROM crm_broadcast_recipients WHERE broadcast_id = ? "
@@ -634,9 +719,16 @@ class CrmStore:
         buttons = data.get("buttons") or []
         if not isinstance(buttons, list) or len(buttons) > 3 or not all(
                 isinstance(b, dict) and isinstance(b.get("text"), str) and 1 <= len(b["text"]) <= 40
-                and isinstance(b.get("url"), str) and (b["url"].startswith("https://") or b["url"] == "miniapp")
-                and len(b["url"]) <= 300 for b in buttons):
+                and valid_button_url(b.get("url")) for b in buttons):
             raise ActionError("invalid_buttons")
+        try:
+            visible = re.sub(r"<[^>]*>", "", render_broadcast(body.replace(NAME_PLACEHOLDER, ""), None))
+        except ValueError:
+            raise ActionError("invalid_html") from None
+        if not visible.strip():  # a recipient without a first name must still get a message
+            raise ActionError("invalid_body")
+        if not html_fits(body):  # the longest text any recipient can get must still fit one queued message
+            raise ActionError("body_too_long")
         buttons = [{"text": b["text"], "url": b["url"]} for b in buttons]
         # Auto-delete in the users' chats: Telegram allows it within 48 h of sending, hence these choices.
         delete_after = data.get("deleteAfterHours")

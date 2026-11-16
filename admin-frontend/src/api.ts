@@ -78,7 +78,12 @@ const MESSAGES: Record<string, string> = {
   insufficient_balance: 'Недостаточно кредитов для списания.',
   invalid_rules: 'Проверьте условия сегмента.',
   name_taken: 'Сегмент с таким названием уже есть.',
-  invalid_buttons: 'Кнопка: текст до 40 символов и ссылка https:// или Mini App.',
+  invalid_buttons: 'Кнопка: текст до 40 символов и ссылка https:// с адресом сайта или Mini App.',
+  invalid_html: 'Разметка: только теги Telegram (b, i, u, s, code, pre, a href, blockquote, tg-spoiler), каждый закрыт.',
+  body_too_long: 'Текст слишком длинный с учётом разметки и имени.',
+  invalid_body: 'В тексте должно быть что-то кроме {имя}: у части пользователей имени нет.',
+  not_cancellable: 'Рассылку уже нельзя отменить: она отправлена или отменена.',
+  access_not_published: 'Блокировка записана, но Mini App её ещё не получил. Повторите действие.',
   not_a_draft: 'Изменять можно только черновик.',
   invalid_time: 'Время отправки: от текущего момента до 90 дней вперёд.',
   idempotency_key_reused: 'Повтор с другими данными. Откройте диалог заново.',
@@ -278,6 +283,8 @@ export interface Broadcast {
   id: number; name: string; rules: Rules; body: string; buttons: { text: string; url: string }[];
   status: 'draft' | 'scheduled' | 'cancelled' | 'sent'; scheduledAt: number | null; recipients: number | null;
   createdAt: number; updatedAt: number; by: string | null; audience?: number;
+  /** Jobs by status from the bot's queue (scheduled, sent and cancelled broadcasts). */
+  delivery?: Partial<Record<'queued' | 'sending' | 'sent' | 'failed' | 'expired' | 'cancelled', number>>;
   /** Hours after sending at which the bot deletes the message in each chat (null = never). */
   deleteAfterHours?: number | null;
 }

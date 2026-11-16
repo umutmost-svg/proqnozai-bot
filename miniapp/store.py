@@ -516,7 +516,7 @@ class Store:
         where, args = ["1 = 1"], []
         if query:
             q = query.strip().lstrip("@")
-            if q.isdigit():
+            if q.isascii() and q.isdigit() and len(q) <= 18:  # "²".isdigit(); 20 digits overflow SQLite's integer
                 where.append("(u.telegram_user_id = ? OR u.username LIKE ? ESCAPE '\\')")
                 args += [int(q), _like(q)]
             else:

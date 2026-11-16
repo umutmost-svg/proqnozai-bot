@@ -31,6 +31,8 @@ logger = logging.getLogger("bot_crm")
 DAY = 86400
 REF_PREFIX = "ref_"
 MAX_INQUIRY = 2000
+INQUIRIES_PER_HOUR = 30   # stored per user (more are dropped, logged by count only)
+INQUIRIES_PER_DAY = 200
 DEFAULT_RETENTION_DAYS = 90
 MIN_RETENTION_DAYS, MAX_RETENTION_DAYS = 1, 365
 PURGE_EVERY_S = 3600
@@ -158,8 +160,13 @@ class BotCrm:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 noticed = conn.execute("SELECT 1 FROM inquiry_notices WHERE user_id = ?", (user_id,)).fetchone()
-                if noticed is not None:
+                # Per-user caps (CRM audit P1): one scripted account must not fill the shared volume.
+                recent = conn.execute("SELECT COUNT(*), SUM(at > ?) FROM inquiries WHERE user_id = ? AND at > ?",
+                                      (now - 3600, user_id, now - DAY)).fetchone() if noticed is not None else (0, 0)
+                if noticed is not None and (recent[1] or 0) < INQUIRIES_PER_HOUR and recent[0] < INQUIRIES_PER_DAY:
                     conn.execute("INSERT INTO inquiries (user_id, at, text) VALUES (?, ?, ?)", (user_id, now, text))
+                elif noticed is not None:
+                    logger.info("event=inquiry_capped")
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
