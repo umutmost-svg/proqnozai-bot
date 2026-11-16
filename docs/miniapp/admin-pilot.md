@@ -108,7 +108,9 @@ Telegram, планирование) · Сегменты (конструктор 
   архив — право `manage_referrals` (owner, admin); в журнал — id, код и канал, без названия. Статистика — только
   агрегаты, видна аналитику.
 - Ссылка бота `https://t.me/<бот>?start=ref_<код>`, Mini App — `https://t.me/<бот>/<app>?startapp=ref_<код>`; имена
-  берутся из `ADMIN_BOT_USERNAME` и `ADMIN_MINIAPP_SHORT_NAME` (не заданы — показывается только параметр).
+  берутся из `ADMIN_BOT_USERNAME` и `ADMIN_MINIAPP_SHORT_NAME`. Без короткого имени ссылка Mini App —
+  `https://t.me/<бот>?startapp=ref_<код>` (основное Mini App бота, включается в BotFather); без имени бота —
+  только параметр.
 - Атрибуция — только первый запуск: бот пишет `(user, code)` в `bot-crm.db` (`BOT_CRM_DB` + `BOT_REFERRALS_ENABLED=true`,
   только если пользователя ещё нет в `bot.db`; ошибка файла не мешает `/start`); Mini App — в `miniapp.db`
   `user_attribution` в той же транзакции, что создаёт пользователя (`MINIAPP_REFERRALS_ENABLED=true`). При двух

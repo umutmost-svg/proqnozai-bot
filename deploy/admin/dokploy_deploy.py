@@ -113,6 +113,8 @@ env_vars = {
     "ADMIN_PUBLIC_HOST": DOMAIN,
     "ADMIN_EDGE_SECRET": EDGE,
     "ADMIN_WEB_PORT": str(PORT),
+    # Public names, for full referral links in the panel (the Mini App is the bot's main Mini App).
+    "ADMIN_BOT_USERNAME": "ProqnozAI_bot",
 }
 for k, v in env_vars.items():
     if "\n" in v or not v:

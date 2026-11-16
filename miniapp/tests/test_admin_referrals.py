@@ -26,7 +26,8 @@ def _bot_start(config, user_id: int, code: str, at: int) -> None:
 def test_link_urls():
     assert link_url("bot", "abc", "sporbot", None) == "https://t.me/sporbot?start=ref_abc"
     assert link_url("miniapp", "abc", "sporbot", "app") == "https://t.me/sporbot/app?startapp=ref_abc"
-    assert link_url("miniapp", "abc", "sporbot", None) is None and link_url("bot", "abc", None, None) is None
+    assert link_url("miniapp", "abc", "sporbot", None) == "https://t.me/sporbot?startapp=ref_abc"  # main Mini App
+    assert link_url("bot", "abc", None, None) is None
 
 
 def test_config_validates_public_names(tmp_path):

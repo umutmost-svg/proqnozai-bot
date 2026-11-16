@@ -1,7 +1,7 @@
 """Individual referral links (admin.db) and their attribution.
 
 A link is a code; the bot link is `t.me/<bot>?start=ref_<code>`, the Mini App link
-`t.me/<bot>/<app>?startapp=ref_<code>`. Attribution happens on the user's FIRST start only, on the side that
+`t.me/<bot>/<app>?startapp=ref_<code>` (or `t.me/<bot>?startapp=ref_<code>` for the bot's main Mini App). Attribution happens on the user's FIRST start only, on the side that
 saw it: the bot records it in `bot-crm.db` (BOT_REFERRALS_ENABLED), the Mini App in its own `user_attribution`
 table (MINIAPP_REFERRALS_ENABLED). Both are read here; a user attributed on both sides keeps the earlier one.
 
@@ -40,7 +40,8 @@ def link_url(channel: str, code: str, bot_username: str | None, app_name: str | 
     if channel == "bot":
         return f"https://t.me/{bot_username}?start={PREFIX}{code}"
     if not app_name:
-        return None
+        # The bot's MAIN Mini App (BotFather → Configure Mini App): opens the app directly, same start parameter.
+        return f"https://t.me/{bot_username}?startapp={PREFIX}{code}"
     return f"https://t.me/{bot_username}/{app_name}?startapp={PREFIX}{code}"
 
 
