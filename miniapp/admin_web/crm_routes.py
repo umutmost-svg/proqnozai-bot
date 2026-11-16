@@ -3,6 +3,7 @@ credits, analytics). Registered by app.create_admin_app; shares its guards and h
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -16,7 +17,7 @@ from miniapp.ads.policy import public_key_hex as policy_public_key_hex
 from miniapp.admin_web.access import AccessPublisher
 from miniapp.admin_web.outbox import Outbox
 from miniapp.admin_web.accounts import ActionError
-from miniapp.admin_web.crm import RULE_FIELDS, CrmStore, matches, validate_rules
+from miniapp.admin_web.crm import EXTRA_PARTS, RULE_FIELDS, CrmStore, matches, validate_rules
 from miniapp.admin_web.insights import UserInsights, geo
 from miniapp.store import BurnWindow
 
@@ -90,12 +91,49 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
 
     publish_access()
 
+    extras_cache: dict[tuple, tuple[int, dict[int, dict]]] = {}
+
+    def extras_for(rules: dict, users: list[dict], t: int) -> dict[int, dict]:
+        """Telemetry and referral facts per user, only the parts the segment's rules use (crm.EXTRA_PARTS). A part that
+        cannot be read leaves NO record, so its rules match nobody (never "did not"). Cached for 30 s: the segments
+        page computes every saved segment over the same users."""
+        parts = frozenset(EXTRA_PARTS[k] for k in rules if k in EXTRA_PARTS)
+        if not parts or not users:
+            return {}
+        ids = [u["id"] for u in users]
+        key = (parts, len(ids), hash(tuple(ids)))
+        if (hit := extras_cache.get(key)) is not None and t - hit[0] < 30:
+            return hit[1]
+        extras: dict[int, dict] = {uid: {} for uid in ids}
+        tele = parts - {"source"}
+        if tele:
+            got = insights.segment_extras(ids, t, frozenset(tele))
+            if got is None:
+                return {}
+            for uid in ids:
+                extras[uid].update(got.get(uid, {}))
+                if "activity" in tele:
+                    extras[uid].setdefault("opened", False)
+        if "source" in parts:
+            try:
+                found = ctx.sources(ids, strict=True)
+            except sqlite3.Error:
+                return {}
+            for uid, src in found.items():
+                extras[uid]["source"] = src["channel"] if src else None
+        if len(extras_cache) > 32:
+            extras_cache.clear()
+        extras_cache[key] = (t, extras)
+        return extras
+
     def audience(rules: dict, query: str = "") -> list[dict]:
         t = ctx.now()
         _, users = store.list_users(t, query=query, sort="created", descending=True, limit=MAX_SCAN)
         tags = crm.tags_by_user()
         blocked = crm.blocked()
-        return [u for u in users if matches(u, rules, set(tags.get(u["id"], [])), u["id"] in blocked, t)]
+        extras = extras_for(rules, users, t)
+        return [u for u in users
+                if matches(u, rules, set(tags.get(u["id"], [])), u["id"] in blocked, t, extras.get(u["id"]))]
 
     def broadcast_audience(rules: dict) -> list[dict]:
         """Recipients of a broadcast: blocked users are always excluded."""
@@ -146,8 +184,10 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         t = ctx.now()
         tags = crm.tags_by_user(missing)
         blocked = crm.blocked()
-        return [u for u in store.users_by_ids(sorted(missing), t)
-                if matches(u, rules, set(tags.get(u["id"], [])), u["id"] in blocked, t)]
+        found = store.users_by_ids(sorted(missing), t)
+        extras = extras_for(rules, found, t)
+        return [u for u in found
+                if matches(u, rules, set(tags.get(u["id"], [])), u["id"] in blocked, t, extras.get(u["id"]))]
 
     def rules_from_query(request: Request) -> dict:
         q = request.query_params

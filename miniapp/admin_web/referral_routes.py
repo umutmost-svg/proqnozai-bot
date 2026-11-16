@@ -29,12 +29,14 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
     insights = UserInsights(ctx.telemetry_file)
     store = ctx.store
 
-    def sources(user_ids: list[int]) -> dict[int, dict | None]:
+    def sources(user_ids: list[int], strict: bool = False) -> dict[int, dict | None]:
         if not user_ids:
             return {}
         wanted = set(user_ids)
-        bot = bot_file.starts(user_ids)
-        app_starts = {uid: a for uid, a in store.attributions().items() if uid in wanted}
+        if strict and not bot_file.has_table("referral_starts"):  # not recorded is not "no referral"
+            raise sqlite3.OperationalError("bot referral records are not available")
+        bot = bot_file.starts(user_ids, strict=strict)
+        app_starts = {uid: a for uid, a in store.attributions(strict=strict).items() if uid in wanted}
         links = referrals.by_code()
         return {uid: source_of(uid, bot, app_starts, links) for uid in user_ids}
 

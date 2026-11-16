@@ -143,7 +143,20 @@ MAX_GROUP = 5000
 RULE_FIELDS = {
     "registered_within_days": int, "active_within_days": int, "inactive_for_days": int,
     "lang_in": list, "tag_has": str, "tag_not": str, "has_active_session": bool, "blocked": bool,
+    # Behaviour and origin (owner 15.11), from the Mini App's telemetry and the referral records; a user without
+    # that data never matches a rule that needs it ("unknown" is not "any").
+    "country_in": list, "platform_in": list, "forecasts_min": int, "active_days_min": int, "used_ai": bool,
+    "opened_miniapp": bool, "clicked_ad": bool, "source_in": list,
 }
+# Rules that need the per-user extras (telemetry, referrals): computed only when a segment uses one.
+EXTRA_RULES = frozenset({"country_in", "platform_in", "forecasts_min", "active_days_min", "used_ai", "opened_miniapp",
+                         "clicked_ad", "source_in"})
+# Which telemetry each extra rule reads ("source" comes from the referral records instead).
+EXTRA_PARTS = {"country_in": "edge", "platform_in": "edge", "forecasts_min": "activity", "active_days_min": "activity",
+               "used_ai": "activity", "opened_miniapp": "activity", "clicked_ad": "ads", "source_in": "source"}
+PLATFORM_GROUPS = {"ios": {"ios"}, "android": {"android", "android_x"}, "desktop": {"tdesktop", "macos", "unigram"},
+                   "web": {"web", "weba", "webk"}}
+SOURCES = ("bot", "miniapp", "none")
 
 
 def validate_rules(rules: Any) -> dict:
@@ -163,12 +176,45 @@ def validate_rules(rules: Any) -> dict:
         if kind is list and (not isinstance(value, list) or not 1 <= len(value) <= 10
                              or not all(isinstance(v, str) and 1 <= len(v) <= 8 for v in value)):
             raise ActionError("invalid_rules")
+        if key == "country_in" and not all(len(v) == 2 and v.isascii() and v.isalpha() and v.isupper() for v in value):
+            raise ActionError("invalid_rules")
+        if key == "platform_in" and not set(value) <= set(PLATFORM_GROUPS):
+            raise ActionError("invalid_rules")
+        if key == "source_in" and not set(value) <= set(SOURCES):
+            raise ActionError("invalid_rules")
+        if key == "active_days_min" and value > 30:
+            raise ActionError("invalid_rules")
         out[key] = value.strip() if isinstance(value, str) else value
     return out
 
 
-def matches(user: dict, rules: dict, tags: set[str], blocked: bool, now: int) -> bool:
+def needs_extra(rules: dict) -> bool:
+    return bool(EXTRA_RULES & set(rules))
+
+
+def matches(user: dict, rules: dict, tags: set[str], blocked: bool, now: int, extra: dict | None = None) -> bool:
+    """`extra` (only when needs_extra): country, platform, forecasts and activeDays (last 30 days), aiCreated,
+    opened (any Mini App activity since collection started), adClicks, source ('bot' / 'miniapp' / None)."""
     day = 86400
+    if needs_extra(rules):
+        if extra is None:
+            return False
+        if "country_in" in rules and extra.get("country") not in rules["country_in"]:
+            return False
+        if "platform_in" in rules and not any(extra.get("platform") in PLATFORM_GROUPS[g] for g in rules["platform_in"]):
+            return False
+        if "forecasts_min" in rules and extra.get("forecasts", 0) < rules["forecasts_min"]:
+            return False
+        if "active_days_min" in rules and extra.get("activeDays", 0) < rules["active_days_min"]:
+            return False
+        if "used_ai" in rules and ("opened" not in extra or (extra.get("aiCreated", 0) > 0) != rules["used_ai"]):
+            return False
+        if "opened_miniapp" in rules and ("opened" not in extra or extra["opened"] != rules["opened_miniapp"]):
+            return False
+        if "clicked_ad" in rules and (extra.get("adClicks", 0) > 0) != rules["clicked_ad"]:
+            return False
+        if "source_in" in rules and ("source" not in extra or (extra["source"] or "none") not in rules["source_in"]):
+            return False
     if "registered_within_days" in rules and user["createdAt"] < now - rules["registered_within_days"] * day:
         return False
     if "active_within_days" in rules and user["lastLoginAt"] < now - rules["active_within_days"] * day:

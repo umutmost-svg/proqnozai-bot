@@ -129,19 +129,24 @@ class BotCrmFile:
 
     # ---- referral starts --------------------------------------------------------------------
 
-    def starts(self, user_ids: Iterable[int] | None = None) -> dict[int, dict]:
+    def starts(self, user_ids: Iterable[int] | None = None, strict: bool = False) -> dict[int, dict]:
+        """`strict`: an unreadable file raises (a segment must never read it as "no referral")."""
         if user_ids is None:
-            rows = self._read("SELECT user_id, code, at FROM referral_starts")
+            rows = self._read("SELECT user_id, code, at FROM referral_starts", strict=strict)
         else:
             ids = sorted(set(user_ids))
             rows = []
             for i in range(0, len(ids), _CHUNK):
                 chunk = ids[i:i + _CHUNK]
                 rows += self._read(f"SELECT user_id, code, at FROM referral_starts WHERE user_id IN "
-                                   f"({','.join('?' * len(chunk))})", tuple(chunk))
+                                   f"({','.join('?' * len(chunk))})", tuple(chunk), strict=strict)
         return {int(u): {"code": c, "at": int(a)} for u, c, a in rows}
 
     # ---- inquiries --------------------------------------------------------------------------
+
+    def has_table(self, name: str) -> bool:
+        """Strict: an unreadable file raises; a missing file or table is False."""
+        return bool(self._read("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,), strict=True))
 
     def collected(self) -> bool:
         return bool(self._read("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'inquiries'"))

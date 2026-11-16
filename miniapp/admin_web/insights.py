@@ -41,6 +41,11 @@ def _chunks(ids: list[int]) -> Iterator[list[int]]:
         yield ids[start:start + _CHUNK]
 
 
+# Segment windows, both inside what telemetry keeps (activity 400 days, ad events 90 days).
+OPENED_WINDOW_DAYS = 365
+AD_CLICK_WINDOW_DAYS = 60
+
+
 class UserInsights:
     def __init__(self, telemetry_file: Path) -> None:
         self.path = telemetry_file
@@ -197,6 +202,39 @@ class UserInsights:
                 "geo": [{"code": str(c).upper()[:2], "count": int(n)} for c, n in geo if isinstance(c, str) and len(c) == 2],
                 "platforms": [{"name": str(pl)[:32], "count": int(n)} for pl, n in platforms],
                 "activityHeat": heat}
+
+    def segment_extras(self, user_ids: list[int], now: int, parts: frozenset[str]) -> dict[int, dict] | None:
+        """Per user, for segment rules, only the `parts` asked for: "activity" (forecasts, AI analyses and active days
+        over the last 30 days, and "opened" = any activity in OPENED_WINDOW_DAYS), "edge" (sign-in country and
+        platform), "ads" (ad clicks in AD_CLICK_WINDOW_DAYS). Users without data are absent. None when telemetry is not collected or cannot be read: a segment
+        must never read a failure as "did not" (strict reads)."""
+        try:
+            if not self.available(strict=True):
+                return None
+            out: dict[int, dict] = {}
+            if "activity" in parts:
+                for uid, fc, ai, days in self._rows(
+                        "SELECT user_id, SUM(quick_single_ok + quick_coupon_ok + ai_created), SUM(ai_created), COUNT(*) "
+                        "FROM user_activity WHERE day >= ? AND day <= ? AND {ids} GROUP BY user_id", user_ids,
+                        (days_back(now, 29), days_back(now, 0)), strict=True):
+                    out[int(uid)] = {"forecasts": int(fc or 0), "aiCreated": int(ai or 0), "activeDays": int(days or 0)}
+                # Windows inside retention (activity 400 d, ad events 90 d): "no" within them is a real "no".
+                for (uid,) in self._rows("SELECT DISTINCT user_id FROM user_activity WHERE day >= ? AND day <= ? AND {ids}",
+                                         user_ids, (days_back(now, OPENED_WINDOW_DAYS - 1), days_back(now, 0)),
+                                         strict=True):
+                    out.setdefault(int(uid), {})["opened"] = True
+            if "edge" in parts:
+                for uid, country, platform in self._rows("SELECT user_id, country, platform FROM user_edge WHERE {ids}",
+                                                         user_ids, strict=True):
+                    out.setdefault(int(uid), {}).update(country=country, platform=platform)
+            if "ads" in parts:
+                for uid, n in self._rows("SELECT user_id, COUNT(*) FROM ad_events WHERE kind = 'click' AND day >= ? "
+                                         "AND day <= ? AND {ids} GROUP BY user_id", user_ids,
+                                         (days_back(now, AD_CLICK_WINDOW_DAYS - 1), days_back(now, 0)), strict=True):
+                    out.setdefault(int(uid), {})["adClicks"] = int(n)
+            return out
+        except sqlite3.Error:
+            return None
 
     def edge_countries(self, user_ids: Iterable[int] | None) -> dict[int, str]:
         """The latest country code the edge reported for the user: the sign-in record (D1), else the latest ad event

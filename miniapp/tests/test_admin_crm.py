@@ -351,3 +351,14 @@ def test_a_broadcast_can_ask_the_bot_to_delete_it_later(env):
                                                       "deleteAfterHours": 6}).json()["id"]
     draft = next(b for b in client.get("/api/admin/broadcasts").json()["items"] if b["id"] == bid)
     assert draft["deleteAfterHours"] == 6
+
+
+def test_behaviour_filters_never_count_users_without_data(env):
+    """No telemetry collected: a "did not" filter must give 0, not everyone (unknown is not "no")."""
+    _, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    everyone = post(client, "/api/admin/audience/preview", csrf, {"rules": {}}).json()["size"]
+    assert everyone > 0
+    for rules in ({"opened_miniapp": False}, {"used_ai": False}, {"country_in": ["AZ"]}, {"clicked_ad": False}):
+        assert post(client, "/api/admin/audience/preview", csrf, {"rules": rules}).json()["size"] == 0, rules
+    assert post(client, "/api/admin/audience/preview", csrf, {"rules": {"country_in": ["az"]}}).status_code == 400

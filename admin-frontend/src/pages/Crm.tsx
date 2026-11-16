@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { api, describeRules, errorText, RULE_LABELS, type Broadcast, type CreditsPage, type DialogThread, type Rules, type Segment, type TagCount } from '../api';
+import { api, describeRules, errorText, PLATFORM_LABELS, RULE_LABELS, SOURCE_LABELS, type Broadcast, type CreditsPage, type DialogThread, type Rules, type Segment, type TagCount } from '../api';
 import { num, utc } from '../format';
 import { can, useLoad, useMe, usePrefs, useServerMode } from '../state';
 import { Avatar, Card, DangerDialog, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, PageHead, Tag, tagTone, Toast } from '../ui';
@@ -92,7 +92,20 @@ export function Broadcasts() {
 
 function RulesEditor({ rules, onChange, tags }: { rules: Rules; onChange: (r: Rules) => void; tags: TagCount[] }) {
   const set = (k: keyof Rules, v: unknown) => { const n = { ...rules } as Record<string, unknown>; if (v === undefined || v === '' || (Array.isArray(v) && !v.length)) delete n[k]; else n[k] = v; onChange(n as Rules); };
-  const numField = (k: 'registered_within_days' | 'active_within_days' | 'inactive_for_days') => (
+  const yesNo = (k: 'used_ai' | 'opened_miniapp' | 'clicked_ad') => (
+    <div className="field"><label className="sm" htmlFor={`r-${k}`}>{RULE_LABELS[k]}</label>
+      <select id={`r-${k}`} className="control" value={rules[k] === undefined ? '' : rules[k] ? 'yes' : 'no'}
+        onChange={(e) => set(k, e.target.value ? e.target.value === 'yes' : undefined)}>
+        <option value="">не важно</option><option value="yes">да</option><option value="no">нет</option>
+      </select></div>
+  );
+  const pick = (k: 'platform_in' | 'source_in', labels: Record<string, string>) => (
+    <div className="field"><label className="sm" htmlFor={`r-${k}`}>{RULE_LABELS[k]}</label>
+      <select id={`r-${k}`} className="control" value={rules[k]?.[0] ?? ''} onChange={(e) => set(k, e.target.value ? [e.target.value] : undefined)}>
+        <option value="">любой</option>{Object.entries(labels).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select></div>
+  );
+  const numField = (k: 'registered_within_days' | 'active_within_days' | 'inactive_for_days' | 'forecasts_min' | 'active_days_min') => (
     <div className="field"><label className="sm" htmlFor={`r-${k}`}>{RULE_LABELS[k]}</label>
       <input id={`r-${k}`} className="control" inputMode="numeric" placeholder="любой" value={rules[k] ?? ''} onChange={(e) => set(k, e.target.value ? Number(e.target.value.replace(/\D/g, '')) || undefined : undefined)} /></div>
   );
@@ -113,6 +126,15 @@ function RulesEditor({ rules, onChange, tags }: { rules: Rules; onChange: (r: Ru
             <option value="">нет</option>{tags.map((t) => <option key={t.tag} value={t.tag}>{t.tag}</option>)}
           </select></div>
       </div>
+      <div className="small muted" style={{ marginTop: 14 }}>Поведение и происхождение — по данным Mini App с начала их сбора (ноябрь 2026). Если данные недоступны, такие фильтры никого не выбирают.</div>
+      <div className="field-row" style={{ marginTop: 8 }}>
+        <div className="field"><label className="sm" htmlFor="r-country">{RULE_LABELS.country_in}</label>
+          <input id="r-country" key={rules.country_in?.join(',') ?? ''} className="control" placeholder="AZ, TR, KZ" defaultValue={rules.country_in?.join(', ') ?? ''}
+            onBlur={(e) => set('country_in', e.target.value.toUpperCase().split(/[\s,]+/).filter((c) => /^[A-Z]{2}$/.test(c)).slice(0, 10))} /></div>
+        {pick('platform_in', PLATFORM_LABELS)}{pick('source_in', SOURCE_LABELS)}
+      </div>
+      <div className="field-row" style={{ marginTop: 12 }}>{numField('forecasts_min')}{numField('active_days_min')}</div>
+      <div className="field-row" style={{ marginTop: 12 }}>{yesNo('used_ai')}{yesNo('opened_miniapp')}{yesNo('clicked_ad')}</div>
     </>
   );
 }

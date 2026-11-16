@@ -179,6 +179,8 @@ export interface SettingValue { value: boolean | number; version: number | null;
 export type Rules = Partial<{
   registered_within_days: number; active_within_days: number; inactive_for_days: number; lang_in: string[];
   tag_has: string; tag_not: string; has_active_session: boolean; blocked: boolean;
+  country_in: string[]; platform_in: string[]; forecasts_min: number; active_days_min: number; used_ai: boolean;
+  opened_miniapp: boolean; clicked_ad: boolean; source_in: string[];
 }>;
 export interface Source { channel: 'bot' | 'miniapp'; code: string; at: number; linkId: number | null; name: string | null }
 export interface ReferralStats { starts: number; botStarts: number; miniappStarts: number; inMiniApp: number; active7d: number; converted: number | null }
@@ -307,7 +309,12 @@ export const RULE_LABELS: Record<string, string> = {
   registered_within_days: 'Регистрация не старше, дн', active_within_days: 'Входил за последние, дн',
   inactive_for_days: 'Не входил дольше, дн', lang_in: 'Язык', tag_has: 'Есть тег', tag_not: 'Нет тега',
   has_active_session: 'Есть активная сессия', blocked: 'Заблокирован',
+  country_in: 'Страна', platform_in: 'Платформа', forecasts_min: 'Прогнозов за 30 дн, от',
+  active_days_min: 'Активных дней из 30, от', used_ai: 'Брал AI-разбор (30 дн)', opened_miniapp: 'Открывал Mini App (год)',
+  clicked_ad: 'Кликал рекламу (60 дн)', source_in: 'Пришёл по ссылке',
 };
+export const PLATFORM_LABELS: Record<string, string> = { ios: 'iOS', android: 'Android', desktop: 'Desktop', web: 'Web' };
+export const SOURCE_LABELS: Record<string, string> = { bot: 'ссылка на бота', miniapp: 'ссылка на Mini App', none: 'без ссылки' };
 
 export function describeRules(rules: Rules): string[] {
   return Object.entries(rules).map(([k, v]) => {

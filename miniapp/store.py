@@ -449,11 +449,14 @@ class Store:
                 "LIMIT ? OFFSET ?", (now, *args, limit, offset)).fetchall()
         return total, [_user_row(r) for r in rows]
 
-    def attributions(self) -> dict[int, dict]:
+    def attributions(self, strict: bool = False) -> dict[int, dict]:
         """Referral codes of first Mini App starts (admin panel; read only). A database the Mini App has not opened
-        since this table was added has none: empty, not an error."""
+        since this table was added has none: empty, not an error — unless `strict` (a segment must not read "not
+        recorded" as "no referral"), which raises."""
         with self._connect() as conn:
             if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_attribution'").fetchone() is None:
+                if strict:
+                    raise sqlite3.OperationalError("user_attribution is not recorded")
                 return {}
             return {int(u): {"code": c, "at": int(a)} for u, c, a in conn.execute(
                 "SELECT user_id, code, created_at FROM user_attribution")}
