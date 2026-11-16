@@ -53,7 +53,10 @@ export function SettingsFeatures() {
                     <div className="feature-desc">{f.desc}</div>
                   </div>
                   <button type="button" className="toggle" role="switch" aria-checked={on} aria-labelledby={`f-${f.key}`}
-                    disabled={!editable} onClick={() => setPending({ key: f.key, value: !on, label: `${f.name}: ${on ? 'выключить' : 'включить'}` })} />
+                    // A setting with its own permission (the credits switch: the owner's) is editable only with it.
+                    disabled={!editable || (data.settings[f.key]?.permission === 'manage_credits' && me.admin.role !== 'owner')}
+                    title={data.settings[f.key]?.permission === 'manage_credits' && me.admin.role !== 'owner' ? 'Только владелец' : undefined}
+                    onClick={() => setPending({ key: f.key, value: !on, label: `${f.name}: ${on ? 'выключить' : 'включить'}` })} />
                 </div>
               );
             })}

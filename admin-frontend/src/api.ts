@@ -174,7 +174,7 @@ export interface AdminAccount {
   id: number; email: string; role: Role; state: 'active' | 'invited' | 'disabled'; twoFactor: boolean;
   lastLoginAt: number | null; createdAt: number;
 }
-export interface SettingValue { value: boolean | number; version: number | null; updatedAt: number | null; type: string; min?: number; max?: number }
+export interface SettingValue { value: boolean | number; version: number | null; updatedAt: number | null; type: string; min?: number; max?: number; permission?: string }
 
 // ---- CRM v2 ----
 
