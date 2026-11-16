@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS crm_credit_requests (
     created_at   INTEGER NOT NULL
 );
 -- MB ID decisions requested in the panel, applied to the Mini App in a second step.
-CREATE TABLE IF NOT EXISTS crm_mb_decisions (
+CREATE TABLE IF NOT EXISTS crm_mb_requests (
     request_id TEXT PRIMARY KEY,
     action     TEXT NOT NULL CHECK (action IN ('approve', 'reject', 'set')),
     user_id    INTEGER NOT NULL,
@@ -462,7 +462,7 @@ class CrmStore:
                   reason: object, now: int) -> dict:
         """The owner's decision on an MB ID a user entered in the Mini App (docs/miniapp/credits.md), for exactly
         the submission the owner saw. Two steps like a block: the request commits first (`requested` +
-        crm_mb_decisions); then the Mini App side (stale -> refused, nothing else changes), the CRM copy of an
+        crm_mb_requests); then the Mini App side (stale -> refused, nothing else changes), the CRM copy of an
         approved ID (ads audiences) and `completed`. A crash in between is finished at startup."""
         if not isinstance(mb_id, str) or not _MB_ID.match(mb_id) or not isinstance(submission, str) \
                 or not 1 <= len(submission) <= 40:
@@ -487,7 +487,7 @@ class CrmStore:
                                  (mb_id,)).fetchone() if mb_id else None
             if action != "reject" and owner is not None and owner[0] != user_id:
                 raise ActionError("mb_id_taken", 409)
-            conn.execute("INSERT INTO crm_mb_decisions (request_id, action, user_id, mb_id, submission, reason, "
+            conn.execute("INSERT INTO crm_mb_requests (request_id, action, user_id, mb_id, submission, reason, "
                          "admin_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                          (request_id, action, user_id, mb_id, submission, reason, actor.id, now))
             self.accounts._event(conn, now, actor.id, "user.mb_decision", "user", str(user_id), None,
@@ -499,7 +499,7 @@ class CrmStore:
         CRM copy, then `completed`. Every step repeats safely."""
         assert self.credits is not None
         with self.accounts._connect() as conn:
-            row = conn.execute("SELECT action, user_id, mb_id, submission, reason, admin_id FROM crm_mb_decisions "
+            row = conn.execute("SELECT action, user_id, mb_id, submission, reason, admin_id FROM crm_mb_requests "
                                "WHERE request_id = ?", (request_id,)).fetchone()
         if row is None:
             raise ActionError("not_found", 404)
@@ -510,9 +510,13 @@ class CrmStore:
         else:
             result = self.credits.decide_mb(user_id, mb_id, submission, action == "approve", reason)
         if result != "stale" and action in ("approve", "set"):
+            # The CRM copy mirrors the Mini App's CURRENT approved link, not this request's value: a recovered
+            # older request never overwrites a newer one (Codex credits r4 P1).
+            links = self.credits.store.mb_links(user_ids=[user_id])
+            current = links[0]["mbId"] if links and links[0]["state"] == "approved" else ""
             with self.accounts._write() as conn:
                 actor = Admin(admin_id, "", "owner", "active")  # the recorded owner: the CRM copy names who decided
-                self._write_mb(conn, actor, user_id, mb_id, now)
+                self._write_mb(conn, actor, user_id, current, now)
         self.accounts.complete_request("user.mb_decision", admin_id, str(user_id), None, now, request_id)
         if result == "stale":
             raise ActionError("mb_id_taken" if action == "set" else "mb_stale", 409)

@@ -438,11 +438,15 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
             rows = store.ai_token_days(since)
             for r in rows:
                 r["costUsd"] = token_cost(r["model"], r)
-            known = [r["costUsd"] for r in rows if r["costUsd"] is not None]
+            priced = [r for r in rows if r["costUsd"] is not None]
             calls_n = sum(r["calls"] for r in rows)
+            priced_calls = sum(r["calls"] for r in priced)
+            cost = sum(r["costUsd"] for r in priced)
             return {"source": "tokens", "days": rows, "pricing": AI_PRICING,
-                    "totals": {"calls": calls_n, "costUsd": round(sum(known), 4) if known else None,
-                               "perCallUsd": round(sum(known) / calls_n, 4) if known and calls_n else None}}
+                    # A model without a known price makes the total unknown, never an understated sum.
+                    "totals": {"calls": calls_n, "costUsd": round(cost, 4) if rows and len(priced) == len(rows) else None,
+                               "perCallUsd": round(cost / priced_calls, 4) if priced_calls else None,
+                               "unpricedCalls": calls_n - priced_calls}}
         calls = demo.ai_calls(days, today())
         if not can(request.state.admin.role, "read_personal"):
             for c in calls:
