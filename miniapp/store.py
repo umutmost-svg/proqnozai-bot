@@ -109,6 +109,17 @@ CREATE TABLE IF NOT EXISTS applied_commands (
     result     TEXT NOT NULL,
     applied_at INTEGER NOT NULL
 );
+-- Billed AI tokens per UTC day and model (cost accounting; counts only, no content).
+CREATE TABLE IF NOT EXISTS ai_tokens (
+    day         TEXT NOT NULL,
+    model       TEXT NOT NULL,
+    calls       INTEGER NOT NULL,
+    input       INTEGER NOT NULL,
+    output      INTEGER NOT NULL,
+    cache_read  INTEGER NOT NULL,
+    cache_write INTEGER NOT NULL,
+    PRIMARY KEY (day, model)
+);
 -- Paid AI calls per UTC day (per user and in total): survives restarts.
 CREATE TABLE IF NOT EXISTS ai_usage (
     day      TEXT NOT NULL,
@@ -124,7 +135,7 @@ _USER_COLUMNS = ("telegram_user_id, first_name, last_name, username, language_co
 _SESSION_COLUMNS = "token_hash, user_id, created_at, expires_at, revoked_at, init_hash"
 _OWN_TABLES = frozenset({"users", "sessions", "consumed_init_data", "ai_usage", "user_attribution", "sqlite_sequence",
                          "credit_accounts", "credit_ledger", "credit_items", "mb_links", "app_flags",
-                         "applied_commands"})
+                         "applied_commands", "ai_tokens"})
 _REFERRAL = re.compile(r"^ref_([a-z0-9]{3,24})$")
 
 
@@ -439,6 +450,23 @@ class Store:
                     (day, subject),
                 )
             return None
+
+    def record_ai_tokens(self, day: str, model: str, usage: dict[str, int]) -> None:
+        with self._write() as conn:
+            conn.execute(
+                "INSERT INTO ai_tokens (day, model, calls, input, output, cache_read, cache_write) "
+                "VALUES (?, ?, 1, ?, ?, ?, ?) ON CONFLICT(day, model) DO UPDATE SET calls = calls + 1, "
+                "input = input + excluded.input, output = output + excluded.output, "
+                "cache_read = cache_read + excluded.cache_read, cache_write = cache_write + excluded.cache_write",
+                (day, model[:80], int(usage.get("input", 0)), int(usage.get("output", 0)),
+                 int(usage.get("cacheRead", 0)), int(usage.get("cacheWrite", 0))))
+
+    def ai_token_days(self, since_day: str) -> list[dict]:
+        """Admin: billed tokens per day and model since `since_day` (an older database: empty)."""
+        return [{"day": d, "model": m, "calls": c, "input": i, "output": o, "cacheRead": cr, "cacheWrite": cw}
+                for d, m, c, i, o, cr, cw in self._credit_read(
+                    "SELECT day, model, calls, input, output, cache_read, cache_write FROM ai_tokens WHERE day >= ? "
+                    "ORDER BY day, model", (since_day,))]
 
     def purge_expired(self, now: int) -> None:
         with self._write() as conn:

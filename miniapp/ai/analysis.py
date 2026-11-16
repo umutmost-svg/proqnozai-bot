@@ -156,6 +156,8 @@ class AiError(Exception):
 class Completion:
     text: str  # JSON that should satisfy the schema (validated by the caller)
     model: str  # the model that actually answered (a server-side fallback may differ)
+    # Billed tokens of the call {"input", "output", "cacheRead", "cacheWrite"} (cost accounting); None if unknown.
+    usage: dict[str, int] | None = None
 
 
 class ModelClient(Protocol):
@@ -289,12 +291,23 @@ class QuotaLedger(Protocol):
     def reserve_ai_call(self, day: str, limits: dict[str, int]) -> str | None:
         """Charges every {subject: limit} atomically, or none; returns the used-up subject or None."""
 
+    def record_ai_tokens(self, day: str, model: str, usage: dict[str, int]) -> None:
+        """Adds one call's billed tokens to the day's totals per model (cost accounting only)."""
+
 
 @dataclass
 class MemoryLedger:
     """In-process ledger (tests, live check). The app uses the Mini App store, which survives restarts."""
 
     used: dict[tuple[str, str], int] = field(default_factory=dict)
+
+    tokens: dict[tuple[str, str], dict[str, int]] = field(default_factory=dict)
+
+    def record_ai_tokens(self, day: str, model: str, usage: dict[str, int]) -> None:
+        total = self.tokens.setdefault((day, model), {"calls": 0})
+        total["calls"] += 1
+        for k, v in usage.items():
+            total[k] = total.get(k, 0) + v
 
     def reserve_ai_call(self, day: str, limits: dict[str, int]) -> str | None:
         for subject, limit in limits.items():
@@ -490,9 +503,19 @@ class AiService:
         request = f"Facts (JSON):\n{json.dumps(facts, ensure_ascii=False, sort_keys=True)}"
         try:
             # Wall-clock bound: the SDK timeout bounds network waits, not the whole call.
-            return await asyncio.wait_for(client.complete(system, request, SCHEMA), MODEL_TIMEOUT_S)
+            answer = await asyncio.wait_for(client.complete(system, request, SCHEMA), MODEL_TIMEOUT_S)
         except TimeoutError:
             raise AiError("timeout") from None
+        if answer.usage:
+            u = answer.usage
+            # Counts only (cost accounting): never the prompt or the answer.
+            logger.info("ai.usage model=%s in=%d out=%d cache_read=%d cache_write=%d", answer.model,
+                        u.get("input", 0), u.get("output", 0), u.get("cacheRead", 0), u.get("cacheWrite", 0))
+            try:
+                await asyncio.to_thread(self._ledger.record_ai_tokens, self._today(), answer.model, answer.usage)
+            except Exception as exc:  # noqa: BLE001 — accounting must never fail a paid, delivered analysis
+                logger.warning("event=ai_usage_record_failed type=%s", type(exc).__name__)
+        return answer
 
     def _until_kickoff(self, event: FootballEvent) -> float:
         return max(60.0, parse_instant(event.starts_at).timestamp() - self._clock())
@@ -786,7 +809,15 @@ class AnthropicModelClient:
         if text is None:
             raise AiError("bad_output")
         served = getattr(response, "model", None)
-        return Completion(text, served if isinstance(served, str) and served else self.model)
+        usage = getattr(response, "usage", None)
+        counts = None
+        if usage is not None:
+            def n(name: str) -> int:
+                value = getattr(usage, name, 0)
+                return value if isinstance(value, int) else 0
+            counts = {"input": n("input_tokens"), "output": n("output_tokens"),
+                      "cacheRead": n("cache_read_input_tokens"), "cacheWrite": n("cache_creation_input_tokens")}
+        return Completion(text, served if isinstance(served, str) and served else self.model, counts)
 
 
 AI_ERROR_CODES = frozenset({"not_configured", "limit_reached", "budget_exhausted", "refused", "bad_output",

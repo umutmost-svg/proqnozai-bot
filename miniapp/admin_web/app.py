@@ -60,6 +60,26 @@ def _finite(value: Any) -> Any:
     return value
 
 
+# USD per 1M tokens: input, output, cache read, cache write (5-minute). Anthropic list prices (2026-11).
+AI_PRICING: dict[str, tuple[float, float, float, float]] = {
+    "claude-opus-5-5": (4.0, 20.0, 0.20, 5.0),
+    "claude-opus-5": (5.0, 25.0, 0.50, 6.25),
+    "claude-opus-4-8": (5.0, 25.0, 0.50, 6.25),
+    "claude-sonnet-5-5": (2.0, 10.0, 0.10, 2.5),
+    "claude-haiku-5-5": (0.10, 0.50, 0.01, 0.125),
+}
+
+
+def token_cost(model: str, usage: dict) -> float | None:
+    """USD of the given token counts; None for a model without a known price (shown as unknown, never 0)."""
+    price = AI_PRICING.get(model)
+    if price is None:
+        return None
+    i, o, cr, cw = price
+    return round((usage["input"] * i + usage["output"] * o + usage["cacheRead"] * cr
+                  + usage["cacheWrite"] * cw) / 1_000_000, 6)
+
+
 def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.time) -> FastAPI:
     config.require_data()  # the pilot: its demo directory only; the server: the Mini App's data directory only
     SESSION_COOKIE, PRE_COOKIE = config.session_cookie, config.pre_cookie  # noqa: N806 — per mode
@@ -413,7 +433,16 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         admin_of(request)
         days = period(request)
         if not demo_allowed(request):
-            return {"source": "not_collected"}
+            # Real cost accounting: billed tokens per day and model from the Mini App (counts only).
+            since = (datetime.fromtimestamp(now(), UTC) - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+            rows = store.ai_token_days(since)
+            for r in rows:
+                r["costUsd"] = token_cost(r["model"], r)
+            known = [r["costUsd"] for r in rows if r["costUsd"] is not None]
+            calls_n = sum(r["calls"] for r in rows)
+            return {"source": "tokens", "days": rows, "pricing": AI_PRICING,
+                    "totals": {"calls": calls_n, "costUsd": round(sum(known), 4) if known else None,
+                               "perCallUsd": round(sum(known) / calls_n, 4) if known and calls_n else None}}
         calls = demo.ai_calls(days, today())
         if not can(request.state.admin.role, "read_personal"):
             for c in calls:

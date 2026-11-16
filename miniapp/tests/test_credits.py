@@ -180,3 +180,15 @@ def test_calculator_rate_follows_the_viewers_country(credits: Credits) -> None:
     assert credits.summary(UID, "TR")["deposit"] == {"currency": "USD", "perForecast": 3}
     assert credits.summary(UID, None)["deposit"] == {"currency": "USD", "perForecast": 3}
     assert credits.apply("r2", "flag", None, {"key": "credits.rates", "value": [{"country": "AZ"}]}) == "invalid"
+
+
+def test_ai_tokens_are_summed_per_day_and_model_and_priced(tmp_path: Path) -> None:
+    from miniapp.admin_web.app import token_cost
+    store = Store(tmp_path / "t.db")
+    store.init_schema()
+    for _ in range(2):
+        store.record_ai_tokens("2026-11-16", "claude-opus-5-5", {"input": 3000, "output": 2000, "cacheRead": 0, "cacheWrite": 0})
+    [row] = store.ai_token_days("2026-11-01")
+    assert row["calls"] == 2 and row["input"] == 6000 and row["output"] == 4000
+    assert token_cost("claude-opus-5-5", row) == pytest.approx((6000 * 4 + 4000 * 20) / 1e6)
+    assert token_cost("unknown-model", row) is None

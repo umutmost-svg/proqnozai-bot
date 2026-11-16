@@ -8,7 +8,43 @@ import {
   Status, useSort,
 } from '../ui';
 
-type AiData = { source: 'not_collected' } | { source: 'demo'; calls: AiCall[] };
+type TokenDay = { day: string; model: string; calls: number; input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number | null };
+type AiData =
+  | { source: 'not_collected' }
+  | { source: 'demo'; calls: AiCall[] }
+  | { source: 'tokens'; days: TokenDay[]; totals: { calls: number; costUsd: number | null; perCallUsd: number | null } };
+
+/** Real cost accounting: billed tokens per day and model, priced at list rates (counts only, no content). */
+function AiTokenCosts({ data }: { data: Extract<AiData, { source: 'tokens' }> }) {
+  const t = data.totals;
+  const sum = (k: 'input' | 'output' | 'cacheRead') => data.days.reduce((s, d) => s + d[k], 0);
+  return (
+    <>
+      <PageHead crumb="AI и расходы" title="AI и расходы" subtitle="Реальные токены AI-разборов по дням и стоимость по прайсу Anthropic" actions={<PeriodSelect />} />
+      <Metrics>
+        <Metric label="Вызовов AI" value={num(t.calls)} caption="за период" />
+        <Metric label="Стоимость" value={t.costUsd === null ? '—' : usd(t.costUsd)} caption="по прайс-листу" />
+        <Metric label="Один разбор" value={t.perCallUsd === null ? '—' : usd(t.perCallUsd)} caption="в среднем" />
+        <Metric label="Токены" value={`${num(sum('input'))} / ${num(sum('output'))}`} caption={`вход / выход · из кэша ${num(sum('cacheRead'))}`} />
+      </Metrics>
+      {data.days.length === 0 ? <Empty title="Вызовов за период не было">Учёт токенов ведётся с 16.11.2026.</Empty> : (
+        <div className="table-card">
+          <table className="table">
+            <thead><tr><th>День (UTC)</th><th>Модель</th><th className="num">Вызовов</th><th className="num">Вход</th><th className="num">Выход</th><th className="num">Стоимость</th><th className="num">За вызов</th></tr></thead>
+            <tbody>{[...data.days].reverse().map((d) => (
+              <tr key={`${d.day}-${d.model}`}>
+                <td>{d.day}</td><td className="mono">{d.model}</td><td className="num">{num(d.calls)}</td>
+                <td className="num">{num(d.input)}</td><td className="num">{num(d.output)}</td>
+                <td className="num">{d.costUsd === null ? '—' : usd(d.costUsd)}</td>
+                <td className="num">{d.costUsd === null || !d.calls ? '—' : usd(d.costUsd / d.calls)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
 
 const RESULT_LABEL: Record<string, string> = {
   delivered: 'Доставлен', not_delivered: 'Не доставлен', upstream_timeout: 'Таймаут', rate_limited: '429',
@@ -50,6 +86,7 @@ export function AiCosts() {
   const size = 15;
   const shownPage = Math.min(page, Math.max(1, Math.ceil(filtered.length / size)));
 
+  if (data && data.source === 'tokens') return <AiTokenCosts data={data} />;
   return (
     <>
       <PageHead crumb="AI и расходы" title="AI и расходы" subtitle="Себестоимость вызовов, токены и ошибки" />

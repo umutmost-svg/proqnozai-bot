@@ -250,7 +250,8 @@ def test_demo_telemetry_only_on_explicit_request(env):
     _, clock, client, _, secrets_ = env
     login(client, clock, secrets_, "owner@x.test")
     assert client.get("/api/admin/overview?days=30").json()["telemetry"] == {"source": "not_collected"}
-    assert client.get("/api/admin/ai?days=7").json() == {"source": "not_collected"}
+    # Real cost accounting (billed tokens from the Mini App), never the demo set unless asked for.
+    assert client.get("/api/admin/ai?days=7").json()["source"] == "tokens"
     assert client.get("/api/admin/sports-api?days=7").json() == {"source": "not_collected"}
     assert client.get("/api/admin/system").json()["source"] == "not_collected"
     demo = client.get("/api/admin/ai?days=7&demo=1").json()
