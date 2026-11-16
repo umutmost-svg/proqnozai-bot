@@ -26,7 +26,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from miniapp.admin_web import ads_routes, crm_routes, demo, ops_routes, referral_routes, value_routes
-from miniapp.admin_web.accounts import ActionError, Admin, AdminStore, AuthError, can
+from miniapp.admin_web.accounts import ActionError, Admin, AdminStore, AuthError, can, promoter_may
 from miniapp.admin_web.config import EDGE_SECRET_HEADER, AdminWebConfig
 from miniapp.forecast.history import GATE_MIN_FORECASTS, ForecastHistory
 from miniapp.forecast.version import MODEL_VERSION
@@ -114,14 +114,19 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
             if request.method not in ("GET", "HEAD"):
                 if request.headers.get("origin") not in config.origins:
                     return _err("bad_origin", 403, request)
-                if session is not None and path != "/api/admin/auth/login":
+                # Login and the invitation pages do not act through the session: no CSRF token is needed there.
+                if session is not None and path not in ("/api/admin/auth/login", "/api/admin/auth/invite",
+                                                        "/api/admin/auth/invite/accept"):
                     presented = request.headers.get(CSRF_HEADER) or ""
                     if not secrets.compare_digest(accounts.csrf_for(token), presented):
                         return _err("csrf", 403, request)
             public = path in ("/api/admin/health", "/api/admin/auth/login", "/api/admin/auth/totp",
-                              "/api/admin/auth/logout")
+                              "/api/admin/auth/logout", "/api/admin/auth/invite", "/api/admin/auth/invite/accept")
             if not public and session is None:
                 return _err("unauthenticated", 401, request)
+            if session is not None and session.admin.role == "promoter" and not public \
+                    and not promoter_may(request.method, path):
+                return _err("forbidden", 403, request)  # default deny for the promotion manager
         try:
             response = await call_next(request)
         except Exception as exc:  # noqa: BLE001 — never leak internals; the type is enough for the log
@@ -233,6 +238,30 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         if token:
             accounts.logout(token, now())
         response = JSONResponse({"ok": True})
+        response.delete_cookie(SESSION_COOKIE, path="/", secure=secure, httponly=True, samesite="strict")
+        return response
+
+    # Invitation links: the token travels in the body (the page keeps it in the URL fragment), never in a query.
+    @app.post("/api/admin/auth/invite")
+    async def invite_info(request: Request) -> Response:
+        data = await body(request)
+        try:
+            return JSONResponse(accounts.invite_info(str(data.get("token") or ""), now()))
+        except AuthError as exc:
+            return _err(str(exc), 404, request)
+
+    @app.post("/api/admin/auth/invite/accept")
+    async def invite_accept(request: Request) -> Response:
+        data = await body(request)
+        try:
+            accounts.accept_invite(str(data.get("token") or ""), str(data.get("password") or ""),
+                                   str(data.get("code") or ""), now())
+        except AuthError as exc:
+            return _err(str(exc), 404 if str(exc) == "invite_invalid" else 400, request)
+        # Any panel session of this browser ends: "go to sign in" must not land in someone else's account.
+        response = JSONResponse({"ok": True})
+        if token := request.cookies.get(SESSION_COOKIE):
+            accounts.logout(token, now())
         response.delete_cookie(SESSION_COOKIE, path="/", secure=secure, httponly=True, samesite="strict")
         return response
 
@@ -463,6 +492,14 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         state = data.get("state")
         return JSONResponse(step_up_guard(admin, lambda: accounts.update_admin(
             admin, target_id, str(role) if role else None, str(state) if state else None, reason, key, code, now())))
+
+    @app.post("/api/admin/admins/{target_id}/invite")
+    async def admins_invite_link(target_id: int, request: Request) -> Response:
+        admin = admin_of(request, "manage_admins")
+        data = await body(request)
+        reason, code, key = dangerous(data)
+        return JSONResponse(step_up_guard(admin, lambda: accounts.reissue_invite(admin, target_id, reason, key, code,
+                                                                               now())))
 
     @app.post("/api/admin/admins/{target_id}/grants")
     async def admins_grant(target_id: int, request: Request) -> Response:

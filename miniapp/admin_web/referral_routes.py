@@ -40,7 +40,14 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
         links = referrals.by_code()
         return {uid: source_of(uid, bot, app_starts, links) for uid in user_ids}
 
-    def stats() -> tuple[dict[str, dict], dict]:
+    def own_codes(request: Request) -> set[str] | None:
+        """A promotion manager sees only the links they created (owner 16.11); None = every link."""
+        admin = request.state.admin
+        if admin.role != "promoter":
+            return None
+        return {link["code"] for link in referrals.links() if link["adminId"] == admin.id}
+
+    def stats(codes: set[str] | None = None) -> tuple[dict[str, dict], dict]:
         t = ctx.now()
         bot = bot_file.starts()
         app_starts = store.attributions()
@@ -74,6 +81,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
                 "converted": sum(1 for uid in in_app if (activity.get(uid) or {}).get("forecasts", 0) > 0)
                 if collected else None,
             }
+        if codes is not None:
+            out = {code: s for code, s in out.items() if code in codes}
         funnel = {k: sum(s[k] for s in out.values()) for k in ("starts", "inMiniApp", "active7d")}
         funnel["converted"] = sum(s["converted"] for s in out.values()) if collected else None
         return out, funnel
@@ -82,15 +91,19 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
     async def list_links(request: Request) -> dict:
         ctx.admin_of(request)
         personal = ctx.can_personal(request)  # who created a link is an e-mail: not for analysts
-        per_code, funnel = stats()
+        mine = own_codes(request)
+        per_code, funnel = stats(mine)
         empty = {"starts": 0, "botStarts": 0, "miniappStarts": 0, "inMiniApp": 0, "active7d": 0,
                  "converted": None if funnel["converted"] is None else 0}  # the same read as the stats
         items = []
         for link in referrals.links():
+            if mine is not None and link["code"] not in mine:
+                continue
             items.append({**link, "by": link["by"] if personal else None, "param": PREFIX + link["code"],
                           "url": link_url(link["channel"], link["code"], ctx.bot_username, ctx.miniapp_short_name),
                           "stats": per_code.get(link["code"], empty)})
         unknown = {code: s for code, s in per_code.items() if code not in {i["code"] for i in items}}
+        unknown = unknown if mine is None else {}  # codes without a link are not a promotion manager's
         # Summaries by the links' labels (archived links included: their starts still count). "—" = not set.
         keys = ("starts", "botStarts", "miniappStarts", "inMiniApp", "active7d", "converted")
         breakdown: dict[str, list[dict]] = {}
@@ -124,4 +137,4 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
             raise ActionError("invalid_value")
         return referrals.set_archived(admin, link_id, data["archived"], ctx.now())
 
-    return SimpleNamespace(sources=sources, funnel=lambda: stats()[1])
+    return SimpleNamespace(sources=sources, funnel=lambda request: stats(own_codes(request))[1])

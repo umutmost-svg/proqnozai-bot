@@ -80,10 +80,11 @@ class Referrals:
     def links(self) -> list[dict]:
         with self.accounts._connect() as conn:
             rows = conn.execute(
-                "SELECT l.id, l.code, l.name, l.channel, l.archived_at, l.created_at, u.email, l.platform, l.geo, l.pid "
+                "SELECT l.id, l.code, l.name, l.channel, l.archived_at, l.created_at, u.email, l.platform, l.geo, l.pid, "
+                "l.admin_id "
                 "FROM crm_referral_links l LEFT JOIN admin_users u ON u.id = l.admin_id ORDER BY l.id DESC").fetchall()
         return [{"id": r[0], "code": r[1], "name": r[2], "channel": r[3], "archivedAt": r[4], "createdAt": r[5],
-                 "by": r[6], "platform": r[7], "geo": r[8], "pid": r[9]} for r in rows]
+                 "by": r[6], "platform": r[7], "geo": r[8], "pid": r[9], "adminId": r[10]} for r in rows]
 
     def by_code(self) -> dict[str, dict]:
         return {link["code"]: link for link in self.links()}
@@ -124,13 +125,14 @@ class Referrals:
         """Archiving hides a link from the active list; its starts keep counting (old links stay in chats)."""
         if not isinstance(archived, bool):
             raise ActionError("invalid_value")
+        own = actor.role == "promoter"  # a promotion manager archives only the links they created
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "manage_referrals")
             changed = conn.execute(
-                "UPDATE crm_referral_links SET archived_at = ? WHERE id = ? AND (archived_at IS NULL) = ?",
-                (now if archived else None, link_id, archived)).rowcount
-            if not changed and conn.execute("SELECT 1 FROM crm_referral_links WHERE id = ?",
-                                            (link_id,)).fetchone() is None:
+                "UPDATE crm_referral_links SET archived_at = ? WHERE id = ? AND (archived_at IS NULL) = ? "
+                "AND (? = 0 OR admin_id = ?)", (now if archived else None, link_id, archived, own, actor.id)).rowcount
+            if not changed and conn.execute("SELECT 1 FROM crm_referral_links WHERE id = ? AND (? = 0 OR admin_id = ?)",
+                                            (link_id, own, actor.id)).fetchone() is None:
                 raise ActionError("not_found", 404)
             if changed:
                 self.accounts._event(conn, now, actor.id, "referral.archive", "referral", str(link_id), None,

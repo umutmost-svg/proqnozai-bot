@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { Analytics as AnalyticsData, Broadcast, Overview, ValueData } from '../api';
 import { fromUtcText, localTime, num } from '../format';
-import { useLoad, usePrefs } from '../state';
-import { BarList, Bars, Card, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, PageHead, PeriodSelect, Tag, tagTone } from '../ui';
+import { can, useLoad, useMe, usePrefs } from '../state';
+import { BarList, Card, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, PageHead, PeriodSelect, Tag, tagTone } from '../ui';
+import { DayBars } from '../charts';
 
 const TABS = ['Обзор', 'Ценность и топ', 'Аудитория и гео', 'Время активности', 'Контент и лиги', 'Удержание', 'Источники'] as const;
 type TabName = typeof TABS[number];
@@ -153,7 +154,11 @@ export function Analytics() {
   const qs = `days=${period}${demo ? '&demo=1' : ''}`;
   const a = useLoad<AnalyticsData>(`/api/admin/analytics?${qs}`);
   const ov = useLoad<Overview>(`/api/admin/overview?${qs}`);
-  const bc = useLoad<{ items: Broadcast[] }>('/api/admin/broadcasts');
+  const me = useMe();
+  // Broadcasts, users and forecasts are not for analysts and promotion managers (the API refuses them too).
+  const staff = can(me.admin.role, 'read_personal');
+  const promoter = me.admin.role === 'promoter';
+  const bc = useLoad<{ items: Broadcast[] }>(staff ? '/api/admin/broadcasts' : null);
   const d = a.data?.demo ?? null;
   const real = a.data?.real;
   // Collected (D1): shown as measured, zero included; otherwise the pilot's demo set or "not collected".
@@ -168,7 +173,7 @@ export function Analytics() {
   return (
     <>
       <PageHead title="Аналитика" subtitle="Рост аудитории, вовлечённость, география, время активности и результат рассылок"
-        actions={<><PeriodSelect /><button type="button" className="btn primary" onClick={() => navigate('/broadcasts/new')}>Новая рассылка</button></>} />
+        actions={<><PeriodSelect />{staff && <button type="button" className="btn primary" onClick={() => navigate('/broadcasts/new')}>Новая рассылка</button>}</>} />
       <div className="tabs" role="tablist" aria-label="Разделы аналитики" style={{ marginBottom: 20 }}>
         {TABS.map((t) => (
           <a key={t} href="#" role="tab" aria-selected={tab === t} className={tab === t ? 'active' : ''}
@@ -180,14 +185,14 @@ export function Analytics() {
           {tab === 'Обзор' && (
             <>
               <Metrics>
-                <Metric label="Пользователи всего" value={<Link className="metric-link" to="/users">{num(real.totalUsers)}</Link>} caption={`+${num(real.newUsers)} за период · ${src}`} />
+                <Metric label="Пользователи всего" value={!staff ? num(real.totalUsers) : <Link className="metric-link" to="/users">{num(real.totalUsers)}</Link>} caption={`+${num(real.newUsers)} за период · ${src}`} />
                 <Metric demo={Boolean(d)} hint="DAU (Daily Active Users) — сколько разных людей открыли Mini App сегодня (по UTC). Один человек считается один раз, сколько бы раз он ни заходил." label="Активные сегодня (DAU)" value={d ? num(d.activeByDay.at(-1)?.dau) : '—'} caption={d ? 'демо-телеметрия' : 'после D1'} />
-                <Metric label="Прогнозы модели" value={<Link className="metric-link" to="/forecasts">{num(ov.data?.forecasts.total)}</Link>} caption={`сверено: ${num(ov.data?.forecasts.settled)}`} />
+                <Metric label="Прогнозы модели" value={promoter ? num(ov.data?.forecasts.total) : <Link className="metric-link" to="/forecasts">{num(ov.data?.forecasts.total)}</Link>} caption={`сверено: ${num(ov.data?.forecasts.settled)}`} />
                 <Metric demo={Boolean(d)} label="Средняя сессия" value={d ? `${Math.floor(d.summary.avgSessionS / 60)} мин ${d.summary.avgSessionS % 60} с` : '—'} caption={d ? 'демо-телеметрия' : 'после D1'} />
               </Metrics>
               <div className="grid g2">
                 <Card title="Новые пользователи по дням" sub={`Регистрации в Mini App по UTC-дням · ${src}`} action={<Tag tone="accent">{num(real.newUsers)} за период</Tag>}>
-                  <Bars title="Новые" values={real.newByDay.map((x) => x.new)} labels={[real.newByDay[0]?.day ?? '', real.newByDay.at(-1)?.day ?? '']} format={(v) => `${v} новых`} />
+                  <DayBars title="Новые пользователи" points={real.newByDay.map((x) => ({ day: x.day, value: x.new }))} />
                 </Card>
                 <Card title="Воронка активации" action={d ? <Tag tone="violet">ДЕМО</Tag> : undefined}>
                   {d ? d.funnel.map(([label, value], i) => (
@@ -199,7 +204,7 @@ export function Analytics() {
                 </Card>
               </div>
               <div className="grid g2">
-                <Card title="Рассылки" action={<Link to="/broadcasts" className="small">Все рассылки →</Link>}>
+                {staff && <Card title="Рассылки" action={<Link to="/broadcasts" className="small">Все рассылки →</Link>}>
                   {bc.data && bc.data.items.length > 0 ? (
                     <table className="table">
                       <thead><tr><th>Кампания</th><th>Статус</th><th>Когда</th></tr></thead>
@@ -208,12 +213,12 @@ export function Analytics() {
                       ))}</tbody>
                     </table>
                   ) : <p className="muted small">Рассылок пока нет.</p>}
-                </Card>
+                </Card>}
                 <Card title="Теги аудитории" sub="Сколько пользователей с каждым тегом">
                   {real.tags.length === 0 ? <p className="muted small">Тегов нет или нет доступа к ним.</p> : (
                     <div className="bar-list">{real.tags.slice(0, 6).map((t) => (
                       <div key={t.tag} className="row" style={{ justifyContent: 'space-between' }}>
-                        <Link to={`/users?tag=${encodeURIComponent(t.tag)}`}><Tag tone={tagTone(t.tag)}>{t.tag}</Tag></Link><b>{num(t.users)}</b>
+                        {promoter ? <Tag tone={tagTone(t.tag)}>{t.tag}</Tag> : <Link to={`/users?tag=${encodeURIComponent(t.tag)}`}><Tag tone={tagTone(t.tag)}>{t.tag}</Tag></Link>}<b>{num(t.users)}</b>
                       </div>
                     ))}</div>
                   )}

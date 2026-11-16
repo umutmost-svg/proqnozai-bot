@@ -53,7 +53,7 @@ def test_role_matrix(env):
     login(client, clock, secrets_, "analyst@x.test")
     data = client.get("/api/admin/roles").json()
     perms = {p["permission"]: p["roles"] for p in data["permissions"]}
-    assert perms["read"] == ["owner", "admin", "analyst"] and perms["manage_inquiry_settings"] == ["owner"]
+    assert perms["read"] == ["owner", "admin", "analyst", "promoter"] and perms["manage_inquiry_settings"] == ["owner"]
     assert data["grants"] == [{"permission": "view_dialogs", "roles": ["owner", "admin"]}]
 
 

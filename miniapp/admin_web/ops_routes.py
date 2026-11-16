@@ -43,6 +43,6 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> None:
         t = ctx.now()
         users = ctx.store.registrations_since(cohort_since(t))  # every cohort member, no row cap
         return {"period": days, "product": product(insights, t, days, users),
-                "referrals": ctx.referral_funnel(),
+                "referrals": ctx.referral_funnel(request),  # a promotion manager: their own links only
                 # The Mini App keeps odds in memory and records no coverage yet: shown as not collected.
                 "oddsCoverage": {"source": "not_collected"}}

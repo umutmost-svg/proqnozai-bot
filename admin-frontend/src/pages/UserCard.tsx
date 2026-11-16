@@ -3,8 +3,9 @@ import { Link, useParams } from 'react-router-dom';
 import { api, errorText, type CrmProfile } from '../api';
 import { geoLabel, num, sourceLabel, userName, localTime, localDay } from '../format';
 import { can, useLoad, useMe, usePrefs } from '../state';
-import { Avatar, Bars, Card, DangerDialog, Empty, ErrorBox, Loading, Status, Tag, tagTone, Toast, Topbar } from '../ui';
+import { Avatar, Card, DangerDialog, Empty, ErrorBox, Loading, Status, Tag, tagTone, Toast, Topbar } from '../ui';
 import { CreditsDialog, TagDialog } from './dialogs';
+import { DayBars } from '../charts';
 
 /** Keyed by the id: moving to another user remounts the card, so no data or open dialog carries over. */
 export function UserCardRoute() {
@@ -110,8 +111,7 @@ function UserCard({ id }: { id: string }) {
                       <div className="kv-row"><span>AI-разборов создано / открыто</span><b>{num(data.activity.summary.aiCreated)} / {num(data.activity.summary.aiOpened)}</b></div>
                       <div className="kv-row"><span>Запросов к API</span><b>{num(data.activity.summary.requests)}</b></div>
                       <h3 className="small muted" style={{ margin: '16px 0 8px' }}>Прогнозы по дням (UTC), 30 дней</h3>
-                      <Bars title="Прогнозы по дням" values={data.activity.daily.map((d) => d.forecasts)}
-                        labels={[data.activity.daily[0]?.day ?? '', data.activity.daily[data.activity.daily.length - 1]?.day ?? '']} format={(v) => String(v)} />
+                      <DayBars title="Прогнозы по дням" points={data.activity.daily.map((d) => ({ day: d.day, value: d.forecasts }))} />
                     </>
                   ))}
                 {tab === 'Сообщения' && (data.messages.length === 0 ? <Empty title="Сообщений пользователю не было" /> : data.messages.map((m) => (

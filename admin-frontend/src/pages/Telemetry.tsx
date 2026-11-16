@@ -2,8 +2,9 @@ import { useMemo, useState } from 'react';
 import type { AiCall, DaySeries } from '../api';
 import { num, usd, localTime } from '../format';
 import { useLoad, usePrefs } from '../state';
+import { DayBars } from '../charts';
 import {
-  Bars, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, Note, PageHead, Pager, PeriodSelect, SectionHead, SortHeader,
+  Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, Note, PageHead, Pager, PeriodSelect, SectionHead, SortHeader,
   Status, useSort,
 } from '../ui';
 
@@ -160,7 +161,7 @@ export function SportsApi() {
             <section className="section">
               <SectionHead title="Запросы по дням" action={<span className="chip demo sm">ДЕМО</span>} />
               <div style={{ paddingTop: 18 }}>
-                <Bars title="Запросы" values={d.series.map((x) => x.apiAttempts)} labels={[d.series[0]!.day, d.series[d.series.length - 1]!.day]} format={(v) => `${v} запросов`} />
+                <DayBars title="Запросы" points={d.series.map((x) => ({ day: x.day, value: x.apiAttempts }))} />
               </div>
             </section>
           )}

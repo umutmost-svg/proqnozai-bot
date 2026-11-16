@@ -1,5 +1,5 @@
 import { BrowserRouter, Link, Route, Routes } from 'react-router-dom';
-import { LoginFlow } from './pages/Auth';
+import { Activate, LoginFlow } from './pages/Auth';
 import { Forecasts } from './pages/Forecasts';
 import { Analytics } from './pages/Analytics';
 import { BroadcastEditor, Broadcasts, Credits, Dialogs, Segments } from './pages/Crm';
@@ -15,6 +15,8 @@ import { Empty, Layout, Loading, PageHead } from './ui';
 
 function Gate() {
   const { state } = useAuth();
+  // The invitation page works signed in or not: it never uses the session.
+  if (window.location.pathname === '/activate') return <Activate />;
   if (state.status === 'loading') {
     return <div style={{ padding: 60, maxWidth: 600 }}><Loading rows={3} /></div>;
   }

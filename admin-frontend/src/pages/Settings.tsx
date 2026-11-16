@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { api, type AdminAccount, type AdminEvent, type Role, type SettingValue } from '../api';
 import { localTime } from '../format';
 import { can, useLoad, useMe, usePrefs } from '../state';
-import { DangerDialog, Empty, ErrorBox, Loading, Note, PageHead, PeriodSelect, SectionHead, Status, Toast } from '../ui';
+import { DangerDialog, Empty, ErrorBox, Loading, Note, PageHead, PeriodSelect, ROLE_LABEL, SectionHead, Status, Toast } from '../ui';
 
 export function SettingsTabs() {
   return (
@@ -115,18 +115,26 @@ const ROLE_DESC: Record<Role, string> = {
   owner: 'Полный доступ и управление администраторами',
   admin: 'Управление функциями и пользователями',
   analyst: 'Просмотр аналитики без изменений и персональных данных',
+  promoter: 'Аналитика и только свои реферальные ссылки: создание, архив, статистика. Без персональных данных',
 };
+
+const ROLE_OPTIONS = (['promoter', 'analyst', 'admin', 'owner'] as Role[]).map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>);
+
+/** The one-time link an invitee opens to set their password and 2FA (the token lives in the URL fragment). */
+const inviteUrl = (token: string) => `${window.location.origin}/activate#${token}`;
 
 type AdminAction =
   | { kind: 'invite' }
-  | { kind: 'update'; target: AdminAccount; role?: Role; state?: 'active' | 'disabled'; label: string };
+  | { kind: 'update'; target: AdminAccount; role?: Role; state?: 'active' | 'disabled'; label: string }
+  | { kind: 'link'; target: AdminAccount };
 
 export function SettingsAdmins() {
   const me = useMe();
   const { data, error, loading, reload } = useLoad<{ items: AdminAccount[] }>('/api/admin/admins');
   const [action, setAction] = useState<AdminAction | null>(null);
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<Role>('analyst');
+  const [role, setRole] = useState<Role>('promoter');
+  const [link, setLink] = useState<{ email: string; url: string } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const owner = can(me.admin.role, 'manage_admins');
   const activeOwners = data?.items.filter((a) => a.role === 'owner' && a.state === 'active').length ?? 0;
@@ -137,8 +145,19 @@ export function SettingsAdmins() {
       <SettingsTabs />
       <div className="filters" style={{ justifyContent: 'flex-end' }}>
         <button type="button" className="btn" disabled={!owner} title={owner ? undefined : 'Только владелец'}
-          onClick={() => { setEmail(''); setRole('analyst'); setAction({ kind: 'invite' }); }}>Добавить администратора</button>
+          onClick={() => { setEmail(''); setRole('promoter'); setAction({ kind: 'invite' }); }}>Добавить сотрудника</button>
       </div>
+      {link && (
+        <Note title={`Ссылка-приглашение для ${link.email}`}>
+          <p style={{ margin: '0 0 8px' }}>Отправьте её сотруднику лично. Ссылка одноразовая и действует 72 часа; по ней он задаст пароль
+            и подключит 2FA. Показывается один раз — если потеряется, выдайте новую. Его e-mail также нужно добавить в Cloudflare Access.</p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input className="control mono" readOnly value={link.url} aria-label="Ссылка-приглашение" onFocus={(e) => e.target.select()} style={{ flex: 1 }} />
+            <button type="button" className="btn" onClick={() => void navigator.clipboard?.writeText(link.url).then(() => setToast('Скопировано'), () => setToast('Не удалось скопировать'))}>Копировать</button>
+            <button type="button" className="btn link" onClick={() => setLink(null)}>Скрыть</button>
+          </div>
+        </Note>
+      )}
       <div className="cols" style={{ gridTemplateColumns: 'minmax(0, 1fr) 280px', gap: 40 }}>
         <section className="section">
           <SectionHead title="Учётные записи" />
@@ -158,9 +177,9 @@ export function SettingsAdmins() {
                               disabled={lastOwner || a.state === 'invited'}
                               title={lastOwner ? 'Последнего владельца нельзя понизить' : undefined}
                               onChange={(e) => setAction({ kind: 'update', target: a, role: e.target.value as Role, label: `Роль ${a.email}: ${a.role} → ${e.target.value}` })}>
-                              <option value="owner">owner</option><option value="admin">admin</option><option value="analyst">analyst</option>
+                              {ROLE_OPTIONS}
                             </select>
-                          ) : a.role}
+                          ) : ROLE_LABEL[a.role] ?? a.role}
                         </td>
                         <td>{a.twoFactor ? <Status value="ok" label="Включена" /> : <Status value="warning" label="Не настроена" />}</td>
                         <td><Status value={a.state} label={a.state === 'active' ? 'Активна' : undefined} /></td>
@@ -176,7 +195,9 @@ export function SettingsAdmins() {
                               <button type="button" className="btn link"
                                 onClick={() => setAction({ kind: 'update', target: a, state: 'active', label: `Включить ${a.email}` })}>Включить</button>
                             )}
-                            {a.state === 'invited' && <span className="small muted">ждёт активации</span>}
+                            {a.state === 'invited' && (
+                              <button type="button" className="btn link" onClick={() => setAction({ kind: 'link', target: a })}>Новая ссылка</button>
+                            )}
                           </td>
                         )}
                       </tr>
@@ -194,7 +215,7 @@ export function SettingsAdmins() {
           <ul className="kv">
             {(Object.keys(ROLE_DESC) as Role[]).map((r) => (
               <li key={r} style={{ display: 'block' }}>
-                <div style={{ fontWeight: 600, fontSize: 15 }}>{r}</div>
+                <div style={{ fontWeight: 600, fontSize: 15 }}>{ROLE_LABEL[r]}</div>
                 <div className="small" style={{ color: 'var(--text)', marginTop: 6, fontSize: 13 }}>{ROLE_DESC[r]}</div>
               </li>
             ))}
@@ -202,13 +223,14 @@ export function SettingsAdmins() {
         </aside>
       </div>
       {action?.kind === 'invite' && (
-        <DangerDialog title="Добавить администратора" tone="primary" confirmLabel="Создать приглашение"
-          lead="Будет создана учётная запись в состоянии «приглашён». Пароль и 2FA новый администратор задаёт сам по одноразовой ссылке (пока ссылка не выдаётся — этап D2)."
+        <DangerDialog title="Добавить сотрудника" tone="primary" confirmLabel="Создать приглашение"
+          lead="Будет создана учётная запись и одноразовая ссылка: по ней сотрудник сам задаст пароль и 2FA."
           onClose={() => setAction(null)}
           onConfirm={async (input) => {
-            await api('/api/admin/admins', { method: 'POST', body: { ...input, email, role } });
+            const r = await api<{ inviteToken?: string }>('/api/admin/admins', { method: 'POST', body: { ...input, email, role } });
             setAction(null);
-            setToast(`Приглашение для ${email} создано`);
+            setLink(r.inviteToken ? { email, url: inviteUrl(r.inviteToken) } : null);
+            setToast(r.inviteToken ? `Приглашение для ${email} создано` : 'Приглашение уже было создано — выдайте новую ссылку');
             reload();
           }}>
           <div className="field">
@@ -218,8 +240,9 @@ export function SettingsAdmins() {
           <div className="field">
             <label htmlFor="inv-role">Роль</label>
             <select id="inv-role" className="control" value={role} onChange={(e) => setRole(e.target.value as Role)}>
-              <option value="analyst">analyst</option><option value="admin">admin</option><option value="owner">owner</option>
+              {ROLE_OPTIONS}
             </select>
+            <p className="field-hint">{ROLE_DESC[role]}</p>
           </div>
         </DangerDialog>
       )}
@@ -231,6 +254,16 @@ export function SettingsAdmins() {
             setAction(null);
             setToast('Доступ изменён');
             reload();
+          }} />
+      )}
+      {action?.kind === 'link' && (
+        <DangerDialog title="Новая ссылка-приглашение" tone="primary" confirmLabel="Выдать ссылку"
+          lead={<>{action.target.email}: прежняя ссылка перестанет работать.</>}
+          onClose={() => setAction(null)}
+          onConfirm={async (input) => {
+            const r = await api<{ inviteToken: string }>(`/api/admin/admins/${action.target.id}/invite`, { method: 'POST', body: input });
+            setLink({ email: action.target.email, url: inviteUrl(r.inviteToken) });
+            setAction(null);
           }} />
       )}
       {toast && <Toast text={toast} onDone={() => setToast(null)} />}

@@ -137,4 +137,6 @@ def register(app: FastAPI, ctx: Any, snapshot_file: Path) -> None:
             if not personal and isinstance(block.get("topUsers"), list):
                 for r in block["topUsers"]:
                     r["userId"], r["name"], r["username"] = None, "", ""
+            if request.state.admin.role == "promoter" and "topUsers" in block:
+                block["topUsers"] = []  # a promotion manager: totals only, no per-user rows (Codex promoter r1 P2)
         return {"bot": bot, "miniapp": mini, "personal": personal}

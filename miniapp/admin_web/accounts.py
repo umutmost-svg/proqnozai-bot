@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sqlite3
 from collections.abc import Iterator
@@ -23,8 +24,9 @@ from typing import Any, Literal
 
 from miniapp.admin_web import totp
 
-Role = Literal["owner", "admin", "analyst"]
-ROLES: tuple[Role, ...] = ("owner", "admin", "analyst")
+Role = Literal["owner", "admin", "analyst", "promoter"]
+# promoter (owner 16.11): a promotion manager — analytics aggregates and only the referral links they created.
+ROLES: tuple[Role, ...] = ("owner", "admin", "analyst", "promoter")
 
 IDLE_S = 30 * 60
 ABSOLUTE_S = 12 * 3600
@@ -46,7 +48,7 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS admin_users (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     email          TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    role           TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'analyst')),
+    role           TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'analyst', 'promoter')),
     state          TEXT NOT NULL CHECK (state IN ('active', 'invited', 'disabled')),
     password_hash  TEXT,
     totp_secret    TEXT,
@@ -105,6 +107,19 @@ CREATE TABLE IF NOT EXISTS admin_grants (
     granted_by INTEGER NOT NULL,
     PRIMARY KEY (admin_id, permission)
 );
+-- One-time invitation links (16.11): only the SHA-256 of the token is stored. The 2FA secret is generated when the
+-- invitee first opens the link and becomes the account's secret once a code from it is confirmed.
+CREATE TABLE IF NOT EXISTS admin_invites (
+    token_hash  TEXT PRIMARY KEY,
+    admin_id    INTEGER NOT NULL REFERENCES admin_users(id),
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    used_at     INTEGER,
+    revoked_at  INTEGER,
+    totp_secret TEXT,
+    failures    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS admin_invites_admin ON admin_invites(admin_id);
 CREATE TRIGGER IF NOT EXISTS admin_events_no_update BEFORE UPDATE ON admin_events
 BEGIN SELECT RAISE(ABORT, 'admin events are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS admin_events_no_delete BEFORE DELETE ON admin_events
@@ -189,11 +204,31 @@ PERMISSIONS: dict[str, tuple[str, ...]] = {
     "publish_ads": ("owner", "admin"),
     "manage_partners": ("owner",),
     # Referral links: create and archive (owner, admin); per-link stats are aggregates (analysts too).
-    "manage_referrals": ("owner", "admin"),
+    "manage_referrals": ("owner", "admin", "promoter"),  # a promoter: only the links they created
     # Inquiries: reading them needs read_personal AND the explicit view_dialogs grant; the retention period of
     # stored inquiries is an owner decision.
     "manage_inquiry_settings": ("owner",),
 }
+
+
+# A promoter reaches only these API routes (default deny, checked in the request guard before any route runs):
+# their session, the aggregate analytics pages and their own referral links.
+PROMOTER_API: tuple[tuple[str, re.Pattern[str]], ...] = tuple((m, re.compile(p)) for m, p in (
+    ("GET", r"^/api/admin/auth/me$"),
+    ("POST", r"^/api/admin/auth/logout$"),
+    ("GET", r"^/api/admin/(overview|analytics|value|product)$"),
+    ("GET", r"^/api/admin/referrals$"),
+    ("POST", r"^/api/admin/referrals$"),
+    ("POST", r"^/api/admin/referrals/[0-9]+/archive$"),
+))
+
+INVITE_TTL_S = 72 * 3600
+INVITE_MAX_FAILURES = 5
+MIN_PASSWORD = 12
+
+
+def promoter_may(method: str, path: str) -> bool:
+    return any(method == m and p.match(path) for m, p in PROMOTER_API)
 
 
 def can(role: str, permission: str) -> bool:
@@ -236,9 +271,41 @@ class AdminStore:
                 conn.execute("ALTER TABLE admin_events ADD COLUMN reason_digest TEXT")
             except sqlite3.OperationalError:
                 pass
+            self._widen_roles(conn)
             conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('csrf_key', ?)", (secrets.token_hex(32),))
         if fresh:
             os.chmod(self.path, 0o600)
+
+    @staticmethod
+    def _widen_roles(conn: sqlite3.Connection) -> None:
+        """Databases created before the promoter role (16.11): SQLite cannot alter a CHECK, so admin_users is rebuilt
+        once with the same columns and rows (the documented table-rebuild procedure; ids are kept, so every
+        reference to admin_users(id) stays valid). Runs under an exclusive lock; a second process sees the new
+        schema and skips it."""
+        def old() -> bool:
+            sql = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'admin_users'").fetchone()
+            return sql is not None and "'promoter'" not in sql[0]
+        if not old():
+            return
+        conn.execute("PRAGMA foreign_keys=OFF")  # only outside a transaction; restored below
+        try:
+            conn.execute("BEGIN EXCLUSIVE")
+            try:
+                if old():
+                    columns = ", ".join(r[1] for r in conn.execute("PRAGMA table_info(admin_users)"))
+                    table = _SCHEMA.split("CREATE TABLE IF NOT EXISTS admin_users (", 1)[1].split(");", 1)[0]
+                    conn.execute(f"CREATE TABLE admin_users_new ({table})")
+                    conn.execute(f"INSERT INTO admin_users_new ({columns}) SELECT {columns} FROM admin_users")
+                    conn.execute("DROP TABLE admin_users")
+                    conn.execute("ALTER TABLE admin_users_new RENAME TO admin_users")
+                    if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                        raise sqlite3.IntegrityError("foreign key check failed after the roles migration")
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
 
     # ---- accounts -------------------------------------------------------------------------
 
@@ -521,7 +588,78 @@ class AdminStore:
             after = {"email": email, "role": role, "state": "invited"}
             event = self._event(conn, now, actor.id, "admin.invite", "admin", str(cur.lastrowid), None, after,
                                 reason, key, "done")
-        return {"eventId": event, "after": after, "replayed": False}
+            token = self._new_invite(conn, int(cur.lastrowid), now)
+        # The raw token is returned once, never journalled; a replay gets no token (issue a new link instead).
+        return {"eventId": event, "after": after, "replayed": False, "inviteToken": token}
+
+    # ---- invitation links -------------------------------------------------------------------
+
+    @staticmethod
+    def _new_invite(conn: sqlite3.Connection, admin_id: int, now: int) -> str:
+        """One live link per account: issuing a new one revokes the earlier ones."""
+        conn.execute("UPDATE admin_invites SET revoked_at = ? WHERE admin_id = ? AND used_at IS NULL "
+                     "AND revoked_at IS NULL", (now, admin_id))
+        token = secrets.token_urlsafe(32)
+        conn.execute("INSERT INTO admin_invites (token_hash, admin_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                     (_digest(token), admin_id, now, now + INVITE_TTL_S))
+        return token
+
+    def reissue_invite(self, actor: Admin, target_id: int, reason: str, key: str, code: str, now: int) -> dict:
+        with self._write() as conn:
+            if conn.execute("SELECT 1 FROM admin_events WHERE idempotency_key = ?", (key,)).fetchone():
+                raise ActionError("idempotency_key_reused", 409)  # a token cannot be replayed: ask for a new link
+            self.step_up(conn, actor.id, code, now, "manage_admins")
+            row = conn.execute("SELECT state FROM admin_users WHERE id = ?", (target_id,)).fetchone()
+            if row is None:
+                raise ActionError("not_found", 404)
+            if row[0] != "invited":
+                raise ActionError("not_invited", 409)
+            token = self._new_invite(conn, target_id, now)
+            event = self._event(conn, now, actor.id, "admin.invite_link", "admin", str(target_id), None, None,
+                                reason, key, "done")
+        return {"eventId": event, "inviteToken": token}
+
+    @staticmethod
+    def _live_invite(conn: sqlite3.Connection, token: str, now: int) -> tuple[str, int, str, str, str | None, int]:
+        row = conn.execute(
+            "SELECT i.token_hash, u.id, u.email, u.role, i.totp_secret, i.failures FROM admin_invites i "
+            "JOIN admin_users u ON u.id = i.admin_id WHERE i.token_hash = ? AND i.used_at IS NULL "
+            "AND i.revoked_at IS NULL AND i.expires_at > ? AND u.state = 'invited'",
+            (_digest(token), now)).fetchone()
+        if row is None or row[5] >= INVITE_MAX_FAILURES:
+            raise AuthError("invite_invalid")  # unknown, used, expired, revoked or too many wrong codes: one answer
+        return row
+
+    def invite_info(self, token: str, now: int) -> dict:
+        """What the invitee sees: their e-mail and role, and the 2FA secret to add to the authenticator app (created
+        on the first visit, the same on a reload)."""
+        with self._write() as conn:
+            token_hash, _, email, role, secret, _ = self._live_invite(conn, token, now)
+            if secret is None:
+                secret = totp.new_secret()
+                conn.execute("UPDATE admin_invites SET totp_secret = ? WHERE token_hash = ?", (secret, token_hash))
+        return {"email": email, "role": role, "secret": secret, "otpauth": totp.provisioning_uri(secret, email)}
+
+    def accept_invite(self, token: str, password: str, code: str, now: int) -> None:
+        """Sets the password and 2FA of an invited account and activates it; the link is spent."""
+        if len(password) < MIN_PASSWORD or len(password) > 200:
+            raise AuthError("weak_password")
+        with self._write() as conn:
+            token_hash, admin_id, email, role, secret, _ = self._live_invite(conn, token, now)
+            step = totp.matching_step(secret, code, now) if secret else None
+            if step is None:
+                conn.execute("UPDATE admin_invites SET failures = failures + 1 WHERE token_hash = ?", (token_hash,))
+                failure = "invalid_code"
+            else:
+                failure = None
+                conn.execute("UPDATE admin_users SET password_hash = ?, totp_secret = ?, last_totp_step = ?, "
+                             "state = 'active', failed_logins = 0 WHERE id = ? AND state = 'invited'",
+                             (hash_password(password), secret, step, admin_id))
+                conn.execute("UPDATE admin_invites SET used_at = ? WHERE token_hash = ?", (now, token_hash))
+                self._event(conn, now, admin_id, "admin.activate", "admin", str(admin_id), None,
+                            {"email": email, "role": role, "state": "active"}, None, None, "done")
+        if failure is not None:  # raised after the commit: the failure counter must persist
+            raise AuthError(failure)
 
     def update_admin(self, actor: Admin, target_id: int, role: str | None, state: str | None, reason: str, key: str,
                      code: str, now: int) -> dict:

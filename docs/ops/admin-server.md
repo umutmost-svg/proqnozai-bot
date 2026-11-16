@@ -39,6 +39,18 @@ There are four layers. A request arriving another way, such as the server's publ
 2. **Cloudflare → proqnozai.com → Rules → Transform Rules → Modify Request Header → Create.** Name `admin-edge-auth`. Condition: *Hostname equals* `admin.proqnozai.com`. Action: *Set static* header `X-Admin-Edge-Auth` with the value from step 1.
 3. **Tunnel `proqnozai-admin` → Published application routes → Add.** `admin.proqnozai.com`, path empty, `HTTP` → `127.0.0.1:80`. **Protect with Access** on, with Team name `patient-mode-acdb` and the AUD of the `admin.proqnozai.com` Access application.
 4. **Access application** `admin.proqnozai.com`: Self-hosted on the whole host, with a single policy *Allow → Emails →* the owner's e-mail.
+   Every colleague invited to the panel is added to the same policy (*Emails*), otherwise Access stops them before the panel.
+
+### Colleagues (16.11)
+
+- **Settings → Administrators → Add a colleague** (owner, reason + 2FA) creates the account and shows a one-time link
+  `https://admin.proqnozai.com/activate#<token>`, valid 72 hours. It is shown once; **New link** revokes the old one.
+  The token stays in the URL fragment (never sent to a server or logged) and only its SHA-256 is stored.
+- On the link the colleague sets a password (12+ characters) and adds the 2FA key to an authenticator app; the account
+  becomes active after a valid code. Five wrong codes burn the link.
+- Role **promoter** (promotion manager): analytics aggregates (overview, analytics, value, product) and only the
+  referral links they created — create, archive, stats, label summary. Every other API route is refused by the request
+  guard (default deny); no personal data.
 5. **First owner**, interactive in your own SSH session:
    ```sh
    ssh -t root@164.90.180.208 'docker exec -it $(docker ps -q -f name=proqnozai-admin | head -1) admin-entrypoint create-owner <your e-mail>'

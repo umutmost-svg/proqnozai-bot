@@ -10,7 +10,9 @@ const NAV = [
 const NAV_DATA = [['/product', 'Продукт'], ['/forecasts', 'Прогнозы'], ['/ai', 'AI и расходы'], ['/sports-api', 'Спортивные API']] as const;
 const NAV_ADMIN = [['/system', 'Система'], ['/settings', 'Настройки']] as const;
 
-const ROLE_LABEL: Record<string, string> = { owner: 'Владелец', admin: 'Администратор', analyst: 'Аналитик' };
+export const ROLE_LABEL: Record<string, string> = { owner: 'Владелец', admin: 'Администратор', analyst: 'Аналитик', promoter: 'Менеджер по продвижению' };
+// A promotion manager reaches only analytics and their own referral links (the API refuses the rest).
+const PROMOTER_PAGES = new Set(['/', '/referrals', '/product']);
 
 export function initials(name: string | null | undefined, fallback = '?'): string {
   const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
@@ -73,6 +75,7 @@ export function BarList({ rows, tone }: { rows: { label: ReactNode; value: numbe
 export function Layout() {
   const me = useMe();
   const { logout } = useAuth();
+  const promoter = me.admin.role === 'promoter';
   const link = ([to, label]: readonly [string, string]) => <NavLink key={to} to={to} end={to === '/'}>{label}</NavLink>;
   return (
     <div className="shell">
@@ -83,11 +86,12 @@ export function Layout() {
         </div>
         {/* The queue lists recipients (personal data): hidden for roles without read_personal (the API refuses too). */}
         <nav className="nav" aria-label="Разделы" style={{ marginTop: 24 }}>{NAV.filter(([to]) => to !== '/outbox' || me.admin.role !== 'analyst')
+          .filter(([to]) => !promoter || PROMOTER_PAGES.has(to))
           .map(([to, label]) => [to, to === '/dialogs' && me.pilot.demoTelemetry ? 'Диалоги (демо)' : label] as const).map(link)}</nav>
         <div className="nav-caption">ДАННЫЕ</div>
-        <nav className="nav" aria-label="Данные">{NAV_DATA.map(link)}</nav>
+        <nav className="nav" aria-label="Данные">{NAV_DATA.filter(([to]) => !promoter || PROMOTER_PAGES.has(to)).map(link)}</nav>
         <div className="nav-grow" />
-        <nav className="nav" aria-label="Администрирование">{NAV_ADMIN.map(link)}</nav>
+        {!promoter && <nav className="nav" aria-label="Администрирование">{NAV_ADMIN.map(link)}</nav>}
         <div className="account">
           <Avatar name={me.admin.email} />
           <div>
@@ -217,6 +221,8 @@ const STATUS: Record<string, [string, string]> = {
   done: ['ok', 'Выполнено'], requested: ['warn', 'Запрошено'], completed: ['ok', 'Завершено'],
   denied: ['bad', 'Отказано'], failed: ['bad', 'Ошибка'],
   ok: ['ok', 'В норме'], warning: ['warn', 'Внимание'], error: ['bad', 'Ошибка'], unavailable: ['bad', 'Недоступно'],
+  // Bot queue jobs (Очередь): waiting is not an error.
+  queued: ['info', 'В очереди'], sending: ['warn', 'Отправляется'], sent: ['ok', 'Отправлено'], cancelled: ['', 'Отменено'],
 };
 
 export function Status({ value, label }: { value: string; label?: string }) {
@@ -310,22 +316,6 @@ export function NotCollected({ what }: { what: string }) {
         ? 'Сбор ещё не подключён в Mini App. Показатели не подставляются: здесь появятся реальные данные, когда сбор включат.'
         : 'Сбор начнётся после этапа D1 (телеметрия Mini App). До этого здесь нет реальных данных — показатели не подставляются. Для оценки интерфейса можно включить помеченную демо-телеметрию.'}
     </Empty>
-  );
-}
-
-export function Bars({ values, labels, format, title }: {
-  values: number[]; labels: [string, string]; format: (v: number) => string; title: string;
-}) {
-  const max = Math.max(1, ...values);
-  return (
-    <figure style={{ margin: 0 }} aria-label={title}>
-      <div className="bars">
-        {values.map((v, i) => (
-          <div key={i} className="bar" style={{ height: `${(v / max) * 100}%` }} title={format(v)} />
-        ))}
-      </div>
-      <div className="bars-axis"><span>{labels[0]}</span><span>{labels[1]}</span></div>
-    </figure>
   );
 }
 

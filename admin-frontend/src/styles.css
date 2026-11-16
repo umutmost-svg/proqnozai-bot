@@ -233,6 +233,31 @@ input.control::placeholder { color: var(--muted); }
 .bars .bar:hover { background: var(--accent); }
 .bars-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); margin-top: 6px; }
 
+/* Day bars: summary, round-number scale, dated ticks, a tooltip per bar (charts.tsx). */
+.daybars { margin: 0; }
+.daybars-summary { display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+.daybars-summary b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.daybars-plot { display: flex; gap: 8px; height: 160px; }
+.daybars-scale { display: flex; flex-direction: column; justify-content: space-between; font-size: 11px; color: var(--faint);
+  text-align: right; min-width: 28px; font-variant-numeric: tabular-nums; transform: translateY(-0.5em); height: calc(100% + 1em); }
+.daybars-area { position: relative; flex: 1; min-width: 0; }
+.daybars-grid { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
+.daybars-grid i { display: block; border-top: 1px dashed var(--line); }
+.daybars-grid i:last-child { border-top: 1px solid #cfd4dc; }
+.daybars-bars { position: absolute; inset: 0; display: flex; align-items: flex-end; }
+.daybars-col { flex: 1; height: 100%; display: flex; align-items: flex-end; padding: 0 1px; cursor: default; }
+.daybars-bar { width: 100%; background: #7aa2f7; border-radius: 4px 4px 0 0; min-height: 3px; transition: background 0.1s; }
+.daybars-col.on .daybars-bar { background: var(--accent); }
+.daybars-col.on { background: rgba(37, 99, 235, 0.06); }
+.daybars-tip { position: absolute; top: -8px; transform: translate(-50%, -100%); background: #fff; border: 1px solid var(--line);
+  box-shadow: 0 4px 12px rgba(16, 24, 40, 0.1); border-radius: 6px; padding: 5px 9px; font-size: 12px; white-space: nowrap;
+  pointer-events: none; z-index: 2; }
+.daybars-tip b { color: var(--ink); }
+.daybars-tip.start { transform: translate(-12px, -100%); }
+.daybars-tip.end { transform: translate(calc(-100% + 12px), -100%); }
+.daybars-axis { display: flex; margin: 6px 0 0 36px; font-size: 11px; color: var(--faint); }
+.daybars-axis span { flex: 1; text-align: center; white-space: nowrap; overflow: visible; width: 0; }
+
 .banner { display: block; background: var(--demo-bg); color: var(--demo); font-size: 13px; line-height: 1.45; padding: 10px 14px; border-radius: var(--radius); margin-top: 18px; }
 .banner strong { font-weight: 600; }
 .toast { position: fixed; bottom: 24px; right: 24px; background: var(--ink); color: #fff; font-size: 13px; padding: 12px 16px; border-radius: var(--radius); z-index: 30; max-width: 420px; }

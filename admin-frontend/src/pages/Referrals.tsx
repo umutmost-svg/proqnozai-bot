@@ -30,7 +30,7 @@ function StatCells({ s }: { s: ReferralStats }) {
 
 export function Referrals() {
   const me = useMe();
-  const manage = me.admin.role === 'owner' || me.admin.role === 'admin';
+  const manage = me.admin.role === 'owner' || me.admin.role === 'admin' || me.admin.role === 'promoter';
   const { data, error, loading, reload } = useLoad<ReferralsPage>('/api/admin/referrals');
   const [name, setName] = useState('');
   const [channel, setChannel] = useState<'bot' | 'miniapp'>('bot');
@@ -141,7 +141,7 @@ export function Referrals() {
                   <td>
                     <div className="row">
                       <button type="button" className="btn" onClick={() => copy(i.url ?? i.param)}>Копировать</button>
-                      {manage && <Link className="btn link" to={`/users?ref=${encodeURIComponent(i.code)}`}>Пользователи</Link>}
+                      {manage && me.admin.role !== 'promoter' && <Link className="btn link" to={`/users?ref=${encodeURIComponent(i.code)}`}>Пользователи</Link>}
                       {manage && <button type="button" className="btn link" onClick={() => void toggleArchive(i.id, !i.archivedAt)}>{i.archivedAt ? 'Вернуть' : 'В архив'}</button>}
                     </div>
                   </td>

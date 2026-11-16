@@ -3,8 +3,9 @@ import { Link } from 'react-router-dom';
 import { api, type AdminAccount, type OutboxPage, type ProductPage, type RolesPage } from '../api';
 import { num, pct, localTime } from '../format';
 import { useLoad, useMe, usePrefs } from '../state';
-import { Bars, Card, DangerDialog, Empty, ErrorBox, Loading, Metric, Metrics, PageHead, PeriodSelect, pagePeriod, Status, Tag, Toast } from '../ui';
+import { Card, DangerDialog, Empty, ErrorBox, Loading, Metric, Metrics, PageHead, PeriodSelect, pagePeriod, Status, Tag, Toast } from '../ui';
 import { SettingsTabs } from './Settings';
+import { DayBars } from '../charts';
 
 const JOB_STATUS: Record<string, string> = {
   queued: 'в очереди', sending: 'отправляется', sent: 'отправлено', failed: 'ошибка', expired: 'просрочено', cancelled: 'отменено',
@@ -82,7 +83,7 @@ const PERMISSION_LABEL: Record<string, string> = {
   manage_partners: 'Партнёры рекламы', manage_referrals: 'Реферальные ссылки', manage_inquiry_settings: 'Срок хранения обращений',
   view_dialogs: 'Чтение обращений (отдельное право)',
 };
-const ROLE_LABEL: Record<string, string> = { owner: 'Владелец', admin: 'Администратор', analyst: 'Аналитик' };
+const ROLE_LABEL: Record<string, string> = { owner: 'Владелец', admin: 'Администратор', analyst: 'Аналитик', promoter: 'Продвижение' };
 
 /** Settings -> roles: the server's permission matrix, and per-admin grants (owner only, reason + 2FA). */
 export function SettingsRoles() {
@@ -177,10 +178,10 @@ export function Product() {
               </p>
               <div className="grid card-2">
                 <Card title="Активные пользователи по дням" sub="Сколько разных людей открывали Mini App в каждый день (DAU)">
-                  <Bars title="DAU" values={p.series.map((d) => d.dau)} labels={[p.series[0]?.day ?? '', p.series.at(-1)?.day ?? '']} format={(v) => String(v)} />
+                  <DayBars title="DAU" points={p.series.map((d) => ({ day: d.day, value: d.dau }))} />
                 </Card>
                 <Card title="AI-разборы" sub={`создано ${num(p.totals.aiCreated)} · открыто ${num(p.totals.aiOpened)}`}>
-                  <Bars title="AI создано" values={p.series.map((d) => d.aiCreated)} labels={[p.series[0]?.day ?? '', p.series.at(-1)?.day ?? '']} format={(v) => String(v)} />
+                  <DayBars title="AI создано" points={p.series.map((d) => ({ day: d.day, value: d.aiCreated }))} />
                 </Card>
               </div>
               <Card title="Удержание по когортам регистрации" sub="Доля активных на неделе N после своей регистрации — среди тех, у кого эта неделя уже закончилась">

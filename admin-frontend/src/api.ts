@@ -107,7 +107,7 @@ export function errorText(error: unknown): string {
 
 // ---- response types ----
 
-export type Role = 'owner' | 'admin' | 'analyst';
+export type Role = 'owner' | 'admin' | 'analyst' | 'promoter';
 export interface Me {
   admin: { id: number; email: string; role: Role };
   csrf: string;
