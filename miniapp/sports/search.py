@@ -389,13 +389,14 @@ class SearchIndex:
         # Which words name each team, worked out once per team (a few thousand) rather than once per event
         # (~35k, both sides): the per-event check is then a lookup. The fuzzy pass per event blocked the event loop
         # for 1-2 s on a full index (Fable audit 16.11).
-        named: dict[str, tuple[bool, ...]] = {}
+        named: dict[tuple[str, str, str | None], tuple[bool, ...]] = {}
 
         def words_of(team: Competitor) -> tuple[bool, ...]:
-            got = named.get(team.id)
+            key = (team.id, team.name, team.short_name)  # a renamed team under the same id is matched by each name
+            got = named.get(key)
             if got is None:
                 names = self._names(team)
-                got = named[team.id] = tuple(bool(self._score(t, names)) for t in tokens)
+                got = named[key] = tuple(bool(self._score(t, names)) for t in tokens)
             return got
 
         for events in self._fresh().values():

@@ -297,11 +297,12 @@ class ModelForecaster:
 
 
 def value_claimable(forecast: MatchForecast, market: str) -> bool:
-    """May the model's gap to the market be shown as an edge and expected value? Only where the rules may recommend:
-    the validated population (gate-eligible: validated competition, complete history, match day) and a market family
-    the validation kept selectable. Elsewhere (national-team pool, CL, early forecasts, totals, BTTS) the prices and
+    """May the model's gap to the market be shown as an edge and expected value? Only where the rules did recommend:
+    the validated population (gate-eligible: validated competition, complete history, match day), a recommended bet
+    for this match (never next to NO_BET, Codex wave1 r1) and a market family the validation kept selectable. Elsewhere (national-team pool, CL, early forecasts, totals, BTTS) the prices and
     both probabilities are shown, never a value claim (Fable audit 16.11, selection.py: no selection is a value claim)."""
-    return forecast.gate_eligible and FAMILY[market] in FROZEN.pick_families
+    return (forecast.gate_eligible and forecast.selection.pick is not None
+            and FAMILY[market] in FROZEN.pick_families)
 
 
 class QuotaLedger(Protocol):
@@ -724,13 +725,15 @@ class AiService:
     async def _give_back(self, key: str, reserved: list[tuple[str, list[str]]]) -> None:
         """A call the provider refused unbilled: its attempt and the reserved daily allowances are returned, so a
         provider-side throttle never locks the analysis for everyone nor costs users their daily limit."""
-        await self._uncount_attempt(key)
+        # Users' allowances first: an exit between the two steps leaves the attempt counted (the analysis key
+        # merely fails closed until the facts change), never a user's allowance spent on a refused call.
         for day, subjects in reserved:
             try:
                 await asyncio.to_thread(self._ledger.release_ai_call, day, subjects)
             except Exception as exc:  # noqa: BLE001 — the allowance stays spent: fail closed
                 logger.warning("ai.release_failed type=%s", type(exc).__name__)
         reserved.clear()
+        await self._uncount_attempt(key)
 
     async def _uncount_attempt(self, key: str) -> None:
         if self.history is None:

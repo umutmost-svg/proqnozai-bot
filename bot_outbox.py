@@ -203,6 +203,14 @@ class BotOutbox:
                 raise
         return job
 
+    def _pause(self, until: int) -> None:
+        """No job before `until`, also after a restart: every queued job's retry_at is moved there (Codex wave1 r1;
+        the in-memory mark only spares the claim queries meanwhile)."""
+        self.paused_until = until
+        with self._connect() as conn:
+            conn.execute("UPDATE jobs SET retry_at = ? WHERE status = 'queued' AND (retry_at IS NULL OR retry_at < ?)",
+                         (until, until))
+
     def finish(self, job: Job, outcome: Outcome, now: int) -> bool:
         """Records the outcome only for the claim that is still current (fenced by its token)."""
         fence = "WHERE id = ? AND status = 'sending' AND claim_token = ?"
@@ -243,11 +251,11 @@ class BotOutbox:
             self.finish(job, outcome, now())
             counts[outcome.kind] = counts.get(outcome.kind, 0) + 1
             if outcome.code == "rate_limited":
-                self.paused_until = now() + max(1, outcome.retry_after)
+                self._pause(now() + max(1, outcome.retry_after))
                 break
             if outcome.code == "unknown_outcome":
                 self._network_pause = min(NETWORK_PAUSE_MAX_S, max(NETWORK_PAUSE_S, self._network_pause * 2))
-                self.paused_until = now() + self._network_pause
+                self._pause(now() + self._network_pause)
                 logger.warning("event=outbox_paused reason=network seconds=%s", self._network_pause)
                 break
             if outcome.kind == "sent":

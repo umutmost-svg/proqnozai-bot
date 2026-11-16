@@ -74,6 +74,23 @@ async def test_a_flood_limit_pauses_the_whole_outbox_and_never_uses_up_attempts(
     assert sorted(sent) == [11, 12] and statuses(tmp_path)["msg:1"] == ("sent", None)
 
 
+async def test_the_pause_survives_a_restart(tmp_path):
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("msg:1", 11, "x", []), ("msg:2", 12, "y", [])], batch_id=None, not_before=NOW,
+                  admin_event_id=None, now=NOW)
+
+    async def flooded(job):
+        return Outcome("retry", "rate_limited", 60)
+
+    async def ok(job):
+        return Outcome("sent")
+
+    assert await bot.run_once(flooded, lambda: NOW) == {"retry": 1}
+    restarted = BotOutbox(tmp_path / "bot-outbox.db")  # a new process: no pause in memory
+    assert await restarted.run_once(ok, lambda: NOW + 30) == {}  # Telegram's wait still holds for every job
+    assert await restarted.run_once(ok, lambda: NOW + 60) == {"sent": 2}
+
+
 async def test_a_network_error_costs_one_job_never_the_batch(tmp_path):
     admin, bot = setup(tmp_path)
     admin.enqueue([(f"msg:{i}", 10 + i, "x", []) for i in range(5)], batch_id=None, not_before=NOW,

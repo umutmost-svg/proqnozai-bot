@@ -76,6 +76,8 @@ export function safeLink(v: unknown): string | null {
 
 export function createAdsApi(options: {
   getCsrfToken(): string | null;
+  /** Called when the server answers 401: the session ended (AuthController.sessionLost). */
+  onUnauthenticated?(): void;
   fetchImpl?: typeof fetch;
   base?: string;
 }): AdsApi {
@@ -118,6 +120,7 @@ export function createAdsApi(options: {
         disabled = true; // the feature is off on this backend
         return null;
       }
+      if (response.status === 401) options.onUnauthenticated?.();
       let body: unknown = null;
       try {
         body = await response.json();

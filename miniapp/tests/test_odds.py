@@ -427,24 +427,27 @@ def test_an_analysis_carries_the_current_prices_and_is_complete_with_them(clock:
     assert set(quotes) == {"1", "X", "2", "1X", "X2", "12", "O2.5", "U2.5", "BTTS_Y", "BTTS_N"}
     assert quotes["1"]["odds"] == 1.8 and priced.market["fetchedAt"] == iso(clock.now - 60)
     assert priced.to_json()["market"] == priced.market
-    # A value claim only where the rules may recommend: 1X2 / double chance yes; totals and BTTS (never better
-    # than the league average on validation) carry prices and both probabilities, never an edge or EV.
-    assert quotes["1"]["edge"] is not None and quotes["1X"]["expectedValue"] is not None
-    assert all(quotes[k]["edge"] is None and quotes[k]["expectedValue"] is None
-               for k in ("O2.5", "U2.5", "BTTS_Y", "BTTS_N"))
-    assert all(quotes[k]["modelProbability"] is not None for k in quotes)
+    # The fake forecast recommends nothing (NO_BET): prices and both probabilities, never an edge or EV.
+    assert all(q["edge"] is None and q["expectedValue"] is None and q["modelProbability"] is not None
+               for q in quotes.values())
 
 
 def test_no_market_carries_a_value_claim_for_a_forecast_outside_the_validated_population(clock: FakeClock) -> None:
     from dataclasses import replace
 
     from miniapp.ai.analysis import value_claimable
-    from miniapp.tests.forecast_fakes import FakeForecaster
+    from miniapp.tests.forecast_fakes import fake_forecast
 
-    forecast = FakeForecaster().result
-    assert forecast.gate_eligible and value_claimable(forecast, "1") and not value_claimable(forecast, "O2.5")
+    forecast = fake_forecast(pick="X2")
+    # Recommended here: 1X2 / double chance carry a value claim; totals and BTTS (never better than the league
+    # average on validation) never do.
+    assert forecast.gate_eligible and value_claimable(forecast, "1") and value_claimable(forecast, "1X")
+    assert not any(value_claimable(forecast, k) for k in ("O2.5", "U2.5", "BTTS_Y", "BTTS_N"))
+    from miniapp.forecast.selection import Selection
+
     for other in (replace(forecast, limited=True, pool="national-1"), replace(forecast, match_day=False),
-                  replace(forecast, complete_history=False)):
+                  replace(forecast, complete_history=False),
+                  replace(forecast, selection=Selection(None, (), "no_qualifying_market"))):  # NO_BET: no claim
         assert not any(value_claimable(other, k) for k in ("1", "X", "2", "1X", "X2", "12", "H1+1.5"))
 
 

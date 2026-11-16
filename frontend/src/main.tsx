@@ -49,7 +49,7 @@ const services = {
   scrollMemory: new Map<string, number>(),
   boot: new BootTracker(),
   // Off unless the backend runs with MINIAPP_ADS_ENABLED=true (its first 404 switches the client off).
-  ads: real ? createAdsApi({ getCsrfToken }) : undefined,
+  ads: real ? createAdsApi({ getCsrfToken, onUnauthenticated: () => auth.sessionLost() }) : undefined,
 };
 
 createRoot(document.getElementById('root')!).render(
