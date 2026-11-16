@@ -107,3 +107,27 @@ def test_admin_schema_equals_the_bot_side():
     from miniapp.admin_web import bot_crm as admin_side
     text = (Path(__file__).resolve().parents[2] / "bot_crm.py").read_text()  # the bot package is not importable here
     assert f'SCHEMA = """{admin_side.SCHEMA}"""' in text
+
+
+def test_links_carry_platform_geo_pid_and_are_summarised(env):
+    """Labels of a link (owner 16.11): validated, returned with the link, summed per value ("—" = not set)."""
+    config, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    base = {"name": "x", "channel": "miniapp"}
+    for bad, err in (({"platform": "myspace"}, "invalid_platform"), ({"geo": "az"}, "invalid_geo"),
+                     ({"geo": "AZE"}, "invalid_geo"), ({"pid": "a b"}, "invalid_pid"), ({"pid": "x" * 41}, "invalid_pid")):
+        assert post(client, "/api/admin/referrals", csrf, {**base, **bad}).json()["error"] == err
+    post(client, "/api/admin/referrals", csrf, {**base, "code": "tt1", "platform": "tiktok", "geo": "AZ", "pid": "p-1"})
+    post(client, "/api/admin/referrals", csrf, {**base, "code": "tt2", "platform": "tiktok", "geo": "TR"})
+    post(client, "/api/admin/referrals", csrf, {**base, "code": "plain"})
+    now = int(clock())
+    store = Store(config.miniapp_db)
+    for uid, code in ((701, "tt1"), (702, "tt1"), (703, "tt2"), (704, "plain")):
+        store.upsert_user(TelegramUser(uid, "N", None, None, "ru"), now - 50, code)
+    page = client.get("/api/admin/referrals").json()
+    tt1 = next(i for i in page["items"] if i["code"] == "tt1")
+    assert (tt1["platform"], tt1["geo"], tt1["pid"]) == ("tiktok", "AZ", "p-1")
+    by_platform = {g["value"]: (g["links"], g["starts"]) for g in page["breakdown"]["platform"]}
+    assert by_platform == {"tiktok": (2, 3), "—": (1, 1)}
+    assert {g["value"]: g["starts"] for g in page["breakdown"]["geo"]} == {"AZ": 2, "TR": 1, "—": 1}
+    assert {g["value"]: g["starts"] for g in page["breakdown"]["pid"]} == {"p-1": 2, "—": 2}

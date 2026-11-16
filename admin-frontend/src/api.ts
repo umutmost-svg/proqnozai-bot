@@ -91,6 +91,8 @@ const MESSAGES: Record<string, string> = {
   invalid_name: 'Введите название (до 80 символов).',
   invalid_channel: 'Выберите канал.',
   invalid_code_format: 'Код: латиница в нижнем регистре и цифры, 3–24 символа.',
+  invalid_platform: 'Выберите платформу из списка.', invalid_geo: 'Гео — двухбуквенный код страны (AZ, TR…).',
+  invalid_pid: 'PID: латиница, цифры, _ . -, до 40 символов.',
   code_taken: 'Такой код уже используется.',
   retention_not_applied: 'Срок сохранён, но ещё не применён к файлу бота. Повторите — изменение применится.',
   inquiries_unavailable: 'Файл обращений сейчас не читается. Повторите позже.',
@@ -187,10 +189,13 @@ export interface ReferralStats { starts: number; botStarts: number; miniappStart
 export interface ReferralLink {
   id: number; code: string; name: string; channel: 'bot' | 'miniapp'; archivedAt: number | null; createdAt: number;
   by: string | null; param: string; url: string | null; stats: ReferralStats;
+  platform: string | null; geo: string | null; pid: string | null;
 }
+export interface ReferralGroup extends ReferralStats { value: string; links: number }
 export interface ReferralsPage {
   items: ReferralLink[]; funnel: { starts: number; inMiniApp: number; active7d: number; converted: number | null };
   unknownCodes: { code: string; stats: ReferralStats }[]; telemetry: boolean; names: { bot: string | null; miniapp: string | null };
+  breakdown?: { platform: ReferralGroup[]; geo: ReferralGroup[]; pid: ReferralGroup[] };
 }
 export interface InquiriesPage {
   collected: boolean; retentionDays: number;

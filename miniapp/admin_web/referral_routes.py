@@ -84,14 +84,27 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
         personal = ctx.can_personal(request)  # who created a link is an e-mail: not for analysts
         per_code, funnel = stats()
         empty = {"starts": 0, "botStarts": 0, "miniappStarts": 0, "inMiniApp": 0, "active7d": 0,
-                 "converted": 0 if insights.available() else None}
+                 "converted": None if funnel["converted"] is None else 0}  # the same read as the stats
         items = []
         for link in referrals.links():
             items.append({**link, "by": link["by"] if personal else None, "param": PREFIX + link["code"],
                           "url": link_url(link["channel"], link["code"], ctx.bot_username, ctx.miniapp_short_name),
                           "stats": per_code.get(link["code"], empty)})
         unknown = {code: s for code, s in per_code.items() if code not in {i["code"] for i in items}}
-        return {"items": items, "funnel": funnel,
+        # Summaries by the links' labels (archived links included: their starts still count). "—" = not set.
+        keys = ("starts", "botStarts", "miniappStarts", "inMiniApp", "active7d", "converted")
+        breakdown: dict[str, list[dict]] = {}
+        for field in ("platform", "geo", "pid"):
+            groups: dict[str, dict] = {}
+            for item in items:
+                value = item.get(field) or "—"
+                g = groups.setdefault(value, {"value": value, "links": 0, **{k: 0 for k in keys}})
+                g["links"] += 1
+                for k in keys:
+                    if g[k] is not None:
+                        g[k] = None if item["stats"][k] is None else g[k] + item["stats"][k]
+            breakdown[field] = sorted(groups.values(), key=lambda g: (-g["starts"], g["value"]))
+        return {"items": items, "funnel": funnel, "breakdown": breakdown,
                 "unknownCodes": [{"code": c, "stats": s} for c, s in sorted(unknown.items())],
                 "telemetry": insights.available(),
                 "names": {"bot": ctx.bot_username, "miniapp": ctx.miniapp_short_name}}
@@ -100,7 +113,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
     async def create(request: Request) -> dict:
         admin = ctx.admin_of(request, "manage_referrals")
         data = await ctx.body(request)
-        return referrals.create(admin, data.get("name"), data.get("channel"), data.get("code"), ctx.now())
+        return referrals.create(admin, data.get("name"), data.get("channel"), data.get("code"), ctx.now(),
+                                data.get("platform"), data.get("geo"), data.get("pid"))
 
     @app.post("/api/admin/referrals/{link_id}/archive")
     async def archive(link_id: int, request: Request) -> dict:

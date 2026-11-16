@@ -19,6 +19,11 @@ from miniapp.admin_web.accounts import ActionError, Admin, AdminStore
 PREFIX = "ref_"
 CODE = re.compile(r"^[a-z0-9]{3,24}$")
 CHANNELS = ("bot", "miniapp")
+# Labels of a link (owner 16.11): where it is placed, the target country and the partner's id. Only for the panel's
+# filters and summaries; never part of the link itself.
+PLATFORMS = ("telegram", "instagram", "tiktok", "youtube", "facebook", "x", "google", "other")
+PID = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+LABEL_COLUMNS = (("platform", "TEXT"), ("geo", "TEXT"), ("pid", "TEXT"))
 _ALPHABET = string.ascii_lowercase + string.digits
 
 _SCHEMA = """
@@ -65,21 +70,36 @@ class Referrals:
     def init_schema(self) -> None:
         with self.accounts._connect() as conn:
             conn.executescript(_SCHEMA)
+            for column, kind in LABEL_COLUMNS:  # additive (16.11)
+                try:
+                    conn.execute(f"ALTER TABLE crm_referral_links ADD COLUMN {column} {kind}")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
 
     def links(self) -> list[dict]:
         with self.accounts._connect() as conn:
             rows = conn.execute(
-                "SELECT l.id, l.code, l.name, l.channel, l.archived_at, l.created_at, u.email FROM crm_referral_links l "
-                "LEFT JOIN admin_users u ON u.id = l.admin_id ORDER BY l.id DESC").fetchall()
+                "SELECT l.id, l.code, l.name, l.channel, l.archived_at, l.created_at, u.email, l.platform, l.geo, l.pid "
+                "FROM crm_referral_links l LEFT JOIN admin_users u ON u.id = l.admin_id ORDER BY l.id DESC").fetchall()
         return [{"id": r[0], "code": r[1], "name": r[2], "channel": r[3], "archivedAt": r[4], "createdAt": r[5],
-                 "by": r[6]} for r in rows]
+                 "by": r[6], "platform": r[7], "geo": r[8], "pid": r[9]} for r in rows]
 
     def by_code(self) -> dict[str, dict]:
         return {link["code"]: link for link in self.links()}
 
-    def create(self, actor: Admin, name: object, channel: object, code: object, now: int) -> dict:
+    def create(self, actor: Admin, name: object, channel: object, code: object, now: int, platform: object = None,
+               geo: object = None, pid: object = None) -> dict:
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
             raise ActionError("invalid_name")
+        platform, geo, pid = (None if v in (None, "") else v for v in (platform, geo, pid))
+        if platform is not None and platform not in PLATFORMS:
+            raise ActionError("invalid_platform")
+        if geo is not None and not (isinstance(geo, str) and len(geo) == 2 and geo.isascii() and geo.isalpha()
+                                    and geo.isupper()):
+            raise ActionError("invalid_geo")
+        if pid is not None and not (isinstance(pid, str) and PID.match(pid)):
+            raise ActionError("invalid_pid")
         if channel not in CHANNELS:
             raise ActionError("invalid_channel")
         if code in (None, ""):
@@ -90,12 +110,14 @@ class Referrals:
             self.accounts._require_actor(conn, actor.id, "manage_referrals")
             try:
                 link_id = conn.execute(
-                    "INSERT INTO crm_referral_links (code, name, channel, created_at, admin_id) VALUES (?, ?, ?, ?, ?)",
-                    (code, name.strip(), channel, now, actor.id)).lastrowid
+                    "INSERT INTO crm_referral_links (code, name, channel, created_at, admin_id, platform, geo, pid) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (code, name.strip(), channel, now, actor.id, platform, geo,
+                                                        pid)).lastrowid
             except sqlite3.IntegrityError:
                 raise ActionError("code_taken", 409) from None
             self.accounts._event(conn, now, actor.id, "referral.create", "referral", str(link_id), None,
-                                 {"code": code, "channel": channel}, None, None, "done")
+                                 {"code": code, "channel": channel, "platform": platform, "geo": geo, "pid": pid},
+                                 None, None, "done")
         return {"id": link_id, "code": code}
 
     def set_archived(self, actor: Admin, link_id: int, archived: object, now: int) -> dict:
