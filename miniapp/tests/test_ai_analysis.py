@@ -58,7 +58,8 @@ class FakeModel:
 def finished(mid: int, home: tuple, away: tuple, score: tuple, day: int) -> dict:
     return {"id": mid, "status": "FINISHED", "utcDate": f"2027-01-{day:02d}T15:00:00Z",
             "competition": {"code": "PL"}, "homeTeam": {"id": home[0], "name": home[1]},
-            "awayTeam": {"id": away[0], "name": away[1]}, "score": {"fullTime": {"home": score[0], "away": score[1]}}}
+            "awayTeam": {"id": away[0], "name": away[1]},
+            "score": {"duration": "REGULAR", "fullTime": {"home": score[0], "away": score[1]}}}
 
 
 ARSENAL, CHELSEA = (57, "Arsenal FC"), (61, "Chelsea FC")
@@ -104,6 +105,16 @@ def test_form_is_from_the_teams_point_of_view_newest_first_finished_only() -> No
     assert [(m.venue, m.goals_for, m.goals_against) for m in form[:2]] == [("home", 2, 0), ("away", 3, 1)]
     with pytest.raises(Exception):
         normalize_form("nope", 57)
+
+
+def test_form_counts_the_90_minute_score_never_extra_time_or_a_shoot_out() -> None:
+    shootout = finished(301, ARSENAL, (6, "F"), (5, 3), 4)
+    shootout["score"] = {"duration": "PENALTY_SHOOTOUT", "fullTime": {"home": 5, "away": 3},
+                         "regularTime": {"home": 1, "away": 1}, "penalties": {"home": 4, "away": 2}}
+    unreadable = finished(302, ARSENAL, (7, "G"), (2, 1), 3)
+    unreadable["score"] = {"duration": "EXTRA_TIME", "fullTime": {"home": 2, "away": 1}}  # no regularTime
+    form = normalize_form([shootout, unreadable], 57)
+    assert [(m.result, m.goals_for, m.goals_against) for m in form] == [("D", 1, 1)]
 
 
 def test_standings_use_the_total_table() -> None:

@@ -260,6 +260,18 @@ describe('the model against the market', () => {
     expect(screen.getByTestId('ai-result')).not.toHaveTextContent(ATTR);
   });
 
+  it('a forecast the rules never recommend from shows prices and probabilities without any value claim', async () => {
+    const plain = (q: ReturnType<typeof quote>) => ({ ...q, edge: null, expectedValue: null });
+    const quotes = [plain(quote('1', 4.2, 22.6)), plain(quote('X', 3.9, 24.3)), plain(quote('2', 1.85, 53.1))];
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3({ ...READY_OVER, market: { ...PRICES, quotes } })) });
+    const verdict = await screen.findByTestId('ai-market-verdict');
+    expect(verdict).toHaveTextContent('коэффициенты и вероятности — для справки');
+    const value = screen.getByTestId('ai-market-value');
+    expect(value).toHaveTextContent('4,2');
+    expect(value).not.toHaveTextContent('Наибольшее расхождение');
+    expect(value.querySelector('[data-positive]')).toBeNull();
+  });
+
   it('a large gap below the market is named too, never reported as agreement', async () => {
     // 1X2: the model 3.8 points under the market on the draw, 1.9 over on each win.
     const quotes = [quote('1', 4.2, M['1'] - 1.9), quote('X', 3.9, M.X + 3.8), quote('2', 1.85, M['2'] - 1.9)];

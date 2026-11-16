@@ -1070,15 +1070,18 @@ export function readQuote(v: unknown, shown: number | undefined): MarketQuote | 
   const implied = finite(v.impliedProbability, 0, 100);
   const market = finite(v.marketProbability, 0, 100);
   const model = finite(v.modelProbability, 0, 100);
-  const edge = finite(v.edge, -100, 100);
-  const ev = finite(v.expectedValue, -100, 10_000);
+  // Both null together: no value claim for this market (backend value_claimable); otherwise both must be numbers.
+  const noValue = v.edge === null && v.expectedValue === null;
+  const edge = noValue ? null : finite(v.edge, -100, 100);
+  const ev = noValue ? null : finite(v.expectedValue, -100, 10_000);
   const margin = finite(v.margin, -1, 35);
-  if (odds === null || implied === null || market === null || model === null || edge === null || ev === null || margin === null) return null;
+  if (odds === null || implied === null || market === null || model === null || margin === null) return null;
+  if (!noValue && (edge === null || ev === null)) return null;
   if (Math.abs(odds * 100 - Math.round(odds * 100)) > 1e-6) return null;  // the backend sends cents
   if (Math.abs(implied - 100 / odds) > 0.051) return null;
   if (Math.abs(model - shown) > SHOWN_TOLERANCE + 0.051) return null;
-  if (Math.abs(edge - (model - market)) > 0.101) return null;
-  if (Math.abs(ev - (model * odds - 100)) > 0.05 * odds + 0.051) return null;
+  if (edge !== null && Math.abs(edge - (model - market)) > 0.101) return null;
+  if (ev !== null && Math.abs(ev - (model * odds - 100)) > 0.05 * odds + 0.051) return null;
   return { market: v.market, odds, impliedProbability: implied, marketProbability: market, modelProbability: model, edge, expectedValue: ev, margin };
 }
 

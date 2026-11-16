@@ -36,9 +36,9 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from miniapp.forecast.data import results_from_events
-from miniapp.forecast.engine import ForecastEngine, MatchForecast, Unavailable
+from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast, Unavailable
 from miniapp.forecast.history import ForecastHistory, ForecastRecord
-from miniapp.forecast.markets import KEYS as MARKET_KEYS
+from miniapp.forecast.markets import FAMILY, KEYS as MARKET_KEYS
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.odds.store import MatchOdds, OddsStore
 from miniapp.odds.value import book_json, compare, market_1x2_percent, market_book
@@ -290,6 +290,14 @@ class ModelForecaster:
         return self.engine.forecast(code, results_from_events(history.pool if pooled else history.events), start,
                                     home, away, self._clock(), complete_history=history.previous_season,
                                     kickoff=parse_instant(event.starts_at).timestamp(), pooled=pooled)
+
+
+def value_claimable(forecast: MatchForecast, market: str) -> bool:
+    """May the model's gap to the market be shown as an edge and expected value? Only where the rules may recommend:
+    the validated population (gate-eligible: validated competition, complete history, match day) and a market family
+    the validation kept selectable. Elsewhere (national-team pool, CL, early forecasts, totals, BTTS) the prices and
+    both probabilities are shown, never a value claim (Fable audit 16.11, selection.py: no selection is a value claim)."""
+    return forecast.gate_eligible and FAMILY[market] in FROZEN.pick_families
 
 
 class QuotaLedger(Protocol):
@@ -643,7 +651,7 @@ class AiService:
         if not quotes:
             return result
         market = {"fetchedAt": _iso_ts(found.fetched_at), "validFor": int(found.valid_for),
-                  "quotes": [quotes[k].to_json() for k in MARKET_KEYS if k in quotes]}
+                  "quotes": [quotes[k].to_json(value=value_claimable(forecast, k)) for k in MARKET_KEYS if k in quotes]}
         if has_form:
             return replace(result, kind="ready", reasons=(), estimated=False, market=market)
         return replace(result, kind="partial", reasons=("no_verified_form",), estimated=True, market=market)

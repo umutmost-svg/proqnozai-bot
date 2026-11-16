@@ -366,8 +366,9 @@ export interface MarketQuote {
   impliedProbability: number;
   marketProbability: number;
   modelProbability: number;
-  edge: number;
-  expectedValue: number;
+  /** null (with expectedValue): a forecast or market family the rules never recommend from — no value claim. */
+  edge: number | null;
+  expectedValue: number | null;
   margin: number;
 }
 

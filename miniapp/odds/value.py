@@ -42,15 +42,17 @@ class MarketQuote:
     def expected_value(self) -> float:
         return self.model * self.odds - 1.0
 
-    def to_json(self) -> dict:
+    def to_json(self, value: bool = True) -> dict:
+        """`value`: the edge and expected value may be stated. Without it (a forecast or market family the rules
+        never recommend from) they are null: a gap to the market there is no claim of value."""
         return {
             "market": self.key,
             "odds": round(self.odds, 2),
             "impliedProbability": round(self.implied * 100, 1),
             "marketProbability": round(self.market * 100, 1),
             "modelProbability": round(self.model * 100, 1),
-            "edge": round(self.edge * 100, 1),
-            "expectedValue": round(self.expected_value * 100, 1),
+            "edge": round(self.edge * 100, 1) if value else None,
+            "expectedValue": round(self.expected_value * 100, 1) if value else None,
             "margin": round(self.margin * 100, 1),
         }
 

@@ -51,6 +51,13 @@ export function quoteOf(prices: MarketPrices | undefined, market: MarketKey | 'N
 
 /** "Odds 1.80 · market 51% · model 60% · expected value +8%" — every number from the backend. */
 export function priceLine(t: Translate, lang: Lang, q: MarketQuote): string {
+  if (q.expectedValue === null) {
+    return t('ai.price.lineNoValue', {
+      odds: decimal(lang, q.odds),
+      market: oneDecimal(lang, q.marketProbability),
+      model: oneDecimal(lang, q.modelProbability),
+    });
+  }
   return t('ai.price.line', {
     odds: decimal(lang, q.odds),
     market: oneDecimal(lang, q.marketProbability),
@@ -62,7 +69,7 @@ export function priceLine(t: Translate, lang: Lang, q: MarketQuote): string {
 export function PriceLine({ quote }: { quote: MarketQuote }) {
   const { t, settings } = useSettings();
   return (
-    <p className={s.priceLine} data-testid="price-line" data-positive={quote.expectedValue > 0 || undefined}>
+    <p className={s.priceLine} data-testid="price-line" data-positive={(quote.expectedValue ?? 0) > 0 || undefined}>
       {priceLine(t, settings.lang, quote)}
     </p>
   );
@@ -78,9 +85,12 @@ export function MarketValue({ prices, event }: { prices: MarketPrices; event: Sp
   const lang = settings.lang;
   const home = event.home.name;
   const away = event.away.name;
-  const rows = [...prices.quotes].sort((a, b) => b.edge - a.edge || a.market.localeCompare(b.market));
-  // The verdict names the largest difference either way (the model above or below the market).
-  const best = [...prices.quotes].sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge) || a.market.localeCompare(b.market))[0];
+  // Rows with a value claim first, by the model's advantage; the reference-only rows (no edge) after them.
+  const rows = [...prices.quotes].sort((a, b) =>
+    (a.edge === null ? 1 : 0) - (b.edge === null ? 1 : 0) || (b.edge ?? 0) - (a.edge ?? 0) || a.market.localeCompare(b.market));
+  // The verdict names the largest difference either way (the model above or below the market) among the claimable.
+  const claimable = prices.quotes.filter((q): q is MarketQuote & { edge: number } => q.edge !== null);
+  const best = [...claimable].sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge) || a.market.localeCompare(b.market))[0];
   const margin = prices.quotes.find((q) => q.market === '1')?.margin;
   return (
     <section className={s.card} data-testid="ai-market-value">
@@ -93,7 +103,9 @@ export function MarketValue({ prices, event }: { prices: MarketPrices; event: Sp
               market: oneDecimal(lang, best.marketProbability),
               edge: oneDecimal(lang, best.edge, true),
             })
-          : t('ai.value.none')}
+          : claimable.length === 0
+            ? t('ai.value.referenceOnly')
+            : t('ai.value.none')}
       </p>
       {/* One row per outcome: its name across the card, the four numbers under it (fits 360 px). */}
       <div className={s.valueHead} aria-hidden="true">
@@ -104,14 +116,18 @@ export function MarketValue({ prices, event }: { prices: MarketPrices; event: Sp
       </div>
       <ul className={s.valueRows}>
         {rows.map((q) => (
-          <li key={q.market} className={s.valueRow} data-market={q.market} data-positive={q.expectedValue > 0 || undefined}>
+          <li key={q.market} className={s.valueRow} data-market={q.market} data-positive={(q.expectedValue ?? 0) > 0 || undefined}>
             <span className={s.valueName}>{marketText(t, q.market, home, away)}</span>
             <span aria-label={`${t('ai.value.odds')} ${decimal(lang, q.odds)}`}>{decimal(lang, q.odds)}</span>
             <span aria-label={`${t('ai.value.market')} ${oneDecimal(lang, q.marketProbability)}%`}>{oneDecimal(lang, q.marketProbability)}%</span>
             <span aria-label={`${t('ai.value.model')} ${oneDecimal(lang, q.modelProbability)}%`}>{oneDecimal(lang, q.modelProbability)}%</span>
-            <span className={s.valueEv} aria-label={`${t('ai.value.ev')} ${oneDecimal(lang, q.expectedValue, true)}%`}>
-              {oneDecimal(lang, q.expectedValue, true)}%
-            </span>
+            {q.expectedValue === null ? (
+              <span className={s.valueEv} aria-label={`${t('ai.value.ev')} —`}>—</span>
+            ) : (
+              <span className={s.valueEv} aria-label={`${t('ai.value.ev')} ${oneDecimal(lang, q.expectedValue, true)}%`}>
+                {oneDecimal(lang, q.expectedValue, true)}%
+              </span>
+            )}
           </li>
         ))}
       </ul>

@@ -779,7 +779,9 @@ def normalize_form(raw_matches: object, team: int) -> list[FormMatch]:
         home, away = raw.get("homeTeam"), raw.get("awayTeam")
         if not isinstance(home, dict) or not isinstance(away, dict):
             continue
-        score = _pair((raw.get("score") or {}).get("fullTime") if isinstance(raw.get("score"), dict) else None)
+        # The 90-minute score, as everywhere in the model: `fullTime` also counts extra time and may count a
+        # shoot-out, which would turn a 1:1 won on penalties into a "5:3 win" in the verified form.
+        score = ninety_minute_score(raw.get("score"))
         kickoff = _iso_utc(raw.get("utcDate"))
         if score is None or kickoff is None:
             continue

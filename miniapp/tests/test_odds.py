@@ -427,6 +427,25 @@ def test_an_analysis_carries_the_current_prices_and_is_complete_with_them(clock:
     assert set(quotes) == {"1", "X", "2", "1X", "X2", "12", "O2.5", "U2.5", "BTTS_Y", "BTTS_N"}
     assert quotes["1"]["odds"] == 1.8 and priced.market["fetchedAt"] == iso(clock.now - 60)
     assert priced.to_json()["market"] == priced.market
+    # A value claim only where the rules may recommend: 1X2 / double chance yes; totals and BTTS (never better
+    # than the league average on validation) carry prices and both probabilities, never an edge or EV.
+    assert quotes["1"]["edge"] is not None and quotes["1X"]["expectedValue"] is not None
+    assert all(quotes[k]["edge"] is None and quotes[k]["expectedValue"] is None
+               for k in ("O2.5", "U2.5", "BTTS_Y", "BTTS_N"))
+    assert all(quotes[k]["modelProbability"] is not None for k in quotes)
+
+
+def test_no_market_carries_a_value_claim_for_a_forecast_outside_the_validated_population(clock: FakeClock) -> None:
+    from dataclasses import replace
+
+    from miniapp.ai.analysis import value_claimable
+    from miniapp.tests.forecast_fakes import FakeForecaster
+
+    forecast = FakeForecaster().result
+    assert forecast.gate_eligible and value_claimable(forecast, "1") and not value_claimable(forecast, "O2.5")
+    for other in (replace(forecast, limited=True, pool="national-1"), replace(forecast, match_day=False),
+                  replace(forecast, complete_history=False)):
+        assert not any(value_claimable(other, k) for k in ("1", "X", "2", "1X", "X2", "12", "H1+1.5"))
 
 
 # --- quick prediction and coupons ----------------------------------------------------------------
