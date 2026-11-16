@@ -420,3 +420,16 @@ def test_deposit_rates_by_country_reach_the_mini_app(env):
     assert post(client, "/api/admin/settings/credits.rates", csrf, {**owner("rates-ok-0001"), "value": rates}).status_code == 200
     assert client.get("/api/admin/credits").json()["rates"] == rates
     assert _apply_commands(config, clock).summary(U1, "TR")["deposit"] == {"currency": "TRY", "perForecast": 100}
+
+
+def test_mb_ids_entered_earlier_in_the_panel_are_approved_in_the_mini_app(env):
+    from miniapp.admin_web.app import create_admin_app
+    config, clock, client, accounts, secrets_ = env
+    with accounts._connect() as conn:  # an ID the owner typed into a card before the Mini App knew MB IDs
+        conn.execute("INSERT INTO crm_external_ids (user_id, mb_id, updated_at, admin_id) VALUES (?, 'OLD7', 1, 1)",
+                     (U1,))
+    create_admin_app(config, clock=clock)  # the next start of the panel
+    [link] = Store(config.miniapp_db).mb_links(user_ids=[U1])
+    assert (link["mbId"], link["state"]) == ("OLD7", "approved")
+    create_admin_app(config, clock=clock)  # once: a second start changes nothing
+    assert len(Store(config.miniapp_db).mb_links(user_ids=[U1])) == 1

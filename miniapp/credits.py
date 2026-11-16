@@ -220,6 +220,8 @@ class Credits:
             if conn.execute("SELECT 1 FROM credit_items WHERE user_id = ? AND item = ?", (user_id, item)).fetchone():
                 return False
             if account.unlimited_until and account.unlimited_until > now:
+                # Owned like a paid one: the same analysis stays free after the unlimited period (Codex r5 P2).
+                conn.execute("INSERT INTO credit_items (user_id, item, at) VALUES (?, ?, ?)", (user_id, item, now))
                 return False
             if account.balance < COST:
                 raise NoCredits(account.balance)
