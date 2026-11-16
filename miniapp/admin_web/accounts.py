@@ -43,9 +43,9 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "ai.per_user_daily": {"type": "int", "default": 5, "min": 0, "max": 50},
     "ai.daily_budget": {"type": "int", "default": 300, "min": 0, "max": 5000},
     # Forecasts require and spend credits (docs/miniapp/credits.md); off until the owner switches it on.
-    "credits.enabled": {"type": "bool", "default": False},
+    "credits.enabled": {"type": "bool", "default": False, "permission": "manage_credits"},
     # Partner deposits per forecast by country (credits.valid_rates): the calculator and, later, the report import.
-    "credits.rates": {"type": "rates", "default": []},
+    "credits.rates": {"type": "rates", "default": [], "permission": "manage_credits"},
 }
 
 _SCHEMA = """
@@ -212,6 +212,8 @@ PERMISSIONS: dict[str, tuple[str, ...]] = {
     "manage_referrals": ("owner", "admin", "promoter"),  # a promoter: only the links they created
     # MB IDs users enter in the Mini App: the owner approves them personally (owner 16.11, docs/miniapp/credits.md).
     "approve_mb": ("owner",),
+    # The credits switch and the deposit rates: the owner's decision (docs/miniapp/credits.md).
+    "manage_credits": ("owner",),
     # Inquiries: reading them needs read_personal AND the explicit view_dialogs grant; the retention period of
     # stored inquiries is an owner decision.
     "manage_inquiry_settings": ("owner",),
@@ -735,7 +737,7 @@ class AdminStore:
         with self._write() as conn:
             prior = self._replayed(conn, idem, actor.id, "settings.update", key, {"key": key, "value": value}, reason)
             if prior is None:
-                self.step_up(conn, actor.id, code, now, "manage_settings")
+                self.step_up(conn, actor.id, code, now, spec.get("permission", "manage_settings"))
                 row = conn.execute("SELECT value_json, version FROM runtime_settings WHERE key = ?", (key,)).fetchone()
                 before_value = json.loads(row[0]) if row else spec["default"]
                 version = max(now * 1000, (row[1] + 1) if row else 0)

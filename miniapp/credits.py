@@ -65,6 +65,10 @@ class NoCredits(Exception):
         self.balance = balance
 
 
+class Busy(Exception):
+    """The same forecast is being generated for this user by another request right now: try again shortly."""
+
+
 class MbError(Exception):
     """invalid_mb_id | mb_taken | mb_locked: the message is a stable code."""
 
@@ -210,6 +214,9 @@ class Credits:
         now = int(self.clock())
         with self.store._write() as conn:
             account = self._account(conn, user_id, now)
+            if conn.execute("SELECT 1 FROM credit_holds WHERE user_id = ? AND item = ?", (user_id, item)).fetchone():
+                # Another request of this user is generating it: never a free ride on a hold that may be refunded.
+                raise Busy()
             if conn.execute("SELECT 1 FROM credit_items WHERE user_id = ? AND item = ?", (user_id, item)).fetchone():
                 return False
             if account.unlimited_until and account.unlimited_until > now:
@@ -223,9 +230,18 @@ class Credits:
             spend = conn.execute("INSERT INTO credit_ledger (user_id, at, kind, delta, balance_after, item, key) "
                                  "VALUES (?, ?, 'spend', ?, ?, ?, ?)",
                                  (user_id, now, -COST, balance, item, f"spend:{user_id}:{item}:{secrets.token_hex(6)}")).lastrowid
-            conn.execute("INSERT INTO credit_holds (user_id, item, spend_id) VALUES (?, ?, ?) "
-                         "ON CONFLICT(user_id, item) DO UPDATE SET spend_id = excluded.spend_id", (user_id, item, spend))
+            conn.execute("INSERT INTO credit_holds (user_id, item, spend_id, held_at) VALUES (?, ?, ?, ?)",
+                         (user_id, item, spend, now))
         return True
+
+    def release_all_holds(self) -> int:
+        """At Mini App startup (one replica, stop-first deploys): a hold left by a process that ended mid-generation
+        produced nothing for the user, so it is refunded (Codex credits r2 P1). Returns how many."""
+        with self.store._connect() as conn:
+            holds = conn.execute("SELECT user_id, item FROM credit_holds").fetchall()
+        for user_id, item in holds:
+            self.settle(user_id, item, generated=False)
+        return len(holds)
 
     def settle(self, user_id: int, item: str, generated: bool) -> None:
         """After a held generation: kept when something was generated, else refunded once (the item unpaid again)."""
@@ -245,15 +261,15 @@ class Credits:
             conn.execute("DELETE FROM credit_items WHERE user_id = ? AND item = ?", (user_id, item))
             self._entry(conn, user_id, now, "refund", COST, balance, item, f"refund:{hold[0]}")
 
-    def decide_mb(self, user_id: int, mb_id: str, submitted_at: int, approve: bool, reason: str | None) -> str:
+    def decide_mb(self, user_id: int, mb_id: str, submission: str, approve: bool, reason: str | None) -> str:
         """The owner's decision, written by the admin process for exactly the submission the owner saw: "done",
         "already" (this submission was decided the same way before: a retried decision) or "stale" (the user entered
         another ID since, or it was decided otherwise)."""
         now = int(self.clock())
         state = "approved" if approve else "rejected"
         with self.store._write() as conn:
-            row = conn.execute("SELECT mb_id, state, submitted_at FROM mb_links WHERE user_id = ?", (user_id,)).fetchone()
-            if row is None or row[0].lower() != mb_id.lower() or row[2] != submitted_at:
+            row = conn.execute("SELECT mb_id, state, submission FROM mb_links WHERE user_id = ?", (user_id,)).fetchone()
+            if row is None or row[0].lower() != mb_id.lower() or row[2] != submission:
                 return "stale"
             if row[1] == state:
                 return "already"
@@ -282,10 +298,11 @@ class Credits:
                                  (mb_id, user_id)).fetchone()
             if taken:
                 raise MbError("mb_taken")
-            conn.execute("INSERT INTO mb_links (user_id, mb_id, state, submitted_at) VALUES (?, ?, 'pending', ?) "
+            conn.execute("INSERT INTO mb_links (user_id, mb_id, state, submitted_at, submission) "
+                         "VALUES (?, ?, 'pending', ?, ?) "
                          "ON CONFLICT(user_id) DO UPDATE SET mb_id = excluded.mb_id, state = 'pending', "
-                         "submitted_at = excluded.submitted_at, decided_at = NULL, reason = NULL",
-                         (user_id, mb_id, now))
+                         "submitted_at = excluded.submitted_at, submission = excluded.submission, decided_at = NULL, "
+                         "reason = NULL", (user_id, mb_id, now, secrets.token_hex(8)))
         return {"id": mb_id, "state": "pending"}
 
     # ---- admin commands ----------------------------------------------------------------------
@@ -305,7 +322,15 @@ class Credits:
     def _apply(self, conn: sqlite3.Connection, key: str, kind: str, user_id: int | None, payload: dict,
                now: int) -> str:
         if kind == "flag":
-            key, value = payload.get("key"), payload.get("value")
+            key, value, version = payload.get("key"), payload.get("value"), payload.get("version")
+            if isinstance(version, int) and not isinstance(version, bool):
+                # Settings versions only move forward: an older one applied late never overwrites a newer value.
+                seen = conn.execute("SELECT value FROM app_flags WHERE key = ?", (f"{key}#version",)).fetchone()
+                if seen is not None and int(seen[0]) >= version:
+                    return "stale"
+                conn.execute("INSERT INTO app_flags (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO "
+                             "UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                             (f"{key}#version", str(version), now))
             if key == FLAG_ENABLED and isinstance(value, bool):
                 self._set_flag(conn, FLAG_ENABLED, value, now)
                 return "done"
@@ -347,9 +372,9 @@ class Credits:
             if conn.execute("SELECT 1 FROM mb_links WHERE mb_id = ? AND state != 'rejected' AND user_id != ?",
                             (mb_id, user_id)).fetchone():
                 return "mb_taken"
-            conn.execute("INSERT INTO mb_links (user_id, mb_id, state, submitted_at, decided_at) "
-                         "VALUES (?, ?, 'approved', ?, ?) ON CONFLICT(user_id) DO UPDATE SET mb_id = excluded.mb_id, "
-                         "state = 'approved', decided_at = excluded.decided_at, reason = NULL",
-                         (user_id, mb_id, now, now))
+            conn.execute("INSERT INTO mb_links (user_id, mb_id, state, submitted_at, submission, decided_at) "
+                         "VALUES (?, ?, 'approved', ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET mb_id = excluded.mb_id, "
+                         "state = 'approved', submission = excluded.submission, decided_at = excluded.decided_at, "
+                         "reason = NULL", (user_id, mb_id, now, secrets.token_hex(8), now))
             return "done"
         return "unknown_kind"

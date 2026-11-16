@@ -24,7 +24,7 @@ export function MbQueue() {
     try {
       await api(`/api/admin/mb/${item.userId}/decide`, {
         method: 'POST',
-        body: { decision: approve ? 'approve' : 'reject', mbId: item.mbId, submittedAt: item.submittedAt, reason: why ?? null },
+        body: { decision: approve ? 'approve' : 'reject', mbId: item.mbId, submission: item.submission, reason: why ?? null },
       });
       setToast(approve ? `MB ID ${item.mbId} подтверждён` : `MB ID ${item.mbId} отклонён`);
       setRejecting(null);

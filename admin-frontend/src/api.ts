@@ -251,6 +251,8 @@ export interface CreditRate { country: string; currency: string; perForecast: nu
 export interface MbLink {
   userId: number; mbId: string; state: 'pending' | 'approved' | 'rejected'; submittedAt: number; decidedAt: number | null;
   reason: string | null;
+  /** The submission's own id: a decision applies to exactly this submission. */
+  submission: string;
 }
 export interface CrmProfile extends Omit<UserProfile, 'credits'> {
   tags: string[];

@@ -110,10 +110,14 @@ def test_credits_are_queued_to_the_mini_app_and_read_back_from_it(env):
                 {**dangerous(secrets_, clock), "userIds": [123], "kind": "grant", "amount": 1}).status_code == 404
 
 
-def test_the_credits_switch_reaches_the_mini_app(env):
+def test_the_credits_switch_is_the_owners_and_reaches_the_mini_app(env):
     config, clock, client, accounts, secrets_ = env
     csrf = login(client, clock, secrets_, "admin@x.test")
-    r = post(client, "/api/admin/settings/credits.enabled", csrf, {**dangerous(secrets_, clock), "value": True})
+    assert post(client, "/api/admin/settings/credits.enabled", csrf, {**dangerous(secrets_, clock), "value": True}).status_code == 403
+    client.cookies.clear()
+    csrf = login(client, clock, secrets_, "owner@x.test")
+    r = post(client, "/api/admin/settings/credits.enabled", csrf,
+             {"reason": "запуск", "code": code(secrets_["owner@x.test"], clock), "idempotencyKey": "switch-on-0001", "value": True})
     assert r.status_code == 200, r.text
     assert _apply_commands(config, clock).enabled()
 
@@ -125,22 +129,22 @@ def test_owner_approves_mb_ids_entered_in_the_mini_app(env):
     credits.submit_mb(U2, "MBX2")
     csrf = login(client, clock, secrets_, "admin@x.test")
     assert client.get("/api/admin/mb").json()["counts"]["pending"] == 2
-    assert post(client, f"/api/admin/mb/{U1}/decide", csrf, {"decision": "approve", "mbId": "MBX1", "submittedAt": 1}).status_code == 403
+    assert post(client, f"/api/admin/mb/{U1}/decide", csrf, {"decision": "approve", "mbId": "MBX1", "submission": "x"}).status_code == 403
     client.cookies.clear()
     csrf = login(client, clock, secrets_, "owner@x.test")
     items = {i["userId"]: i for i in client.get("/api/admin/mb").json()["items"]}
     ok = post(client, f"/api/admin/mb/{U1}/decide", csrf,
-              {"decision": "approve", "mbId": "MBX1", "submittedAt": items[U1]["submittedAt"]})
+              {"decision": "approve", "mbId": "MBX1", "submission": items[U1]["submission"]})
     assert ok.json() == {"decision": "approved"}
     assert post(client, f"/api/admin/mb/{U2}/decide", csrf,
-                {"decision": "reject", "mbId": "MBX2", "submittedAt": items[U2]["submittedAt"]}).json()["error"] == "reason_required"
+                {"decision": "reject", "mbId": "MBX2", "submission": items[U2]["submission"]}).json()["error"] == "reason_required"
     post(client, f"/api/admin/mb/{U2}/decide", csrf,
-         {"decision": "reject", "mbId": "MBX2", "submittedAt": items[U2]["submittedAt"], "reason": "нет аккаунта"})
+         {"decision": "reject", "mbId": "MBX2", "submission": items[U2]["submission"], "reason": "нет аккаунта"})
     assert client.get("/api/admin/mb").json()["counts"] == {"pending": 0, "approved": 1, "rejected": 1}
     assert credits.summary(U2)["mb"]["reason"] == "нет аккаунта"
     # A decision on a submission the user replaced since is refused (never a false verified ID here).
     credits.submit_mb(U2, "MBX3")
-    stale = post(client, f"/api/admin/mb/{U2}/decide", csrf, {"decision": "approve", "mbId": "MBX2", "submittedAt": items[U2]["submittedAt"]})
+    stale = post(client, f"/api/admin/mb/{U2}/decide", csrf, {"decision": "approve", "mbId": "MBX2", "submission": items[U2]["submission"]})
     assert stale.json()["error"] == "mb_stale" and client.get(f"/api/admin/users/{U2}").json()["mbId"] is None
     card = client.get(f"/api/admin/users/{U1}").json()
     assert card["mbId"] == "MBX1" and card["mbLink"]["state"] == "approved"  # also the ads' MB ID
@@ -407,11 +411,12 @@ def test_behaviour_filters_never_count_users_without_data(env):
 
 def test_deposit_rates_by_country_reach_the_mini_app(env):
     config, clock, client, accounts, secrets_ = env
-    csrf = login(client, clock, secrets_, "admin@x.test")
-    bad = post(client, "/api/admin/settings/credits.rates", csrf, {**dangerous(secrets_, clock), "value": [{"country": "AZE"}]})
+    csrf = login(client, clock, secrets_, "owner@x.test")
+    owner = lambda key: {"reason": "курсы", "code": code(secrets_["owner@x.test"], clock), "idempotencyKey": key}  # noqa: E731
+    bad = post(client, "/api/admin/settings/credits.rates", csrf, {**owner("rates-bad-001"), "value": [{"country": "AZE"}]})
     assert bad.json()["error"] == "invalid_rates"
     clock.t += 30
     rates = [{"country": "TR", "currency": "TRY", "perForecast": 100}]
-    assert post(client, "/api/admin/settings/credits.rates", csrf, {**dangerous(secrets_, clock), "value": rates}).status_code == 200
+    assert post(client, "/api/admin/settings/credits.rates", csrf, {**owner("rates-ok-0001"), "value": rates}).status_code == 200
     assert client.get("/api/admin/credits").json()["rates"] == rates
     assert _apply_commands(config, clock).summary(U1, "TR")["deposit"] == {"currency": "TRY", "perForecast": 100}

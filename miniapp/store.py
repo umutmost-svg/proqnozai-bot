@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS mb_links (
     mb_id        TEXT NOT NULL COLLATE NOCASE,
     state        TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'rejected')),
     submitted_at INTEGER NOT NULL,
+    submission   TEXT NOT NULL,  -- random id of this submission: a decision is for exactly this one
     decided_at   INTEGER,
     reason       TEXT
 );
@@ -108,6 +109,7 @@ CREATE TABLE IF NOT EXISTS credit_holds (
     user_id  INTEGER NOT NULL,
     item     TEXT NOT NULL,
     spend_id INTEGER NOT NULL,
+    held_at  INTEGER NOT NULL,
     PRIMARY KEY (user_id, item)
 );
 -- Admin actions already applied (by their keys): applying one twice is a no-op.
@@ -642,11 +644,11 @@ class Store:
 
     def mb_links(self, state: str | None = None, user_ids: Iterable[int] | None = None) -> list[dict]:
         wanted = set(user_ids) if user_ids is not None else None
-        rows = self._credit_read("SELECT user_id, mb_id, state, submitted_at, decided_at, reason FROM mb_links "
+        rows = self._credit_read("SELECT user_id, mb_id, state, submitted_at, decided_at, reason, submission FROM mb_links "
                                  + ("WHERE state = ? " if state else "") + "ORDER BY submitted_at",
                                  (state,) if state else ())
-        return [{"userId": u, "mbId": m, "state": st, "submittedAt": sa, "decidedAt": da, "reason": r}
-                for u, m, st, sa, da, r in rows if wanted is None or u in wanted]
+        return [{"userId": u, "mbId": m, "state": st, "submittedAt": sa, "decidedAt": da, "reason": r, "submission": sub}
+                for u, m, st, sa, da, r, sub in rows if wanted is None or u in wanted]
 
     def backup(self, destination: Path) -> None:
         """Consistent online copy (SQLite backup API) into a new file."""

@@ -39,7 +39,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
 
     def push_setting(key: str, value: object, version: int) -> None:
         """A credits setting the Mini App follows, applied once per settings version."""
-        credit_store.apply(f"flag:{key}:{version}", "flag", None, {"key": key, "value": value})
+        credit_store.apply(f"flag:{key}:{version}", "flag", None, {"key": key, "value": value, "version": version})
 
     for flag in ("credits.enabled", "credits.rates"):
         ctx.accounts.setting_hooks[flag] = lambda value, now, version, flag=flag: push_setting(flag, value, version)
@@ -55,6 +55,12 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     for pending in ctx.accounts.pending_requests():
         if pending["action"] == "credits.change":  # finished after a crash between the two steps
             crm.finish_credit(pending["requestId"], pending["adminId"], ctx.now())
+            continue
+        if pending["action"] == "user.mb_decision":
+            try:
+                crm.finish_mb_decision(pending["requestId"], ctx.now())
+            except ActionError:
+                pass  # stale or taken: recorded as completed inside
             continue
         if pending["action"] in ("user.block", "user.sessions_revoke") and pending["targetId"]:
             t = ctx.now()
@@ -538,7 +544,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         data = await ctx.body(request)
         if data.get("decision") not in ("approve", "reject"):
             raise ActionError("invalid_value")
-        return crm.decide_mb(admin, user_id, data.get("mbId"), data.get("submittedAt"),
+        return crm.decide_mb(admin, user_id, data.get("mbId"), data.get("submission"),
                              data["decision"] == "approve", data.get("reason"), ctx.now())
 
     @app.post("/api/admin/credits/change")
