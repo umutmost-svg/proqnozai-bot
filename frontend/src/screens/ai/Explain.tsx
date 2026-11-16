@@ -16,7 +16,8 @@ function lastMatches(t: Translate, lang: Lang, n: number): string {
 export function factorSentence(t: Translate, lang: Lang, factor: AiFactor, basis: Basis, forecast?: ModelForecast): string {
   const team = factor.startsWith('home') ? basis.home : basis.away;
   if (factor === 'homeAdvantage') {
-    return t('ai.sentence.homeAdvantage', { value: decimal(lang, forecast!.homeAdvantage) });
+    const key = forecast!.pool ? 'ai.sentence.homeAdvantagePool' : 'ai.sentence.homeAdvantage';
+    return t(key, { value: decimal(lang, forecast!.homeAdvantage) });
   }
   if (factor.endsWith('Rating')) {
     const rating = forecast!.ratings[factor === 'homeRating' ? 'home' : 'away'];

@@ -147,6 +147,12 @@ KNOWN_COMPETITIONS: dict[str, tuple[str, str]] = {
     "QCCF": ("WC Qualification CONCACAF", "World"),
 }
 
+# Senior men's national-team competitions: the goal model learns from all of them at once (forecast.version
+# NATIONAL_*; docs/miniapp/national-model.md). The Olympics (under-23) and women's tournaments are not national
+# sides of the same strength and stay out.
+NATIONAL_CODES: frozenset[str] = frozenset({
+    "WC", "EC", "ECQ", "UNL", "QUFA", "QCBL", "QCAF", "QAFC", "QCCF", "CA", "AC", "ACQ"})
+
 _STAGE = re.compile(r"[A-Z0-9_]{1,40}")
 
 _STATUS: dict[str, EventStatus] = {
@@ -180,6 +186,8 @@ PAST_SEASON_TTL_S = 24 * 3600.0
 # Competition emblems rarely change: the competition list is asked at most once a day.
 EMBLEMS_TTL_S = 24 * 3600.0
 EMBLEMS_RETRY_S = 15 * 60.0
+# A competition's season list (start and end dates): asked at most once a day.
+SEASON_LIST_TTL_S = 24 * 3600.0
 
 
 # Display names: the provider's `shortName` (Latin) unless it is an unfamiliar
@@ -224,6 +232,16 @@ def short_name(team: int, full: str, provided: object) -> str | None:
     if isinstance(provided, str) and provided.strip() and len(provided.strip()) <= MAX_SHORT_NAME:
         return provided.strip()
     return None
+
+
+def _iso_date(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 10:
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
 
 
 def tournament_id(code: str) -> str:
@@ -621,6 +639,23 @@ class FootballDataAdapter:
         ordered, season = self._season_payload(code, data)
         ttl = CALENDAR_LIVE_TTL_S if any(e.status == "live" for e in ordered) else CALENDAR_TTL_S
         return (ordered, season), ttl
+
+    async def season_list(self, code: str) -> tuple[tuple[tuple[str, str | None], ...], float]:
+        """(start, end) dates of every season the provider lists for one competition (ISO dates)."""
+        if code not in self._allowed:
+            raise UpstreamError("not_found")
+        data, _ = await self.client.get_json(f"/competitions/{code}")
+        seasons = data.get("seasons") if isinstance(data, dict) else None
+        if not isinstance(data, dict) or data.get("code") != code or not isinstance(seasons, list):
+            raise UpstreamError("bad_response")
+        out: list[tuple[str, str | None]] = []
+        for node in seasons:
+            start = node.get("startDate") if isinstance(node, dict) else None
+            end = node.get("endDate") if isinstance(node, dict) else None
+            if not _iso_date(start) or not (end is None or _iso_date(end)):
+                raise UpstreamError("bad_response")  # a season we cannot read could hide one in the window
+            out.append((start, end))
+        return tuple(out), SEASON_LIST_TTL_S
 
     async def past_season(self, code: str, year: int) -> tuple[tuple[list[FootballEvent], Season], float]:
         """A finished earlier season (the goal model's history): asked at most once a day."""

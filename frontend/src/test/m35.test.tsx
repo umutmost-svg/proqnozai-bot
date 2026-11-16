@@ -122,6 +122,17 @@ describe('v3 analysis is read strictly', () => {
 });
 
 describe('AI screen with the goal model', () => {
+  it('labels the averages of the pooled national-team model as national-team averages', async () => {
+    const pooled = v3({ pick: { market: 'NO_BET', reasons: [], probability: null }, alternatives: [] },
+      { pool: 'national-1', noBetReason: 'unvalidated_competition', limited: true });
+    renderApp('#/event/fd%3A4/ai', { data: aiBackend(pooled) });
+    const stats = await screen.findByTestId('ai-model-stats');
+    expect(stats).toHaveTextContent('средний уровень сборных');
+    expect(stats).toHaveTextContent('В среднем по матчам сборных');
+    expect(stats).not.toHaveTextContent('по турниру');
+    expect(screen.getByTestId('ai-factors')).toHaveTextContent('Домашний фактор по модели сборных');
+  });
+
   it('shows the sections in order: the pick, alternatives, every market, factors and the numbers', async () => {
     renderApp('#/event/fd%3A4/ai', { data: aiBackend(v3()) });
     const pick = await screen.findByTestId('ai-pick');

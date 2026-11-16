@@ -1017,6 +1017,7 @@ function readForecast(v: unknown): ModelForecast | null {
     noBetReason,
     ...(typeof v.gateEligible === 'boolean' ? { gateEligible: v.gateEligible } : {}),
     experimental: v.experimental,
+    ...(typeof v.pool === 'string' ? { pool: v.pool } : {}),
   };
 }
 

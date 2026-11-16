@@ -21,3 +21,12 @@ def stability_half_lives(half_life: float | None) -> tuple[float, float]:
     if half_life is None:
         return (365.0, 730.0)
     return (half_life / 2, half_life * 2)
+
+
+# National teams (docs/miniapp/national-model.md): one pooled fit over every national-team competition, because a
+# single competition holds only 6-10 matches per team. Chosen on the 2025 matches of the pool (half-life 180/365/730,
+# prior 2/5/10, window 3/5 years, neutral venues on/off), checked on 2026: no neutral-venue handling won.
+NATIONAL_POOL = "national-1"
+NATIONAL_HALF_LIFE_DAYS = 730.0
+NATIONAL_PRIOR_MATCHES = 2.0
+NATIONAL_WINDOW_DAYS = 3 * 365

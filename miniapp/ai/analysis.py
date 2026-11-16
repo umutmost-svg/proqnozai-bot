@@ -36,7 +36,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from miniapp.forecast.data import results_from_events
-from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast, Unavailable
+from miniapp.forecast.engine import ForecastEngine, MatchForecast, Unavailable
 from miniapp.forecast.history import ForecastHistory, ForecastRecord
 from miniapp.forecast.markets import KEYS as MARKET_KEYS
 from miniapp.forecast.version import MODEL_VERSION
@@ -283,9 +283,10 @@ class ModelForecaster:
         start = (datetime.fromisoformat(history.season_start).replace(tzinfo=UTC).timestamp()
                  if history.season_start else None)
         code = event.tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
-        return self.engine.forecast(code, results_from_events(history.events), start, home, away, self._clock(),
-                                    complete_history=history.previous_season,
-                                    kickoff=parse_instant(event.starts_at).timestamp())
+        pooled = history.pool is not None
+        return self.engine.forecast(code, results_from_events(history.pool if pooled else history.events), start,
+                                    home, away, self._clock(), complete_history=history.previous_season,
+                                    kickoff=parse_instant(event.starts_at).timestamp(), pooled=pooled)
 
 
 class QuotaLedger(Protocol):
@@ -707,7 +708,7 @@ class AiService:
             forecast_key=f"{MODEL_VERSION}:{event.id}:{digest}:{_answer_digest(result)}", event_id=event.id,
             tournament_id=event.tournament_id, home_team_id=event.home.id, away_team_id=event.away.id,
             created_at=result.generated_at, kickoff_at=event.starts_at, model_version=MODEL_VERSION,
-            parameters=FROZEN.digest, data_until=forecast.data_until, sample=forecast.sample, inputs_digest=digest,
+            parameters=forecast.parameters, data_until=forecast.data_until, sample=forecast.sample, inputs_digest=digest,
             probabilities={k: round(v, 6) for k, v in forecast.exact.items()},
             baseline={k: round(v, 6) for k, v in forecast.baseline_1x2.items()},
             gate_eligible=forecast.gate_eligible, display=forecast.display,

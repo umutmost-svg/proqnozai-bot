@@ -256,6 +256,8 @@ export interface ModelForecast {
   gateEligible?: boolean;
   /** Recommendations not yet confirmed on matches forecast before kickoff: labelled as experimental. */
   experimental: boolean;
+  /** Fitted on every national-team competition at once: averages and ratings are of national teams overall. */
+  pool?: string;
 }
 
 /** The model's forecast for every match with probabilities (backend-computed): the top 1X2 outcome, or the

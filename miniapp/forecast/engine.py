@@ -25,7 +25,8 @@ from .model import ModelParams, Ratings, fit
 from .scores import MAX_RATE, score_matrix
 from .selection import (LIMITED_COMPETITIONS, MIN_SAMPLE, NO_BET_EARLY, NO_BET_LIMITED, NO_BET_PARTIAL,
                         NO_BET_UNVALIDATED, Selection, select)
-from .version import MIN_TEAM_SHOW, MODEL_VERSION, UNPROVEN_FAMILIES, stability_half_lives
+from .version import (MIN_TEAM_SHOW, MODEL_VERSION, NATIONAL_HALF_LIFE_DAYS, NATIONAL_POOL, NATIONAL_PRIOR_MATCHES,
+                      NATIONAL_WINDOW_DAYS, UNPROVEN_FAMILIES, stability_half_lives)
 
 FIT_CACHE_SIZE = 96
 TOP_SCORES = 3
@@ -85,6 +86,12 @@ class MatchForecast:
     # B1 (league-average Poisson on the same window): stored with each forecast so the
     # prospective gate can compare the model with it on the very same future matches.
     baseline_1x2: dict[str, float] = field(default_factory=dict)
+    pool: str | None = None  # NATIONAL_POOL: fitted on every national-team competition at once
+
+    @property
+    def parameters(self) -> str:
+        """Identity of the fitted parameters stored with the forecast (the pooled fit has its own)."""
+        return FROZEN.digest if self.pool is None else f"{FROZEN.digest}+{self.pool}"
 
     @property
     def gate_eligible(self) -> bool:
@@ -95,7 +102,8 @@ class MatchForecast:
         return {
             "version": MODEL_VERSION,
             "kind": "dixon_coles" if FROZEN.params.dixon_coles else "poisson",
-            "parameters": FROZEN.digest,
+            "parameters": self.parameters,
+            "pool": self.pool,
             "competition": self.competition,
             "limited": self.limited,
             "computedAt": self.computed_at,
@@ -129,13 +137,20 @@ def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def model_gap(results: Sequence[MatchResult], home: int, away: int, now: float) -> str | None:
+def pooled_window(results: Sequence[MatchResult], day_start: float) -> list[MatchResult]:
+    """The national-team pool as the fit sees it: results certainly final at 00:00 UTC, at most
+    NATIONAL_WINDOW_DAYS old (the window validated in docs/miniapp/national-model.md)."""
+    return [r for r in known_before(results, day_start) if r.kickoff >= day_start - NATIONAL_WINDOW_DAYS * 86400.0]
+
+
+def model_gap(results: Sequence[MatchResult], home: int, away: int, now: float, pooled: bool = False) -> str | None:
     """The data checks of ForecastEngine.forecast() without a fit: None when the competition has enough results
     before today and both teams enough matches, else why the match page would show a basis analysis without the
     goal model. The teams are checked first (forecast() checks the sample first; either way there is no model):
     "small_sample" therefore means the teams are fine and only the competition is short of results. The rare "extreme_rates" needs the fit and is not
-    predicted here (owner 16.11: lists show only matches the model can forecast)."""
-    known = known_before(results, math.floor(now / 86400) * 86400.0)
+    predicted here (owner 16.11: lists show only matches the model can forecast). `pooled`: the national-team pool."""
+    day_start = math.floor(now / 86400) * 86400.0
+    known = pooled_window(results, day_start) if pooled else known_before(results, day_start)
     counts: dict[int, int] = {}
     for r in known:
         counts[r.home] = counts.get(r.home, 0) + 1
@@ -145,8 +160,8 @@ def model_gap(results: Sequence[MatchResult], home: int, away: int, now: float) 
     return "small_sample" if len(known) < MIN_SAMPLE else None
 
 
-def model_possible(results: Sequence[MatchResult], home: int, away: int, now: float) -> bool:
-    return model_gap(results, home, away, now) is None
+def model_possible(results: Sequence[MatchResult], home: int, away: int, now: float, pooled: bool = False) -> bool:
+    return model_gap(results, home, away, now, pooled) is None
 
 
 class ForecastEngine:
@@ -155,16 +170,17 @@ class ForecastEngine:
         self._fits: OrderedDict[tuple, Ratings] = OrderedDict()
 
     def _fit(self, competition: str, results: Sequence[MatchResult], now: float, season_start: float | None,
-             half_life: float | None) -> Ratings:
+             half_life: float | None, prior: float | None = None) -> Ratings:
         day = math.floor(now / 86400)
         # Keyed by the content of every result: a corrected old score is a new fit.
         content = hash(tuple((r.match_id, r.kickoff, r.home, r.away, r.home_goals, r.away_goals) for r in results))
-        key = (competition, len(results), content, day, season_start, half_life)
+        prior = self.frozen.params.prior_matches if prior is None else prior
+        key = (competition, len(results), content, day, season_start, half_life, prior)
         cached = self._fits.get(key)
         if cached is not None:
             self._fits.move_to_end(key)
             return cached
-        params = ModelParams(half_life, self.frozen.params.prior_matches, self.frozen.params.dixon_coles)
+        params = ModelParams(half_life, prior, self.frozen.params.dixon_coles)
         # Fitted at 00:00 UTC of the day, as in the validation protocol: the cached fit is
         # exactly the one any forecast of that day would compute.
         ratings = fit(results, day * 86400.0, params, season_start)
@@ -176,24 +192,32 @@ class ForecastEngine:
 
     def forecast(self, competition: str, results: Sequence[MatchResult], season_start: float | None,
                  home: int, away: int, now: float, complete_history: bool = True,
-                 kickoff: float | None = None) -> MatchForecast | Unavailable:
+                 kickoff: float | None = None, pooled: bool = False) -> MatchForecast | Unavailable:
         """`complete_history`: the window holds the previous season as validated; without it
         the probabilities are still shown, but nothing is recommended (NO_BET).
         `kickoff`: before the match's UTC day the forecast lead time is longer than the
-        validated one (00:00 of match day), so nothing is recommended yet either."""
+        validated one (00:00 of match day), so nothing is recommended yet either.
+        `pooled`: `results` is the national-team pool (every national-team competition): fitted with the national
+        parameters on its window, without a season split; the selection rules were never validated on it."""
         # Exactly the validated window: fitted at 00:00 UTC of the day from matches that
         # kicked off at least BACKTEST_LAG_S before it. Fresher results wait for the next
         # day, so the frozen calibration and selection rules apply to the same kind of input.
         day_start = math.floor(now / 86400) * 86400.0
-        known = known_before(results, day_start)
+        known = pooled_window(results, day_start) if pooled else known_before(results, day_start)
         if len(known) < MIN_SAMPLE:
             return Unavailable("small_sample")
-        main_hl = self.frozen.params.half_life_days
-        ratings = self._fit(competition, known, now, season_start, main_hl)
+        main_hl = NATIONAL_HALF_LIFE_DAYS if pooled else self.frozen.params.half_life_days
+        prior = NATIONAL_PRIOR_MATCHES if pooled else None
+        if pooled:
+            season_start = None  # one pool of many competitions: no "current season" newcomers
+            competition_key = NATIONAL_POOL
+        else:
+            competition_key = competition
+        ratings = self._fit(competition_key, known, now, season_start, main_hl, prior)
         hm, am = ratings.matches.get(home, 0), ratings.matches.get(away, 0)
         if min(hm, am) < MIN_TEAM_SHOW:
             return Unavailable("team_history")
-        refits = [self._fit(competition, known, now, season_start, hl) for hl in stability_half_lives(main_hl)]
+        refits = [self._fit(competition_key, known, now, season_start, hl, prior) for hl in stability_half_lives(main_hl)]
         # Every fit that feeds a shown number or a rule must stay in the supported range.
         if any(max(r.expected_goals(home, away)) > MAX_RATE for r in (ratings, *refits)):
             return Unavailable("extreme_rates")  # never a capped, inconsistent forecast
@@ -207,7 +231,7 @@ class ForecastEngine:
                            sample=len(known), calibration=self.frozen.calibration, alternatives=variants,
                            families=self.frozen.pick_families)
         match_day = kickoff is None or math.floor(now / 86400) >= math.floor(kickoff / 86400)
-        unvalidated = competition not in self.frozen.validated and competition not in LIMITED_COMPETITIONS
+        unvalidated = pooled or (competition not in self.frozen.validated and competition not in LIMITED_COMPETITIONS)
         if unvalidated:
             # e.g. EC / WC when configured: never validated, so limited data — no recommendation.
             selection = Selection(None, (), NO_BET_UNVALIDATED)
@@ -226,6 +250,7 @@ class ForecastEngine:
             home_rating=_relative(ratings, home), away_rating=_relative(ratings, away),
             home_advantage=ratings.home_advantage,
             league_goals=(ratings.league_home_goals, ratings.league_away_goals),
+            pool=NATIONAL_POOL if pooled else None,
         )
 
     @staticmethod

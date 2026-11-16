@@ -125,9 +125,12 @@ export function ModelStats({ forecast, event }: { forecast: ModelForecast; event
           </div>
         ))}
       </div>
-      <p className={s.hint}>{t('ai.stats.ratingNote')}</p>
+      <p className={s.hint}>{t(forecast.pool ? 'ai.stats.ratingNotePool' : 'ai.stats.ratingNote')}</p>
       <p className={s.hint}>
-        {t('ai.stats.league', { home: decimal(lang, forecast.leagueGoals.home), away: decimal(lang, forecast.leagueGoals.away) })}
+        {t(forecast.pool ? 'ai.stats.leaguePool' : 'ai.stats.league', {
+          home: decimal(lang, forecast.leagueGoals.home),
+          away: decimal(lang, forecast.leagueGoals.away),
+        })}
       </p>
     </div>
   );

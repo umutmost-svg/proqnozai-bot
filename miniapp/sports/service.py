@@ -24,6 +24,10 @@ from .football_data import FootballDataAdapter, Season, Standings
 from .search import MAX_AGE_S as SEARCH_MAX_AGE_S, REFRESH_AFTER_S, WARM_SPACING_S, SearchIndex, search_pacing
 from .models import SPORTS, FootballEvent, Provenance, Sport, SportEvent, Tournament
 
+# The national-team pool's window (forecast.version.NATIONAL_WINDOW_DAYS; the sports layer does not import the
+# forecast layer, so the number is repeated here and a test keeps the two equal).
+NATIONAL_WINDOW_DAYS = 3 * 365
+
 logger = logging.getLogger("miniapp.sports")
 
 MAX_RANGE = timedelta(hours=48)
@@ -92,6 +96,10 @@ class ModelHistory:
     # Why the previous season is missing: "absent" (the source has none) or "transient"
     # (timeout, rate limit, outage: may load on a later try); None when it is there.
     previous_missing: str | None = None
+    # A national-team competition: every cached result of all national-team competitions inside the window
+    # (the goal model's pooled history, own calendar included). None: not one, or the pool is not cached yet
+    # — the model then learns from `events` as for a club competition.
+    pool: tuple[SportEvent, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -571,7 +579,7 @@ class SportsService:
                     events.extend(past)
                     previous = True
             events.extend(current.events)
-            return ModelHistory(events, start, previous, missing)
+            return ModelHistory(events, start, previous, missing, self._national_pool(code))
         finally:
             if speculative is not None and not speculative.done():
                 speculative.cancel()  # only this waiter: the shielded cache load runs on and is kept
@@ -598,7 +606,35 @@ class SportsService:
             else:
                 # "absent" once the source said it has none (remembered by _past_season), else not loaded yet.
                 missing = self._past_failure.get((code, int(start[:4]) - 1), "transient")
-        return ModelHistory(past_events + list(events), start, bool(past_events), missing)
+        return ModelHistory(past_events + list(events), start, bool(past_events), missing, self._national_pool(code))
+
+    def _national_pool(self, code: str) -> tuple[SportEvent, ...] | None:
+        """The pooled history of a national-team competition, from the cache only (never a request): the calendar
+        of every served national-team competition and each of its earlier seasons inside the window. None until
+        all of them are cached (a season the source lacks is no gap) — a partial pool would rate a whole
+        confederation from a fraction of its matches."""
+        if self.football is None or code not in football_data.NATIONAL_CODES:
+            return None
+        events: list[SportEvent] = []
+        for other in sorted(c for c in self.football.codes if c in football_data.NATIONAL_CODES):
+            current = self.cache.peek(f"football:calendar:{other}")
+            listed = self.cache.peek(f"football:seasons:{other}")
+            if current is None or listed is None:
+                return None
+            for year in self._national_years(listed.value, current.value[1].start):
+                past = self.cache.peek(f"football:season:{other}:{year}")
+                if past is not None:
+                    events.extend(past.value[0])
+                elif self._past_failure.get((other, year)) != "absent":
+                    return None
+            events.extend(current.value[0])
+        return tuple(events)
+
+    def _national_years(self, seasons: tuple[tuple[str, str | None], ...], current_start: str | None) -> list[int]:
+        """Start years of the earlier seasons that reach into the pooled window."""
+        cutoff = datetime.fromtimestamp(self._clock() - NATIONAL_WINDOW_DAYS * 86400.0, UTC).date().isoformat()
+        return sorted({int(start[:4]) for start, end in seasons
+                       if (end or start) >= cutoff and (current_start is None or start < current_start)})
 
     async def _past_season(self, tournament_id: str, year: int, *, background: bool = False,
                            ) -> tuple[list[SportEvent] | None, str | None]:
@@ -732,15 +768,54 @@ class SportsService:
     async def _warm_past_season(self, tournament_id: str, current: CalendarResult | None) -> None:
         """The goal model's previous season, warmed right after its calendar (same slot and low priority):
         an AI analysis of a warmed competition then needs no season load of its own."""
-        if current is None or current.season.start is None or not self.search_index.warm_past_seasons:
+        if current is None:
             return
         code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+        if code in football_data.NATIONAL_CODES:
+            await self._warm_national(tournament_id, code, current)
+        if current.season.start is None or not self.search_index.warm_past_seasons:
+            return
         year = int(current.season.start[:4]) - 1
         if self._clock() < self._past_retry_at.get((code, year), 0.0):
             return
         if not self._costs_request(f"football:season:{code}:{year}") or not self._warm_budget_left():
             return
         await self._past_season(tournament_id, year, background=True)
+
+    async def _warm_national(self, tournament_id: str, code: str, current: CalendarResult) -> None:
+        """A national-team competition's season list and its earlier seasons inside the pooled window (same slot
+        and low priority as the calendar; about one request a day per season). Independent of
+        warm_past_seasons: the pool is what national-team forecasts learn from."""
+        adapter = self.football
+        assert adapter is not None
+        key = f"football:seasons:{code}"
+        if self._costs_request(key):
+            if not self._warm_budget_left():
+                return
+            try:
+                await self.cache.get(key, lambda: adapter.season_list(code))
+            except UpstreamError as exc:
+                if exc.low_priority_only:
+                    raise
+                logger.info("sports.national_seasons_unavailable tournament=%s code=%s", tournament_id, exc.code)
+                return
+        listed = self.cache.peek(key)
+        if listed is None:
+            return
+        for year in self._national_years(listed.value, current.season.start):
+            if self._clock() < self._past_retry_at.get((code, year), 0.0):
+                continue
+            if not self._costs_request(f"football:season:{code}:{year}"):
+                continue
+            if not self._warm_budget_left():
+                return
+            try:
+                await self._past_season(tournament_id, year, background=True)
+            except UpstreamError as exc:
+                if exc.low_priority_only:
+                    raise
+                logger.info("sports.national_season_unavailable tournament=%s year=%s code=%s",
+                            tournament_id, year, exc.code)
 
     def background_busy(self) -> bool:
         """A background load (standings warm-up, search warm-up, settlement) is running: the

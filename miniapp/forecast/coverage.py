@@ -35,7 +35,8 @@ class ModelCoverage:
 
     def keep(self, events: Sequence[SportEvent]) -> list[SportEvent]:
         now = self.clock()
-        results: dict[str, tuple[list, bool] | None] = {}  # per competition, once per call: (results, final)
+        # per competition, once per call: (results, final, pooled)
+        results: dict[str, tuple[list, bool, bool] | None] = {}
         out: list[SportEvent] = []
         for event in events:
             if event.sport != "football":
@@ -44,9 +45,10 @@ class ModelCoverage:
             tid = event.tournament_id
             if tid not in results:
                 history = self.cached_history(tid)
+                pool = getattr(history, "pool", None)
                 results[tid] = None if history is None else (
-                    results_from_events(history.events),  # type: ignore[attr-defined]
-                    history.previous_missing != "transient")  # type: ignore[attr-defined]
+                    results_from_events(pool if pool is not None else history.events),  # type: ignore[attr-defined]
+                    history.previous_missing != "transient", pool is not None)  # type: ignore[attr-defined]
             cached = results[tid]
             home, away = team_number(event.home.id), team_number(event.away.id)
             if home is None or away is None:
@@ -56,7 +58,7 @@ class ModelCoverage:
                 if trusted:
                     out.append(event)  # cold cache: a validated competition stays listed
                 continue
-            gap = model_gap(cached[0], home, away, now)
+            gap = model_gap(cached[0], home, away, now, pooled=cached[2])
             if gap is None or (gap == "small_sample" and not cached[1] and trusted):
                 out.append(event)  # forecastable, or only short of the previous season that is still loading
         return out

@@ -232,8 +232,8 @@ def test_a_stability_refit_beyond_the_supported_range_is_refused_too() -> None:
     engine = ForecastEngine()
     real_fit = engine._fit
 
-    def fit(competition, known, moment, season_start, half_life):
-        fitted = real_fit(competition, known, moment, season_start, half_life)
+    def fit(competition, known, moment, season_start, half_life, prior=None):
+        fitted = real_fit(competition, known, moment, season_start, half_life, prior)
         main = half_life == FROZEN.params.half_life_days
         return fitted if main else replace(fitted, scale=fitted.scale * 20)
 
