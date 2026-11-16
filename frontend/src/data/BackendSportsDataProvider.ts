@@ -96,6 +96,8 @@ export interface BackendOptions {
   waitForSession(): Promise<boolean>;
   /** The session's anti-CSRF token, sent with the (paid) AI request. */
   getCsrfToken?(): string | null;
+  /** Called when the server answers 401: the session ended (AuthController.sessionLost). */
+  onUnauthenticated?(): void;
   fetchImpl?: typeof fetch;
   base?: string;
   timeoutMs?: number;
@@ -589,7 +591,10 @@ export class BackendSportsDataProvider implements SportsDataProvider {
       throw new DataError(op, 'network');
     }
     if (response.status === 404 && nullOn404) return null;
-    if (response.status === 401) throw new DataError(op, 'unauthenticated');
+    if (response.status === 401) {
+      this.options.onUnauthenticated?.();
+      throw new DataError(op, 'unauthenticated');
+    }
     if (response.status === 429) throw new DataError(op, 'limit_reached', retryAfterHeader(response));
     // Credits (docs/miniapp/credits.md): not enough for one forecast; nothing was generated or charged.
     if (response.status === 402) throw new DataError(op, 'no_credits');

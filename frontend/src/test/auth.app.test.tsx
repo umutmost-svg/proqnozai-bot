@@ -1,6 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { fail, ok, scriptedApi, SESSION } from '../auth/testing';
+import { AuthController } from '../auth/controller';
+import { BackendSportsDataProvider } from '../data/BackendSportsDataProvider';
 import { renderApp } from './renderApp';
 
 // A real launch always names its user (the server rejects initData without one); 501 = SESSION's user.
@@ -49,8 +51,19 @@ describe('auth in the app', () => {
       authApi: scriptedApi({ me: [fail('session_expired')], createSession: [fail('init_data_expired')] }),
       initData: INIT,
     });
-    await waitFor(() => expect(status()).toBe('session_expired'));
-    expect(screen.getByTestId('auth-status')).toHaveTextContent('Сессия истекла');
+    // One screen for every route (the profile included): never a retry that cannot succeed.
+    expect(await screen.findByTestId('session-expired')).toHaveTextContent('Сессия истекла');
+  });
+
+  it('a 401 on any data request ends the session for the whole app', async () => {
+    const auth = new AuthController(scriptedApi({ me: [ok(SESSION)] }), () => INIT);
+    await auth.start();
+    expect(auth.getState().status).toBe('authenticated');
+    const fetchImpl = (async () => new Response('{}', { status: 401 })) as typeof fetch;
+    const data = new BackendSportsDataProvider({ waitForSession: async () => true, fetchImpl,
+      onUnauthenticated: () => auth.sessionLost() });
+    await expect(data.getCredits()).rejects.toMatchObject({ reason: 'unauthenticated' });
+    expect(auth.getState().status).toBe('session_expired');
   });
 
   it('server unavailable → manual retry signs in', async () => {

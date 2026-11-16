@@ -38,7 +38,8 @@ const getCsrfToken = () => {
 const real = resolveDataMode(import.meta.env.VITE_DATA_MODE) === 'real';
 // Real data needs a session; a real build never switches to demo data on errors.
 const data = real
-  ? new BackendSportsDataProvider({ waitForSession: () => waitForSession(auth), getCsrfToken })
+  ? new BackendSportsDataProvider({ waitForSession: () => waitForSession(auth), getCsrfToken,
+    onUnauthenticated: () => auth.sessionLost() })
   : new DemoDataProvider(systemClock, { failOnce });
 const services = {
   clock: systemClock,

@@ -90,6 +90,12 @@ export class AuthController {
     return true;
   }
 
+  /** A data request answered 401: the session ended on the server (12 h lifetime, revoked, blocked). The whole
+   * app then shows the "session expired" screen instead of endless retries (Fable audit 16.11). */
+  sessionLost(): void {
+    if (this.state.status === 'authenticated') this.set({ status: 'session_expired' });
+  }
+
   /** Best-effort: the local setting stays the UI source of truth in M2. */
   async syncLanguage(lang: Lang): Promise<void> {
     if (this.state.status !== 'authenticated') return;

@@ -1,6 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { useAuthBootstrap } from './auth/useAuth';
+import { useAuth, useAuthBootstrap } from './auth/useAuth';
+import { EmptyState } from './components/States';
+import ui from './components/ui.module.css';
+import { useT } from './state/contexts';
 import { useGoBack } from './hooks/useGoBack';
 import { AppLoadingGate } from './loading/AppLoadingGate';
 import { AiScreen } from './screens/AiScreen';
@@ -77,6 +80,30 @@ export function AppRoutes() {
   );
 }
 
+/** A session that ended while the app was open (12 h lifetime, revoked, blocked): one clear screen for every route,
+ * never a retry that cannot succeed. Reopening the Mini App brings new launch data and a new session. */
+function SessionGate({ children }: { children: ReactNode }) {
+  const { state } = useAuth();
+  const { telegram } = useServices();
+  const t = useT();
+  if (state.status !== 'session_expired') return <>{children}</>;
+  return (
+    <EmptyState
+      icon="error"
+      testId="session-expired"
+      title={t('auth.sessionExpired')}
+      text=""
+      actions={
+        telegram.available ? (
+          <button type="button" className={ui.primary} onClick={() => telegram.close()}>
+            {t('auth.close')}
+          </button>
+        ) : undefined
+      }
+    />
+  );
+}
+
 export function App({ services }: { services: Services }) {
   return (
     <AppProviders services={services}>
@@ -84,7 +111,9 @@ export function App({ services }: { services: Services }) {
       <HashRouter>
         <TelegramBridge />
         <AppLoadingGate>
-          <AppRoutes />
+          <SessionGate>
+            <AppRoutes />
+          </SessionGate>
         </AppLoadingGate>
       </HashRouter>
     </AppProviders>
