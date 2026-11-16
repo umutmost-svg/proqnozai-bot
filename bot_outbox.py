@@ -229,7 +229,10 @@ class BotOutbox:
                 os.replace(tmp, self._pause_file)
         except OSError as exc:
             # The file is unusable: the pause is kept in the queue itself instead — every queued job waits for it,
-            # also after a restart (Codex wave1 r4) — and in memory for this process.
+            # also after a restart (Codex wave1 r4) — and in memory for this process. Accepted limit (Codex wave1 r5):
+            # a job enqueued after this AND a restart before the pause ends may be tried once early; a flood limit then
+            # refuses it again (requeued, no attempt used, the pause re-set), a network outage costs that one job.
+            # Closing it fully needs a queue-wide deadline in the schema shared with the admin — not worth it.
             logger.warning("event=outbox_pause_not_saved type=%s", type(exc).__name__)
             with self._connect() as conn:
                 conn.execute("UPDATE jobs SET retry_at = ? WHERE status = 'queued' AND (retry_at IS NULL OR retry_at < ?)",
