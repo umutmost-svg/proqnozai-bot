@@ -1,5 +1,5 @@
 {
-  "_comment": "Weights of the day's top matches (miniapp/sports/top.py). Popularity of a match from source facts only: competition, stage, table positions, status. Never the model's or Claude's confidence. A competition weighted at or below otherCompetition (lower tiers, women's leagues) gets stage/table bonuses capped at otherStageCap, like an unlisted one. National-team competitions are weighted so that an international break shows its matches, not lower-tier club games (14.11). featuredTeams: provider team ids (resolved from the real calendars on 14.11, never names: Liverpool FC of Uruguay or a club's women's team share the name); a match with one of them gets featuredOne, with two featuredBoth, as part of the stage/table bonus (so capped for minor competitions). National teams have no table or league tier in the source: this list is the only signal that separates Portugal - Denmark from Faroe Islands - Moldova. Only majorCompetitions make the top (owner 15.11): 0 to 5 matches, no lower tiers or minor leagues to fill a short day, and no per-competition cap among them (maxPerCompetition = maxMatches).",
+  "_comment": "Weights of the day's top matches (miniapp/sports/top.py). Popularity of a match from source facts only: competition, stage, table positions, status. Never the model's or Claude's confidence. A competition weighted at or below otherCompetition (lower tiers, women's leagues) gets stage/table bonuses capped at otherStageCap, like an unlisted one. National-team competitions are weighted so that an international break shows its matches, not lower-tier club games (14.11). featuredTeams: provider team ids (resolved from the real calendars on 14.11, never names: Liverpool FC of Uruguay or a club's women's team share the name); a match with one of them gets featuredOne, with two featuredBoth, as part of the stage/table bonus (so capped for minor competitions). National teams have no table or league tier in the source: this list is the only signal that separates Portugal - Denmark from Faroe Islands - Moldova. Only majorCompetitions make the top (owner 15.11): 0 to 5 matches, no lower tiers or minor leagues to fill a short day, and no per-competition cap among them (maxPerCompetition = maxMatches). In nationalCompetitions a match makes the top only with at least one featuredTeams side (owner 15.11: strong national teams only).",
   "maxMatches": 5,
   "maxPerCompetition": 5,
   "competition": {
@@ -150,6 +150,15 @@
     "BL1",
     "SA",
     "FL1",
+    "WC",
+    "EC",
+    "QUFA",
+    "QCBL",
+    "ECQ",
+    "UNL",
+    "CA"
+  ],
+  "nationalCompetitions": [
     "WC",
     "EC",
     "QUFA",

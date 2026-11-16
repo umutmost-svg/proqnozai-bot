@@ -49,6 +49,8 @@ class TopWeights:
     featured_both: float = 0.0
     # Only these competitions make the top (owner 15.11: "the main tournaments"); empty = every competition.
     major: frozenset[str] = frozenset()
+    # National-team competitions: a match makes the top only with at least one featured (strong) national team.
+    national: frozenset[str] = frozenset()
 
 
 def load_weights(path: Path) -> TopWeights:
@@ -79,6 +81,7 @@ def load_weights(path: Path) -> TopWeights:
         featured_one=number(raw.get("featuredOne", 0)),
         featured_both=number(raw.get("featuredBoth", 0)),
         major=frozenset(str(c) for c in raw.get("majorCompetitions", [])),
+        national=frozenset(str(c) for c in raw.get("nationalCompetitions", [])),
     )
     major = raw.get("majorCompetitions")
     # The owner's rule must not be switched off or emptied by a config mistake: a non-empty list of codes that have a
@@ -86,6 +89,10 @@ def load_weights(path: Path) -> TopWeights:
     if (not isinstance(major, list) or not major or not all(isinstance(c, str) for c in major)
             or not set(major) <= set(weights.competition)):
         raise ValueError("majorCompetitions must be a non-empty list of weighted competition codes")
+    national = raw.get("nationalCompetitions")
+    if (not isinstance(national, list) or not national or not all(isinstance(c, str) for c in national)
+            or not set(national) <= set(major)):
+        raise ValueError("nationalCompetitions must list main competitions")
     if any(not n.startswith("fd:team:") or not n[8:].isdigit() for n in weights.featured):
         raise ValueError("featuredTeams must be provider team ids (fd:team:<n>)")
     if not 1 <= weights.max_matches <= 5 or weights.max_per_competition < 1 or weights.leaders_top < 1 or weights.min_table_teams < 2:
@@ -165,7 +172,9 @@ def rank(events: Iterable[FootballEvent], code_of: Callable[[str], str],
     w = w or WEIGHTS
     ranked = [score(e, code_of(e.tournament_id), tables.get(e.tournament_id), w, now)
               for e in events if e.status in RANKED_STATUSES
-              and (not w.major or code_of(e.tournament_id) in w.major)]  # main tournaments only: a short day stays short
+              and (not w.major or code_of(e.tournament_id) in w.major)  # main tournaments only: a short day stays short
+              # national teams: only matches with a strong (featured) side, never Faroe Islands - Moldova
+              and (code_of(e.tournament_id) not in w.national or bool({e.home.id, e.away.id} & w.featured))]
     ranked.sort(key=lambda r: (-r.score, r.event.starts_at, r.event.id))
     chosen: list[Ranked] = []
     per: dict[str, int] = {}

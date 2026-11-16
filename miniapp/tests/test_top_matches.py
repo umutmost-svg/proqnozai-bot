@@ -23,7 +23,7 @@ REAL = top.WEIGHTS
 # The other weights are checked without the notable-teams bonus (small test ids such as 3, 4, 5 are real clubs);
 # the bonus has its own tests below, with the real weights passed explicitly.
 # ...and without the main-tournaments filter and with the old per-competition cap of 3 (these tests use any code).
-W = replace(top.WEIGHTS, featured=frozenset(), major=frozenset(), max_per_competition=3)
+W = replace(top.WEIGHTS, featured=frozenset(), major=frozenset(), national=frozenset(), max_per_competition=3)
 
 
 @pytest.fixture(autouse=True)
@@ -253,7 +253,7 @@ def test_only_the_main_tournaments_make_the_top():
     Brazilian club game to fill the places; no per-competition cap among the main ones."""
     unl = [event(i, code="UNL", home=(100 + i, f"N{i}"), away=(200 + i, f"M{i}")) for i in (1, 2, 3, 4)]
     minor = [event(10 + i, code="UPD", home=(300 + i, f"C{i} FC"), away=(400 + i, f"D{i} FC")) for i in (1, 2, 3)]
-    ids = [r.event.id for r in top.rank([*unl, *minor], code_of, {}, w=REAL)]
+    ids = [r.event.id for r in top.rank([*unl, *minor], code_of, {}, w=replace(REAL, national=frozenset()))]
     assert ids == ["fd:1", "fd:2", "fd:3", "fd:4"]                       # a short day stays short
     assert top.rank(minor, code_of, {}, w=REAL) == []
     assert {"CL", "PL", "PD", "BL1", "SA", "FL1", "UNL", "WC", "EC"} <= REAL.major and "UPD" not in REAL.major
@@ -267,6 +267,31 @@ def test_the_main_tournaments_list_cannot_be_disabled_by_mistake(tmp_path: Path,
         raw.pop("majorCompetitions")
     else:
         raw["majorCompetitions"] = major
+    bad = tmp_path / "w.json"
+    bad.write_text(json.dumps(raw))
+    with pytest.raises(ValueError):
+        top.load_weights(bad)
+
+
+
+def test_national_teams_make_the_top_only_with_a_strong_side():
+    """Owner 15.11: Spain - England yes, Faroe Islands - Moldova no (no featured national team)."""
+    strong = event(1, code="UNL", home=(760, "Spain"), away=(770, "England"))
+    one = event(2, code="UNL", home=(799, "Croatia"), away=(9001, "Gibraltar"))
+    weak = event(3, code="UNL", home=(9002, "Faroe Islands"), away=(9003, "Moldova"))
+    club = event(4, code="PL", home=(9004, "A FC"), away=(9005, "B FC"))
+    ids = [r.event.id for r in top.rank([strong, one, weak, club], code_of, {}, w=REAL)]
+    assert set(ids) == {"fd:1", "fd:2", "fd:4"}                       # clubs of a main league need no star
+
+
+
+@pytest.mark.parametrize("national", [None, [], ["UPD"]])
+def test_the_strong_national_teams_rule_cannot_be_disabled_by_mistake(tmp_path: Path, national) -> None:
+    raw = json.loads(Path(top.__file__).with_name("top_weights.json").read_text())
+    if national is None:
+        raw.pop("nationalCompetitions")
+    else:
+        raw["nationalCompetitions"] = national
     bad = tmp_path / "w.json"
     bad.write_text(json.dumps(raw))
     with pytest.raises(ValueError):
