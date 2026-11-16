@@ -120,8 +120,22 @@ def test_a_subset_of_the_national_competitions_or_an_outdated_entry_never_makes_
     run(service._search_warm_load("fd:UNL"))
     run(service._search_warm_load("fd:QUFA"))
     assert service._national_pool("UNL") is not None
-    clock.advance(sports_service.SEARCH_MAX_AGE_S + 1)  # the warm-up could not refresh the calendars since
+    # Past the calendars' 15-minute expiry but within the bound: every result the fit may read (kicked off >= 24 h
+    # before 00:00 UTC of the day) is already in a calendar fetched this recently, so the pool stays.
+    clock.advance(3600)
+    assert service._national_pool("UNL") is not None
+    clock.advance(sports_service.SEARCH_MAX_AGE_S)  # the warm-up could not refresh the calendars since
     assert service._national_pool("UNL") is None
+
+    fresh_calendars = make(RoutedTransport(routes()), clock)
+    run(fresh_calendars._search_warm_load("fd:UNL"))
+    run(fresh_calendars._search_warm_load("fd:QUFA"))
+    clock.advance(sports_service.NATIONAL_SEASON_MAX_AGE_S + 1)
+    for key in [k for k in fresh_calendars.cache._entries if k.startswith("football:calendar:")]:
+        del fresh_calendars.cache._entries[key]  # calendars reloaded now: only the seasons are old
+    run(fresh_calendars.calendar("football", "fd:UNL"))
+    run(fresh_calendars.calendar("football", "fd:QUFA"))
+    assert fresh_calendars._national_pool("UNL") is None  # season lists and earlier seasons too old
 
 
 def test_the_sports_layer_repeats_the_window_of_the_forecast_layer() -> None:

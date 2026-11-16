@@ -29,7 +29,11 @@ from .models import SPORTS, FootballEvent, Provenance, Sport, SportEvent, Tourna
 NATIONAL_WINDOW_DAYS = 3 * 365
 # The pool is built only from entries this fresh: a calendar as old as the search index still serves
 # (SEARCH_MAX_AGE_S), a season list or an earlier season within two of their daily refreshes. Older ones mean the
-# warm-up could not refresh them, and a pool that may miss recent results falls back to the club rule.
+# warm-up could not refresh them, and the forecast falls back to the club rule. Expiry (a calendar's 15-minute TTL)
+# is deliberately not the bound (Codex national r2): the fit reads only results that kicked off at least 24 h
+# before 00:00 UTC of the forecast day (data.BACKTEST_LAG_S), and a calendar fetched within the last 6 h already
+# holds every one of them; an earlier season is finished and no longer changes. Requiring unexpired entries would
+# switch the pool off between the hourly warm-up passes without adding a single usable result.
 NATIONAL_SEASON_MAX_AGE_S = 2 * 86400.0
 
 logger = logging.getLogger("miniapp.sports")

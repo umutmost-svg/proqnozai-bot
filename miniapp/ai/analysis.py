@@ -105,6 +105,9 @@ its 1X2 estimate, the recommended market and the alternatives; and, ONLY when a
 "market" list is present, the bookmaker's current decimal odds with the market
 probability (margin removed) that the app computed from them. Nothing else is known:
 no injuries, lineups, head-to-head history or any other data. Do not assume any.
+When the model figures say "pool": "national_teams", the model learnt from every national-team
+competition at once: the ratings, the averages and the home advantage are relative to all
+national teams, not to this competition.
 Without a "market" list there are no odds: do not assume any, and the probabilities
 are shown to the user as an estimate ("Оценка вероятностей" / "estimated probabilities").
 
@@ -401,6 +404,7 @@ class AiService:
                 "homeAdvantage": figures["homeAdvantage"], "estimate1x2": probabilities,
                 "recommended": market, "alternatives": [a["market"] for a in alternatives],
                 "limitedData": forecast.limited, "results": forecast.sample, "dataUntil": forecast.data_until,
+                **({"pool": "national_teams"} if forecast.pool is not None else {}),
             },
             "allowedFactors": list(allowed),
             "allowedReasons": list(reasons_allowed),
