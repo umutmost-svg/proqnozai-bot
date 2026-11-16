@@ -331,12 +331,15 @@ class SportsService:
         tournament = next((t for t in adapter.tournaments() if t.id == event.tournament_id), None)
         return _with_cache_state(event, cached.stale), tournament
 
-    async def top(self, start: datetime, end: datetime,
-                  tournament: str | None = None) -> tuple[list[top_matches.Ranked], EventsResult]:
+    async def top(self, start: datetime, end: datetime, tournament: str | None = None,
+                  listed: Callable[[list[SportEvent]], list[SportEvent]] | None = None,
+                  ) -> tuple[list[top_matches.Ranked], EventsResult]:
         """The day's top matches from the same day listings as the catalogue (no extra request);
-        all competitions unless the user narrowed the day to one."""
+        all competitions unless the user narrowed the day to one. `listed`: the matches the lists may show
+        (ranked among those only)."""
         result = await self.events("football", start, end, tournament)
-        events = [e for e in result.events if isinstance(e, FootballEvent)]
+        pool = listed(result.events) if listed is not None else result.events
+        events = [e for e in pool if isinstance(e, FootballEvent)]
         tables = {t: self._day_table(start, t) for t in {e.tournament_id for e in events}}
         return top_matches.rank(events, lambda t: t.removeprefix(f"{football_data.ID_PREFIX}:"), tables,
                                 now=self._clock()), result
@@ -573,14 +576,16 @@ class SportsService:
             if speculative is not None and not speculative.done():
                 speculative.cancel()  # only this waiter: the shielded cache load runs on and is kept
 
-    def cached_model_history(self, tournament_id: str) -> ModelHistory | None:
+    def cached_model_history(self, tournament_id: str, any_age: bool = False) -> ModelHistory | None:
         """model_history() from what is already in the cache — never a provider request (None when the
         current calendar is not cached or older than the search's bound; without a cached previous season
-        the history is partial)."""
+        the history is partial). `any_age`: also an older calendar — enough for counting finished results
+        (the lists' model coverage), never for which matches are upcoming."""
         code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
         current = self.cache.peek(f"football:calendar:{code}")
         # An old calendar may list a moved or cancelled match as upcoming: same age bound as the search.
-        if current is None or self.football is None or self._clock() - current.fetched_at > SEARCH_MAX_AGE_S:
+        if current is None or self.football is None or (
+                not any_age and self._clock() - current.fetched_at > SEARCH_MAX_AGE_S):
             return None
         events, season = current.value
         start = season.start
@@ -591,7 +596,8 @@ class SportsService:
             if past is not None:
                 past_events = list(past.value[0])
             else:
-                missing = "transient"
+                # "absent" once the source said it has none (remembered by _past_season), else not loaded yet.
+                missing = self._past_failure.get((code, int(start[:4]) - 1), "transient")
         return ModelHistory(past_events + list(events), start, bool(past_events), missing)
 
     async def _past_season(self, tournament_id: str, year: int, *, background: bool = False,

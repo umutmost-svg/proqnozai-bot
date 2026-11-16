@@ -86,7 +86,10 @@ def _short(coverage: dict) -> dict:
 
 def register_sports_routes(app: FastAPI, service: SportsService, current_session: SessionCheck,
                            ai_status: Callable[[], str] = lambda: "not_connected",
-                           user_limiter: UserUpstreamLimiter | None = None) -> None:
+                           user_limiter: UserUpstreamLimiter | None = None,
+                           listed: Callable[[list[Any]], list[Any]] | None = None) -> None:
+    """`listed`: which matches the day's list and the top matches show (the Mini App passes the goal model's
+    coverage, owner 16.11); None = all. A match page, search and calendars are never narrowed."""
     async def signed_in(request: Request) -> int | None:
         """The signed-in user's id, else None."""
         active = await current_session(request)
@@ -145,10 +148,11 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             return _upstream(exc)
         await service.ensure_emblems()  # after the data: an emblem never delays or fails a listing
         coverage = service.coverage()["sports"][sport]
+        shown = listed(result.events) if listed is not None else result.events
         return JSONResponse({
             "sport": sport,
             "coverage": _short(coverage),
-            "events": [e.to_json() for e in result.events],
+            "events": [e.to_json() for e in shown],
             "tournaments": [service.tournament_json(t) for t in result.tournaments],
             "fetchedAt": result.fetched_at,
             "stale": result.stale,
@@ -173,7 +177,7 @@ def register_sports_routes(app: FastAPI, service: SportsService, current_session
             if no := refused(share, service.events_cost(start, end)):
                 return no
             with share.tally():
-                ranked, result = await service.top(start, end, params.get("tournament") or None)
+                ranked, result = await service.top(start, end, params.get("tournament") or None, listed)
         except RequestError as exc:
             return _error(400, exc.code)
         except UpstreamError as exc:

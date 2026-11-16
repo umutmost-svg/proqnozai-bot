@@ -129,6 +129,26 @@ def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def model_gap(results: Sequence[MatchResult], home: int, away: int, now: float) -> str | None:
+    """The data checks of ForecastEngine.forecast() without a fit: None when the competition has enough results
+    before today and both teams enough matches, else why the match page would show a basis analysis without the
+    goal model. The teams are checked first (forecast() checks the sample first; either way there is no model):
+    "small_sample" therefore means the teams are fine and only the competition is short of results. The rare "extreme_rates" needs the fit and is not
+    predicted here (owner 16.11: lists show only matches the model can forecast)."""
+    known = known_before(results, math.floor(now / 86400) * 86400.0)
+    counts: dict[int, int] = {}
+    for r in known:
+        counts[r.home] = counts.get(r.home, 0) + 1
+        counts[r.away] = counts.get(r.away, 0) + 1
+    if min(counts.get(home, 0), counts.get(away, 0)) < MIN_TEAM_SHOW:
+        return "team_history"
+    return "small_sample" if len(known) < MIN_SAMPLE else None
+
+
+def model_possible(results: Sequence[MatchResult], home: int, away: int, now: float) -> bool:
+    return model_gap(results, home, away, now) is None
+
+
 class ForecastEngine:
     def __init__(self, frozen: Frozen = FROZEN) -> None:
         self.frozen = frozen

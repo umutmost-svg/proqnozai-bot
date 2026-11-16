@@ -32,6 +32,7 @@ from miniapp.odds.store import OddsStore
 from miniapp.quick.routes import register_quick_routes
 from miniapp.quick.service import QuickService
 from miniapp.sports.client import UpstreamError
+from miniapp.forecast.coverage import ModelCoverage
 from miniapp.sports.routes import refused, register_sports_routes, upstream_response, user_share
 from miniapp.sports.user_limits import UserUpstreamLimiter
 from miniapp.sports.service import SportsService, build_service
@@ -667,9 +668,11 @@ def create_app(
 
     # One share per user of the shared football-data budget, for every route that may read it.
     user_limiter = UserUpstreamLimiter(settings.user_share_per_minute, settings.sports_user_unknown_per_hour, clock)
+    # Lists and top matches: only matches the goal model can forecast (owner 16.11), judged from cached calendars.
+    coverage = ModelCoverage(lambda tid: sports.cached_model_history(tid, any_age=True), clock)
     register_sports_routes(app, sports, active_session,
                            ai_status=lambda: "connected" if ai.connected else "not_connected",
-                           user_limiter=user_limiter)
+                           user_limiter=user_limiter, listed=coverage.keep)
     def on_pick(user_id: int, field: str, event_ids: list[str]) -> None:
         note_activity(user_id, field)
         try:
