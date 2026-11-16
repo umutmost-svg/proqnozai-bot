@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { api, errorText, type ReferralsPage, type ReferralStats } from '../api';
-import { num, pct, utcDay } from '../format';
+import { num, pct, localDay } from '../format';
 import { useLoad, useMe } from '../state';
 import { Card, Empty, ErrorBox, Loading, Metric, Metrics, PageHead, Tag, Toast } from '../ui';
 
@@ -90,7 +90,7 @@ export function Referrals() {
             <tbody>
               {items.map((i) => (
                 <tr key={i.id}>
-                  <td><b>{i.name}</b><span className="sub mono">{i.url ?? i.param}</span><span className="sub">{utcDay(i.createdAt)} · {i.by ?? '—'}</span></td>
+                  <td><b>{i.name}</b><span className="sub mono">{i.url ?? i.param}</span><span className="sub">{localDay(i.createdAt)} · {i.by ?? '—'}</span></td>
                   <td><Tag tone={i.channel === 'bot' ? 'accent' : 'violet'}>{CHANNEL[i.channel]}</Tag></td>
                   <StatCells s={i.stats} />
                   <td>

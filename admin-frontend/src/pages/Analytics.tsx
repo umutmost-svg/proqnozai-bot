@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { Analytics as AnalyticsData, Broadcast, Overview, ValueData } from '../api';
-import { num, utc } from '../format';
+import { fromUtcText, localTime, num } from '../format';
 import { useLoad, usePrefs } from '../state';
 import { BarList, Bars, Card, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, PageHead, PeriodSelect, Tag, tagTone } from '../ui';
 
@@ -66,7 +66,7 @@ function ValueTab() {
               caption={bot.value.cpa ? `всего ${num(bot.value.revenueTotal ?? 0, 2)} · ставка ${num(bot.value.cpa, 2)} за клик` : 'ставка за клик (PARTNER_CPA) не задана'}
               hint="Оценка, а не измеренный доход: клики на пользователя × ставка за клик партнёра (PARTNER_CPA в настройках бота)." />
           </Metrics>
-          <Card title="Топ пользователей бота" sub={`по числу запросов · снимок ${utc(bot.generatedAt, true)} UTC`}>
+          <Card title="Топ пользователей бота" sub={`по числу запросов · снимок ${localTime(bot.generatedAt, true)}`}>
             <table className="table">
               <thead><tr><th>#</th><th>Пользователь</th><th>Запросов</th><th>Прогнозов</th><th>Кликов</th><th>Промокод</th><th>Последний визит</th></tr></thead>
               <tbody>{bot.topUsers.map((u, i) => (
@@ -74,7 +74,7 @@ function ValueTab() {
                   <td>{i + 1}</td>
                   <td><UserCell u={u} /></td>
                   <td>{num(u.requests)}</td><td>{num(u.forecasts)}</td><td>{num(u.clicks)}</td><td>{u.promo ? 'да' : '—'}</td>
-                  <td className="muted">{u.lastActive ? u.lastActive.slice(0, 16) : '—'}</td>
+                  <td className="muted">{localTime(fromUtcText(u.lastActive))}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -186,7 +186,7 @@ export function Analytics() {
                 <Metric demo={Boolean(d)} label="Средняя сессия" value={d ? `${Math.floor(d.summary.avgSessionS / 60)} мин ${d.summary.avgSessionS % 60} с` : '—'} caption={d ? 'демо-телеметрия' : 'после D1'} />
               </Metrics>
               <div className="grid g2">
-                <Card title="Новые пользователи по дням" sub={`Регистрации в Mini App · ${src}`} action={<Tag tone="accent">{num(real.newUsers)} за период</Tag>}>
+                <Card title="Новые пользователи по дням" sub={`Регистрации в Mini App по UTC-дням · ${src}`} action={<Tag tone="accent">{num(real.newUsers)} за период</Tag>}>
                   <Bars title="Новые" values={real.newByDay.map((x) => x.new)} labels={[real.newByDay[0]?.day ?? '', real.newByDay.at(-1)?.day ?? '']} format={(v) => `${v} новых`} />
                 </Card>
                 <Card title="Воронка активации" action={d ? <Tag tone="violet">ДЕМО</Tag> : undefined}>
@@ -204,7 +204,7 @@ export function Analytics() {
                     <table className="table">
                       <thead><tr><th>Кампания</th><th>Статус</th><th>Когда</th></tr></thead>
                       <tbody>{bc.data.items.slice(0, 4).map((b) => (
-                        <tr key={b.id}><td className="strong">{b.name}</td><td><Tag tone={b.status === 'scheduled' ? 'accent' : b.status === 'draft' ? 'neutral' : b.status === 'sent' ? 'success' : 'warning'}>{{ draft: 'Черновик', scheduled: 'Запланирована', sent: 'Отправлена', cancelled: 'Отменена' }[b.status]}</Tag></td><td>{utc(b.scheduledAt ?? b.updatedAt)}</td></tr>
+                        <tr key={b.id}><td className="strong">{b.name}</td><td><Tag tone={b.status === 'scheduled' ? 'accent' : b.status === 'draft' ? 'neutral' : b.status === 'sent' ? 'success' : 'warning'}>{{ draft: 'Черновик', scheduled: 'Запланирована', sent: 'Отправлена', cancelled: 'Отменена' }[b.status]}</Tag></td><td>{localTime(b.scheduledAt ?? b.updatedAt)}</td></tr>
                       ))}</tbody>
                     </table>
                   ) : <p className="muted small">Рассылок пока нет.</p>}

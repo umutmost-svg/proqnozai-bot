@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, type AdminAccount, type OutboxPage, type ProductPage, type RolesPage } from '../api';
-import { num, pct, utc } from '../format';
+import { num, pct, localTime } from '../format';
 import { useLoad, useMe, usePrefs } from '../state';
 import { Bars, Card, DangerDialog, Empty, ErrorBox, Loading, Metric, Metrics, PageHead, PeriodSelect, pagePeriod, Status, Tag, Toast } from '../ui';
 import { SettingsTabs } from './Settings';
@@ -26,8 +26,8 @@ export function Outbox() {
         <>
           {!s.connected && <p className="small muted">Файл очереди ещё не создан: ни одного задания не было.</p>}
           <Metrics>
-            <Metric label="В очереди" value={num(s.byStatus.queued ?? 0)} caption={s.nextDueAt ? `ближайшее: ${utc(s.nextDueAt)}` : 'нет ожидающих'} />
-            <Metric label="Отправлено" value={num(s.byStatus.sent ?? 0)} caption={`за 24 ч: ${num(s.last24h.sent ?? 0)} · последнее ${utc(s.lastSentAt)}`} />
+            <Metric label="В очереди" value={num(s.byStatus.queued ?? 0)} caption={s.nextDueAt ? `ближайшее: ${localTime(s.nextDueAt)}` : 'нет ожидающих'} />
+            <Metric label="Отправлено" value={num(s.byStatus.sent ?? 0)} caption={`за 24 ч: ${num(s.last24h.sent ?? 0)} · последнее ${localTime(s.lastSentAt)}`} />
             <Metric label="Ошибки" value={num(s.byStatus.failed ?? 0)} caption={`за 24 ч (по последней попытке): ${num(s.last24h.failed ?? 0)}`} />
             <Metric label="Просрочено / отменено" value={`${num(s.byStatus.expired ?? 0)} / ${num(s.byStatus.cancelled ?? 0)}`} caption="не отправлялись" />
           </Metrics>
@@ -48,16 +48,16 @@ export function Outbox() {
           {data.items.length === 0 ? <Empty title="Заданий нет" /> : (
             <div className="table-card">
               <table className="table">
-                <thead><tr><th>Создано (UTC)</th><th>Тип</th><th>Получатель</th><th>Статус</th><th className="num">Попыток</th><th>Код ошибки</th><th>Отправлено</th></tr></thead>
+                <thead><tr><th>Создано</th><th>Тип</th><th>Получатель</th><th>Статус</th><th className="num">Попыток</th><th>Код ошибки</th><th>Отправлено</th></tr></thead>
                 <tbody>{data.items.map((j) => (
                   <tr key={j.key}>
-                    <td>{utc(j.createdAt)}{j.notBefore > j.createdAt && <span className="sub">не раньше {utc(j.notBefore)}</span>}</td>
+                    <td>{localTime(j.createdAt)}{j.notBefore > j.createdAt && <span className="sub">не раньше {localTime(j.notBefore)}</span>}</td>
                     <td>{j.kind === 'broadcast' ? <Tag tone="violet">Рассылка</Tag> : <Tag>Сообщение</Tag>}</td>
                     <td><Link to={`/users/${j.userId}`} className="mono">{j.userId}</Link></td>
                     <td><Status value={j.status} label={JOB_STATUS[j.status] ?? j.status} /></td>
                     <td className="num">{j.attempts}</td>
                     <td className="mono">{j.error ?? '—'}</td>
-                    <td>{utc(j.sentAt)}</td>
+                    <td>{localTime(j.sentAt)}</td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -66,7 +66,7 @@ export function Outbox() {
           <Card title="Журнал действий с очередью">
             {data.log.length === 0 ? <Empty title="Действий не было" /> : (
               <table className="table"><tbody>{data.log.map((e) => (
-                <tr key={e.id}><td>{utc(e.at)}</td><td>{ACTION[e.action] ?? e.action}</td><td>{e.adminEmail ?? '—'}</td><td><Status value={e.result} /></td></tr>
+                <tr key={e.id}><td>{localTime(e.at)}</td><td>{ACTION[e.action] ?? e.action}</td><td>{e.adminEmail ?? '—'}</td><td><Status value={e.result} /></td></tr>
               ))}</tbody></table>
             )}
           </Card>

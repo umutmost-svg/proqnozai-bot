@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ApiError } from './api';
-import { utc } from './format';
+import { fromUtcText, localTime, parseLocalInput, toLocalInput } from './format';
 import { DangerDialog } from './ui';
 
 describe('DangerDialog', () => {
@@ -30,8 +30,28 @@ describe('DangerDialog', () => {
 });
 
 describe('format', () => {
-  it('shows UTC times and a dash for missing values', () => {
-    expect(utc('2026-11-21T12:30:00Z')).toBe('21 ноя · 12:30');
-    expect(utc(null)).toBe('—');
+  it('shows times in the viewer zone and a dash for missing values', () => {
+    const d = new Date('2026-11-21T12:30:00Z');
+    const hh = String(d.getHours()).padStart(2, '0');
+    expect(localTime('2026-11-21T12:30:00Z')).toBe(`${d.getDate()} ноя · ${hh}:30`);
+    expect(localTime(null)).toBe('—');
+    expect(toLocalInput(new Date(2026, 10, 21, 9, 5))).toBe('2026-11-21T09:05');
+  });
+  it('parses the scheduler input in the viewer zone and rejects empty or invalid values', () => {
+    expect(parseLocalInput('2026-11-21T09:05')).toBe(Math.floor(new Date(2026, 10, 21, 9, 5).getTime() / 1000));
+    expect(parseLocalInput('')).toBeNull();
+    expect(parseLocalInput('2026-02-30T10:00')).toBeNull();
+    // a wall time skipped by a DST change in the viewer's zone (none in zones without DST)
+    for (let h = 0; h < 24 * 366; h += 1) {
+      const t = new Date(2026, 0, 1, h);
+      const next = new Date(t.getTime() + 3600_000);
+      if (next.getHours() === (t.getHours() + 2) % 24) {
+        const skipped = `${toLocalInput(t).slice(0, 11)}${String((t.getHours() + 1) % 24).padStart(2, '0')}:30`;
+        expect(parseLocalInput(skipped)).toBeNull();
+        break;
+      }
+    }
+    expect(fromUtcText('2026-11-15 12:30:00')).toBe('2026-11-15T12:30:00Z');
+    expect(fromUtcText(null)).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { AiCall, DaySeries } from '../api';
-import { num, usd, utc } from '../format';
+import { num, usd, localTime } from '../format';
 import { useLoad, usePrefs } from '../state';
 import {
   Bars, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, Note, PageHead, Pager, PeriodSelect, SectionHead, SortHeader,
@@ -78,7 +78,7 @@ export function AiCosts() {
                 <table className="table">
                   <thead>
                     <tr>
-                      <SortHeader label="Дата и время UTC" field="at" sort={sort} onSort={onSort} />
+                      <SortHeader label="Дата и время" field="at" sort={sort} onSort={onSort} />
                       <th>Операция</th><th>Модель</th>
                       <SortHeader label="Токены" field="inputTokens" sort={sort} onSort={onSort} className="num" />
                       <SortHeader label="Стоимость" field="costUsd" sort={sort} onSort={onSort} className="num" />
@@ -89,7 +89,7 @@ export function AiCosts() {
                   <tbody>
                     {filtered.slice((shownPage - 1) * size, shownPage * size).map((c) => (
                       <tr key={c.id}>
-                        <td>{utc(c.at)}</td><td>{c.operation}</td><td className="mono">{c.model}</td>
+                        <td>{localTime(c.at)}</td><td>{c.operation}</td><td className="mono">{c.model}</td>
                         <td className="num">{c.inputTokens === null ? '—' : `${num(c.inputTokens)} / ${num(c.outputTokens)}`}</td>
                         <td className="num">{c.costUsd === null ? <span title="Стоимость неизвестна: нет usage">н/д</span> : usd(c.costUsd)}</td>
                         <td className="num">{(c.latencyMs / 1000).toFixed(1)} с</td>
@@ -134,7 +134,7 @@ export function SportsApi() {
             <Metric demo={Boolean(d)} label="Запросов к API" value={d ? num(total) : '—'} caption={d ? 'все попытки, включая повторы' : 'после D1'} />
             <Metric demo={Boolean(d)} label="Ответов 429" value={d ? num(r429) : '—'} caption={d ? 'от провайдера' : 'после D1'} />
             <Metric demo={Boolean(d)} label="Ошибки" value={d ? num(errs) : '—'} caption={d ? 'сеть и 5xx' : 'после D1'} />
-            <Metric demo={Boolean(d)} label="Последний успех" value={d ? utc(lastOk).split(' · ')[1] ?? '—' : '—'} caption={d ? utc(lastOk) + ' UTC' : 'из оперативного состояния'} />
+            <Metric demo={Boolean(d)} label="Последний успех" value={d ? localTime(lastOk).split(' · ')[1] ?? '—' : '—'} caption={d ? localTime(lastOk) : 'из оперативного состояния'} />
           </Metrics>
           <section className="section">
             <SectionHead title="Источники спортивных данных" action={d ? <span className="chip demo sm">ДЕМО</span> : undefined} />
@@ -148,7 +148,7 @@ export function SportsApi() {
                       <td className="num">{p.perMinuteLimit ?? '—'}</td>
                       <td className="num">{p.usedLastMinute ?? '—'}</td>
                       <td className="num">{p.status === 'disabled' ? '—' : p.rateLimited}</td>
-                      <td>{utc(p.lastOkAt)}</td>
+                      <td>{localTime(p.lastOkAt)}</td>
                       <td>{p.status === 'disabled' ? <span className="chip">Отключено до production</span> : <Status value={p.status} />}</td>
                     </tr>
                   ))}
@@ -214,11 +214,11 @@ export function System() {
               <SectionHead title="События и ошибки" action={events ? <span className="chip demo sm">ДЕМО</span> : undefined} />
               {!events ? <NotCollected what="Журнал событий" /> : rows.length === 0 ? <Empty title="Нет событий под фильтр" /> : (
                 <table className="table">
-                  <thead><tr><th>Время UTC</th><th>Компонент</th><th>Событие</th><th className="num">Кол-во</th><th>Request ID</th></tr></thead>
+                  <thead><tr><th>Время</th><th>Компонент</th><th>Событие</th><th className="num">Кол-во</th><th>Request ID</th></tr></thead>
                   <tbody>
                     {rows.slice(0, 20).map((e, i) => (
                       <tr key={i}>
-                        <td>{utc(e.at)}</td><td>{e.component}</td>
+                        <td>{localTime(e.at)}</td><td>{e.component}</td>
                         <td><Status value={e.level} label={e.code} /></td>
                         <td className="num">{e.count}</td><td className="mono">{e.requestId}</td>
                       </tr>
@@ -239,7 +239,7 @@ export function System() {
                   <div className="small muted" style={{ margin: '22px 0 4px' }}>Фоновые задачи <span className="chip demo sm">ДЕМО</span></div>
                   <ul className="kv">
                     {data.tasks.map((t) => (
-                      <li key={t.name}><span className="k">{t.name}<span className="sub small">успех: {utc(t.lastOkAt)}</span></span><Status value={t.state} /></li>
+                      <li key={t.name}><span className="k">{t.name}<span className="sub small">успех: {localTime(t.lastOkAt)}</span></span><Status value={t.state} /></li>
                     ))}
                   </ul>
                 </>

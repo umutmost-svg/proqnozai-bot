@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { ForecastDetail, ForecastRow, Page, Quality } from '../api';
-import { num, pct, PICKS, utc } from '../format';
+import { num, pct, PICKS, localTime } from '../format';
 import { useLoad } from '../state';
 import { Empty, ErrorBox, Loading, Metric, Metrics, Note, PageHead, Pager, SectionHead, SortHeader, Status, useSort } from '../ui';
 
@@ -81,7 +81,7 @@ export function Forecasts() {
                     <thead>
                       <tr>
                         <th>Матч</th>
-                        <SortHeader label="Дата UTC" field="kickoff" sort={sort} onSort={onSort} />
+                        <SortHeader label="Дата" field="kickoff" sort={sort} onSort={onSort} />
                         <th>Рекомендация</th>
                         <th>Итог</th>
                         <SortHeader label="Сверка" field="status" sort={sort} onSort={onSort} />
@@ -95,7 +95,7 @@ export function Forecasts() {
                               onClick={(e) => { e.stopPropagation(); update({ open: f.key }); }}>{f.match ?? f.eventId}</button>
                             <span className="sub">{f.tournament}</span>
                           </td>
-                          <td>{utc(f.kickoffAt)}</td>
+                          <td>{localTime(f.kickoffAt)}</td>
                           <td>{PICKS[f.pick] ?? f.pick}{f.pickProbability !== null && <span className="sub">{pct(f.pickProbability, 0)}</span>}</td>
                           <td className="mono">{f.score ? `${f.score[0]}:${f.score[1]}` : '—'}</td>
                           <td><Status value={f.status} />{f.revision > 1 && <span className="sub">ревизия {f.revision}</span>}</td>
@@ -151,7 +151,7 @@ function ForecastDrawer({ forecastKey, onClose }: { forecastKey: string; onClose
       {error ? <div style={{ marginTop: 20 }}><ErrorBox error={error} onRetry={reload} /></div> : loading || !data ? <Loading rows={8} /> : (
         <>
           <h2>{data.match ?? data.eventId}</h2>
-          <div className="sub">{data.tournament} · {utc(data.kickoffAt, true)} UTC</div>
+          <div className="sub">{data.tournament} · {localTime(data.kickoffAt, true)}</div>
           <div style={{ marginTop: 14 }}><Status value={data.status} />{data.score && <span className="chip" style={{ marginLeft: 8 }}>Итог {data.score[0]}:{data.score[1]}</span>}</div>
           <div className="probs">
             {(['1', 'X', '2'] as const).map((k) => (
@@ -163,7 +163,7 @@ function ForecastDrawer({ forecastKey, onClose }: { forecastKey: string; onClose
             {data.noBetReason && <li><span className="k">Причина «без ставки»</span><span className="v mono">{data.noBetReason}</span></li>}
             <li><span className="k">Ожидаемые голы</span><span className="v" style={{ fontSize: 14 }}>{data.expectedGoals[0].toFixed(2)} : {data.expectedGoals[1].toFixed(2)}</span></li>
             <li><span className="k">Выборка матчей</span><span className="v" style={{ fontSize: 14 }}>{data.sample}</span></li>
-            <li><span className="k">Прогноз создан</span><span className="v" style={{ fontSize: 14 }}>{utc(data.createdAt, true)}</span></li>
+            <li><span className="k">Прогноз создан</span><span className="v" style={{ fontSize: 14 }}>{localTime(data.createdAt, true)}</span></li>
             <li><span className="k">Модель</span><span className="v mono">{data.modelVersion}</span></li>
           </ul>
           <div className="small muted" style={{ margin: '24px 0 4px' }}>Журнал ревизий итога</div>
@@ -173,7 +173,7 @@ function ForecastDrawer({ forecastKey, onClose }: { forecastKey: string; onClose
               <tbody>
                 {data.settlements.map((r) => (
                   <tr key={r.revision}><td>{r.revision}</td><td className="mono">{r.score ? `${r.score[0]}:${r.score[1]}` : '—'}</td>
-                    <td><Status value={r.status} /></td><td>{utc(r.recordedAt)}</td></tr>
+                    <td><Status value={r.status} /></td><td>{localTime(r.recordedAt)}</td></tr>
                 ))}
               </tbody>
             </table>

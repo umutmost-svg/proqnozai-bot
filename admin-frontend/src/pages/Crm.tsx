@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, describeRules, errorText, PLATFORM_LABELS, RULE_LABELS, SOURCE_LABELS, type Broadcast, type CreditsPage, type DialogThread, type Rules, type Segment, type TagCount } from '../api';
-import { num, utc } from '../format';
+import { localTime, num, parseLocalInput, toLocalInput, zoneLabel } from '../format';
 import { can, useLoad, useMe, usePrefs, useServerMode } from '../state';
 import { Avatar, Card, DangerDialog, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, PageHead, Tag, tagTone, Toast } from '../ui';
 import { CreditsDialog } from './dialogs';
@@ -62,7 +62,7 @@ export function Broadcasts() {
                 <tr key={b.id} className="clickable" onClick={() => navigate(`/broadcasts/${b.id}`)}>
                   <td className="strong"><Link to={`/broadcasts/${b.id}`} onClick={(e) => e.stopPropagation()} style={{ color: 'var(--ink)' }}>{b.name}</Link></td>
                   <td>{describeRules(b.rules).join(' · ') || 'Все пользователи'}</td>
-                  <td>{b.scheduledAt ? utc(b.scheduledAt) : b.status === 'draft' ? 'черновик' : '—'}</td>
+                  <td>{b.scheduledAt ? localTime(b.scheduledAt) : b.status === 'draft' ? 'черновик' : '—'}</td>
                   <td className="num">{num(b.recipients ?? b.audience)}</td>
                   <td>{b.by ?? '—'}</td>
                   <td><Tag tone={STATUS[b.status][1]}>{STATUS[b.status][0]}</Tag></td>
@@ -89,6 +89,9 @@ export function Broadcasts() {
     </>
   );
 }
+
+// A new broadcast is saved, then reopened as its draft with the confirmation: the chosen time survives the remount.
+let pendingWhen: { id: number; when: string } | null = null;
 
 function RulesEditor({ rules, onChange, tags }: { rules: Rules; onChange: (r: Rules) => void; tags: TagCount[] }) {
   const set = (k: keyof Rules, v: unknown) => { const n = { ...rules } as Record<string, unknown>; if (v === undefined || v === '' || (Array.isArray(v) && !v.length)) delete n[k]; else n[k] = v; onChange(n as Rules); };
@@ -179,12 +182,15 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
   const [button, setButton] = useState(item?.buttons[0]?.text ?? 'Открыть Mini App');
   const [withButton, setWithButton] = useState(item ? item.buttons.length > 0 : true);
   const [deleteAfter, setDeleteAfter] = useState<number | null>(item?.deleteAfterHours ?? null);
-  const [when, setWhen] = useState(() => { const d = new Date(Date.now() + 3600_000); d.setUTCSeconds(0, 0); return d.toISOString().slice(0, 16); });
+  const [when, setWhen] = useState(() => (item && pendingWhen?.id === item.id ? pendingWhen.when : null) ?? toLocalInput(new Date(Date.now() + 3600_000)));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(autoConfirm && item?.status === 'draft');
   const [toast, setToast] = useState<string | null>(null);
   const size = useAudience(rules, true);
+  const at = parseLocalInput(when);
+  const itemId = item?.id;
+  useEffect(() => { if (itemId !== undefined && pendingWhen?.id === itemId) pendingWhen = null; }, [itemId]);  // consumed once
   const preview = useMemo(() => body.replaceAll('{имя}', 'Айгерим'), [body]);
   const save = async (): Promise<number | null> => {
     setBusy(true); setError(null);
@@ -198,10 +204,10 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
   return (
     <>
       <PageHead crumb="Рассылки" title={item ? item.name : 'Новая рассылка'}
-        subtitle={item && item.status !== 'draft' ? `${STATUS[item.status][0]}${item.scheduledAt ? ` · ${utc(item.scheduledAt)} UTC` : ''} — изменения недоступны` : 'Черновик · отправка — с причиной и повторной 2FA'}
+        subtitle={item && item.status !== 'draft' ? `${STATUS[item.status][0]}${item.scheduledAt ? ` · ${localTime(item.scheduledAt)}` : ''} — изменения недоступны` : 'Черновик · отправка — с причиной и повторной 2FA'}
         actions={editable ? <>
           <button type="button" className="btn" disabled={busy || !name.trim() || !body.trim()} onClick={async () => { const nid = await save(); if (nid && !item) onSaved(nid, false); }}>Сохранить черновик</button>
-          <button type="button" className="btn primary" disabled={busy || !name.trim() || !body.trim()} onClick={async () => { const nid = await save(); if (nid) { if (!item) onSaved(nid, true); else setConfirm(true); } }}>Запланировать</button>
+          <button type="button" className="btn primary" disabled={busy || !name.trim() || !body.trim() || at === null} onClick={async () => { const nid = await save(); if (nid) { if (!item) { pendingWhen = { id: nid, when }; onSaved(nid, true); } else setConfirm(true); } }}>Запланировать</button>
         </> : <Link to="/broadcasts">← К рассылкам</Link>} />
       <div className="steps"><span className="s"><span className="d">1</span>Аудитория</span>—<span className="s"><span className="d">2</span>Сообщение</span>—<span className="s"><span className="d">3</span>Отправка</span></div>
       {error && <div className="form-error" role="alert">{error}</div>}
@@ -223,8 +229,9 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
           </Card>
           <Card title="Отправка">
             <div className="field-row" style={{ gridTemplateColumns: '1fr 1fr' }}>
-              <div className="field"><label htmlFor="b-when" className="sm">Когда (UTC)</label>
-                <input id="b-when" type="datetime-local" className="control" value={when} disabled={!editable} onChange={(e) => setWhen(e.target.value)} /></div>
+              <div className="field"><label htmlFor="b-when" className="sm">Когда (время компьютера, {zoneLabel(at !== null ? new Date(at * 1000) : new Date())})</label>
+                <input id="b-when" type="datetime-local" className="control" value={when} disabled={!editable} onChange={(e) => setWhen(e.target.value)} />
+                {at === null && <div className="small" style={{ marginTop: 4, color: 'var(--danger, #d33)' }}>Такого времени нет (переход часов) или поле пустое</div>}</div>
               <div className="field"><label className="sm">Скорость</label><input className="control" disabled value="Авто (лимит Telegram)" /></div>
               <div className="field"><label htmlFor="b-del" className="sm">Удалить у получателей через</label>
                 <select id="b-del" className="control" value={deleteAfter ?? ''} disabled={!editable}
@@ -257,9 +264,9 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
       </div>
       {confirm && item && (
         <DangerDialog title="Запланировать рассылку?" confirmLabel="Запланировать" tone="primary" onClose={() => setConfirm(false)}
-          lead={<>«{name}» · ≈ {num(size)} получателей · {when.replace('T', ' ')} UTC. {server ? 'В это время бот начнёт отправку.' : 'В пилоте сообщение не уйдёт в Telegram.'}</>}
+          lead={<>«{name}» · ≈ {num(size)} получателей · {localTime(at)} ({zoneLabel(at !== null ? new Date(at * 1000) : new Date())}). {server ? 'В это время бот начнёт отправку.' : 'В пилоте сообщение не уйдёт в Telegram.'}</>}
           onConfirm={async (input) => {
-            await api(`/api/admin/broadcasts/${item.id}/schedule`, { method: 'POST', body: { ...input, at: Math.floor(Date.parse(`${when}:00Z`) / 1000) } });
+            await api(`/api/admin/broadcasts/${item.id}/schedule`, { method: 'POST', body: { ...input, at } });
             setConfirm(false); setToast('Рассылка запланирована'); reload();
           }} />
       )}
@@ -298,7 +305,7 @@ export function Segments() {
                     <td><button type="button" className="btn link" onClick={(e) => { e.stopPropagation(); setEditing({ id: s.id, name: s.name, rules: s.rules }); }}><Tag tone={tagTone(s.name)}>{s.name}</Tag></button></td>
                     <td>{describeRules(s.rules).join(' · ') || 'все'}</td>
                     <td className="num strong">{num(s.size)}</td>
-                    <td>{utc(s.updatedAt)}</td>
+                    <td>{localTime(s.updatedAt)}</td>
                     <td onClick={(e) => e.stopPropagation()}><Link to={`/users?segment=${s.id}`} className="small">Список →</Link></td>
                   </tr>
                 ))}</tbody>
@@ -376,7 +383,7 @@ export function Credits() {
                   <thead><tr><th>Время</th><th>Пользователь</th><th>Операция</th><th className="num">Сумма</th><th className="num">Баланс</th><th>Кто и почему</th></tr></thead>
                   <tbody>{data.ledger.map((l) => (
                     <tr key={l.id}>
-                      <td>{utc(l.at)}</td>
+                      <td>{localTime(l.at)}</td>
                       <td><Link to={`/users/${l.userId}`} className="mono">{l.userId}</Link>{l.batch && <span className="sub">групповая</span>}</td>
                       <td><Tag tone={KIND[l.kind]![1]}>{KIND[l.kind]![0]}</Tag></td>
                       <td className="num strong">{l.kind.startsWith('unlimited') ? '∞' : l.delta > 0 ? `+${l.delta}` : l.delta}</td>
@@ -443,7 +450,7 @@ export function Dialogs() {
               <button key={th.userId} type="button" className="thread" aria-current={i === current} onClick={() => setCurrent(i)}>
                 <Avatar name={th.name} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="row" style={{ justifyContent: 'space-between' }}><b style={{ fontSize: 13 }}>{th.name}</b><span className="small muted">{utc(th.messages.at(-1)?.at)}</span></div>
+                  <div className="row" style={{ justifyContent: 'space-between' }}><b style={{ fontSize: 13 }}>{th.name}</b><span className="small muted">{localTime(th.messages.at(-1)?.at)}</span></div>
                   <div className="preview">{th.messages.at(-1)?.text}</div>
                   {th.tag && <div style={{ marginTop: 4 }}><Tag tone={th.tag[1] as 'danger'}>{th.tag[0]}</Tag></div>}
                 </div>
@@ -458,7 +465,7 @@ export function Dialogs() {
               </div>
               <div className="convo-msgs">
                 {t.messages.map((m, i) => (
-                  <div key={i} className={`msg${m.from === 'admin' ? ' mine' : ''}`}>{m.text}<div className="meta">{m.by ? `${m.by} · ` : ''}{utc(m.at)}</div></div>
+                  <div key={i} className={`msg${m.from === 'admin' ? ' mine' : ''}`}>{m.text}<div className="meta">{m.by ? `${m.by} · ` : ''}{localTime(m.at)}</div></div>
                 ))}
                 {t.system && <div style={{ alignSelf: 'center' }}><Tag tone="warning">Система: {t.system}</Tag></div>}
               </div>

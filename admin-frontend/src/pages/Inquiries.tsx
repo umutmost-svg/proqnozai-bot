@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ApiError, api, errorText, newIdempotencyKey, type InquiriesPage, type InquiryThread } from '../api';
-import { utc } from '../format';
+import { localTime } from '../format';
 import { can, useLoad, useMe } from '../state';
 import { Card, DangerDialog, Empty, ErrorBox, Loading, PageHead, Tag, Toast } from '../ui';
 
@@ -47,7 +47,7 @@ export function Inquiries() {
                       aria-current={selected === String(t.userId)} onClick={() => pick({ user: String(t.userId) })}>
                       <b>{t.name ?? t.userId}</b>{t.username && <span className="muted"> @{t.username}</span>}
                       <Tag tone={t.status === 'open' ? 'accent' : 'neutral'}>{STATUS[t.status]}</Tag>
-                      <div className="small muted">{utc(t.lastAt)} · {t.count} сообщ.</div>
+                      <div className="small muted">{localTime(t.lastAt)} · {t.count} сообщ.</div>
                     </button>
                   </li>
                 ))}
@@ -83,7 +83,7 @@ function Thread({ userId, onChanged, onToast }: { userId: string; onChanged: () 
   if (!data) return null;
   const name = [data.user?.firstName, data.user?.lastName].filter(Boolean).join(' ') || userId;
   return (
-    <Card title={<Link to={`/users/${userId}`}>{name}</Link>} sub={data.noticeAt ? `Уведомление о хранении показано ${utc(data.noticeAt)}` : undefined}
+    <Card title={<Link to={`/users/${userId}`}>{name}</Link>} sub={data.noticeAt ? `Уведомление о хранении показано ${localTime(data.noticeAt)}` : undefined}
       action={manage && (
         <button type="button" className="btn" disabled={busy} onClick={() => void act(() => api(`/api/admin/inquiries/${userId}/status`, { method: 'POST', body: { status: data.status === 'open' ? 'closed' : 'open' } }), data.status === 'open' ? 'Обращение закрыто' : 'Обращение открыто')}>
           {data.status === 'open' ? 'Закрыть' : 'Открыть снова'}
@@ -96,7 +96,7 @@ function Thread({ userId, onChanged, onToast }: { userId: string; onChanged: () 
         {data.history.map((h) => (
           <div key={h.id} className={`bubble-box ${h.from === 'admin' ? 'out' : 'in'}`} style={{ marginLeft: h.from === 'admin' ? 40 : 0, marginRight: h.from === 'user' ? 40 : 0 }}>
             {h.text}
-            <div className="small muted" style={{ marginTop: 4 }}>{utc(h.at)} · {h.from === 'user' ? 'пользователь' : `${h.by ?? 'команда'} · ${DELIVERY[h.status ?? ''] ?? h.status ?? ''}`}</div>
+            <div className="small muted" style={{ marginTop: 4 }}>{localTime(h.at)} · {h.from === 'user' ? 'пользователь' : `${h.by ?? 'команда'} · ${DELIVERY[h.status ?? ''] ?? h.status ?? ''}`}</div>
           </div>
         ))}
       </div>

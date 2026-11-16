@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { api, type AdminAccount, type AdminEvent, type Role, type SettingValue } from '../api';
-import { utc } from '../format';
+import { localTime } from '../format';
 import { can, useLoad, useMe, usePrefs } from '../state';
 import { DangerDialog, Empty, ErrorBox, Loading, Note, PageHead, PeriodSelect, SectionHead, Status, Toast } from '../ui';
 
@@ -78,7 +78,7 @@ export function SettingsFeatures() {
               Последнее изменение: {(() => {
                 const times = Object.values(data.settings).map((s) => s.updatedAt ?? 0);
                 const t = Math.max(0, ...times);
-                return t ? `${utc(t)} UTC` : 'значения по умолчанию';
+                return t ? `${localTime(t)}` : 'значения по умолчанию';
               })()}
             </p>
           </section>
@@ -164,7 +164,7 @@ export function SettingsAdmins() {
                         </td>
                         <td>{a.twoFactor ? <Status value="ok" label="Включена" /> : <Status value="warning" label="Не настроена" />}</td>
                         <td><Status value={a.state} label={a.state === 'active' ? 'Активна' : undefined} /></td>
-                        <td>{utc(a.lastLoginAt)}</td>
+                        <td>{localTime(a.lastLoginAt)}</td>
                         {owner && (
                           <td>
                             {a.state === 'active' && (
@@ -289,11 +289,11 @@ export function SettingsJournal() {
             <Empty title="Действий пока нет">Каждая операция и соответствующая запись журнала выполняются в одной транзакции.</Empty>
           ) : (
             <table className="table">
-              <thead><tr><th>Время UTC</th><th>Администратор</th><th>Действие</th><th>Причина</th><th>Результат</th></tr></thead>
+              <thead><tr><th>Время</th><th>Администратор</th><th>Действие</th><th>Причина</th><th>Результат</th></tr></thead>
               <tbody>
                 {data.items.map((e) => (
                   <tr key={e.id}>
-                    <td>{utc(e.at)}</td>
+                    <td>{localTime(e.at)}</td>
                     <td>{e.adminEmail ?? (e.action === 'admin.create_cli' ? 'CLI' : '—')}</td>
                     <td className="strong">{ACTIONS[e.action] ?? e.action}<span className="sub">{describe(e)}</span></td>
                     <td>{e.reason ?? '—'}</td>

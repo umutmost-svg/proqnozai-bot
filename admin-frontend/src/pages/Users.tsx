@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, type CrmUsersPage } from '../api';
-import { geoLabel, num, sourceLabel, userName, utc, utcDay } from '../format';
+import { geoLabel, num, sourceLabel, userName, localTime, localDay } from '../format';
 import { can, useLoad, useMe } from '../state';
 import { Avatar, Empty, ErrorBox, Loading, PageHead, Pager, SortHeader, Tag, tagTone, Toast, useSort } from '../ui';
 import { CreditsDialog, TagDialog } from './dialogs';
@@ -148,8 +148,8 @@ export function Users() {
                   </td>
                   <td className="mono">{u.id}</td>
                   <td>{u.lang}</td>
-                  <td>{utcDay(u.createdAt)}</td>
-                  <td>{utc(u.lastSeenAt ?? u.lastLoginAt)}</td>
+                  <td>{localDay(u.createdAt)}</td>
+                  <td>{localTime(u.lastSeenAt ?? u.lastLoginAt)}</td>
                   <td className="num">{u.forecasts ?? '—'}</td>
                   <td>{geoLabel(u.geo)}</td>
                   <td>{sourceLabel(u.source)}</td>

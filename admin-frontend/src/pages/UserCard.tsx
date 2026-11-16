@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, errorText, type CrmProfile } from '../api';
-import { geoLabel, num, sourceLabel, userName, utc, utcDay } from '../format';
+import { geoLabel, num, sourceLabel, userName, localTime, localDay } from '../format';
 import { can, useLoad, useMe, usePrefs } from '../state';
 import { Avatar, Bars, Card, DangerDialog, Empty, ErrorBox, Loading, Status, Tag, tagTone, Toast, Topbar } from '../ui';
 import { CreditsDialog, TagDialog } from './dialogs';
@@ -61,7 +61,7 @@ function UserCard({ id }: { id: string }) {
                 {data.blocked ? <Tag tone="danger">Заблокирован</Tag> : active > 0 ? <Tag tone="success">Активна сессия</Tag> : null}
               </h2>
               <div className="small muted" style={{ marginTop: 6 }}>
-                {data.username ? `@${data.username}` : 'без username'} · Telegram ID <span className="mono">{data.id}</span> · ID MB {data.mbId ? <span className="mono">{data.mbId}</span> : <span className="muted">не указан</span>} · язык {data.lang} · с нами с {utcDay(data.createdAt)}
+                {data.username ? `@${data.username}` : 'без username'} · Telegram ID <span className="mono">{data.id}</span> · ID MB {data.mbId ? <span className="mono">{data.mbId}</span> : <span className="muted">не указан</span>} · язык {data.lang} · с нами с {localDay(data.createdAt)}
               </div>
             </div>
             <div className="row">
@@ -71,7 +71,7 @@ function UserCard({ id }: { id: string }) {
             </div>
           </section>
           <div className="stats-strip">
-            <div className="stat"><div className="k">Последняя активность</div><div className="v">{utc(data.lastSeenAt ?? data.lastLoginAt)}</div></div>
+            <div className="stat"><div className="k">Последняя активность</div><div className="v">{localTime(data.lastSeenAt ?? data.lastLoginAt)}</div></div>
             <div className="stat"><div className="k">Прогнозов</div><div className="v">{data.activity?.summary ? num(data.activity.summary.forecasts) : '—'}</div></div>
             <div className="stat"><div className="k">Страна</div><div className="v">{geoLabel(data.geo)}</div></div>
             <div className="stat"><div className="k">Источник</div><div className="v">{sourceLabel(data.source)}</div></div>
@@ -93,7 +93,7 @@ function UserCard({ id }: { id: string }) {
                       <div className="tl-item" key={i}>
                         <span className={`tl-dot ${e.kind}`} aria-hidden="true">{DOT[e.kind] ?? '•'}</span>
                         <div>
-                          <div className="tl-title">{e.title}<span className="tl-time">{utc(e.at)}</span>{e.demo && <> <Tag tone="violet">ДЕМО</Tag></>}</div>
+                          <div className="tl-title">{e.title}<span className="tl-time">{localTime(e.at)}</span>{e.demo && <> <Tag tone="violet">ДЕМО</Tag></>}</div>
                           {e.kind === 'message' ? <div className="bubble-box">{e.detail}<div className="small muted" style={{ marginTop: 4 }}>{e.by} · {MSG_STATUS[e.status ?? ''] ?? e.status}</div></div>
                             : e.detail && <div className="tl-detail">{e.detail}{e.by && <span className="muted"> · {e.by}</span>}</div>}
                         </div>
@@ -104,7 +104,7 @@ function UserCard({ id }: { id: string }) {
                 {tab === 'Активность' && (!data.activity?.collected ? <Empty title="Активность не собирается">Телеметрия Mini App выключена: последняя активность — по последнему входу.</Empty>
                   : !data.activity.summary ? <Empty title="Активности пока не было" /> : (
                     <>
-                      <div className="kv-row"><span>Первая активность</span><b>{utc(data.activity.summary.firstSeenAt)}</b></div>
+                      <div className="kv-row"><span>Первая активность</span><b>{localTime(data.activity.summary.firstSeenAt)}</b></div>
                       <div className="kv-row"><span>Активных дней за 30</span><b>{data.activity.summary.activeDays}</b></div>
                       <div className="kv-row"><span>Прогнозов (быстрые, купоны, AI)</span><b>{num(data.activity.summary.forecasts)}</b></div>
                       <div className="kv-row"><span>AI-разборов создано / открыто</span><b>{num(data.activity.summary.aiCreated)} / {num(data.activity.summary.aiOpened)}</b></div>
@@ -115,21 +115,21 @@ function UserCard({ id }: { id: string }) {
                     </>
                   ))}
                 {tab === 'Сообщения' && (data.messages.length === 0 ? <Empty title="Сообщений пользователю не было" /> : data.messages.map((m) => (
-                  <div className="bubble-box" key={m.id}>{m.body}<div className="small muted" style={{ marginTop: 4 }}>{utc(m.at)} · {m.by} · {MSG_STATUS[m.status]}</div></div>
+                  <div className="bubble-box" key={m.id}>{m.body}<div className="small muted" style={{ marginTop: 4 }}>{localTime(m.at)} · {m.by} · {MSG_STATUS[m.status]}</div></div>
                 )))}
                 {tab === 'Кредиты' && (data.ledger.length === 0 ? <Empty title="Операций с кредитами не было" /> : (
                   <table className="table"><thead><tr><th>Время</th><th>Операция</th><th className="num">Сумма</th><th className="num">Баланс</th><th>Причина</th></tr></thead>
                     <tbody>{data.ledger.map((l) => (
-                      <tr key={l.id}><td>{utc(l.at)}</td><td><Tag tone={l.kind === 'debit' ? 'danger' : l.kind.startsWith('unlimited') ? 'violet' : 'success'}>{{ grant: 'Начисление', debit: 'Списание', unlimited: 'Безлимит', unlimited_off: 'Безлимит выкл.' }[l.kind]}</Tag></td>
+                      <tr key={l.id}><td>{localTime(l.at)}</td><td><Tag tone={l.kind === 'debit' ? 'danger' : l.kind.startsWith('unlimited') ? 'violet' : 'success'}>{{ grant: 'Начисление', debit: 'Списание', unlimited: 'Безлимит', unlimited_off: 'Безлимит выкл.' }[l.kind]}</Tag></td>
                         <td className="num">{l.kind.startsWith('unlimited') ? '∞' : l.delta > 0 ? `+${l.delta}` : l.delta}</td><td className="num">{l.balanceAfter}</td><td>{l.reason}<span className="sub">{l.by}</span></td></tr>
                     ))}</tbody></table>
                 ))}
                 {tab === 'Сессии' && (data.sessions.length === 0 ? <Empty title="Сессий нет" /> : (
-                  <table className="table"><thead><tr><th>Создана (UTC)</th><th>Истекает</th><th>Отозвана</th><th>Состояние</th></tr></thead>
-                    <tbody>{data.sessions.map((s, i) => (<tr key={i}><td>{utc(s.createdAt)}</td><td>{utc(s.expiresAt)}</td><td>{utc(s.revokedAt)}</td><td><Status value={s.state} /></td></tr>))}</tbody></table>
+                  <table className="table"><thead><tr><th>Создана</th><th>Истекает</th><th>Отозвана</th><th>Состояние</th></tr></thead>
+                    <tbody>{data.sessions.map((s, i) => (<tr key={i}><td>{localTime(s.createdAt)}</td><td>{localTime(s.expiresAt)}</td><td>{localTime(s.revokedAt)}</td><td><Status value={s.state} /></td></tr>))}</tbody></table>
                 ))}
                 {tab === 'Заметки' && (data.notes.length === 0 ? <Empty title="Заметок нет" /> : data.notes.map((n) => (
-                  <div className="note-card" key={n.id} style={{ marginBottom: 8 }}>{n.body}<div className="by">{n.by} · {utc(n.at)}</div></div>
+                  <div className="note-card" key={n.id} style={{ marginBottom: 8 }}>{n.body}<div className="by">{n.by} · {localTime(n.at)}</div></div>
                 )))}
               </div>
             </section>
@@ -150,7 +150,7 @@ function UserCard({ id }: { id: string }) {
                 </div>
               </Card>
               <Card title="Кредиты" action={<Tag tone="warning">выключены</Tag>}>
-                <div className="kv-row"><span>Баланс</span><b style={{ color: 'var(--demo)' }}>{data.credits.unlimitedUntil ? `∞ до ${utcDay(data.credits.unlimitedUntil)}` : num(data.credits.balance)}</b></div>
+                <div className="kv-row"><span>Баланс</span><b style={{ color: 'var(--demo)' }}>{data.credits.unlimitedUntil ? `∞ до ${localDay(data.credits.unlimitedUntil)}` : num(data.credits.balance)}</b></div>
                 <div className="kv-row"><span>Операций</span><b>{data.ledger.length}</b></div>
                 <div className="row" style={{ marginTop: 10 }}>
                   <button type="button" className="btn" disabled={!manage} onClick={() => setDialog('credits')}>Начислить / списать</button>
@@ -158,7 +158,7 @@ function UserCard({ id }: { id: string }) {
                 <p className="small muted" style={{ marginBottom: 0 }}>Пока кредиты выключены, операции пишутся только в журнал и не влияют на доступ к прогнозам.</p>
               </Card>
               <Card title="Заметки команды">
-                {data.notes.slice(0, 2).map((n) => <div className="note-card" key={n.id} style={{ marginBottom: 8 }}>{n.body}<div className="by">{n.by} · {utc(n.at)}</div></div>)}
+                {data.notes.slice(0, 2).map((n) => <div className="note-card" key={n.id} style={{ marginBottom: 8 }}>{n.body}<div className="by">{n.by} · {localTime(n.at)}</div></div>)}
                 <textarea className="control" style={{ minHeight: 60 }} aria-label="Новая заметка" placeholder="Новая заметка (видна только команде)" maxLength={2000}
                   value={note} onChange={(e) => setNote(e.target.value)} disabled={!manage} />
                 <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
@@ -195,7 +195,7 @@ function UserCard({ id }: { id: string }) {
                   <details style={{ marginTop: 10 }}>
                     <summary className="small">История изменений ({data.mbIdHistory!.length})</summary>
                     {data.mbIdHistory!.map((h, i) => (
-                      <div className="kv-row small" key={i}><span>{utc(h.at)} · {h.by ?? '—'}</span>
+                      <div className="kv-row small" key={i}><span>{localTime(h.at)} · {h.by ?? '—'}</span>
                         <b className="mono">{h.old ?? '∅'} → {h.new ?? '∅'}</b></div>
                     ))}
                   </details>
@@ -203,7 +203,7 @@ function UserCard({ id }: { id: string }) {
               </Card>
               <Card title="Доступ и безопасность">
                 <div className="kv-row"><span>Активных сессий</span><b>{active}</b></div>
-                {data.blocked && <div className="kv-row"><span>Заблокирован</span><b>{utc(data.blocked.at)} · {data.blocked.reason}</b></div>}
+                {data.blocked && <div className="kv-row"><span>Заблокирован</span><b>{localTime(data.blocked.at)} · {data.blocked.reason}</b></div>}
                 <div className="row" style={{ marginTop: 10 }}>
                   <button type="button" className="btn" disabled={!manage || active === 0} onClick={() => setDialog('revoke')}>Отозвать сессии</button>
                   <button type="button" className={`btn ${data.blocked ? '' : 'danger'}`} disabled={!manage} onClick={() => setDialog('block')}>{data.blocked ? 'Разблокировать' : 'Заблокировать'}</button>
@@ -213,7 +213,7 @@ function UserCard({ id }: { id: string }) {
                   <details style={{ marginTop: 10 }}>
                     <summary className="small">История блокировок ({data.blockHistory!.length})</summary>
                     {data.blockHistory!.map((h, i) => (
-                      <div className="kv-row small" key={i}><span>{utc(h.at)} · {h.by ?? '—'}</span>
+                      <div className="kv-row small" key={i}><span>{localTime(h.at)} · {h.by ?? '—'}</span>
                         <b>{h.blocked ? 'Заблокирован' : 'Разблокирован'}{h.reason ? ` · ${h.reason}` : ''}</b></div>
                     ))}
                   </details>
