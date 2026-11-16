@@ -31,7 +31,9 @@ export function MbQueue() {
       setReason('');
       reload();
     } catch (err) {
-      setToast(err instanceof Error ? err.message : 'Не удалось сохранить решение');
+      const code = err instanceof Error ? err.message : '';
+      setToast(code.includes('mb_stale') ? 'Пользователь уже сменил MB ID — обновите список' : code.includes('mb_id_taken') ? 'Этот MB ID уже у другого пользователя' : 'Не удалось сохранить решение');
+      reload();
     } finally {
       setBusy(null);
     }
@@ -41,7 +43,7 @@ export function MbQueue() {
 
   return (
     <>
-      <PageHead title="MB ID" subtitle="Пользователи вводят MB ID в Mini App; подтверждает владелец. Решение доходит до Mini App за несколько секунд" />
+      <PageHead title="MB ID" subtitle="Пользователи вводят MB ID в Mini App; подтверждает владелец. Решение применяется сразу" />
       <div className="chips" role="group" aria-label="Статус" style={{ marginBottom: 16 }}>
         {STATES.map(([k, l]) => (
           <button key={k} type="button" className="chip-btn" aria-pressed={state === k} onClick={() => setState(k)}>

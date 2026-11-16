@@ -17,8 +17,7 @@ from miniapp.ads.policy import public_key_hex as policy_public_key_hex
 from miniapp.admin_web.access import AccessPublisher
 from miniapp.admin_web.outbox import Outbox
 from miniapp.admin_web.accounts import ActionError
-from miniapp.admin_commands import FILE_NAME as COMMANDS_FILE, CommandQueue
-from miniapp.credits import COST as CREDIT_COST, MONTHLY, WELCOME
+from miniapp.credits import COST as CREDIT_COST, MONTHLY, WELCOME, Credits
 from miniapp.admin_web.crm import EXTRA_PARTS, RULE_FIELDS, CrmStore, matches, validate_rules
 from miniapp.admin_web.insights import UserInsights, geo
 from miniapp.store import BurnWindow
@@ -33,19 +32,30 @@ _USER_SORT = {"id": "id", "created": "createdAt", "login": "lastLoginAt", "usern
 
 def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     store = ctx.store
-    # Admin -> Mini App commands next to the Mini App database (docs/miniapp/credits.md).
-    commands = CommandQueue(store.path.with_name(COMMANDS_FILE))
-    commands.init_schema()
-    crm = CrmStore(ctx.accounts, commands)
+    # The Mini App's credits, written straight into miniapp.db (docs/miniapp/credits.md).
+    credit_store = Credits(store, ctx.now)  # not `credits`: a route below has that name
+    crm = CrmStore(ctx.accounts, credit_store)
     crm.init_schema()
-    for flag in ("credits.enabled", "credits.rates"):  # settings the Mini App must follow
-        ctx.accounts.setting_hooks[flag] = lambda value, now, version, flag=flag: commands.enqueue(
-            f"flag:{flag}:{version}", "flag", None, {"key": flag, "value": value}, now)
+
+    def push_setting(key: str, value: object, version: int) -> None:
+        """A credits setting the Mini App follows, applied once per settings version."""
+        credit_store.apply(f"flag:{key}:{version}", "flag", None, {"key": key, "value": value})
+
+    for flag in ("credits.enabled", "credits.rates"):
+        ctx.accounts.setting_hooks[flag] = lambda value, now, version, flag=flag: push_setting(flag, value, version)
+    # At startup: the current settings again (a crash after the settings commit never leaves the Mini App behind).
+    current = ctx.accounts.settings()
+    for flag in ("credits.enabled", "credits.rates"):
+        if current[flag]["version"] is not None:
+            push_setting(flag, current[flag]["value"], current[flag]["version"])
     insights = UserInsights(ctx.telemetry_file)
 
     # Finish revocations left half-done by a crash (block / session revoke: the request is journalled, the Mini
     # App write may be missing). Revocation is idempotent; each request completes exactly once.
     for pending in ctx.accounts.pending_requests():
+        if pending["action"] == "credits.change":  # finished after a crash between the two steps
+            crm.finish_credit(pending["requestId"], pending["adminId"], ctx.now())
+            continue
         if pending["action"] in ("user.block", "user.sessions_revoke") and pending["targetId"]:
             t = ctx.now()
             store.revoke_user_sessions(int(pending["targetId"]), t, BurnWindow.for_policy(t, 300, 30))
@@ -351,7 +361,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
 
     @app.post("/api/admin/users/{user_id}/mb-id")
     async def set_mb_id(user_id: int, request: Request) -> dict:
-        admin = ctx.admin_of(request, "manage_users")
+        # An MB ID set here is approved in the Mini App: the owner's personal decision (Codex credits r1 P1).
+        admin = ctx.admin_of(request, "approve_mb")
         exists(user_id)
         return crm.set_mb_id(admin, user_id, (await ctx.body(request)).get("mbId"), ctx.now())
 
@@ -505,7 +516,6 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         return {"enabled": bool(ctx.accounts.settings().get("credits.enabled", {}).get("value", False)),
                 "totals": store.credit_totals(t, t - 30 * 86400),
                 "ledger": store.credit_history(None, 200, kind),
-                "pendingCommands": commands.pending_count(),
                 "rates": ctx.accounts.settings().get("credits.rates", {}).get("value", []),
                 "rules": {"cost": CREDIT_COST, "welcome": WELCOME, "monthly": MONTHLY, "editable": False}}
 

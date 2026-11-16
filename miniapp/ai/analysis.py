@@ -147,8 +147,9 @@ Nothing here is a claim of value, profit or certainty."""
 class AiError(Exception):
     """The analysis could not be produced; ``code`` is safe to return and log."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, usage: dict[str, int] | None = None) -> None:
         super().__init__(code)
+        self.usage = usage  # billed tokens of a model answer that was refused or unusable (cost accounting)
         self.code = code  # not_created | not_configured | limit_reached | budget_exhausted | refused | bad_output | upstream_error | timeout | rate_limited
 
 
@@ -506,16 +507,23 @@ class AiService:
             answer = await asyncio.wait_for(client.complete(system, request, SCHEMA), MODEL_TIMEOUT_S)
         except TimeoutError:
             raise AiError("timeout") from None
+        except AiError as exc:
+            if exc.usage:
+                await self._record_usage(str(exc.usage.get("model") or client.model), exc.usage)
+            raise
         if answer.usage:
-            u = answer.usage
-            # Counts only (cost accounting): never the prompt or the answer.
-            logger.info("ai.usage model=%s in=%d out=%d cache_read=%d cache_write=%d", answer.model,
-                        u.get("input", 0), u.get("output", 0), u.get("cacheRead", 0), u.get("cacheWrite", 0))
-            try:
-                await asyncio.to_thread(self._ledger.record_ai_tokens, self._today(), answer.model, answer.usage)
-            except Exception as exc:  # noqa: BLE001 — accounting must never fail a paid, delivered analysis
-                logger.warning("event=ai_usage_record_failed type=%s", type(exc).__name__)
+            await self._record_usage(answer.model, answer.usage)
         return answer
+
+    async def _record_usage(self, model: str, usage: dict) -> None:
+        """Counts only (cost accounting): never the prompt or the answer. Never fails the analysis."""
+        counts = {k: int(usage.get(k, 0)) for k in ("input", "output", "cacheRead", "cacheWrite")}
+        logger.info("ai.usage model=%s in=%d out=%d cache_read=%d cache_write=%d", model, counts["input"],
+                    counts["output"], counts["cacheRead"], counts["cacheWrite"])
+        try:
+            await asyncio.to_thread(self._ledger.record_ai_tokens, self._today(), model, counts)
+        except Exception as exc:  # noqa: BLE001 — accounting must never fail a paid, delivered analysis
+            logger.warning("event=ai_usage_record_failed type=%s", type(exc).__name__)
 
     def _until_kickoff(self, event: FootballEvent) -> float:
         return max(60.0, parse_instant(event.starts_at).timestamp() - self._clock())
@@ -801,14 +809,8 @@ class AnthropicModelClient:
             raise AiError("upstream_error") from None
         except a.APIConnectionError:
             raise AiError("timeout") from None
-        if response.stop_reason == "refusal":
-            raise AiError("refused")
-        if response.stop_reason == "max_tokens":
-            raise AiError("bad_output")
-        text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), None)
-        if text is None:
-            raise AiError("bad_output")
         served = getattr(response, "model", None)
+        model = served if isinstance(served, str) and served else self.model
         usage = getattr(response, "usage", None)
         counts = None
         if usage is not None:
@@ -816,8 +818,17 @@ class AnthropicModelClient:
                 value = getattr(usage, name, 0)
                 return value if isinstance(value, int) else 0
             counts = {"input": n("input_tokens"), "output": n("output_tokens"),
-                      "cacheRead": n("cache_read_input_tokens"), "cacheWrite": n("cache_creation_input_tokens")}
-        return Completion(text, served if isinstance(served, str) and served else self.model, counts)
+                      "cacheRead": n("cache_read_input_tokens"), "cacheWrite": n("cache_creation_input_tokens"),
+                      "model": model}  # type: ignore[dict-item]
+        # A refused or unusable answer is still billed: its tokens travel with the error (Codex credits r1 P2).
+        if response.stop_reason == "refusal":
+            raise AiError("refused", counts)
+        if response.stop_reason == "max_tokens":
+            raise AiError("bad_output", counts)
+        text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), None)
+        if text is None:
+            raise AiError("bad_output", counts)
+        return Completion(text, model, counts)
 
 
 AI_ERROR_CODES = frozenset({"not_configured", "limit_reached", "budget_exhausted", "refused", "bad_output",

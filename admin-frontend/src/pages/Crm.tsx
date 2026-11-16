@@ -359,9 +359,8 @@ export function Credits() {
   const manage = can(me.admin.role, 'manage_users');
   return (
     <>
-      <PageHead title="Кредиты" subtitle="Балансы и операции пользователей Mini App; ручные начисления уходят в Mini App за несколько секунд" />
+      <PageHead title="Кредиты" subtitle="Балансы и операции пользователей Mini App; ручные начисления применяются сразу" />
       {data && !data.enabled && <div className="banner warn" style={{ marginBottom: 16 }}>Списание выключено: прогнозы бесплатны. Балансы, стартовые и ежемесячные кредиты и MB ID уже работают. Включить — в Настройках → «Кредиты за прогнозы».</div>}
-      {data && data.pendingCommands > 0 && <p className="small muted">В очереди для Mini App: {num(data.pendingCommands)} операций (применяются в течение нескольких секунд).</p>}
       {error ? <ErrorBox error={error} onRetry={reload} /> : loading && !data ? <Loading rows={6} /> : data && (
         <>
           <Metrics>

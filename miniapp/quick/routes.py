@@ -53,9 +53,10 @@ def register_quick_routes(app: FastAPI, service: QuickService, current_session: 
             if len(ids) > MAX_TOURNAMENTS or any(not 0 < len(i) <= 40 for i in ids):
                 return _error(400, "bad_request")
             tournaments = frozenset(ids)
-        # One paid item per UTC-local day range and criteria: the same request again costs nothing.
-        item = ":".join(("quick", params["from"], params["to"], mode, criteria.market, criteria.risk, str(size),
-                         ",".join(sorted(tournaments or ()))))
+        # One paid item per period (its UTC dates) and criteria: the same request again costs nothing, whatever exact
+        # instants the client sent for that period (Codex credits r1 P2).
+        item = ":".join(("quick", start.date().isoformat(), end.date().isoformat(), mode, criteria.market,
+                         criteria.risk, str(size), ",".join(sorted(tournaments or ()))))
         if credits is not None and await run_in_threadpool(credits.enabled):
             # Spends credits: a cross-site page must not be able to trigger it (custom header + session token).
             if csrf_ok is None or not csrf_ok(token, request.headers.get("X-CSRF-Token")):

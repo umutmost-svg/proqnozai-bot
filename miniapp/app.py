@@ -21,7 +21,6 @@ from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 
-from miniapp.admin_commands import FILE_NAME as COMMANDS_FILE, CommandQueue
 from miniapp.credits import COST, Credits, MbError, NoCredits
 from miniapp.security import ACCESS_POLICY_FILE, AccessPolicy, CsrfTokens, LoginRateLimiter, origin_allowed
 from miniapp.settings import Settings
@@ -48,7 +47,6 @@ CSRF_HEADER = "X-CSRF-Token"
 REQUEST_ID_HEADER = "X-Request-ID"
 EDGE_SECRET_HEADER = "X-Edge-Auth"
 HEALTH_CACHE_S = 5
-COMMANDS_POLL_S = 5  # admin panel commands (credits, MB ID): applied within a few seconds
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
@@ -213,7 +211,6 @@ def create_app(
                 else f"allowlist({len(settings.allowed_user_ids)})", len(settings.blocked_user_ids))
     csrf = CsrfTokens(settings.csrf_key_material)
     credits = Credits(store, clock)
-    commands = CommandQueue(settings.db_path.with_name(COMMANDS_FILE))
 
     def no_credits(balance: int) -> JSONResponse:
         return JSONResponse({"error": "no_credits", "balance": balance, "cost": COST}, status_code=402)
@@ -771,36 +768,43 @@ def create_app(
         if not isinstance(event_id, str) or not 0 < len(event_id) <= 40:
             raise ApiError(400, "bad_request")
         item = f"ai:{event_id}"
-        try:
-            await run_in_threadpool(credits.precheck, session.user_id, item)
-        except NoCredits as exc:
-            return no_credits(exc.balance)
         cost, unknown = sports.analysis_cost(event_id)
         share = user_share(user_limiter, session.user_id)
         if no := refused(share, cost, unknown=unknown):
             return no
+        # Credits are taken BEFORE generating (no two analyses can share one balance) and given back unless the
+        # language model actually produced one (docs/miniapp/credits.md).
+        try:
+            held = await run_in_threadpool(credits.hold, session.user_id, item)
+        except NoCredits as exc:
+            return no_credits(exc.balance)
+        response, generated = None, False
+        try:
+            response, generated = await _analysis_response(event_id, session.user_id, share)
+            return response
+        finally:  # also on a cancelled request: a hold is never left taken without an analysis
+            if held:  # shielded: a client that disconnects cannot cancel the refund half-way
+                await asyncio.shield(run_in_threadpool(credits.settle, session.user_id, item, generated))
+
+    async def _analysis_response(event_id: str, user_id: int, share: Any) -> tuple[JSONResponse, bool]:
+        """The analysis answer, and whether a language-model analysis was produced (what credits pay for: an
+        insufficient-data answer or a market-only estimate made without the model costs nothing)."""
         try:
             with share.tally():
-                result = await ai.analyse(event_id, session.user_id)
+                result = await ai.analyse(event_id, user_id)
         except UpstreamError as exc:
             logger.info("ai.source_unavailable path=create reason=%s", exc.code)
-            return upstream_response(exc)
+            return upstream_response(exc), False
         except AiError as exc:
             logger.info("ai.unavailable path=create reason=%s", exc.code)  # code only: monitoring of timeouts etc.
             if exc.code in AI_ERROR_CODES:
                 status = 429 if exc.code == "limit_reached" else 503
-                return JSONResponse({"error": "ai_unavailable", "reason": exc.code}, status_code=status)
-            return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503)
+                return JSONResponse({"error": "ai_unavailable", "reason": exc.code}, status_code=status), False
+            return JSONResponse({"error": "source_unavailable", "reason": exc.code}, status_code=503), False
         if result is None:
             raise ApiError(404, "not_found")
-        await run_in_threadpool(note_activity, session.user_id, "ai_created")  # delivered analysis (off: no-op)
-        if result.kind != "insufficient":  # a generated forecast: charged once per match (docs/miniapp/credits.md)
-            try:
-                await run_in_threadpool(credits.charge, session.user_id, item)
-            except NoCredits:
-                # Spent concurrently: the analysis exists and is free to view anyway (GET); nothing more to charge.
-                logger.info("credits.charge_skipped reason=no_credits")
-        return JSONResponse(result.to_json())
+        await run_in_threadpool(note_activity, user_id, "ai_created")  # delivered analysis (off: no-op)
+        return JSONResponse(result.to_json()), result.kind != "insufficient" and result.model is not None
 
     # ---- credits and MB ID (docs/miniapp/credits.md) ------------------------------------------
 
@@ -839,18 +843,6 @@ def create_app(
             raise ApiError(409 if str(exc) in ("mb_taken", "mb_locked") else 400, str(exc)) from None
         return JSONResponse({"mb": mb})
 
-    async def apply_commands_forever() -> None:
-        """Admin panel -> Mini App commands (credits, MB ID decisions, the switch): applied every few seconds."""
-        while True:
-            try:
-                await run_in_threadpool(commands.apply_pending, credits.apply, int(clock()))
-            except sqlite3.Error as exc:
-                logger.warning("event=admin_commands_failed type=%s", type(exc).__name__)
-            await asyncio.sleep(COMMANDS_POLL_S)
-
-    async def start_commands() -> None:
-        app.state.commands_task = asyncio.create_task(apply_commands_forever())
-    app.router.on_startup.append(start_commands)
 
     static = StaticFiles(directory=settings.static_dir, html=True) if settings.static_dir is not None else None
 

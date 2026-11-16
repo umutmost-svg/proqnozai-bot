@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from miniapp.admin_commands import CommandQueue
 from miniapp.ai.analysis import AnalysisResult
 from miniapp.app import create_app
 from miniapp.credits import COST, MONTHLY, WELCOME, Credits, MbError, NoCredits
@@ -69,19 +68,35 @@ def test_an_item_already_paid_is_free_and_unlimited_charges_nothing(credits: Cre
     credits.precheck(UID, "ai:fd:1")  # paid before: free whatever the balance
 
 
-def test_admin_commands_apply_once(tmp_path: Path, credits: Credits, clock: FakeClock) -> None:
-    q = CommandQueue(tmp_path / "admin-commands.db")
-    q.init_schema()
-    assert q.enqueue("g1", "grant", UID, {"amount": 25}, int(clock()))
-    assert not q.enqueue("g1", "grant", UID, {"amount": 25}, int(clock()))  # a retried admin action
-    q.enqueue("bad", "grant", UID, {"amount": -5}, int(clock()))
-    assert q.apply_pending(credits.apply, int(clock())) == 2
-    assert q.apply_pending(credits.apply, int(clock())) == 0
+def test_admin_actions_apply_once_by_key(credits: Credits) -> None:
+    assert credits.apply("g1", "grant", UID, {"amount": 25}) == "done"
+    assert credits.apply("g1", "grant", UID, {"amount": 25}) == "done"  # a retried admin action: no second grant
+    assert credits.apply("bad", "grant", UID, {"amount": -5}) == "invalid"
     assert credits.summary(UID)["balance"] == WELCOME + 25
-    assert credits.apply("g1", "grant", UID, {"amount": 25}) == "done"  # the Mini App's own record: no second grant
-    assert credits.summary(UID)["balance"] == WELCOME + 25
-    assert q.results(["g1", "bad"]) == {"g1": {"appliedAt": int(clock()), "result": "done"},
-                                         "bad": {"appliedAt": int(clock()), "result": "invalid"}}
+
+
+def test_a_hold_is_kept_when_generated_and_refunded_once_otherwise(credits: Credits) -> None:
+    on(credits)
+    assert credits.hold(UID, "ai:fd:1") is True
+    assert credits.hold(UID, "ai:fd:1") is False  # paid (held) already: a second request is free, not double
+    credits.settle(UID, "ai:fd:1", generated=False)
+    credits.settle(UID, "ai:fd:1", generated=False)  # settled once
+    assert credits.summary(UID)["balance"] == WELCOME
+    assert credits.hold(UID, "ai:fd:1") is True  # unpaid again after the refund
+    credits.settle(UID, "ai:fd:1", generated=True)
+    assert credits.summary(UID)["balance"] == WELCOME - COST
+    assert [h["kind"] for h in credits.summary(UID)["history"]][:3] == ["spend", "refund", "spend"]
+
+
+def test_two_analyses_cannot_share_the_last_credits(credits: Credits) -> None:
+    on(credits)
+    credits.apply("d", "debit", UID, {"amount": WELCOME - COST})  # exactly one forecast left
+    with credits.store._write() as conn:  # this month's top-up already used: nothing else arrives
+        conn.execute("UPDATE credit_accounts SET topup_month = ? WHERE user_id = ?",
+                     (datetime.fromtimestamp(credits.clock(), UTC).strftime("%Y-%m"), UID))
+    assert credits.hold(UID, "ai:fd:1") is True
+    with pytest.raises(NoCredits):
+        credits.hold(UID, "ai:fd:2")  # the concurrent one is refused before generating
 
 
 def test_mb_id_submit_decide_and_uniqueness(credits: Credits) -> None:
@@ -90,12 +105,15 @@ def test_mb_id_submit_decide_and_uniqueness(credits: Credits) -> None:
     assert credits.submit_mb(UID, "MB123") == {"id": "MB123", "state": "pending"}
     with pytest.raises(MbError, match="mb_taken"):
         credits.submit_mb(UID + 1, "mb123")
-    assert credits.apply("d0", "mb_approve", UID, {"mbId": "OTHER"}) == "stale"  # not the ID the owner saw
-    assert credits.apply("d1", "mb_reject", UID, {"mbId": "MB123", "reason": "нет такого"}) == "done"
+    at = credits.summary(UID)["mb"]["submittedAt"]
+    assert credits.decide_mb(UID, "OTHER", at, True, None) == "stale"  # not the ID the owner saw
+    assert credits.decide_mb(UID, "MB123", at + 1, True, None) == "stale"  # not the submission the owner saw
+    assert credits.decide_mb(UID, "MB123", at, False, "нет такого") == "done"
+    assert credits.decide_mb(UID, "MB123", at, False, "нет такого") == "already"
     assert credits.summary(UID)["mb"]["state"] == "rejected"
     credits.submit_mb(UID + 1, "MB123")  # a rejected ID is free again
     credits.submit_mb(UID, "MB777")
-    assert credits.apply("d2", "mb_approve", UID, {"mbId": "mb777"}) == "done"
+    assert credits.decide_mb(UID, "mb777", credits.summary(UID)["mb"]["submittedAt"], True, None) == "done"
     with pytest.raises(MbError, match="mb_locked"):
         credits.submit_mb(UID, "MB888")
     assert credits.apply("s1", "mb_set", UID + 2, {"mbId": "MB777"}) == "mb_taken"
@@ -110,7 +128,8 @@ class FakeAi:
 
     async def analyse(self, event_id: str, user_id: int, *, create: bool = True):
         self.calls += 1
-        return AnalysisResult(event_id, self.kind, ())
+        # A language-model answer (what credits pay for), or an insufficient-data one made without it.
+        return AnalysisResult(event_id, self.kind, (), model=None if self.kind == "insufficient" else "claude-test")
 
 
 def session(client: TestClient, clock: FakeClock, uid: int = UID) -> str:
@@ -146,7 +165,7 @@ def test_api_balance_mb_and_ai_charging(settings: Settings, clock: FakeClock) ->
     ai.kind = "insufficient"  # nothing generated: free
     Credits(Store(settings.db_path), clock).apply("g", "grant", UID, {"amount": COST})
     client.post("/api/ai/analysis", json={"event_id": "fd:ins"}, headers=hdr)
-    assert client.get("/api/credits").json()["balance"] == COST
+    assert client.get("/api/credits").json()["balance"] == COST  # held, then refunded
 
 
 def test_quick_pick_needs_the_csrf_header_once_credits_are_on(settings: Settings, clock: FakeClock) -> None:

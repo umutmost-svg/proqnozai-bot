@@ -733,23 +733,27 @@ class AdminStore:
             if value is None:
                 raise ActionError("invalid_rates")
         with self._write() as conn:
-            if (prior := self._replayed(conn, idem, actor.id, "settings.update", key,
-                                        {"key": key, "value": value}, reason)) is not None:
-                return prior
-            self.step_up(conn, actor.id, code, now, "manage_settings")
-            row = conn.execute("SELECT value_json, version FROM runtime_settings WHERE key = ?", (key,)).fetchone()
-            before_value = json.loads(row[0]) if row else spec["default"]
-            version = max(now * 1000, (row[1] + 1) if row else 0)
-            conn.execute(
-                "INSERT INTO runtime_settings (key, value_json, version, updated_at, admin_id) VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, version = excluded.version, "
-                "updated_at = excluded.updated_at, admin_id = excluded.admin_id",
-                (key, json.dumps(value), version, now, actor.id))
-            if (hook := self.setting_hooks.get(key)) is not None:
-                hook(value, now, version)  # e.g. the credits switch -> Mini App command; a failure rolls back
-            after = {"key": key, "value": value}
-            event = self._event(conn, now, actor.id, "settings.update", "setting", key,
-                                {"key": key, "value": before_value}, after, reason, idem, "done")
+            prior = self._replayed(conn, idem, actor.id, "settings.update", key, {"key": key, "value": value}, reason)
+            if prior is None:
+                self.step_up(conn, actor.id, code, now, "manage_settings")
+                row = conn.execute("SELECT value_json, version FROM runtime_settings WHERE key = ?", (key,)).fetchone()
+                before_value = json.loads(row[0]) if row else spec["default"]
+                version = max(now * 1000, (row[1] + 1) if row else 0)
+                conn.execute(
+                    "INSERT INTO runtime_settings (key, value_json, version, updated_at, admin_id) VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, version = excluded.version, "
+                    "updated_at = excluded.updated_at, admin_id = excluded.admin_id",
+                    (key, json.dumps(value), version, now, actor.id))
+                after = {"key": key, "value": value}
+                event = self._event(conn, now, actor.id, "settings.update", "setting", key,
+                                    {"key": key, "value": before_value}, after, reason, idem, "done")
+            current = conn.execute("SELECT value_json, version FROM runtime_settings WHERE key = ?", (key,)).fetchone()
+        # Another process follows some settings (the credits switch -> the Mini App): only after the commit, keyed by
+        # the version, so a retry of the same request (or the startup pass) applies it once (Codex credits r1 P1).
+        if (hook := self.setting_hooks.get(key)) is not None and current is not None:
+            hook(json.loads(current[0]), now, current[1])
+        if prior is not None:
+            return prior
         return {"eventId": event, "after": after, "replayed": False}
 
     # ---- user sessions (the only write into miniapp.db, §4.6) ---------------------------------

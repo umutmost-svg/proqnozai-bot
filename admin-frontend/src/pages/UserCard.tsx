@@ -177,7 +177,7 @@ function UserCard({ id }: { id: string }) {
                 {mbEdit === null ? (
                   <div className="row" style={{ justifyContent: 'space-between' }}>
                     {data.mbId ? <b className="mono">{data.mbId}</b> : <span className="muted">Не указан</span>}
-                    <button type="button" className="btn" disabled={!manage} onClick={() => { setMbError(null); setMbEdit(data.mbId ?? ''); }}>{data.mbId ? 'Изменить' : 'Добавить'}</button>
+                    <button type="button" className="btn" disabled={me.admin.role !== 'owner'} title={me.admin.role !== 'owner' ? 'MB ID подтверждает только владелец' : undefined} onClick={() => { setMbError(null); setMbEdit(data.mbId ?? ''); }}>{data.mbId ? 'Изменить' : 'Добавить'}</button>
                   </div>
                 ) : (
                   <form onSubmit={(e) => {

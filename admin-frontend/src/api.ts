@@ -283,7 +283,6 @@ export interface CreditsPage {
   enabled: boolean;
   totals: { inCirculation: number; accounts: number; unlimited: number; granted: number; spent: number; paidForecasts: number };
   ledger: LedgerRow[];
-  pendingCommands: number;
   rules: { cost: number; welcome: number; monthly: number };
   /** Partner deposits per forecast by country ("*" = every other country). */
   rates: CreditRate[];

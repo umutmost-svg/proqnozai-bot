@@ -46,7 +46,7 @@ def test_an_older_telemetry_schema_is_not_collected(tmp_path):
 
 def test_mb_search_applies_rules_before_any_cap(env, monkeypatch):
     _, clock, client, _, secrets_ = env
-    csrf = login(client, clock, secrets_, "admin@x.test")
+    csrf = login(client, clock, secrets_, "owner@x.test")
     post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "Q1"})
     post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "Q2"})
     post(client, f"/api/admin/users/{U2}/tags", csrf, {"tag": "VIP"})
@@ -73,20 +73,20 @@ def test_users_list_and_card_show_activity_and_geo(env):
 
 def test_mb_id_history_keeps_values_outside_the_journal(env):
     _, clock, client, accounts, secrets_ = env
-    csrf = login(client, clock, secrets_, "admin@x.test")
+    csrf = login(client, clock, secrets_, "owner@x.test")
     post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "111"})
     post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "111"})  # unchanged: no history row
     post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "222"})
     post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": ""})
     history = client.get(f"/api/admin/users/{U1}").json()["mbIdHistory"]
     assert [(h["old"], h["new"]) for h in history] == [("222", None), ("111", "222"), (None, "111")]
-    assert history[0]["by"] == "admin@x.test"
+    assert history[0]["by"] == "owner@x.test"
     assert "222" not in " ".join(str(e) for e in accounts.events())
 
 
 def test_mb_search_finds_owners_beyond_the_in_memory_scan(env, monkeypatch):
     _, clock, client, _, secrets_ = env
-    csrf = login(client, clock, secrets_, "admin@x.test")
+    csrf = login(client, clock, secrets_, "owner@x.test")
     post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "XyZ77"})
     monkeypatch.setattr(crm_routes, "MAX_SCAN", 1)  # the owner is outside the scanned page
     found = client.get("/api/admin/users?q=xyz7").json()

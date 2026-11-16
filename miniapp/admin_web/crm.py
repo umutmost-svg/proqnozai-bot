@@ -18,7 +18,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Any
 
-from miniapp.admin_commands import CommandQueue
+from miniapp.credits import Credits
 from miniapp.admin_web.accounts import REASON_OF_E, ActionError, Admin, AdminStore, reason_digest
 from miniapp.admin_web.ads import bump_revision as bump_ads_revision
 
@@ -116,6 +116,14 @@ CREATE TABLE IF NOT EXISTS crm_broadcast_recipients (
     PRIMARY KEY (broadcast_id, user_id)
 );
 -- MB id changes with the values (editable CRM data, read_personal only); the immutable journal keeps only the fact.
+-- Credit changes requested in the panel (users and amounts), applied to the Mini App in a second step.
+CREATE TABLE IF NOT EXISTS crm_credit_requests (
+    request_id   TEXT PRIMARY KEY,
+    kind         TEXT NOT NULL,
+    users_json   TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at   INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS crm_mb_id_history (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER NOT NULL,
@@ -246,9 +254,10 @@ def _text(value: Any, field: str, limit: int = MAX_TEXT, minimum: int = 1) -> st
 DELETE_AFTER_HOURS = (1, 6, 12, 24, 47)
 
 class CrmStore:
-    def __init__(self, accounts: AdminStore, commands: CommandQueue | None = None) -> None:
+    def __init__(self, accounts: AdminStore, credits: Credits | None = None) -> None:
         self.accounts = accounts
-        self.commands = commands  # admin -> Mini App (credits, MB ID decisions); None in tools without the data dir
+        # The Mini App's credits on miniapp.db (written directly, as session revocation already is); None in tools.
+        self.credits = credits
 
     def init_schema(self) -> None:
         with self.accounts._connect() as conn:
@@ -427,41 +436,57 @@ class CrmStore:
         return {"removed": bool(removed)}
 
     def set_mb_id(self, actor: Admin, user_id: int, value: object, now: int) -> dict:
-        """Sets (or clears, with an empty value) the user's MB account id; the Mini App gets it as approved. The
-        journal records only that it changed, never the id itself (it identifies a person at a third party)."""
+        """The owner sets (or clears, with an empty value) a user's MB ID directly: approved in the Mini App first
+        (refused there if another user holds it), then the CRM copy for ads audiences. The journal records only that
+        it changed, never the id itself (it identifies a person at a third party)."""
         if not isinstance(value, str):
             raise ActionError("invalid_mb_id")
         mb_id = value.strip()
         if mb_id and not _MB_ID.match(mb_id):
             raise ActionError("invalid_mb_id")
+        with self.accounts._connect() as conn:
+            self.accounts._require_actor(conn, actor.id, "approve_mb")
+            owner = conn.execute("SELECT user_id FROM crm_external_ids WHERE mb_id = ? COLLATE NOCASE",
+                                 (mb_id,)).fetchone() if mb_id else None
+            if owner is not None and owner[0] != user_id:
+                raise ActionError("mb_id_taken", 409)
+        if self.credits is not None:
+            result = self.credits.apply(f"mbset:{user_id}:{now}:{mb_id.lower()}", "mb_set", user_id, {"mbId": mb_id})
+            if result == "mb_taken":
+                raise ActionError("mb_id_taken", 409)
         with self.accounts._write() as conn:
-            self.accounts._require_actor(conn, actor.id, "manage_users")
+            self.accounts._require_actor(conn, actor.id, "approve_mb")
             self._write_mb(conn, actor, user_id, mb_id, now)
-            if self.commands is not None:
-                self.commands.enqueue(f"mbset:{user_id}:{now}:{mb_id.lower()}", "mb_set", user_id, {"mbId": mb_id},
-                                      now)
         return {"mbId": mb_id or None}
 
     def decide_mb(self, actor: Admin, user_id: int, mb_id: object, submitted_at: object, approve: bool,
                   reason: object, now: int) -> dict:
-        """The owner's decision on an MB ID a user entered in the Mini App (docs/miniapp/credits.md). Approved: it
-        also becomes the user's MB ID here (ads audiences). The command is keyed by the submission, so deciding
-        the same submission again changes nothing; a user who entered another ID since is not affected (stale)."""
+        """The owner's decision on an MB ID a user entered in the Mini App (docs/miniapp/credits.md), for exactly
+        the submission the owner saw. Written in the Mini App first (stale -> refused, nothing else changes); an
+        approved ID then becomes the user's MB ID here too (ads audiences). Retrying the same decision repeats only
+        the CRM step."""
         if not isinstance(mb_id, str) or not _MB_ID.match(mb_id) or isinstance(submitted_at, bool) \
                 or not isinstance(submitted_at, int):
             raise ActionError("invalid_mb_id")
         note = reason.strip()[:200] if isinstance(reason, str) else ""
         if not approve and len(note) < 3:
             raise ActionError("reason_required")
-        if self.commands is None:
-            raise ActionError("commands_unavailable", 503)
-        kind = "mb_approve" if approve else "mb_reject"
+        if self.credits is None:
+            raise ActionError("credits_unavailable", 503)
+        with self.accounts._connect() as conn:
+            self.accounts._require_actor(conn, actor.id, "approve_mb")
+            # Checked before the Mini App write: an ID another user holds here would leave the two sides apart.
+            owner = conn.execute("SELECT user_id FROM crm_external_ids WHERE mb_id = ? COLLATE NOCASE",
+                                 (mb_id,)).fetchone()
+            if approve and owner is not None and owner[0] != user_id:
+                raise ActionError("mb_id_taken", 409)
+        result = self.credits.decide_mb(user_id, mb_id, submitted_at, approve, note or None)
+        if result == "stale":
+            raise ActionError("mb_stale", 409)
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "approve_mb")
             if approve:
                 self._write_mb(conn, actor, user_id, mb_id, now)
-            self.commands.enqueue(f"mbdecide:{user_id}:{mb_id.lower()}:{submitted_at}", kind, user_id,
-                                  {"mbId": mb_id, "reason": note or None}, now)
             self.accounts._event(conn, now, actor.id, "user.mb_decision", "user", str(user_id), None,
                                  {"approved": approve}, note or None, None, "done")
         return {"decision": "approved" if approve else "rejected"}
@@ -650,9 +675,10 @@ class CrmStore:
 
     def credit(self, actor: Admin, user_ids: list[int], kind: str, amount: int, days: int, reason: str, key: str,
                code: str, now: int) -> dict:
-        """grant / debit `amount`, or unlimited for `days` (0 = switch off). The balances live in the Mini App
-        (docs/miniapp/credits.md): one command per user goes to admin-commands.db, applied there once by its key
-        (a debit never takes a balance below zero). The journal keeps the request shape only."""
+        """grant / debit `amount`, or unlimited for `days` (0 = switch off), on the Mini App's balances
+        (docs/miniapp/credits.md). Two steps like a block: the request (users and amounts in crm_credit_requests,
+        the journal's `requested` event) commits first; then each user's change is applied once by its key in
+        miniapp.db and the request is `completed`. A crash in between is finished at startup (finish_credit)."""
         if kind not in ("grant", "debit", "unlimited") or not user_ids or len(user_ids) > MAX_GROUP:
             raise ActionError("invalid_credit")
         if kind in ("grant", "debit") and (isinstance(amount, bool) or not isinstance(amount, int)
@@ -660,29 +686,43 @@ class CrmStore:
             raise ActionError("invalid_amount")
         if kind == "unlimited" and (isinstance(days, bool) or not isinstance(days, int) or not 0 <= days <= 366):
             raise ActionError("invalid_days")
-        if self.commands is None:
-            raise ActionError("commands_unavailable", 503)
+        if self.credits is None:
+            raise ActionError("credits_unavailable", 503)
         users = sorted(set(user_ids))
         target = str(users[0]) if len(users) == 1 else f"group:{len(users)}"
         request = {"kind": kind, "amount": amount if kind != "unlimited" else 0,
                    "days": days if kind == "unlimited" else 0, "users": len(users),
                    # the whole recipient list binds the idempotency key (not only its size and first id)
                    "usersDigest": hashlib.sha256(",".join(map(str, users)).encode()).hexdigest()}
+        payload = {"amount": amount} if kind != "unlimited" else {"days": days}
         with self.accounts._write() as conn:
-            if (prior := self.accounts._replayed(conn, key, actor.id, "credits.change", target, None, reason)) is not None:
-                if (prior["after"] or {}).get("request") != request:
-                    raise ActionError("idempotency_key_reused", 409)
-                return prior
-            self.accounts.step_up(conn, actor.id, code, now, "manage_users")
-            payload = {"amount": amount} if kind != "unlimited" else {"days": days}
-            # Enqueued before the journal commits: a failure rolls the journal back, and a retry with the same key
-            # enqueues nothing twice (deterministic command keys, INSERT OR IGNORE).
-            for uid in users:
-                self.commands.enqueue(f"credits:{key}:{uid}", kind, uid, payload, now)
-            after = {"request": request}
-            event = self.accounts._event(conn, now, actor.id, "credits.change", "user" if len(users) == 1 else "group",
-                                         target, None, after, reason, key, "done")
-        return {"eventId": event, "after": {**after, "queued": len(users)}, "replayed": False}
+            prior = self.accounts._replayed(conn, key, actor.id, "credits.change", target, None, reason)
+            if prior is not None and (prior["after"] or {}).get("request") != request:
+                raise ActionError("idempotency_key_reused", 409)
+            if prior is None:
+                self.accounts.step_up(conn, actor.id, code, now, "manage_users")
+                conn.execute("INSERT INTO crm_credit_requests (request_id, kind, users_json, payload_json, created_at) "
+                             "VALUES (?, ?, ?, ?, ?)", (key, kind, json.dumps(users), json.dumps(payload), now))
+                event = self.accounts._event(conn, now, actor.id, "credits.change",
+                                             "user" if len(users) == 1 else "group", target, None,
+                                             {"request": request}, reason, key, "requested", key)
+        self.finish_credit(key, actor.id, now)  # a retry of the same key finishes whatever is left
+        if prior is not None:
+            return prior
+        return {"eventId": event, "after": {"request": request, "applied": len(users)}, "replayed": False}
+
+    def finish_credit(self, request_id: str, admin_id: int | None, now: int) -> None:
+        """Applies a requested credit change to every user (each once, by its key) and records it completed."""
+        assert self.credits is not None
+        with self.accounts._connect() as conn:
+            row = conn.execute("SELECT kind, users_json, payload_json FROM crm_credit_requests WHERE request_id = ?",
+                               (request_id,)).fetchone()
+        if row is None:
+            return
+        kind, users, payload = row[0], json.loads(row[1]), json.loads(row[2])
+        for uid in users:
+            self.credits.apply(f"credits:{request_id}:{uid}", kind, uid, payload)
+        self.accounts.complete_request("credits.change", admin_id, request_id, None, now, request_id)
 
     def set_block(self, actor: Admin, user_id: int, blocked: bool, reason: str, key: str, code: str,
                   now: int, request_id: str) -> dict:

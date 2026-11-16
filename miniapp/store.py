@@ -103,7 +103,14 @@ CREATE TABLE IF NOT EXISTS app_flags (
     value      TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
--- Admin commands already applied (admin-commands.db keys): applying one twice is a no-op.
+-- Credits taken before an AI generation (Credits.hold), until it is settled: kept or refunded once.
+CREATE TABLE IF NOT EXISTS credit_holds (
+    user_id  INTEGER NOT NULL,
+    item     TEXT NOT NULL,
+    spend_id INTEGER NOT NULL,
+    PRIMARY KEY (user_id, item)
+);
+-- Admin actions already applied (by their keys): applying one twice is a no-op.
 CREATE TABLE IF NOT EXISTS applied_commands (
     key        TEXT PRIMARY KEY,
     result     TEXT NOT NULL,
@@ -135,7 +142,7 @@ _USER_COLUMNS = ("telegram_user_id, first_name, last_name, username, language_co
 _SESSION_COLUMNS = "token_hash, user_id, created_at, expires_at, revoked_at, init_hash"
 _OWN_TABLES = frozenset({"users", "sessions", "consumed_init_data", "ai_usage", "user_attribution", "sqlite_sequence",
                          "credit_accounts", "credit_ledger", "credit_items", "mb_links", "app_flags",
-                         "applied_commands", "ai_tokens"})
+                         "applied_commands", "ai_tokens", "credit_holds"})
 _REFERRAL = re.compile(r"^ref_([a-z0-9]{3,24})$")
 
 

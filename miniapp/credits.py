@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import sqlite3
 import time
 from collections.abc import Callable
@@ -197,8 +198,70 @@ class Credits:
             conn.execute("UPDATE credit_accounts SET balance = ?, updated_at = ? WHERE user_id = ?",
                          (balance, now, user_id))
             conn.execute("INSERT INTO credit_items (user_id, item, at) VALUES (?, ?, ?)", (user_id, item, now))
-            self._entry(conn, user_id, now, "spend", -COST, balance, item, f"spend:{user_id}:{item}")
+            self._entry(conn, user_id, now, "spend", -COST, balance, item, f"spend:{user_id}:{item}:{secrets.token_hex(6)}")
         return True
+
+    def hold(self, user_id: int, item: str) -> bool:
+        """Before a generation whose cost must not race (AI): takes COST now, atomically, and marks the item paid.
+        True = credits were taken (give them back with `refund` if nothing is generated); False = nothing to take
+        (switch off, unlimited, or already paid). Raises NoCredits when the balance is below the cost."""
+        if not self.enabled():
+            return False
+        now = int(self.clock())
+        with self.store._write() as conn:
+            account = self._account(conn, user_id, now)
+            if conn.execute("SELECT 1 FROM credit_items WHERE user_id = ? AND item = ?", (user_id, item)).fetchone():
+                return False
+            if account.unlimited_until and account.unlimited_until > now:
+                return False
+            if account.balance < COST:
+                raise NoCredits(account.balance)
+            balance = account.balance - COST
+            conn.execute("UPDATE credit_accounts SET balance = ?, updated_at = ? WHERE user_id = ?",
+                         (balance, now, user_id))
+            conn.execute("INSERT INTO credit_items (user_id, item, at) VALUES (?, ?, ?)", (user_id, item, now))
+            spend = conn.execute("INSERT INTO credit_ledger (user_id, at, kind, delta, balance_after, item, key) "
+                                 "VALUES (?, ?, 'spend', ?, ?, ?, ?)",
+                                 (user_id, now, -COST, balance, item, f"spend:{user_id}:{item}:{secrets.token_hex(6)}")).lastrowid
+            conn.execute("INSERT INTO credit_holds (user_id, item, spend_id) VALUES (?, ?, ?) "
+                         "ON CONFLICT(user_id, item) DO UPDATE SET spend_id = excluded.spend_id", (user_id, item, spend))
+        return True
+
+    def settle(self, user_id: int, item: str, generated: bool) -> None:
+        """After a held generation: kept when something was generated, else refunded once (the item unpaid again)."""
+        now = int(self.clock())
+        with self.store._write() as conn:
+            hold = conn.execute("SELECT spend_id FROM credit_holds WHERE user_id = ? AND item = ?",
+                                (user_id, item)).fetchone()
+            if hold is None:
+                return
+            conn.execute("DELETE FROM credit_holds WHERE user_id = ? AND item = ?", (user_id, item))
+            if generated:
+                return
+            balance = conn.execute("SELECT balance FROM credit_accounts WHERE user_id = ?", (user_id,)).fetchone()[0]
+            balance += COST
+            conn.execute("UPDATE credit_accounts SET balance = ?, updated_at = ? WHERE user_id = ?",
+                         (balance, now, user_id))
+            conn.execute("DELETE FROM credit_items WHERE user_id = ? AND item = ?", (user_id, item))
+            self._entry(conn, user_id, now, "refund", COST, balance, item, f"refund:{hold[0]}")
+
+    def decide_mb(self, user_id: int, mb_id: str, submitted_at: int, approve: bool, reason: str | None) -> str:
+        """The owner's decision, written by the admin process for exactly the submission the owner saw: "done",
+        "already" (this submission was decided the same way before: a retried decision) or "stale" (the user entered
+        another ID since, or it was decided otherwise)."""
+        now = int(self.clock())
+        state = "approved" if approve else "rejected"
+        with self.store._write() as conn:
+            row = conn.execute("SELECT mb_id, state, submitted_at FROM mb_links WHERE user_id = ?", (user_id,)).fetchone()
+            if row is None or row[0].lower() != mb_id.lower() or row[2] != submitted_at:
+                return "stale"
+            if row[1] == state:
+                return "already"
+            if row[1] != "pending":
+                return "stale"
+            conn.execute("UPDATE mb_links SET state = ?, decided_at = ?, reason = ? WHERE user_id = ?",
+                         (state, now, (reason or "")[:200] or None, user_id))
+        return "done"
 
     # ---- MB ID -------------------------------------------------------------------------------
 
@@ -228,7 +291,8 @@ class Credits:
     # ---- admin commands ----------------------------------------------------------------------
 
     def apply(self, key: str, kind: str, user_id: int | None, payload: dict) -> str:
-        """Applies one admin command once (by its key). Returns a stable result code."""
+        """Applies one admin action once (by its key), written by the admin process straight into miniapp.db (it
+        already writes there for session revocation). Returns a stable result code."""
         now = int(self.clock())
         with self.store._write() as conn:
             done = conn.execute("SELECT result FROM applied_commands WHERE key = ?", (key,)).fetchone()
@@ -272,17 +336,6 @@ class Credits:
             conn.execute("UPDATE credit_accounts SET unlimited_until = ?, updated_at = ? WHERE user_id = ?",
                          (until, now, user_id))
             self._entry(conn, user_id, now, "unlimited", 0, account.balance, json.dumps({"days": days}), f"admin:{key}")
-            return "done"
-        if kind in ("mb_approve", "mb_reject"):
-            mb_id = payload.get("mbId")
-            row = conn.execute("SELECT mb_id, state FROM mb_links WHERE user_id = ?", (user_id,)).fetchone()
-            # The decision is for the ID the owner saw: a user who entered another one since needs a new decision.
-            if row is None or not isinstance(mb_id, str) or row[0].lower() != mb_id.lower():
-                return "stale"
-            reason = payload.get("reason") if isinstance(payload.get("reason"), str) else None
-            state = "approved" if kind == "mb_approve" else "rejected"
-            conn.execute("UPDATE mb_links SET state = ?, decided_at = ?, reason = ? WHERE user_id = ?",
-                         (state, now, (reason or "")[:200] or None, user_id))
             return "done"
         if kind == "mb_set":
             mb_id = payload.get("mbId")
