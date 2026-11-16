@@ -8,7 +8,10 @@ Rules: a job is claimed atomically (queued -> sending) right before it is sent, 
 its outcome, so two bot instances never send it twice. Delivery is AT MOST ONCE: a job left in `sending` past
 STUCK_S (the bot died mid-send, Telegram's outcome unknown) is marked `failed/interrupted`, never re-sent;
 only Telegram's explicit "retry after" (the message was refused, not sent) is retried, up to MAX_ATTEMPTS;
-a timeout or network error is `failed/unknown_outcome`. Expired jobs
+a timeout or network error is `failed/unknown_outcome`. Either one PAUSES the whole outbox (Fable audit 16.11): a
+"retry after" for the time Telegram names (the flood limit is per bot, so every other job would be refused too, and
+that retry does not use up an attempt — the job's expiry bounds it), a network error for NETWORK_PAUSE_S doubling up
+to NETWORK_PAUSE_MAX_S while it lasts, so an outage costs one job its delivery, never the whole batch. Expired jobs
 are never sent late; users banned in the bot are skipped; texts are never logged. Retention: texts of finished
 jobs are cleared after TEXT_RETENTION_DAYS, rows deleted after ROW_RETENTION_DAYS.
 """
@@ -45,6 +48,8 @@ def match_owner(path: Path, conn: sqlite3.Connection) -> None:
 STUCK_S = 600
 MAX_ATTEMPTS = 3
 BATCH = 25  # per run: below Telegram's ~30 messages/s; the caller runs it about once a second
+NETWORK_PAUSE_S = 30
+NETWORK_PAUSE_MAX_S = 300
 TEXT_RETENTION_DAYS = 30
 ROW_RETENTION_DAYS = 400
 DAY = 86400
@@ -152,6 +157,8 @@ def classify(exc: BaseException) -> Outcome:
 class BotOutbox:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.paused_until = 0  # no job is claimed before this moment (flood limit / network outage)
+        self._network_pause = 0  # the current network back-off, doubled per failure in a row
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -203,12 +210,14 @@ class BotOutbox:
             if outcome.kind == "sent":
                 cur = conn.execute(f"UPDATE jobs SET status = 'sent', sent_at = ?, message_id = ?, last_error_code = NULL, "
                                    f"claim_token = NULL {fence}", (now, outcome.message_id, job.id, job.token))
-            elif outcome.kind == "retry" and job.attempts < MAX_ATTEMPTS:
-                # A batch cancelled while this job was being sent: never queued again.
+            elif outcome.kind == "retry" and (outcome.code == "rate_limited" or job.attempts < MAX_ATTEMPTS):
+                # A batch cancelled while this job was being sent: never queued again. A flood limit refused the
+                # message (nothing was sent) and pauses the whole outbox: it gives its attempt back.
+                given_back = 1 if outcome.code == "rate_limited" else 0
                 cur = conn.execute(f"UPDATE jobs SET status = CASE WHEN batch_id IN (SELECT batch_id FROM "
                                    f"cancelled_batches) THEN 'cancelled' ELSE 'queued' END, retry_at = ?, "
-                                   f"last_error_code = ?, claim_token = NULL {fence}",
-                                   (now + max(1, outcome.retry_after), outcome.code, job.id, job.token))
+                                   f"attempts = attempts - ?, last_error_code = ?, claim_token = NULL {fence}",
+                                   (now + max(1, outcome.retry_after), given_back, outcome.code, job.id, job.token))
             else:
                 cur = conn.execute(f"UPDATE jobs SET status = 'failed', last_error_code = ?, claim_token = NULL {fence}",
                                    (outcome.code or "error", job.id, job.token))
@@ -218,6 +227,8 @@ class BotOutbox:
                        is_banned: Callable[[int], bool] = lambda user_id: False) -> dict[str, int]:
         """Claims due jobs and sends them through `send` (the bot's own sender). Returns counts by outcome."""
         counts: dict[str, int] = {}
+        if now() < self.paused_until:
+            return counts
         for _ in range(BATCH):
             job = self.claim(now())
             if job is None:
@@ -231,6 +242,16 @@ class BotOutbox:
                     outcome = classify(exc)
             self.finish(job, outcome, now())
             counts[outcome.kind] = counts.get(outcome.kind, 0) + 1
+            if outcome.code == "rate_limited":
+                self.paused_until = now() + max(1, outcome.retry_after)
+                break
+            if outcome.code == "unknown_outcome":
+                self._network_pause = min(NETWORK_PAUSE_MAX_S, max(NETWORK_PAUSE_S, self._network_pause * 2))
+                self.paused_until = now() + self._network_pause
+                logger.warning("event=outbox_paused reason=network seconds=%s", self._network_pause)
+                break
+            if outcome.kind == "sent":
+                self._network_pause = 0
         if counts:
             logger.info("event=outbox_run %s", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
         return counts

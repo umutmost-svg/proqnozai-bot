@@ -49,20 +49,50 @@ async def test_jobs_are_sent_once_with_outcomes_recorded(tmp_path):
     assert admin.status_by_keys(["msg:1"])["msg:1"]["status"] == "sent"
 
 
-async def test_retry_after_a_rate_limit_then_give_up(tmp_path):
+async def test_a_flood_limit_pauses_the_whole_outbox_and_never_uses_up_attempts(tmp_path):
     admin, bot = setup(tmp_path)
-    admin.enqueue([("msg:1", 11, "x", [])], batch_id=None, not_before=NOW, admin_event_id=None, now=NOW)
+    admin.enqueue([("msg:1", 11, "x", []), ("msg:2", 12, "y", [])], batch_id=None, not_before=NOW,
+                  admin_event_id=None, now=NOW)
     t = [NOW]
+    floods = [4]  # more flood windows than MAX_ATTEMPTS
+    sent = []
 
-    async def limited(job):
-        return Outcome("retry", "rate_limited", 5)
+    async def send(job):
+        if floods[0]:
+            floods[0] -= 1
+            return Outcome("retry", "rate_limited", 5)
+        sent.append(job.user_id)
+        return Outcome("sent")
 
-    assert await bot.run_once(limited, lambda: t[0]) == {"retry": 1}
-    assert await bot.run_once(limited, lambda: t[0]) == {}  # waits for retry_at
-    for _ in range(2):
+    assert await bot.run_once(send, lambda: t[0]) == {"retry": 1}  # the batch stops: msg:2 is not tried
+    assert await bot.run_once(send, lambda: t[0] + 4) == {}  # paused for the time Telegram named
+    for _ in range(3):
         t[0] += 6
-        await bot.run_once(limited, lambda: t[0])
-    assert statuses(tmp_path)["msg:1"] == ("failed", "rate_limited")  # MAX_ATTEMPTS reached
+        assert await bot.run_once(send, lambda: t[0]) == {"retry": 1}
+    t[0] += 6
+    assert await bot.run_once(send, lambda: t[0]) == {"sent": 2}
+    assert sorted(sent) == [11, 12] and statuses(tmp_path)["msg:1"] == ("sent", None)
+
+
+async def test_a_network_error_costs_one_job_never_the_batch(tmp_path):
+    admin, bot = setup(tmp_path)
+    admin.enqueue([(f"msg:{i}", 10 + i, "x", []) for i in range(5)], batch_id=None, not_before=NOW,
+                  admin_event_id=None, now=NOW)
+    t = [NOW]
+    down = [True]
+
+    async def send(job):
+        return Outcome("failed", "unknown_outcome") if down[0] else Outcome("sent")
+
+    assert await bot.run_once(send, lambda: t[0]) == {"failed": 1}  # at most once: that one is not re-sent
+    assert await bot.run_once(send, lambda: t[0] + bot_outbox.NETWORK_PAUSE_S - 1) == {}
+    t[0] += bot_outbox.NETWORK_PAUSE_S
+    assert await bot.run_once(send, lambda: t[0]) == {"failed": 1}  # still down: the pause doubles
+    assert bot.paused_until == t[0] + 2 * bot_outbox.NETWORK_PAUSE_S
+    down[0] = False
+    t[0] += 2 * bot_outbox.NETWORK_PAUSE_S
+    assert await bot.run_once(send, lambda: t[0]) == {"sent": 3}
+    assert bot._network_pause == 0
 
 
 async def test_scheduled_cancelled_expired_and_stuck_jobs(tmp_path):
@@ -135,7 +165,9 @@ async def test_a_timeout_is_never_retried(tmp_path):
     async def lost(job):
         raise TimedOut() if job.user_id == 11 else NetworkError("connection reset")
 
-    assert await bot.run_once(lost, lambda: NOW) == {"failed": 2}
+    assert await bot.run_once(lost, lambda: NOW) == {"failed": 1}  # the outage pauses the outbox
+    later = NOW + bot_outbox.NETWORK_PAUSE_S
+    assert await bot.run_once(lost, lambda: later) == {"failed": 1}
     assert statuses(tmp_path) == {"msg:1": ("failed", "unknown_outcome"), "msg:2": ("failed", "unknown_outcome")}
 
 
