@@ -49,7 +49,11 @@ function OfferBlock({ ads, placement, eventId }: { ads: AdsApi; placement: Place
     // Counted once per shown offer (the server also keeps one per user, campaign, variant, match and day).
     if (token && counted.current !== token) {
       counted.current = token;
-      void ads.impression(token);
+      void ads.impression(token).then((shown) => {
+        // No longer offered (paused, or another tab filled the frequency caps): hidden, its click would be refused too.
+        // Only while this offer is still the one on screen.
+        if (shown === false && counted.current === token) setAnswer({ kind: 'none' });
+      });
     }
   }, [ads, token]);
 

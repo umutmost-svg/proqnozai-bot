@@ -47,7 +47,7 @@ function backend(body: unknown) {
 }
 
 function ads(answer: OfferAnswer): AdsApi {
-  return { offer: vi.fn(async () => answer), impression: vi.fn(async () => {}), click: vi.fn(async () => null), confirmAge: vi.fn(async () => true) };
+  return { offer: vi.fn(async () => answer), impression: vi.fn(async () => true), click: vi.fn(async () => null), confirmAge: vi.fn(async () => true) };
 }
 
 const OFFER: OfferAnswer = {

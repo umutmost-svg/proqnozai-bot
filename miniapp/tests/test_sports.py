@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from types import SimpleNamespace
 from datetime import UTC, date, datetime
 
 import pytest
@@ -408,6 +409,22 @@ def test_cached_event_never_asks_the_provider(clock: FakeClock) -> None:
     run(service.event("fd:7"))
     found, _ = run(service.cached_event("fd:7"))
     assert found is not None and found.id == "fd:7" and len(t.calls) == 1
+
+
+def test_cached_event_prefers_the_newer_record(clock: FakeClock) -> None:
+    """An old calendar row must not hide a newer match record (kickoff moved, match started)."""
+    from miniapp.sports.cache import Cached
+
+    service = make_service(FakeTransport(), clock)
+    old = SimpleNamespace(id="fd:7", status="upcoming")
+    new = SimpleNamespace(id="fd:7", status="live")
+    service._calendar_index["fd:7"] = "fd:PL"
+    entries = {"football:calendar:PL": Cached(([old], None), 100.0, 9e9),
+               "football:match:7": Cached(new, 200.0, 9e9)}
+    service.cache.peek = lambda key: entries.get(key)  # type: ignore[method-assign]
+    assert run(service.cached_event("fd:7"))[0] is new
+    entries["football:match:7"] = Cached(new, 50.0, 9e9)
+    assert run(service.cached_event("fd:7"))[0] is old
 
 
 def test_event_detail_cached_and_not_found_cached(clock: FakeClock) -> None:

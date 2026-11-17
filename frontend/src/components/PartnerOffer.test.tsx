@@ -66,6 +66,7 @@ function fakeAds(answer: OfferAnswer, link: string | null = 'https://p.example.c
     }),
     impression: vi.fn(async () => {
       calls.push('impression');
+      return true;
     }),
     click: vi.fn(async () => {
       calls.push('click');
@@ -119,6 +120,14 @@ describe('PartnerOffer', () => {
     setup(fakeAds(priced(false, -1)));
     expect(await screen.findByTestId('partner-offer')).toBeInTheDocument();
     expect(screen.queryByTestId('partner-odds')).toBeNull();
+  });
+
+  it('an offer the server no longer shows (caps filled by another tab, paused) is hidden', async () => {
+    const ads = fakeAds(OFFER);
+    vi.mocked(ads.impression).mockImplementation(async () => false);
+    setup(ads);
+    await waitFor(() => expect(ads.impression).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByTestId('partner-offer')).toBeNull());
   });
 
   it('an offer that is gone says so instead of opening anything', async () => {

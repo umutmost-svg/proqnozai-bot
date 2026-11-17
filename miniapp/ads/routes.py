@@ -217,17 +217,23 @@ def register_ads_routes(
         country = country_from(request.headers.get(COUNTRY_HEADER), trust_country)
         odds = await token_price(t)
 
-        def record() -> bool:
+        def record() -> tuple[bool, bool]:
+            """(counted, gone): `gone` — the offer may no longer be shown (paused, retargeted, or the frequency caps
+            were filled by another tab or match); the card is then hidden, as its click would be refused."""
             found = current_variant(t, country, odds is not None)
             if found is None:
-                return False
+                return False, True
             c = found[0]
             ts = now()
-            return safe(lambda: telemetry.exposure("impression", t.user_id, t.campaign_id, t.variant, t.placement,
-                                                   t.event_key, country, ts, viewer_class(t.user_id, ts),
-                                                   (c.cap_per_day, c.cap_total)), False, "impression")
-        counted = await run_in_threadpool(record)
-        return JSONResponse({"ok": True, "counted": counted})
+            caps = (c.cap_per_day, c.cap_total)
+            counted = safe(lambda: telemetry.exposure("impression", t.user_id, t.campaign_id, t.variant, t.placement,
+                                                      t.event_key, country, ts, viewer_class(t.user_id, ts), caps),
+                           False, "impression")
+            gone = not counted and safe(lambda: telemetry.cap_reached(t.user_id, t.campaign_id, t.event_key, ts, caps),
+                                        False, "cap_read")
+            return counted, gone
+        counted, gone = await run_in_threadpool(record)
+        return JSONResponse({"ok": True, "counted": counted, "gone": gone})
 
     @app.post("/api/ads/click")
     async def click(request: Request) -> JSONResponse:
@@ -244,10 +250,13 @@ def register_ads_routes(
             if found is None:
                 return None
             c, v = found
-            click_id = secrets.token_urlsafe(18)
+            ts = now()
+            # A repeated tap on the same offer today reuses its click id: replays never add rows.
+            click_id = safe(lambda: telemetry.click_id_for(t.user_id, t.campaign_id, t.variant, c.partner_id,
+                                                           t.event_key, ts), None, "click_read") \
+                or secrets.token_urlsafe(18)
             # Already checked on read; once more, with this click's id in place, right before it leaves.
             url = policy.render_url(v.url, click_id, c.hosts)
-            ts = now()
             # A lost click record must not cost the user the link (its conversion is then unattributed).
             safe(lambda: telemetry.click(t.user_id, t.campaign_id, t.variant, t.placement, t.event_key, country, ts,
                                          viewer_class(t.user_id, ts), click_id, c.partner_id), False, "click")

@@ -524,8 +524,20 @@ class SportsService:
 
     async def cached_event(self, event_id: str) -> tuple[SportEvent | None, None]:
         """`event()` for callers outside a user's upstream share (ads offer prices): the cached match only, never a
-        provider request. The match was just recommended, so it is normally cached; when not, there is no price."""
-        return self._peek_event(event_id), None
+        provider request. The match was just recommended, so it is normally cached; when not, there is no price.
+        Of the calendar row and the match's own record the newer one wins (a fixture moved or started early)."""
+        found: list[tuple[float, SportEvent]] = []
+        calendar_of = self._calendar_index.get(event_id)
+        if calendar_of is not None:
+            entry = self.cache.peek(f"football:calendar:{calendar_of.removeprefix(f'{football_data.ID_PREFIX}:')}")
+            row = next((e for e in entry.value[0] if e.id == event_id), None) if entry is not None else None
+            if row is not None and entry is not None:
+                found.append((entry.fetched_at, row))
+        match_id = football_data.parse_event_id(event_id)
+        own = self.cache.peek(f"football:match:{match_id}") if match_id is not None else None
+        if own is not None and own.value is not None:
+            found.append((own.fetched_at, own.value))
+        return (max(found, key=lambda f: f[0])[1] if found else None), None
 
     def _peek_event(self, event_id: str) -> SportEvent | None:
         """The match as already cached (fresh or not), from its calendar or its own lookup; never loads."""

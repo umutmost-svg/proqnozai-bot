@@ -132,7 +132,8 @@ def test_impression_once_per_day_and_tokens_bound_to_the_user(tmp_path):
     publish(tmp_path, campaign())
     c, csrf = env.user()
     token = env.offer(c).json()["offer"]["impressionToken"]
-    assert post(c, "/api/ads/impression", csrf, {"impressionToken": token}).json() == {"ok": True, "counted": True}
+    assert post(c, "/api/ads/impression", csrf, {"impressionToken": token}).json() == {"ok": True, "counted": True,
+                                                                                        "gone": False}
     assert post(c, "/api/ads/impression", csrf, {"impressionToken": token}).json()["counted"] is False
     assert env.rows("impression") == [(USER, 1, "A", "fd:1", "AZ")]
     other, other_csrf = env.user(OTHER)

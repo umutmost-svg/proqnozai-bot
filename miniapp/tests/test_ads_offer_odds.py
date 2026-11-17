@@ -155,6 +155,22 @@ def test_frequency_caps_count_other_matches(tmp_path, monkeypatch):
     assert env.offer(c, "fd:3").json() == {"offer": None}                # two in all: the total cap
 
 
+def test_an_offer_issued_before_the_cap_filled_is_reported_gone(tmp_path, monkeypatch):
+    """Two tabs got offers for two matches before either impression landed (Codex ads merge r2 P2)."""
+    env = Env(tmp_path, monkeypatch)
+    publish(tmp_path, campaign(caps={"perDay": 1}))
+    c, csrf = env.user()
+    for event in ("fd:1", "fd:2"):
+        env.pick(c, event)
+    first = env.offer(c, "fd:1").json()["offer"]["impressionToken"]
+    second = env.offer(c, "fd:2").json()["offer"]["impressionToken"]
+    assert post(c, "/api/ads/impression", csrf, {"impressionToken": first}).json() == {
+        "ok": True, "counted": True, "gone": False}
+    assert post(c, "/api/ads/impression", csrf, {"impressionToken": first}).json()["gone"] is False  # a repeat
+    assert post(c, "/api/ads/impression", csrf, {"impressionToken": second}).json() == {
+        "ok": True, "counted": False, "gone": True}
+
+
 def test_global_settings_block_countries_and_gate_age(tmp_path, monkeypatch):
     env = Env(tmp_path, monkeypatch)
     publish(tmp_path, campaign(countries=["AZ", "TR"]), extra={"settings": {"blockedCountries": ["TR"]}})
@@ -181,6 +197,11 @@ def test_click_id_goes_into_the_link_and_the_postback_counts_once(tmp_path, monk
     link = post(c, "/api/ads/click", csrf, {"impressionToken": token}).json()["url"]
     click_id = parse_qs(urlsplit(link).query)["sub"][0]
     assert link.startswith("https://p.example.com/promo?sub=") and "{" not in link
+    # A replayed tap the same day opens the same link and adds no click row (Codex ads merge r2 P1).
+    again = post(c, "/api/ads/click", csrf, {"impressionToken": token}).json()["url"]
+    assert again == link
+    with sqlite3.connect(telemetry_path(tmp_path / "miniapp.db")) as db:
+        assert db.execute("SELECT COUNT(*) FROM ad_clicks").fetchone()[0] == 1
     edge = TestClient(env.app, base_url="http://127.0.0.1:8000", headers={"X-Edge-Auth": EDGE})
     q = {"partner": "1", "click_id": click_id, "txn": "dep-1", "event": "first_deposit"}
     auth = {"X-Postback-Token": PB_TOKEN}

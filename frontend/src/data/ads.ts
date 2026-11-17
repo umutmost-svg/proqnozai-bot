@@ -32,7 +32,8 @@ export type OfferAnswer = { kind: 'none' } | { kind: 'offer'; offer: PartnerOffe
 
 export interface AdsApi {
   offer(placement: Placement, eventId: string): Promise<OfferAnswer>;
-  impression(token: string): Promise<void>;
+  /** False when the offer may no longer be shown (paused, retargeted, frequency caps filled): the card is hidden. */
+  impression(token: string): Promise<boolean>;
   /** The link to open, or null when the offer is gone (paused, ended) or the request failed. */
   click(token: string): Promise<string | null>;
   /** The user's own statement "I am `min` or older" for the partner's age gate. */
@@ -180,7 +181,8 @@ export function createAdsApi(options: {
       return r && r.status === 200 ? readOffer(r.body, sent) : NONE;
     },
     async impression(token) {
-      await post('/ads/impression', { impressionToken: token });
+      const r = await post('/ads/impression', { impressionToken: token });
+      return !(r && r.status === 200 && isObj(r.body) && r.body.gone === true);
     },
     async click(token) {
       const r = await post('/ads/click', { impressionToken: token });
