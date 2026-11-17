@@ -161,6 +161,24 @@ describe('event navigation', () => {
     expect(screen.getByTestId('scroll-viewport').scrollTop).toBe(240);
   });
 
+  it('tapping the open tab again scrolls it to the top; from a sub-page it navigates as before', async () => {
+    const user = userEvent.setup();
+    await openCatalog();
+    const viewport = screen.getByTestId('scroll-viewport');
+    const scrollTo = vi.fn((o: ScrollToOptions) => { viewport.scrollTop = o.top ?? 0; });
+    viewport.scrollTo = scrollTo as unknown as typeof viewport.scrollTo;
+    viewport.scrollTop = 500;
+    await user.click(screen.getByRole('link', { name: 'Матчи' }));
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 0 }));
+    expect(viewport.scrollTop).toBe(0);
+    expect(screen.getByTestId('event-list')).toBeInTheDocument();
+
+    await user.click(screen.getAllByTestId('event-card')[0]!);
+    await screen.findByTestId('event-hero');
+    await user.click(screen.getByRole('link', { name: 'Матчи' }));
+    expect(await screen.findByTestId('event-list')).toBeInTheDocument();
+  });
+
   it('shows sport-specific stats', async () => {
     renderApp('#/event/bb-live?tab=stats');
     const stats = await screen.findByTestId('stats');

@@ -13,9 +13,14 @@ const ITEMS = [
   { to: '/profile', icon: personIcon, label: 'nav.profile', match: (p: string) => p.startsWith('/profile') },
 ] as const;
 
-export function BottomNavigation() {
+interface Props {
+  /** Tapping the tab that is already open (its root, no step) scrolls it back to the top instead of navigating. */
+  onReselect?: () => void;
+}
+
+export function BottomNavigation({ onReselect }: Props) {
   const t = useT();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   return (
     <nav className={s.dock} aria-label={t('nav.label')}>
       <div className={s.bar}>
@@ -27,6 +32,14 @@ export function BottomNavigation() {
               to={item.to}
               className={`${s.item} ${active ? s.active : ''}`}
               aria-current={active ? 'page' : undefined}
+              onClick={(e) => {
+                // Only a plain tap: Ctrl/⌘/Shift/middle clicks keep the browser's own link behaviour.
+                const plain = e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+                if (plain && pathname === item.to && !search && onReselect) {
+                  e.preventDefault();
+                  onReselect();
+                }
+              }}
             >
               <img src={item.icon} alt="" width={20} height={20} />
               <span className={s.label}>{t(item.label)}</span>

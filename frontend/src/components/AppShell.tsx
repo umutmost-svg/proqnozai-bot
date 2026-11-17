@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import washSrc from '../assets/figma/bg-lemon-wash.svg';
 import atmosphereSrc from '../assets/figma/bg-atmosphere.svg';
-import { useServices } from '../state/contexts';
+import { useServices, useSettings } from '../state/contexts';
 import { BottomNavigation } from './BottomNavigation';
 import s from './AppShell.module.css';
 
@@ -18,6 +18,7 @@ interface Props {
 
 export function AppShell({ children, scrollKey, restoreReady = true, atmosphere = false, gap }: Props) {
   const { scrollMemory } = useServices();
+  const { motionReduced } = useSettings();
   const scrollRef = useRef<HTMLElement>(null);
   const restored = useRef(false);
 
@@ -36,6 +37,13 @@ export function AppShell({ children, scrollKey, restoreReady = true, atmosphere 
     const saved = scrollMemory.get(scrollKey);
     if (el && saved) el.scrollTop = saved;
   }, [restoreReady, scrollKey, scrollMemory]);
+
+  const scrollToTop = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (typeof el.scrollTo === 'function') el.scrollTo({ top: 0, behavior: motionReduced ? 'auto' : 'smooth' });
+    else el.scrollTop = 0;
+  };
 
   return (
     <div className={s.app}>
@@ -56,7 +64,7 @@ export function AppShell({ children, scrollKey, restoreReady = true, atmosphere 
         </div>
       </main>
       <div className={s.dock}>
-        <BottomNavigation />
+        <BottomNavigation onReselect={scrollToTop} />
       </div>
     </div>
   );
