@@ -259,9 +259,10 @@ def register_ads_routes(
                             "click_claim")
             # Already checked on read; once more, with this click's id in place, right before it leaves.
             url = policy.render_url(v.url, click_id, c.hosts)
-            # A lost click record must not cost the user the link (its conversion is then unattributed).
+            # A lost click record must not cost the user the link (its conversion is then unattributed). The id row
+            # was written by the claim (or deliberately not, when the claim failed): never a second id for the day.
             safe(lambda: telemetry.click(t.user_id, t.campaign_id, t.variant, t.placement, t.event_key, country, ts,
-                                         viewer_class(t.user_id, ts), click_id, c.partner_id), False, "click")
+                                         viewer_class(t.user_id, ts)), False, "click")
             return url
         url = await run_in_threadpool(record)
         if url is None:
