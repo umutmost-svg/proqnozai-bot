@@ -49,6 +49,25 @@ def code(secret: str, clock: Clock, shift: int = 0) -> str:
     return totp.code_at(secret, int(clock() // 30) + shift)
 
 
+def fresh(secrets_: dict, clock: Clock, email: str = "owner@x.test") -> str:
+    """A code of the next TOTP step (each step works once)."""
+    clock.t += 30
+    return code(secrets_[email], clock)
+
+
+def digest_of(client: TestClient, broadcast_id: int) -> str:
+    """The content digest the panel shows with a draft and sends back with the schedule request."""
+    return next(b for b in client.get("/api/admin/broadcasts").json()["items"] if b["id"] == broadcast_id)["digest"]
+
+
+def reviewed(client: TestClient, broadcast_id: int) -> dict:
+    """What the panel sends with a schedule: the draft's content digest and the recipients it previewed."""
+    item = next(b for b in client.get("/api/admin/broadcasts").json()["items"] if b["id"] == broadcast_id)
+    csrf = client.get("/api/admin/auth/me").json()["csrf"]
+    preview = post(client, "/api/admin/audience/preview", csrf, {"rules": item["rules"], "forBroadcast": True}).json()
+    return {"digest": item["digest"], "audienceDigest": preview["audienceDigest"]}
+
+
 def login(client: TestClient, clock: Clock, secrets_: dict, email: str) -> str:
     role = email.split("@")[0]
     r = client.post("/api/admin/auth/login", json={"email": email, "password": "pw-" + role}, headers={"Origin": ORIGIN})

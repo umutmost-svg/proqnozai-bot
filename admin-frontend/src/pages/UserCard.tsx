@@ -37,6 +37,7 @@ function UserCard({ id }: { id: string }) {
   };
   const [note, setNote] = useState('');
   const [mbEdit, setMbEdit] = useState<string | null>(null);
+  const [mbCode, setMbCode] = useState('');
   const [mbError, setMbError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -184,16 +185,19 @@ function UserCard({ id }: { id: string }) {
                     e.preventDefault();
                     const v = mbEdit.trim();
                     setBusy(true); setMbError(null);
-                    api(`/api/admin/users/${data.id}/mb-id`, { method: 'POST', body: { mbId: v } })
-                      .then(() => { setMbEdit(null); setToast(v ? 'ID MB сохранён' : 'ID MB удалён'); reload(); })
-                      .catch((err) => setMbError(errorText(err))).finally(() => setBusy(false));
+                    api(`/api/admin/users/${data.id}/mb-id`, { method: 'POST', body: { mbId: v, code: mbCode } })
+                      .then(() => { setMbEdit(null); setMbCode(''); setToast(v ? 'ID MB сохранён' : 'ID MB удалён'); reload(); })
+                      .catch((err) => { setMbError(errorText(err)); setMbCode(''); }).finally(() => setBusy(false));
                   }}>
                     <input className="control mono" aria-label="ID MB" placeholder="Например, 123456789" maxLength={32} autoFocus
                       value={mbEdit} onChange={(e) => setMbEdit(e.target.value)} />
+                    <input className="control" aria-label="Код 2FA" placeholder="Код 2FA, 6 цифр" inputMode="numeric"
+                      autoComplete="one-time-code" maxLength={6} style={{ marginTop: 8 }}
+                      value={mbCode} onChange={(e) => setMbCode(e.target.value.replace(/\D/g, ''))} />
                     {mbError && <div className="form-error" role="alert">{mbError}</div>}
                     <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
-                      <button type="button" className="btn" onClick={() => setMbEdit(null)}>Отмена</button>
-                      <button type="submit" className="btn primary" disabled={busy}>Сохранить</button>
+                      <button type="button" className="btn" onClick={() => { setMbEdit(null); setMbCode(''); }}>Отмена</button>
+                      <button type="submit" className="btn primary" disabled={busy || !/^\d{6}$/.test(mbCode)}>Сохранить</button>
                     </div>
                     <p className="small muted" style={{ marginBottom: 0 }}>Пустое значение удалит ID. В журнал попадает только факт изменения.</p>
                   </form>

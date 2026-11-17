@@ -19,7 +19,7 @@ from miniapp.admin_web import demo, inquiry_routes
 from miniapp.ads.policy import public_key_hex as policy_public_key_hex
 from miniapp.admin_web.access import AccessPublisher
 from miniapp.admin_web.bot_crm import BotCrmFile
-from miniapp.admin_web.crm import html_fits, render_broadcast, render_plain
+from miniapp.admin_web.crm import audience_digest, html_fits, render_broadcast, render_plain
 from miniapp.admin_web.outbox import JOB_TTL_S, Outbox
 from miniapp.admin_web.accounts import ActionError
 from miniapp.credits import COST as CREDIT_COST, MONTHLY, WELCOME, Credits
@@ -438,7 +438,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         # An MB ID set here is approved in the Mini App: the owner's personal decision (Codex credits r1 P1).
         admin = ctx.admin_of(request, "approve_mb")
         exists(user_id)
-        return crm.set_mb_id(admin, user_id, (await ctx.body(request)).get("mbId"), ctx.now())
+        data = await ctx.body(request)
+        return ctx.step_up_guard(admin, lambda: crm.set_mb_id(admin, user_id, data.get("mbId"), ctx.now(),
+                                                              str(data.get("code") or "").strip()))
 
     @app.post("/api/admin/users/{user_id}/notes")
     async def add_note(user_id: int, request: Request) -> dict:
@@ -524,10 +526,14 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         ctx.admin_of(request, "read_personal")
         data = await ctx.body(request)
         rules = validate_rules(data.get("rules") or {})
-        rows = broadcast_audience(rules) if data.get("forBroadcast") is True else audience(rules)
-        return {"size": len(rows), "sample": [{"id": r["id"], "username": r["username"],
-                                               "firstName": r["firstName"]} for r in rows[:5]],
-                "langs": dict(Counter(r["lang"] for r in rows))}
+        for_broadcast = data.get("forBroadcast") is True
+        rows = broadcast_audience(rules) if for_broadcast else audience(rules)
+        out = {"size": len(rows), "sample": [{"id": r["id"], "username": r["username"],
+                                              "firstName": r["firstName"]} for r in rows[:5]],
+               "langs": dict(Counter(r["lang"] for r in rows))}
+        if for_broadcast:  # sent back with the schedule request: the recipients confirmed are the ones shown
+            out["audienceDigest"] = audience_digest(r["id"] for r in rows)
+        return out
 
     # ---- broadcasts --------------------------------------------------------------------------
 
@@ -560,12 +566,21 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         at = data.get("at")
         if isinstance(at, bool) or not isinstance(at, int):
             raise ActionError("invalid_time")
+        digest = data.get("digest")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ActionError("broadcast_changed", 409)  # an older panel without the digest: reload and review
         item = next((b for b in crm.broadcasts() if b["id"] == broadcast_id), None)
         if item is None:
             raise ActionError("not_found", 404)
+        if item["status"] == "draft" and item["digest"] != digest:
+            raise ActionError("broadcast_changed", 409)  # the audience below must be the one the admin reviewed
         audience_ids = [u["id"] for u in broadcast_audience(item["rules"])]
+        # Exactly the recipients the admin was shown (the confirmation dialog previews them afresh): a session without
+        # the 2FA device could otherwise grow or swap them through the tag routes between the review and the code.
+        if item["status"] == "draft" and data.get("audienceDigest") != audience_digest(audience_ids):
+            raise ActionError("audience_changed", 409)
         result = ctx.step_up_guard(admin, lambda: crm.schedule_broadcast(admin, broadcast_id, at, audience_ids,
-                                                                         reason, key, code, ctx.now()))
+                                                                         reason, key, code, ctx.now(), digest))
         # Also on a replay: a crash between the schedule and the queue is finished by the retry — with the frozen
         # recipients only, and only while the broadcast is still scheduled.
         queue_broadcast(broadcast_id)
@@ -616,8 +631,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         data = await ctx.body(request)
         if data.get("decision") not in ("approve", "reject"):
             raise ActionError("invalid_value")
-        return crm.decide_mb(admin, user_id, data.get("mbId"), data.get("submission"),
-                             data["decision"] == "approve", data.get("reason"), ctx.now())
+        return ctx.step_up_guard(admin, lambda: crm.decide_mb(
+            admin, user_id, data.get("mbId"), data.get("submission"), data["decision"] == "approve", data.get("reason"),
+            ctx.now(), str(data.get("code") or "").strip()))
 
     @app.post("/api/admin/credits/change")
     async def credit_change(request: Request) -> dict:

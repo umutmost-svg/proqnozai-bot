@@ -22,13 +22,27 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from miniapp.credits import Credits
-from miniapp.admin_web.accounts import REASON_OF_E, ActionError, Admin, AdminStore, reason_digest
+from miniapp.admin_web.accounts import (MESSAGES_PER_DAY, MESSAGES_PER_HOUR, REASON_OF_E, ActionError, Admin,
+                                        AdminStore, reason_digest)
 from miniapp.admin_web.ads import bump_revision as bump_ads_revision
 
 # Broadcast text (CRM audit P1, owner "да, делай" 17.11): Telegram HTML plus the {имя} placeholder, as the editor
 # promises. Only Telegram's tags are kept as tags; every other "<", ">" and "&" is escaped, so a stray "<" in plain
 # text is shown as typed instead of failing the whole batch. Unbalanced or unknown markup is refused at save time.
 NAME_PLACEHOLDER = "{имя}"
+
+
+def audience_digest(user_ids: Iterable[int]) -> str:
+    """The exact recipient set the admin was shown before the 2FA code (tags change without step-up: a session without
+    the 2FA device could swap reviewed users for others while keeping the count; Codex CRM-B1 r3)."""
+    return hashlib.sha256(",".join(str(i) for i in sorted(set(user_ids))).encode()).hexdigest()
+
+
+def broadcast_digest(name: str, rules_json: str, body: str, buttons_json: str, delete_after_h: int | None) -> str:
+    """What the admin reviewed before the 2FA code: scheduling is refused if the stored draft differs (CRM audit B: a
+    session without the code edits the draft, the legitimate admin's code then schedules the altered content)."""
+    raw = json.dumps([name, rules_json, body, buttons_json, delete_after_h], ensure_ascii=False)
+    return hashlib.sha256(raw.encode()).hexdigest()
 _TAG = re.compile(r'<(/?)(b|strong|i|em|u|ins|s|strike|del|code|pre|tg-spoiler|blockquote|a)'
                   r'(\s+href="(?:https://|tg://user\?id=)[^"<>\s]{1,280}")?\s*>', re.IGNORECASE)
 _ENTITY = re.compile(r"&(?:lt|gt|amp|quot|#\d{1,7}|#x[0-9a-fA-F]{1,6});")
@@ -473,7 +487,8 @@ class CrmStore:
                 "LEFT JOIN admin_users u ON u.id = b.admin_id ORDER BY b.id DESC").fetchall()
         return [{"id": r[0], "name": r[1], "rules": json.loads(r[2]), "body": r[3], "buttons": json.loads(r[4]),
                  "status": r[5], "scheduledAt": r[6], "recipients": r[7], "createdAt": r[8], "updatedAt": r[9],
-                 "by": r[10], "deleteAfterHours": r[11]} for r in rows]
+                 "by": r[10], "deleteAfterHours": r[11], "digest": broadcast_digest(r[1], r[2], r[3], r[4], r[11])}
+                for r in rows]
 
     def ledger(self, limit: int = 200, kind: str | None = None) -> list[dict]:
         where, args = "", []
@@ -526,7 +541,7 @@ class CrmStore:
                                      {"tagEventId": ev}, None, None, "done")
         return {"removed": bool(removed)}
 
-    def set_mb_id(self, actor: Admin, user_id: int, value: object, now: int) -> dict:
+    def set_mb_id(self, actor: Admin, user_id: int, value: object, now: int, code: str = "") -> dict:
         """The owner sets (or clears, with an empty value) a user's MB ID directly: approved in the Mini App, then the
         CRM copy for ads audiences, as one two-step request (finished at startup after a crash). The journal records
         only that it changed, never the id itself (it identifies a person at a third party)."""
@@ -535,10 +550,10 @@ class CrmStore:
         mb_id = value.strip()
         if mb_id and not _MB_ID.match(mb_id):
             raise ActionError("invalid_mb_id")
-        return self._mb_request(actor, "set", user_id, mb_id, "", None, now)
+        return self._mb_request(actor, "set", user_id, mb_id, "", None, now, code)
 
     def decide_mb(self, actor: Admin, user_id: int, mb_id: object, submission: object, approve: bool,
-                  reason: object, now: int) -> dict:
+                  reason: object, now: int, code: str = "") -> dict:
         """The owner's decision on an MB ID a user entered in the Mini App (docs/miniapp/credits.md), for exactly
         the submission the owner saw. Two steps like a block: the request commits first (`requested` +
         crm_mb_requests); then the Mini App side (stale -> refused, nothing else changes), the CRM copy of an
@@ -552,15 +567,18 @@ class CrmStore:
         if self.credits is None:
             raise ActionError("credits_unavailable", 503)
         return self._mb_request(actor, "approve" if approve else "reject", user_id, mb_id, submission, note or None,
-                                now)
+                                now, code)
 
     def _mb_request(self, actor: Admin, action: str, user_id: int, mb_id: str, submission: str,
-                    reason: str | None, now: int) -> dict:
+                    reason: str | None, now: int, code: str = "") -> dict:
         if self.credits is None:
             raise ActionError("credits_unavailable", 503)
         request_id = secrets.token_hex(12)
         with self.accounts._write() as conn:
-            self.accounts._require_actor(conn, actor.id, "approve_mb")
+            if action == "reject":  # a user may simply enter it again: no second factor
+                self.accounts._require_actor(conn, actor.id, "approve_mb")
+            else:  # an approved MB ID is a payout identity: a stolen session alone cannot set one (CRM audit B)
+                self.accounts.step_up(conn, actor.id, code, now, "approve_mb")
             # Checked before any write: an ID another user holds here would leave the two sides apart.
             owner = conn.execute("SELECT user_id FROM crm_external_ids WHERE mb_id = ? COLLATE NOCASE",
                                  (mb_id,)).fetchone() if mb_id else None
@@ -654,6 +672,11 @@ class CrmStore:
                     "SELECT request_id FROM admin_events WHERE action = 'user.message' AND kind = 'requested' "
                     "AND CAST(json_extract(after_json, '$.messageId') AS INTEGER) = ?", (prior[0],)).fetchone()
                 return {"id": prior[0], "status": "queued", "requestId": req[0], "replayed": True}
+            hour, day = conn.execute(
+                "SELECT COALESCE(SUM(created_at > ?), 0), COUNT(*) FROM crm_messages WHERE admin_id = ? "
+                "AND created_at > ?", (now - 3600, actor.id, now - 86400)).fetchone()
+            if hour >= MESSAGES_PER_HOUR or day >= MESSAGES_PER_DAY:
+                raise ActionError("message_rate_limited", 429)
             msg_id = conn.execute("INSERT INTO crm_messages (user_id, body, status, created_at, admin_id, "
                                   "idempotency_key) VALUES (?, ?, 'queued', ?, ?, ?)",
                                   (user_id, body, now, actor.id, key)).lastrowid
@@ -730,6 +753,7 @@ class CrmStore:
         if not html_fits(body):  # the longest text any recipient can get must still fit one queued message
             raise ActionError("body_too_long")
         buttons = [{"text": b["text"], "url": b["url"]} for b in buttons]
+        rules_json, buttons_json = json.dumps(rules), json.dumps(buttons)
         # Auto-delete in the users' chats: Telegram allows it within 48 h of sending, hence these choices.
         delete_after = data.get("deleteAfterHours")
         if delete_after is not None and (isinstance(delete_after, bool) or delete_after not in DELETE_AFTER_HOURS):
@@ -740,7 +764,7 @@ class CrmStore:
                 broadcast_id = conn.execute(
                     "INSERT INTO crm_broadcasts (name, rules_json, body, buttons_json, status, created_at, updated_at, "
                     "admin_id, delete_after_h) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?)",
-                    (name, json.dumps(rules), body, json.dumps(buttons), now, now, actor.id, delete_after)).lastrowid
+                    (name, rules_json, body, buttons_json, now, now, actor.id, delete_after)).lastrowid
             else:
                 status = conn.execute("SELECT status FROM crm_broadcasts WHERE id = ?", (broadcast_id,)).fetchone()
                 if status is None:
@@ -749,16 +773,15 @@ class CrmStore:
                     raise ActionError("not_a_draft", 409)
                 conn.execute("UPDATE crm_broadcasts SET name = ?, rules_json = ?, body = ?, buttons_json = ?, "
                              "updated_at = ?, admin_id = ?, delete_after_h = ? WHERE id = ?",
-                             (name, json.dumps(rules), body, json.dumps(buttons), now, actor.id, delete_after,
-                              broadcast_id))
+                             (name, rules_json, body, buttons_json, now, actor.id, delete_after, broadcast_id))
             self.accounts._event(conn, now, actor.id, "broadcast.save", "broadcast", str(broadcast_id), None,
                                  {"status": "draft"}, None, None, "done")
-        return {"id": broadcast_id}
+        return {"id": broadcast_id, "digest": broadcast_digest(name, rules_json, body, buttons_json, delete_after)}
 
     # ---- dangerous writes: step-up + reason + idempotency ------------------------------------
 
     def schedule_broadcast(self, actor: Admin, broadcast_id: int, at: int, recipients: list[int], reason: str,
-                           key: str, code: str, now: int) -> dict:
+                           key: str, code: str, now: int, digest: str = "") -> dict:
         """The recipient list is frozen here (crm_broadcast_recipients), in the schedule's transaction."""
         with self.accounts._write() as conn:
             # A retry returns the recorded result even if the audience size changed since (only the time binds).
@@ -770,11 +793,14 @@ class CrmStore:
             if not now - 60 <= at <= now + 90 * 86400:  # only for a new schedule: a replay may come later
                 raise ActionError("invalid_time")
             self.accounts.step_up(conn, actor.id, code, now, "manage_users")
-            status = conn.execute("SELECT status FROM crm_broadcasts WHERE id = ?", (broadcast_id,)).fetchone()
-            if status is None:
+            row = conn.execute("SELECT status, name, rules_json, body, buttons_json, delete_after_h FROM crm_broadcasts "
+                               "WHERE id = ?", (broadcast_id,)).fetchone()
+            if row is None:
                 raise ActionError("not_found", 404)
-            if status[0] != "draft":
+            if row[0] != "draft":
                 raise ActionError("not_a_draft", 409)
+            if not secrets.compare_digest(str(digest), broadcast_digest(*row[1:])):
+                raise ActionError("broadcast_changed", 409)  # edited since the admin reviewed it: review again
             conn.execute("UPDATE crm_broadcasts SET status = 'scheduled', scheduled_at = ?, recipients = ?, "
                          "updated_at = ? WHERE id = ?", (at, len(recipients), now, broadcast_id))
             conn.executemany("INSERT OR IGNORE INTO crm_broadcast_recipients (broadcast_id, user_id) VALUES (?, ?)",

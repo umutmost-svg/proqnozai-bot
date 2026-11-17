@@ -87,7 +87,7 @@ export function Referrals() {
             <select className="control" aria-label="Канал" value={channel} onChange={(e) => setChannel(e.target.value as 'bot' | 'miniapp')}>
               <option value="bot">{CHANNEL.bot}</option><option value="miniapp">{CHANNEL.miniapp}</option>
             </select>
-            <input className="control mono" aria-label="Код" placeholder="код (необязательно)" maxLength={24} value={code} onChange={(e) => setCode(e.target.value.toLowerCase())} />
+            {me.admin.role !== 'promoter' && <input className="control mono" aria-label="Код" placeholder="код (необязательно)" maxLength={24} value={code} onChange={(e) => setCode(e.target.value.toLowerCase())} />}
             <select className="control" aria-label="Платформа" value={platform} onChange={(e) => setPlatform(e.target.value)}>
               <option value="">Платформа —</option>{Object.entries(PLATFORM).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>

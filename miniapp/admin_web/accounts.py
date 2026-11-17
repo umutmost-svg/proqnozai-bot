@@ -36,6 +36,14 @@ ABSOLUTE_S = 12 * 3600
 PRE_AUTH_S = 5 * 60
 MAX_FAILURES = 5
 LOCK_S = 15 * 60
+# Each further lock within LOCK_WINDOW_S doubles (15 min, 30 min, 1 h, ...), up to LOCK_MAX_S (CRM audit B: someone
+# holding a password no longer gets 5 TOTP guesses every 15 minutes forever).
+LOCK_WINDOW_S = 24 * 3600
+LOCK_MAX_S = 24 * 3600
+# Direct messages from the panel (and inquiry replies): per admin, so a hijacked session cannot spam every user from the
+# official bot (CRM audit B; broadcasts need step-up instead).
+MESSAGES_PER_HOUR = 60
+MESSAGES_PER_DAY = 300
 # Wrong PASSWORDS never lock the account (CRM audit P1: anyone past Access could lock the owner out, step-up included).
 # They are throttled in memory instead: per e-mail and source (CF-Connecting-IP behind the edge) and per source. No
 # per-e-mail cap across sources (Codex CRM-A r4: spread failures would close the owner's login everywhere): guessing
@@ -184,20 +192,33 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+# OWASP's scrypt option with the same 16 MiB of memory per hash as before and 5x the work (the admin container has
+# 384 MiB; N=2^17 would need 128 MiB per login). Hashes made with older parameters are redone at the next login.
+SCRYPT_N, SCRYPT_R, SCRYPT_P = 2**14, 8, 5
+
+
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
-    n, r, p = 2**14, 8, 1
+    n, r, p = SCRYPT_N, SCRYPT_R, SCRYPT_P
     derived = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
     return f"scrypt${n}${r}${p}${salt.hex()}${derived.hex()}"
+
+
+def needs_rehash(stored: str) -> bool:
+    return stored.split("$")[1:4] != [str(SCRYPT_N), str(SCRYPT_R), str(SCRYPT_P)]
 
 
 def verify_password(password: str, stored: str | None) -> bool:
     if not stored:
         # Same work for a missing account, so timing does not reveal which e-mails exist.
-        hashlib.scrypt(password.encode(), salt=b"0" * 16, n=2**14, r=8, p=1, dklen=32)
+        hashlib.scrypt(password.encode(), salt=b"0" * 16, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P, dklen=32)
         return False
     _, n, r, p, salt, expected = stored.split("$")
     derived = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p), dklen=32)
+    if (int(n), int(r)) == (SCRYPT_N, SCRYPT_R) and int(p) < SCRYPT_P:
+        # An older, lighter hash (until its next login): pad to the current work, so the response time does not tell
+        # an existing account from an unknown e-mail (Codex CRM-B1 r1 P2).
+        hashlib.scrypt(b"pad", salt=b"0" * 16, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P - int(p), dklen=32)
     return hmac.compare_digest(derived.hex(), expected)
 
 
@@ -235,6 +256,8 @@ PERMISSIONS: dict[str, tuple[str, ...]] = {
 PROMOTER_API: tuple[tuple[str, re.Pattern[str]], ...] = tuple((m, re.compile(p)) for m, p in (
     ("GET", r"^/api/admin/auth/me$"),
     ("POST", r"^/api/admin/auth/logout$"),
+    ("POST", r"^/api/admin/auth/password$"),
+    ("POST", r"^/api/admin/auth/sessions/revoke-others$"),
     ("GET", r"^/api/admin/(overview|analytics|value|product)$"),
     ("GET", r"^/api/admin/referrals$"),
     ("POST", r"^/api/admin/referrals$"),
@@ -400,10 +423,14 @@ class AdminStore:
             self._pw_failed(email_key, source, now)
             raise AuthError("invalid_credentials")
         token = secrets.token_urlsafe(32)
+        rehashed = hash_password(password) if needs_rehash(row[2]) else None
         with self._write() as conn:
             conn.execute(
                 "INSERT INTO admin_sessions (token_hash, admin_id, stage, created_at, last_seen_at, expires_at) "
                 "VALUES (?, ?, 'password', ?, ?, ?)", (_digest(token), admin_id, now, now, now + PRE_AUTH_S))
+            if rehashed is not None:  # only if the password was not changed meanwhile
+                conn.execute("UPDATE admin_users SET password_hash = ? WHERE id = ? AND password_hash = ?",
+                             (rehashed, admin_id, row[2]))
         return token
 
     def login_totp(self, pre_token: str, code: str, now: int) -> str:
@@ -422,6 +449,8 @@ class AdminStore:
             step = totp.matching_step(secret, code, now) if secret else None
             if step is None or step <= last_step:
                 # The failure is COMMITTED (raising here would roll the counter back with the transaction).
+                self._event(conn, now, admin_id, "auth.totp_failed", "admin", str(admin_id), None, None, None, None,
+                            "failed")
                 if self._fail_in(conn, admin_id, now):
                     conn.execute("UPDATE admin_sessions SET revoked_at = ? WHERE token_hash = ?",
                                  (now, _digest(pre_token)))
@@ -457,9 +486,13 @@ class AdminStore:
         failures = conn.execute("UPDATE admin_users SET failed_logins = failed_logins + 1 WHERE id = ? "
                                 "RETURNING failed_logins", (admin_id,)).fetchone()[0]
         if failures >= MAX_FAILURES:
+            recent = conn.execute("SELECT COUNT(*) FROM admin_events WHERE action = 'auth.locked' AND admin_id = ? "
+                                  "AND at > ?", (admin_id, now - LOCK_WINDOW_S)).fetchone()[0]
+            lock_s = min(LOCK_S * 2 ** min(recent, 10), LOCK_MAX_S)
             conn.execute("UPDATE admin_users SET locked_until = ?, failed_logins = 0 WHERE id = ?",
-                         (now + LOCK_S, admin_id))
-            self._event(conn, now, admin_id, "auth.locked", "admin", str(admin_id), None, None, None, None, "done")
+                         (now + lock_s, admin_id))
+            self._event(conn, now, admin_id, "auth.locked", "admin", str(admin_id), None, {"seconds": lock_s}, None,
+                        None, "done")
             return True
         return False
 
@@ -483,6 +516,42 @@ class AdminStore:
             conn.execute("UPDATE admin_sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
                          (now, _digest(token)))
 
+    @staticmethod
+    def _revoke_others(conn: sqlite3.Connection, admin_id: int, keep_hash: str, now: int) -> int:
+        return conn.execute("UPDATE admin_sessions SET revoked_at = ? WHERE admin_id = ? AND token_hash != ? "
+                            "AND revoked_at IS NULL", (now, admin_id, keep_hash)).rowcount
+
+    def revoke_other_sessions(self, admin_id: int, keep_hash: str, now: int) -> int:
+        """"Sign out everywhere else": every other session of this account ends; this one stays."""
+        with self._write() as conn:
+            self._require_actor(conn, admin_id, "read")
+            revoked = self._revoke_others(conn, admin_id, keep_hash, now)
+            self._event(conn, now, admin_id, "admin.sessions_revoke_self", "admin", str(admin_id), None,
+                        {"revoked": revoked}, None, None, "done")
+        return revoked
+
+    def change_password(self, admin_id: int, keep_hash: str, current: str, new: str, code: str, now: int) -> dict:
+        """Self-service: the current password AND a fresh 2FA code; every other session of the account ends."""
+        if not isinstance(new, str) or not MIN_PASSWORD <= len(new) <= 200:
+            raise ActionError("weak_password")
+        with self._connect() as conn:
+            row = conn.execute("SELECT password_hash FROM admin_users WHERE id = ?", (admin_id,)).fetchone()
+        stored = row[0] if row else None
+        if not verify_password(current if isinstance(current, str) else "", stored):
+            raise ActionError("invalid_password", 403)  # the caller counts it like a wrong code
+        if new == current:
+            raise ActionError("same_password")
+        new_hash = hash_password(new)
+        with self._write() as conn:
+            self.step_up(conn, admin_id, code, now, "read")
+            if not conn.execute("UPDATE admin_users SET password_hash = ? WHERE id = ? AND password_hash = ?",
+                                (new_hash, admin_id, stored)).rowcount:
+                raise ActionError("conflict", 409)  # changed meanwhile (another tab): nothing is overwritten
+            revoked = self._revoke_others(conn, admin_id, keep_hash, now)
+            event = self._event(conn, now, admin_id, "admin.password_change", "admin", str(admin_id), None,
+                                {"revokedSessions": revoked}, None, None, "done")
+        return {"eventId": event, "revokedSessions": revoked}
+
     def step_up(self, conn: sqlite3.Connection, admin_id: int, code: str, now: int, permission: str) -> None:
         """Repeated TOTP for a dangerous action, inside the action's transaction (a code works once).
 
@@ -505,8 +574,10 @@ class AdminStore:
             raise ActionError("forbidden", 403)
 
     def step_up_failed(self, admin_id: int, now: int) -> None:
-        """A wrong step-up code counts toward the lockout (outside the rolled-back action)."""
+        """A wrong step-up code (or current password) counts toward the lockout (outside the rolled-back action)."""
         with self._write() as conn:
+            self._event(conn, now, admin_id, "auth.step_up_failed", "admin", str(admin_id), None, None, None, None,
+                        "failed")
             if self._fail_in(conn, admin_id, now):
                 conn.execute("UPDATE admin_sessions SET revoked_at = ? WHERE admin_id = ? AND revoked_at IS NULL",
                              (now, admin_id))
@@ -668,6 +739,58 @@ class AdminStore:
             event = self._event(conn, now, actor.id, "admin.invite_link", "admin", str(target_id), None, None,
                                 reason, key, "done")
         return {"eventId": event, "inviteToken": token}
+
+    def reset_credentials(self, actor: Admin, target_id: int, reason: str, key: str, code: str, now: int) -> dict:
+        """Owner: a colleague's password or 2FA device is lost or leaked. The account goes back to `invited` (no
+        password, no 2FA, every session ended, grants and role kept) and gets a new one-time link."""
+        with self._write() as conn:
+            if conn.execute("SELECT 1 FROM admin_events WHERE idempotency_key = ?", (key,)).fetchone():
+                raise ActionError("idempotency_key_reused", 409)  # a token cannot be replayed: ask for a new link
+            self.step_up(conn, actor.id, code, now, "manage_admins")
+            if target_id == actor.id:
+                raise ActionError("use_password_change", 409)  # an owner never locks themselves out from the panel
+            row = conn.execute("SELECT role, state FROM admin_users WHERE id = ?", (target_id,)).fetchone()
+            if row is None:
+                raise ActionError("not_found", 404)
+            if row[1] != "active":
+                raise ActionError("not_active", 409)
+            if row[0] == "owner" and conn.execute(
+                    "SELECT COUNT(*) FROM admin_users WHERE role = 'owner' AND state = 'active'").fetchone()[0] <= 1:
+                raise ActionError("last_owner", 409)
+            conn.execute("UPDATE admin_users SET state = 'invited', password_hash = NULL, totp_secret = NULL, "
+                         "failed_logins = 0, locked_until = 0 WHERE id = ?", (target_id,))
+            conn.execute("UPDATE admin_sessions SET revoked_at = ? WHERE admin_id = ? AND revoked_at IS NULL",
+                         (now, target_id))
+            token = self._new_invite(conn, target_id, now)
+            event = self._event(conn, now, actor.id, "admin.reset", "admin", str(target_id), {"state": "active"},
+                                {"state": "invited"}, reason, key, "done")
+        return {"eventId": event, "inviteToken": token}
+
+    def cli_unlock(self, email: str, now: int) -> bool:
+        """Server shell only (`python -m miniapp.admin_web unlock`): ends a 2FA lock early."""
+        with self._write() as conn:
+            row = conn.execute("SELECT id FROM admin_users WHERE email = ?", (email.strip(),)).fetchone()
+            if row is None:
+                return False
+            conn.execute("UPDATE admin_users SET locked_until = 0, failed_logins = 0 WHERE id = ?", (row[0],))
+            self._event(conn, now, None, "admin.unlock_cli", "admin", str(row[0]), None, None, None, None, "done")
+        return True
+
+    def cli_reset(self, email: str, password: str, now: int) -> str | None:
+        """Server shell only (`reset-credentials`): an owner who lost the password or the 2FA device. New password
+        and a new 2FA secret (returned once), every session ended, lock cleared."""
+        secret = totp.new_secret()
+        with self._write() as conn:
+            row = conn.execute("SELECT id FROM admin_users WHERE email = ? AND state = 'active'",
+                               (email.strip(),)).fetchone()
+            if row is None:
+                return None
+            conn.execute("UPDATE admin_users SET password_hash = ?, totp_secret = ?, last_totp_step = 0, "
+                         "failed_logins = 0, locked_until = 0 WHERE id = ?", (hash_password(password), secret, row[0]))
+            conn.execute("UPDATE admin_sessions SET revoked_at = ? WHERE admin_id = ? AND revoked_at IS NULL",
+                         (now, row[0]))
+            self._event(conn, now, None, "admin.reset_cli", "admin", str(row[0]), None, None, None, None, "done")
+        return secret
 
     @staticmethod
     def _live_invite(conn: sqlite3.Connection, token: str, now: int) -> tuple[str, int, str, str, str | None, int]:

@@ -6,7 +6,7 @@ import sqlite3
 
 from miniapp.admin_web.app import create_admin_app
 from miniapp.tests.test_admin_crm import U1, dangerous
-from miniapp.tests.test_admin_web import env, login, post  # noqa: F401 — env is a fixture
+from miniapp.tests.test_admin_web import digest_of, reviewed, fresh, env, login, post  # noqa: F401 — env is a fixture
 
 
 def jobs(config) -> list[tuple]:
@@ -50,7 +50,7 @@ def test_broadcast_schedule_queues_one_job_per_recipient_and_cancel_stops_them(e
     bid = post(client, "/api/admin/broadcasts", csrf, {"name": "Тур", "body": "Новый тур", "rules": {"lang_in": ["ru"]},
                                                       "buttons": [{"text": "Открыть", "url": "miniapp"}]}).json()["id"]
     at = int(clock()) + 3600
-    r = post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": at}).json()
+    r = post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": at}).json()
     queued = jobs(config)
     assert len(queued) == r["after"]["recipients"] > 0
     assert {(j[3], j[4], j[5]) for j in queued} == {("queued", at, f"bc:{bid}")}
@@ -78,7 +78,7 @@ def test_a_replayed_schedule_after_cancel_queues_nothing_new(env):
     csrf = login(client, clock, secrets_, "admin@x.test")
     bid = post(client, "/api/admin/broadcasts", csrf, {"name": "Т", "body": "Т", "rules": {"lang_in": ["ru"]}}).json()["id"]
     at = int(clock()) + 3600
-    schedule = {**dangerous(secrets_, clock), "at": at}
+    schedule = {**dangerous(secrets_, clock), "at": at, **reviewed(client, bid)}
     post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, schedule)
     frozen = len(jobs(config))
     clock.t += 30
@@ -117,7 +117,7 @@ def test_a_cancel_committed_between_the_status_check_and_the_enqueue_still_wins(
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(Outbox, "enqueue", cancel_first)
-    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 3600})
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": int(clock()) + 3600})
     states = {j[3] for j in jobs(config) if j[5] == f"bc:{bid}"}
     assert states == {"cancelled"}
 
@@ -154,7 +154,7 @@ def test_the_bot_cannot_claim_a_broadcast_job_before_the_status_is_rechecked(env
         return added
 
     monkeypatch.setattr(Outbox, "enqueue", cancel_then_insert_then_bot_claims)
-    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 3600})
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": int(clock()) + 3600})
     assert claimed == [None]
     assert {j[3] for j in jobs(config) if j[5] == f"bc:{bid}"} == {"cancelled"}
 
@@ -165,7 +165,7 @@ def test_a_scheduled_broadcast_is_released_and_a_crash_while_held_is_released_at
     csrf = login(client, clock, secrets_, "admin@x.test")
     bid = post(client, "/api/admin/broadcasts", csrf, {"name": "Норма", "body": "Текст", "rules": {"lang_in": ["ru"]}}).json()["id"]
     monkeypatch.setattr(Outbox, "release_batch", lambda self, batch: 0)  # crash before the release
-    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 60})
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": int(clock()) + 60})
     bot = _bot_outbox(config)
     assert bot.claim(int(clock()) + 120) is None  # still held
     monkeypatch.undo()
@@ -180,7 +180,7 @@ def test_a_crash_while_held_after_a_cancel_cancels_the_jobs_at_startup(env, monk
     csrf = login(client, clock, secrets_, "admin@x.test")
     bid = post(client, "/api/admin/broadcasts", csrf, {"name": "Сбой", "body": "Текст", "rules": {"lang_in": ["ru"]}}).json()["id"]
     monkeypatch.setattr(Outbox, "release_batch", lambda self, batch: 0)
-    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 60})
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": int(clock()) + 60})
     monkeypatch.undo()
     with sqlite3.connect(config.admin_db) as conn:  # cancelled, but its cancel_batch never ran (crash)
         conn.execute("UPDATE crm_broadcasts SET status = 'cancelled' WHERE id = ?", (bid,))
@@ -204,7 +204,7 @@ def test_a_cancel_between_the_recheck_and_the_release_is_never_released(env, mon
         return original(self, batch)
 
     monkeypatch.setattr(Outbox, "release_batch", cancel_lands_first)
-    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 60})
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": int(clock()) + 60})
     assert _bot_outbox(config).claim(int(clock()) + 120) is None
     assert {j[3] for j in jobs(config) if j[5] == f"bc:{bid}"} == {"cancelled"}
 

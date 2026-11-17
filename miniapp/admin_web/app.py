@@ -131,6 +131,7 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
             session = accounts.session(token, now()) if token else None
             if session is not None:
                 request.state.admin = session.admin
+                request.state.session_hash = session.token_hash
             if request.method not in ("GET", "HEAD"):
                 if request.headers.get("origin") not in config.origins:
                     return _err("bad_origin", 403, request)
@@ -203,7 +204,7 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         try:
             return fn()
         except ActionError as exc:
-            if exc.code == "invalid_code":
+            if exc.code in ("invalid_code", "invalid_password"):
                 accounts.step_up_failed(admin.id, now())
             raise
 
@@ -263,6 +264,19 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         response = JSONResponse({"ok": True})
         response.delete_cookie(SESSION_COOKIE, path="/", secure=secure, httponly=True, samesite="strict")
         return response
+
+    @app.post("/api/admin/auth/password")
+    async def change_password(request: Request) -> Response:
+        admin = admin_of(request)
+        data = await body(request)
+        return JSONResponse(step_up_guard(admin, lambda: accounts.change_password(
+            admin.id, request.state.session_hash, str(data.get("current") or ""), str(data.get("new") or ""),
+            str(data.get("code") or "").strip(), now())))
+
+    @app.post("/api/admin/auth/sessions/revoke-others")
+    async def revoke_other_sessions(request: Request) -> dict:
+        admin = admin_of(request)
+        return {"revoked": accounts.revoke_other_sessions(admin.id, request.state.session_hash, now())}
 
     # Invitation links: the token travels in the body (the page keeps it in the URL fragment), never in a query.
     @app.post("/api/admin/auth/invite")
@@ -536,6 +550,14 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
         reason, code, key = dangerous(data)
         return JSONResponse(step_up_guard(admin, lambda: accounts.reissue_invite(admin, target_id, reason, key, code,
                                                                                now())))
+
+    @app.post("/api/admin/admins/{target_id}/reset")
+    async def admins_reset(target_id: int, request: Request) -> Response:
+        admin = admin_of(request, "manage_admins")
+        data = await body(request)
+        reason, code, key = dangerous(data)
+        return JSONResponse(step_up_guard(admin, lambda: accounts.reset_credentials(admin, target_id, reason, key,
+                                                                                  code, now())))
 
     @app.post("/api/admin/admins/{target_id}/grants")
     async def admins_grant(target_id: int, request: Request) -> Response:

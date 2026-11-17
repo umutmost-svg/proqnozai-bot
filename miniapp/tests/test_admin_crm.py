@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from miniapp.admin_web.demo import DEMO_ID_BASE
 from miniapp.credits import Credits
 from miniapp.store import Store
-from miniapp.tests.test_admin_web import ORIGIN, code, env, login, post  # noqa: F401 — env is a fixture
+from miniapp.tests.test_admin_web import digest_of, reviewed, fresh, ORIGIN, code, env, login, post  # noqa: F401 — env is a fixture
 
 U1 = DEMO_ID_BASE + 1000
 U2 = DEMO_ID_BASE + 1037
@@ -73,9 +73,9 @@ def test_broadcast_draft_then_scheduled_with_step_up(env):
     draft = next(b for b in client.get("/api/admin/broadcasts").json()["items"] if b["id"] == bid)
     assert draft["status"] == "draft" and draft["audience"] > 0
     at = int(clock()) + 3600
-    no_code = post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "code": "000000", "at": at})
+    no_code = post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "code": "000000", **reviewed(client, bid), "at": at})
     assert no_code.json()["error"] == "invalid_code"
-    ok = post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": at})
+    ok = post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": at})
     assert ok.status_code == 200 and ok.json()["after"]["recipients"] == draft["audience"]
     assert post(client, "/api/admin/broadcasts", csrf, {"id": bid, "name": "x", "body": "y"}).json()["error"] == "not_a_draft"
     assert post(client, f"/api/admin/broadcasts/{bid}/cancel", csrf, {}).json()["error"] == "reason_required"
@@ -133,8 +133,11 @@ def test_owner_approves_mb_ids_entered_in_the_mini_app(env):
     client.cookies.clear()
     csrf = login(client, clock, secrets_, "owner@x.test")
     items = {i["userId"]: i for i in client.get("/api/admin/mb").json()["items"]}
+    no_code = post(client, f"/api/admin/mb/{U1}/decide", csrf,
+                   {"decision": "approve", "mbId": "MBX1", "submission": items[U1]["submission"]})
+    assert no_code.json()["error"] == "invalid_code"  # an approval needs a fresh 2FA code (CRM audit B)
     ok = post(client, f"/api/admin/mb/{U1}/decide", csrf,
-              {"decision": "approve", "mbId": "MBX1", "submission": items[U1]["submission"]})
+              {"decision": "approve", "mbId": "MBX1", "submission": items[U1]["submission"], "code": fresh(secrets_, clock)})
     assert ok.json() == {"decision": "approved"}
     assert post(client, f"/api/admin/mb/{U2}/decide", csrf,
                 {"decision": "reject", "mbId": "MBX2", "submission": items[U2]["submission"]}).json()["error"] == "reason_required"
@@ -144,7 +147,8 @@ def test_owner_approves_mb_ids_entered_in_the_mini_app(env):
     assert credits.summary(U2)["mb"]["reason"] == "нет аккаунта"
     # A decision on a submission the user replaced since is refused (never a false verified ID here).
     credits.submit_mb(U2, "MBX3")
-    stale = post(client, f"/api/admin/mb/{U2}/decide", csrf, {"decision": "approve", "mbId": "MBX2", "submission": items[U2]["submission"]})
+    stale = post(client, f"/api/admin/mb/{U2}/decide", csrf, {"decision": "approve", "mbId": "MBX2", "submission": items[U2]["submission"],
+                                                              "code": fresh(secrets_, clock)})
     assert stale.json()["error"] == "mb_stale" and client.get(f"/api/admin/users/{U2}").json()["mbId"] is None
     card = client.get(f"/api/admin/users/{U1}").json()
     assert card["mbId"] == "MBX1" and card["mbLink"]["state"] == "approved"  # also the ads' MB ID
@@ -235,7 +239,7 @@ def test_schedule_retry_survives_an_audience_change(env):
     csrf = login(client, clock, secrets_, "admin@x.test")
     bid = post(client, "/api/admin/broadcasts", csrf, {"name": "x", "body": "y", "rules": {"tag_has": "VIP"}}).json()["id"]
     at = int(clock()) + 7200
-    body = {"reason": "план", "idempotencyKey": "sched-retry-1", "at": at}
+    body = {"reason": "план", "idempotencyKey": "sched-retry-1", "at": at, **reviewed(client, bid)}
     assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)}).status_code == 200
     post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "VIP"})  # the audience grows
     clock.t += 30
@@ -294,7 +298,7 @@ def test_schedule_replay_after_the_time_passed(env):
     csrf = login(client, clock, secrets_, "admin@x.test")
     bid = post(client, "/api/admin/broadcasts", csrf, {"name": "x", "body": "y"}).json()["id"]
     at = int(clock()) + 120
-    body = {"reason": "план", "idempotencyKey": "sched-late-1", "at": at}
+    body = {"reason": "план", "idempotencyKey": "sched-late-1", "at": at, **reviewed(client, bid)}
     assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**body, "code": code(secrets_["admin@x.test"], clock)}).status_code == 200
     clock.t += 1500  # the scheduled time is now past (the admin session is still alive)
     assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**body, "code": ""}).json()["replayed"] is True
@@ -362,26 +366,26 @@ def test_replay_still_works_after_the_reason_text_is_erased(env):
 def test_mb_id_set_search_unique_and_kept_out_of_the_journal(env):
     _, clock, client, accounts, secrets_ = env
     csrf = login(client, clock, secrets_, "owner@x.test")
-    assert post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "  123456789 "}).json() == {"mbId": "123456789"}
+    assert post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "  123456789 ", "code": fresh(secrets_, clock)}).json() == {"mbId": "123456789"}
     assert client.get(f"/api/admin/users/{U1}").json()["mbId"] == "123456789"
     found = client.get("/api/admin/users?q=123456789").json()
     assert [u["id"] for u in found["items"]] == [U1] and found["items"][0]["mbId"] == "123456789"
     assert [u["id"] for u in client.get("/api/admin/users?q=34567").json()["items"]] == [U1]  # partial, like other fields
-    assert post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "123456789"}).status_code == 409
-    assert post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "AbC"}).json() == {"mbId": "AbC"}
-    assert post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "abc"}).status_code == 409  # case-insensitive
+    assert post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "123456789", "code": fresh(secrets_, clock)}).status_code == 409
+    assert post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "AbC", "code": fresh(secrets_, clock)}).json() == {"mbId": "AbC"}
+    assert post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "abc", "code": fresh(secrets_, clock)}).status_code == 409  # case-insensitive
     assert [u["id"] for u in client.get("/api/admin/users?q=aBc").json()["items"]] == [U2]
     analyst_view = TestClient(client.app, base_url=ORIGIN)
     login(analyst_view, clock, secrets_, "analyst@x.test")
     assert analyst_view.get(f"/api/admin/users/{U2}").status_code == 403
     assert "AbC" not in analyst_view.get("/api/admin/events").text
-    assert post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "bad id!"}).json()["error"] == "invalid_mb_id"
+    assert post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "bad id!", "code": fresh(secrets_, clock)}).json()["error"] == "invalid_mb_id"
     assert "123456789" not in " ".join(str(e) for e in accounts.events())
-    assert post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": ""}).json() == {"mbId": None}
+    assert post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "", "code": fresh(secrets_, clock)}).json() == {"mbId": None}
     assert client.get(f"/api/admin/users/{U1}").json()["mbId"] is None
     analyst = TestClient(client.app, base_url=ORIGIN)
     login(analyst, clock, secrets_, "analyst@x.test")
-    assert post(analyst, f"/api/admin/users/{U1}/mb-id", analyst.get("/api/admin/auth/me").json()["csrf"], {"mbId": "1"}).status_code == 403
+    assert post(analyst, f"/api/admin/users/{U1}/mb-id", analyst.get("/api/admin/auth/me").json()["csrf"], {"mbId": "1", "code": fresh(secrets_, clock)}).status_code == 403
 
 
 def test_a_broadcast_can_ask_the_bot_to_delete_it_later(env):
@@ -474,7 +478,7 @@ def test_broadcast_jobs_carry_the_name_and_html_and_the_list_settles_as_sent(env
                                                       "rules": {"tag_has": "Получатели"}}).json()["id"]
     post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "Получатели"})
     at = int(clock()) + 60
-    assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": at}).status_code == 200
+    assert post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": at}).status_code == 200
     with sq.connect(config.data_dir / "bot-outbox.db") as conn:
         text, mode = conn.execute("SELECT text, parse_mode FROM jobs WHERE batch_id = ?", (f"bc:{bid}",)).fetchone()
     assert text.startswith("<b>") and "{имя}" not in text and (first or "") in text and mode == "HTML"
@@ -504,7 +508,7 @@ def test_users_telegram_refused_and_users_blocked_later_get_no_broadcast(env):
                      "'blocked_by_user', 1, 1)", (U2,))
     assert post(client, "/api/admin/audience/preview", csrf, {"rules": {}, "forBroadcast": True}).json()["size"] == everyone - 1
     bid = post(client, "/api/admin/broadcasts", csrf, {"name": "B", "body": "t"}).json()["id"]
-    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 3600})
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": int(clock()) + 3600})
     clock.t += 31
     post(client, f"/api/admin/users/{U1}/block", csrf, {**dangerous(secrets_, clock), "blocked": True})
     with sq.connect(config.data_dir / "bot-outbox.db") as conn:
@@ -604,7 +608,7 @@ def test_a_cancel_after_delivery_is_refused_without_a_list_refresh(env):
     post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "C"})
     bid = post(client, "/api/admin/broadcasts", csrf, {"name": "c", "body": "t", "rules": {"tag_has": "C"}}).json()["id"]
     at = int(clock()) + 60
-    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": at})
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": at})
 
     async def send(job):
         return Outcome("sent", message_id=1)
@@ -621,7 +625,7 @@ def test_startup_cancels_queued_broadcast_jobs_of_blocked_users(env):
     config, clock, client, _, secrets_ = env
     csrf = login(client, clock, secrets_, "admin@x.test")
     bid = post(client, "/api/admin/broadcasts", csrf, {"name": "B", "body": "t"}).json()["id"]
-    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": int(clock()) + 3600})
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": int(clock()) + 3600})
     with sq.connect(config.admin_db) as conn:          # the block committed, then a crash before the queue was touched
         conn.execute("INSERT INTO crm_blocks (user_id, reason, created_at, admin_id) VALUES (?, 'x', 1, 1)", (U1,))
     create_admin_app(config, clock=clock)
@@ -634,6 +638,6 @@ def test_a_due_broadcast_with_no_recipients_settles_as_sent(env):
     csrf = login(client, clock, secrets_, "admin@x.test")
     bid = post(client, "/api/admin/broadcasts", csrf, {"name": "e", "body": "t", "rules": {"tag_has": "nobody"}}).json()["id"]
     at = int(clock()) + 60
-    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), "at": at})
+    post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": at})
     clock.t = at + 301
     assert next(b for b in client.get("/api/admin/broadcasts").json()["items"] if b["id"] == bid)["status"] == "sent"

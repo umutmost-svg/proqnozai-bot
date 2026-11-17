@@ -8,6 +8,7 @@ import { AiCosts, SportsApi, System } from './pages/Telemetry';
 import { UserCardRoute } from './pages/UserCard';
 import { Users } from './pages/Users';
 import { Referrals } from './pages/Referrals';
+import { Account } from './pages/Account';
 import { MbQueue } from './pages/MbQueue';
 import { Inquiries } from './pages/Inquiries';
 import { AdsPlaceholder, Outbox, Product, SettingsRoles } from './pages/Ops';
@@ -46,6 +47,7 @@ function Gate() {
         <Route path="outbox" element={<Outbox />} />
         <Route path="product" element={<Product />} />
         <Route path="settings/roles" element={<SettingsRoles />} />
+        <Route path="account" element={<Account />} />
         {/* Ads hookup point. After merging feat/ads-module replace this one line with:
             import { AdsRoutes } from './ads';  <Route path="ads/*" element={<AdsRoutes />} />
             (and use ADS_NAV_LINK from './ads' for the ['/ads', 'Реклама'] entry in ui.tsx NAV). */}

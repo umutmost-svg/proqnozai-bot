@@ -94,13 +94,15 @@ def test_promoter_reaches_only_analytics_and_own_links(env):
     assert post(client, "/api/admin/settings/ai.enabled", csrf, {"value": False}).status_code == 403
     mine = post(client, "/api/admin/referrals", csrf, {"name": "моя", "channel": "miniapp", "code": "mine01",
                                                        "platform": "tiktok"}).json()
+    assert mine["code"] != "mine01"  # a promotion manager never picks the code (CRM audit B1)
+    code_ = mine["code"]
     now = int(clock())
     store = Store(config.miniapp_db)
-    store.upsert_user(TelegramUser(801, "N", None, None, "ru"), now - 50, "mine01")
+    store.upsert_user(TelegramUser(801, "N", None, None, "ru"), now - 50, code_)
     store.upsert_user(TelegramUser(802, "N", None, None, "ru"), now - 50, "theirs1")
     store.upsert_user(TelegramUser(803, "N", None, None, "ru"), now - 50, "ghost01")
     page = client.get("/api/admin/referrals").json()
-    assert [i["code"] for i in page["items"]] == ["mine01"] and page["items"][0]["by"] is None
+    assert [i["code"] for i in page["items"]] == [code_] and page["items"][0]["by"] is None
     assert page["funnel"]["starts"] == 1 and page["unknownCodes"] == []
     assert {g["value"] for g in page["breakdown"]["platform"]} == {"tiktok"}
     assert client.get("/api/admin/product?days=30").json()["referrals"]["starts"] == 1

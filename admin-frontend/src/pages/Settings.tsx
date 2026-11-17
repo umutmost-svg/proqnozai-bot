@@ -123,7 +123,8 @@ const inviteUrl = (token: string) => `${window.location.origin}/activate#${token
 type AdminAction =
   | { kind: 'invite' }
   | { kind: 'update'; target: AdminAccount; role?: Role; state?: 'active' | 'disabled'; label: string }
-  | { kind: 'link'; target: AdminAccount };
+  | { kind: 'link'; target: AdminAccount }
+  | { kind: 'reset'; target: AdminAccount };
 
 export function SettingsAdmins() {
   const me = useMe();
@@ -187,6 +188,9 @@ export function SettingsAdmins() {
                               <button type="button" className="btn link" disabled={lastOwner}
                                 title={lastOwner ? 'Последнего владельца нельзя отключить' : undefined}
                                 onClick={() => setAction({ kind: 'update', target: a, state: 'disabled', label: `Отключить ${a.email}` })}>Отключить</button>
+                            )}
+                            {a.state === 'active' && a.id !== me.admin.id && (
+                              <button type="button" className="btn link" onClick={() => setAction({ kind: 'reset', target: a })}>Сбросить вход</button>
                             )}
                             {a.state === 'disabled' && (
                               <button type="button" className="btn link"
@@ -263,6 +267,18 @@ export function SettingsAdmins() {
             setAction(null);
           }} />
       )}
+      {action?.kind === 'reset' && (
+        <DangerDialog title="Сбросить пароль и 2FA?" confirmLabel="Сбросить вход"
+          lead={<>{action.target.email}: пароль и 2FA удаляются, все сессии завершаются. Роль и права сохранятся. Вы получите новую
+            одноразовую ссылку, по которой сотрудник задаст новый пароль и подключит 2FA.</>}
+          onClose={() => setAction(null)}
+          onConfirm={async (input) => {
+            const r = await api<{ inviteToken: string }>(`/api/admin/admins/${action.target.id}/reset`, { method: 'POST', body: input });
+            setLink({ email: action.target.email, url: inviteUrl(r.inviteToken) });
+            setAction(null);
+            reload();
+          }} />
+      )}
       {toast && <Toast text={toast} onDone={() => setToast(null)} />}
     </>
   );
@@ -272,6 +288,10 @@ const ACTIONS: Record<string, string> = {
   'auth.login': 'Вход в панель', 'auth.locked': 'Блокировка после ошибок', 'settings.update': 'Изменение настройки',
   'admin.invite': 'Приглашение администратора', 'admin.update': 'Изменение доступа', 'admin.create_cli': 'Создание через CLI',
   'user.sessions_revoke': 'Отзыв сессий пользователя',
+  'auth.totp_failed': 'Неверный код 2FA при входе', 'auth.step_up_failed': 'Неверный код 2FA или пароль при подтверждении',
+  'admin.password_change': 'Смена своего пароля', 'admin.sessions_revoke_self': 'Выход на других устройствах',
+  'admin.reset': 'Сброс входа сотрудника', 'admin.reset_cli': 'Сброс входа через CLI', 'admin.unlock_cli': 'Разблокировка через CLI',
+  'admin.invite_link': 'Новая ссылка-приглашение', 'admin.activate': 'Активация по приглашению',
 };
 
 function describe(e: AdminEvent): string {

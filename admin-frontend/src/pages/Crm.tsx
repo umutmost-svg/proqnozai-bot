@@ -112,7 +112,7 @@ export function Broadcasts() {
 }
 
 // A new broadcast is saved, then reopened as its draft with the confirmation: the chosen time survives the remount.
-let pendingWhen: { id: number; when: string } | null = null;
+let pendingWhen: { id: number; when: string; digest: string } | null = null;
 
 function RulesEditor({ rules, onChange, tags }: { rules: Rules; onChange: (r: Rules) => void; tags: TagCount[] }) {
   const set = (k: keyof Rules, v: unknown) => { const n = { ...rules } as Record<string, unknown>; if (v === undefined || v === '' || (Array.isArray(v) && !v.length)) delete n[k]; else n[k] = v; onChange(n as Rules); };
@@ -204,22 +204,35 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
   const [withButton, setWithButton] = useState(item ? item.buttons.length > 0 : true);
   const [deleteAfter, setDeleteAfter] = useState<number | null>(item?.deleteAfterHours ?? null);
   const [when, setWhen] = useState(() => (item && pendingWhen?.id === item.id ? pendingWhen.when : null) ?? toLocalInput(new Date(Date.now() + 3600_000)));
+  // The content this admin saved and reviewed: the schedule is refused if someone changed the draft since.
+  const [digest, setDigest] = useState(() => (item && pendingWhen?.id === item.id ? pendingWhen.digest : null) ?? item?.digest ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(autoConfirm && item?.status === 'draft');
+  // The recipients confirmed are exactly the ones previewed when the dialog opened (the server compares the set).
+  const [shown, setShown] = useState<{ size: number; audienceDigest: string } | null>(null);
+  const rulesKey = JSON.stringify(rules);
+  useEffect(() => {
+    if (!confirm) { setShown(null); return; }
+    let alive = true;
+    api<{ size: number; audienceDigest: string }>('/api/admin/audience/preview', { method: 'POST', body: { rules: JSON.parse(rulesKey), forBroadcast: true } })
+      .then((r) => { if (alive) setShown(r); }).catch(() => { if (alive) setShown(null); });
+    return () => { alive = false; };
+  }, [confirm, rulesKey]);
   const [toast, setToast] = useState<string | null>(null);
   const size = useAudience(rules, true);
   const at = parseLocalInput(when);
   const itemId = item?.id;
   useEffect(() => { if (itemId !== undefined && pendingWhen?.id === itemId) pendingWhen = null; }, [itemId]);  // consumed once
   const preview = useMemo(() => body.replaceAll('{имя}', 'Айгерим'), [body]);
-  const save = async (): Promise<number | null> => {
+  const save = async (): Promise<{ id: number; digest: string } | null> => {
     setBusy(true); setError(null);
     try {
-      const r = await api<{ id: number }>('/api/admin/broadcasts', { method: 'POST', body: {
+      const r = await api<{ id: number; digest: string }>('/api/admin/broadcasts', { method: 'POST', body: {
         id: item?.id, name, body, rules, buttons: withButton ? [{ text: button, url: 'miniapp' }] : [],
         deleteAfterHours: deleteAfter } });
-      setToast('Черновик сохранён'); reload(); return r.id;
+      setDigest(r.digest);
+      setToast('Черновик сохранён'); reload(); return { id: r.id, digest: r.digest };
     } catch (e) { setError(errorText(e)); return null; } finally { setBusy(false); }
   };
   return (
@@ -227,8 +240,8 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
       <PageHead crumb="Рассылки" title={item ? item.name : 'Новая рассылка'}
         subtitle={item && item.status !== 'draft' ? `${STATUS[item.status][0]}${item.scheduledAt ? ` · ${localTime(item.scheduledAt)}` : ''} — изменения недоступны` : 'Черновик · отправка — с причиной и повторной 2FA'}
         actions={editable ? <>
-          <button type="button" className="btn" disabled={busy || !name.trim() || !body.trim()} onClick={async () => { const nid = await save(); if (nid && !item) onSaved(nid, false); }}>Сохранить черновик</button>
-          <button type="button" className="btn primary" disabled={busy || !name.trim() || !body.trim() || at === null} onClick={async () => { const nid = await save(); if (nid) { if (!item) { pendingWhen = { id: nid, when }; onSaved(nid, true); } else setConfirm(true); } }}>Запланировать</button>
+          <button type="button" className="btn" disabled={busy || !name.trim() || !body.trim()} onClick={async () => { const r = await save(); if (r && !item) onSaved(r.id, false); }}>Сохранить черновик</button>
+          <button type="button" className="btn primary" disabled={busy || !name.trim() || !body.trim() || at === null} onClick={async () => { const r = await save(); if (r) { if (!item) { pendingWhen = { id: r.id, when, digest: r.digest }; onSaved(r.id, true); } else setConfirm(true); } }}>Запланировать</button>
         </> : <Link to="/broadcasts">← К рассылкам</Link>} />
       <div className="steps"><span className="s"><span className="d">1</span>Аудитория</span>—<span className="s"><span className="d">2</span>Сообщение</span>—<span className="s"><span className="d">3</span>Отправка</span></div>
       {error && <div className="form-error" role="alert">{error}</div>}
@@ -285,9 +298,9 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
       </div>
       {confirm && item && (
         <DangerDialog title="Запланировать рассылку?" confirmLabel="Запланировать" tone="primary" onClose={() => setConfirm(false)}
-          lead={<>«{name}» · ≈ {num(size)} получателей · {localTime(at)} ({zoneLabel(at !== null ? new Date(at * 1000) : new Date())}). {server ? 'В это время бот начнёт отправку.' : 'В пилоте сообщение не уйдёт в Telegram.'}</>}
+          lead={<>«{name}» · {shown ? num(shown.size) : '…'} получателей · {localTime(at)} ({zoneLabel(at !== null ? new Date(at * 1000) : new Date())}). {server ? 'В это время бот начнёт отправку.' : 'В пилоте сообщение не уйдёт в Telegram.'}</>}
           onConfirm={async (input) => {
-            await api(`/api/admin/broadcasts/${item.id}/schedule`, { method: 'POST', body: { ...input, at } });
+            await api(`/api/admin/broadcasts/${item.id}/schedule`, { method: 'POST', body: { ...input, at, digest, audienceDigest: shown?.audienceDigest ?? '' } });
             setConfirm(false); setToast('Рассылка запланирована'); reload();
           }} />
       )}

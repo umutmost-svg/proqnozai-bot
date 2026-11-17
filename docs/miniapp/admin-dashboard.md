@@ -482,3 +482,31 @@ env-список (вход и каждая сессия). Данные поль�
   - At every start the admin cancels queued broadcast jobs of blocked users. This covers a crash between the block and the queue.
   - Queuing a broadcast leaves out users blocked after it was scheduled.
 - **Cancelling:** a cancel first checks delivery. A broadcast that has already gone out is refused. Narrow race, accepted: a cancel within milliseconds of the last send still marks the broadcast cancelled, with 0 jobs cancelled.
+
+## CRM audit fixes (17.11.2026, part B1: security)
+
+- **Own account** («Безопасность», every role): password change needs the current password and a fresh 2FA code and
+  ends every other session; «Выйти на всех других устройствах». A wrong current password counts like a wrong code.
+- **Owner reset** of a colleague (Settings → Administrators → «Сбросить вход», reason + 2FA): password and 2FA removed,
+  sessions ended, role and grants kept, a new one-time link (72 h). Not for the owner's own account. The owner's own
+  recovery is the server command `reset-credentials` (docs/ops/admin-server.md); `unlock` ends a lock early.
+- **Locks**: 5 wrong 2FA codes lock for 15 min; each further lock within 24 h doubles it (up to 24 h). Wrong 2FA codes
+  at login and wrong codes or passwords in confirmations are journalled (`auth.totp_failed`, `auth.step_up_failed`,
+  result `failed`). Wrong passwords still never lock (part A).
+- **Passwords**: scrypt N=2^14, r=8, p=5 (same 16 MiB, 5x the work; N=2^17 would need 128 MiB per login in a 384 MiB
+  container). Older hashes are redone at the next successful login.
+- **MB ID**: approving one in the queue and setting one in the user card need a fresh 2FA code (one per decision: each
+  code works once). Rejecting does not.
+- **Schedule bound to the content**: the panel sends the digest of the draft it saved and reviewed; scheduling is refused
+  (`broadcast_changed`) if the stored draft differs, so a session without the 2FA device cannot swap the text or
+  audience of a draft another admin is about to confirm. The confirmation dialog previews the recipients afresh and sends a
+  digest of exactly that set; scheduling is refused (`audience_changed`) if the set differs, since tags change without
+  step-up and could swap reviewed users for others at the same count.
+- **Direct messages** (user card, inquiry replies): at most 60 per hour and 300 per day per admin (`message_rate_limited`);
+  a retry of an already queued message does not count.
+- **Referral links**: who created a link (e-mail and admin id) is hidden from analysts and promotion managers; a promotion
+  manager never picks a code (the server generates it), so a code already circulating cannot be claimed with its starts.
+- **Remaining P2 (documented, Codex CRM-B1 r4)**: a session without the 2FA device can still change tags BEFORE an admin
+  opens the confirmation, so a rule-based audience (e.g. "tag VIP") is whatever the data says at that moment. Closing
+  it fully needs step-up on every tag change or a full recipient list to approve, both out of this part's scope. Tag
+  changes are journalled with the admin's id (`user.tag_add` / `user.tag_remove`).

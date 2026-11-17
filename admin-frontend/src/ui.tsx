@@ -12,7 +12,7 @@ const NAV_ADMIN = [['/system', 'Система'], ['/settings', 'Настрой�
 
 export const ROLE_LABEL: Record<string, string> = { owner: 'Владелец', admin: 'Администратор', analyst: 'Аналитик', promoter: 'Менеджер по продвижению' };
 // A promotion manager reaches only analytics and their own referral links (the API refuses the rest).
-const PROMOTER_PAGES = new Set(['/', '/referrals', '/product']);
+const PROMOTER_PAGES = new Set(['/', '/referrals', '/product', '/account']);
 
 export function initials(name: string | null | undefined, fallback = '?'): string {
   const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
@@ -98,6 +98,7 @@ export function Layout() {
           <div>
             <div className="account-email" title={me.admin.email}>{me.admin.email}</div>
             <div className="account-role">{ROLE_LABEL[me.admin.role]}</div>
+            <NavLink className="btn link" to="/account">Безопасность</NavLink>{' '}
             <button type="button" className="btn link" onClick={() => void logout()}>Выйти</button>
           </div>
         </div>
@@ -329,10 +330,12 @@ export function Toast({ text, onDone }: { text: string; onDone: () => void }) {
 }
 
 /** Dangerous-action confirmation: mandatory reason + a fresh 2FA code, one idempotency key per dialog. */
-export function DangerDialog({ title, lead, confirmLabel, tone = 'danger', onConfirm, onClose, children }: {
+export function DangerDialog({ title, lead, confirmLabel, tone = 'danger', onConfirm, onClose, children, noReason = false }: {
   title: string; lead: ReactNode; confirmLabel: string; tone?: 'danger' | 'primary';
   onConfirm: (input: { reason: string; code: string; idempotencyKey: string }) => Promise<void>;
   onClose: () => void; children?: ReactNode;
+  /** Only the 2FA code (an action the server does not ask a reason for). */
+  noReason?: boolean;
 }) {
   const [reason, setReason] = useState('');
   const [code, setCode] = useState('');
@@ -340,13 +343,14 @@ export function DangerDialog({ title, lead, confirmLabel, tone = 'danger', onCon
   const [error, setError] = useState<string | null>(null);
   const key = useRef(newIdempotencyKey());
   const first = useRef<HTMLInputElement>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    first.current?.focus();
+    (noReason ? codeRef : first).current?.focus();
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [busy, onClose]);
-  const valid = reason.trim().length >= 3 && /^\d{6}$/.test(code);
+  }, [busy, onClose, noReason]);
+  const valid = (noReason || reason.trim().length >= 3) && /^\d{6}$/.test(code);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!valid || busy) return;
@@ -367,14 +371,16 @@ export function DangerDialog({ title, lead, confirmLabel, tone = 'danger', onCon
         <p className="lead">{lead}</p>
         {children}
         {error && <div className="form-error" role="alert">{error}</div>}
-        <div className="field">
-          <label htmlFor="dlg-reason">Причина</label>
-          <input id="dlg-reason" ref={first} className="control" value={reason} maxLength={300}
-            placeholder="Укажите причину" onChange={(e) => setReason(e.target.value)} />
-        </div>
+        {!noReason && (
+          <div className="field">
+            <label htmlFor="dlg-reason">Причина</label>
+            <input id="dlg-reason" ref={first} className="control" value={reason} maxLength={300}
+              placeholder="Укажите причину" onChange={(e) => setReason(e.target.value)} />
+          </div>
+        )}
         <div className="field">
           <label htmlFor="dlg-code">Код двухфакторной аутентификации</label>
-          <input id="dlg-code" className="control" value={code} inputMode="numeric" autoComplete="one-time-code"
+          <input id="dlg-code" ref={codeRef} className="control" value={code} inputMode="numeric" autoComplete="one-time-code"
             placeholder="6 цифр" maxLength={6} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
         </div>
         <div className="modal-actions">

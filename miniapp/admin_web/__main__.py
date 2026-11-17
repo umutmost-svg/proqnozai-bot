@@ -9,6 +9,9 @@ Server (ADMIN_WEB_MODE=server, docs/ops/admin-server.md):
     python -m miniapp.admin_web serve                 # behind Cloudflare Access + the edge secret
     python -m miniapp.admin_web create-owner <email>  # the first owner, interactively (password asked twice,
                                                       # the 2FA secret shown once on that terminal only)
+    python -m miniapp.admin_web unlock <email>        # end a 2FA lock early
+    python -m miniapp.admin_web reset-credentials <email>   # lost password or 2FA device (interactive, like
+                                                      # create-owner): new password + new 2FA secret, sessions end
 
 Environment: ADMIN_PILOT_DIR (default ~/.sporbot-admin-pilot), ADMIN_WEB_PORT (default 8795).
 Passwords and 2FA secrets go only to <pilot dir>/credentials.txt (0600), never to the repository
@@ -112,6 +115,33 @@ def _create_owner(config: AdminWebConfig, email: str) -> int:
     return 0
 
 
+def _unlock(config: AdminWebConfig, email: str) -> int:
+    if not AdminStore(config.admin_db).cli_unlock(email, int(time.time())):
+        print("no such account", file=sys.stderr)
+        return 2
+    print("unlocked")
+    return 0
+
+
+def _reset_credentials(config: AdminWebConfig, email: str) -> int:
+    """Recovery for an active account (the only owner included): same terminal rules as create-owner."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("refused: run it on an interactive terminal (docker exec -it ...)", file=sys.stderr)
+        return 2
+    password = getpass.getpass(f"new password for {email} (at least {MIN_OWNER_PASSWORD} characters): ")
+    if len(password) < MIN_OWNER_PASSWORD or len(password) > 200 or password != getpass.getpass("repeat: "):
+        print("refused: too short or the two entries differ", file=sys.stderr)
+        return 2
+    secret = AdminStore(config.admin_db).cli_reset(email, password, int(time.time()))
+    if secret is None:
+        print("refused: no active account with this e-mail", file=sys.stderr)
+        return 2
+    print("\nDone. Add this NEW 2FA secret to your authenticator app now (the old one no longer works):")
+    print(f"  2FA secret: {secret}")
+    print(f"  otpauth:    {totp.provisioning_uri(secret, email.strip())}")
+    return 0
+
+
 def _code(config: AdminWebConfig, email: str) -> int:
     secret = AdminStore(config.admin_db).totp_secret_for_cli(email)
     if not secret:
@@ -132,6 +162,8 @@ def main(argv: list[str] | None = None) -> int:
     code.add_argument("email")
     owner = sub.add_parser("create-owner")
     owner.add_argument("email")
+    for name in ("unlock", "reset-credentials"):
+        sub.add_parser(name).add_argument("email")
     args = parser.parse_args(argv)
     try:
         config = AdminWebConfig.from_env(os.environ)
@@ -156,6 +188,10 @@ def main(argv: list[str] | None = None) -> int:
         return _serve(config)
     if args.command == "create-owner":
         return _create_owner(config, args.email)
+    if args.command == "unlock":
+        return _unlock(config, args.email)
+    if args.command == "reset-credentials":
+        return _reset_credentials(config, args.email)
     return _code(config, args.email)
 
 

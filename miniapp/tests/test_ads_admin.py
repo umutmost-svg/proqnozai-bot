@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from miniapp.ads import policy, targeting
 from miniapp.admin_web.ads import load_signing_key
 from miniapp.admin_web.demo import DEMO_ID_BASE
-from miniapp.tests.test_admin_web import code, env, login, post  # noqa: F401 — env is a fixture
+from miniapp.tests.test_admin_web import digest_of, fresh, code, env, login, post  # noqa: F401 — env is a fixture
 
 U1 = DEMO_ID_BASE + 1000
 U2 = DEMO_ID_BASE + 1037
@@ -134,10 +134,10 @@ def test_status_transitions_and_edits_only_when_not_running(ads_env):
 
 
 def test_journal_keeps_texts_and_links_but_no_identifiers(ads_env):
-    _, clock, client, accounts, _, csrf, pid = ads_env
+    _, clock, client, accounts, secrets_, csrf, pid = ads_env
     gid = post(client, "/api/admin/ads/groups", csrf, {"name": "VIP"}).json()["id"]
     assert post(client, f"/api/admin/ads/groups/{gid}/members", csrf, {"add": [U1, U2]}).json()["total"] == 2
-    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB777"})
+    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB777", "code": fresh(secrets_, clock)})
     cond = {"any": [{"user_in": [U2]}, {"group_in": [gid]}, {"mb_id_in": ["MB777"]}]}
     post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()), condition=cond))
     dump = json.dumps(accounts.events(action="ads."), ensure_ascii=False)
@@ -168,7 +168,7 @@ def test_publish_writes_a_valid_snapshot_with_compiled_audiences(ads_env):
     config, clock, client, accounts, secrets_, csrf, pid = ads_env
     gid = post(client, "/api/admin/ads/groups", csrf, {"name": "VIP"}).json()["id"]
     post(client, f"/api/admin/ads/groups/{gid}/members", csrf, {"add": [U2]})
-    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB777"})
+    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB777", "code": fresh(secrets_, clock)})
     cond = {"all": [{"any": [{"group_in": [gid]}, {"mb_id_in": ["mb777"]}, {"mb_verified": True}]},
                     {"not": {"mb_id_in": ["NOBODY"]}}]}
     cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()), condition=cond,
@@ -291,7 +291,7 @@ def test_unpublished_changes_cover_partners_groups_and_mb_ids(ads_env):
     config, clock, client, _, secrets_, csrf, pid = ads_env
     publish(client, csrf, secrets_, clock)
     assert client.get("/api/admin/ads/publication").json()["unpublishedChanges"] is False
-    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB1"})
+    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB1", "code": fresh(secrets_, clock)})
     assert client.get("/api/admin/ads/publication").json()["unpublishedChanges"] is True
     publish(client, csrf, secrets_, clock, key="publish-key-2")
     gid = post(client, "/api/admin/ads/groups", csrf, {"name": "G"}).json()["id"]

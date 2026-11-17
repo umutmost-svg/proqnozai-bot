@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type MbLink, type UserRow } from '../api';
+import { api, ApiError, type MbLink, type UserRow } from '../api';
 import { localTime } from '../format';
 import { useLoad, useMe } from '../state';
-import { Empty, ErrorBox, Loading, PageHead, Toast } from '../ui';
+import { DangerDialog, Empty, ErrorBox, Loading, PageHead, Toast } from '../ui';
 
 type Item = MbLink & { user: UserRow | null };
 const STATES = [['pending', 'На проверке'], ['approved', 'Подтверждены'], ['rejected', 'Отклонены']] as const;
@@ -16,8 +16,29 @@ export function MbQueue() {
   const { data, error, loading, reload } = useLoad<{ items: Item[]; counts: Record<string, number> }>(`/api/admin/mb?state=${state}`);
   const [busy, setBusy] = useState<number | null>(null);
   const [rejecting, setRejecting] = useState<Item | null>(null);
+  const [approving, setApproving] = useState<Item | null>(null);
   const [reason, setReason] = useState('');
   const [toast, setToast] = useState<string | null>(null);
+
+  /** An approval needs a fresh 2FA code (the dialog shows a wrong one and keeps itself open). */
+  const approve = async (item: Item, code: string) => {
+    try {
+      await api(`/api/admin/mb/${item.userId}/decide`, {
+        method: 'POST', body: { decision: 'approve', mbId: item.mbId, submission: item.submission, code },
+      });
+    } catch (err) {
+      if (err instanceof ApiError && (err.code === 'mb_stale' || err.code === 'mb_id_taken')) {
+        setApproving(null);
+        setToast(err.code === 'mb_stale' ? 'Пользователь уже сменил MB ID — обновите список' : 'Этот MB ID уже у другого пользователя');
+        reload();
+        return;
+      }
+      throw err;
+    }
+    setApproving(null);
+    setToast(`MB ID ${item.mbId} подтверждён`);
+    reload();
+  };
 
   const decide = async (item: Item, approve: boolean, why?: string) => {
     setBusy(item.userId);
@@ -65,7 +86,7 @@ export function MbQueue() {
                   {state !== 'pending' && <td>{localTime(i.decidedAt)}{i.reason && <span className="sub">{i.reason}</span>}</td>}
                   {state === 'pending' && owner && (
                     <td>
-                      <button type="button" className="btn primary" disabled={busy === i.userId} onClick={() => void decide(i, true)}>Подтвердить</button>{' '}
+                      <button type="button" className="btn primary" disabled={busy === i.userId} onClick={() => setApproving(i)}>Подтвердить</button>{' '}
                       <button type="button" className="btn" disabled={busy === i.userId} onClick={() => { setRejecting(i); setReason(''); }}>Отклонить</button>
                     </td>
                   )}
@@ -85,6 +106,11 @@ export function MbQueue() {
           <button type="button" className="btn primary" disabled={reason.trim().length < 3 || busy !== null} onClick={() => void decide(rejecting, false, reason.trim())}>Отклонить</button>{' '}
           <button type="button" className="btn link" onClick={() => setRejecting(null)}>Отмена</button>
         </div>
+      )}
+      {approving && (
+        <DangerDialog title="Подтвердить MB ID?" tone="primary" confirmLabel="Подтвердить" noReason
+          lead={<>MB ID <b className="mono">{approving.mbId}</b> станет подтверждённым у пользователя {who(approving)}. Нужен код 2FA.</>}
+          onClose={() => setApproving(null)} onConfirm={({ code }) => approve(approving, code)} />
       )}
       {toast && <Toast text={toast} onDone={() => setToast(null)} />}
     </>

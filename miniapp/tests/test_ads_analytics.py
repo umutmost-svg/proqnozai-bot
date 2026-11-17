@@ -8,7 +8,7 @@ import pytest
 
 from miniapp.ads.telemetry import Telemetry
 from miniapp.admin_web.ads_analytics import wilson
-from miniapp.tests.test_admin_web import env, login, post  # noqa: F401 — env is a fixture
+from miniapp.tests.test_admin_web import digest_of, fresh, env, login, post  # noqa: F401 — env is a fixture
 from miniapp.tests.test_ads_admin import U1, U2, ads_env, campaign_body  # noqa: F401 — ads_env is a fixture
 
 
@@ -59,8 +59,8 @@ def test_confirmed_conversions_are_attributed_to_the_last_clicked_variant(ads_en
     config, clock, client, accounts, secrets_, csrf, pid = ads_env
     cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()))).json()["id"]
     seed(config, int(clock()), cid)
-    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB777"})
-    post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "MB888"})
+    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB777", "code": fresh(secrets_, clock)})
+    post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "MB888", "code": fresh(secrets_, clock)})
     r = post(client, f"/api/admin/ads/campaigns/{cid}/conversions", csrf, {"mbIds": ["mb777", "MB888", "NOPE"]}).json()
     assert r == {"reported": 3, "matched": 2, "added": 2, "attributed": 1}
     again = post(client, f"/api/admin/ads/campaigns/{cid}/conversions", csrf, {"mbIds": ["MB777"]}).json()
@@ -129,9 +129,9 @@ def test_failed_engaged_read_leaves_unique_ctr_unknown(ads_env, monkeypatch):
 
 def test_conversions_are_refused_while_telemetry_is_unreadable_and_attributed_on_retry(ads_env):
     # Codex P1: an unreadable telemetry must not store conversions as permanently unattributed.
-    config, clock, client, accounts, _, csrf, pid = ads_env
+    config, clock, client, accounts, secrets_, csrf, pid = ads_env
     cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()))).json()["id"]
-    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB777"})
+    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB777", "code": fresh(secrets_, clock)})
     body = {"mbIds": ["MB777"]}
     missing = post(client, f"/api/admin/ads/campaigns/{cid}/conversions", csrf, body)
     assert (missing.status_code, missing.json()["error"]) == (503, "telemetry_unavailable")
@@ -191,9 +191,9 @@ def test_unique_ctr_counts_only_clickers_who_were_shown_the_variant(ads_env):
 
 
 def test_conversions_need_readable_telemetry(ads_env):
-    _, clock, client, _, _, csrf, pid = ads_env
+    _, clock, client, _, secrets_, csrf, pid = ads_env
     cid = post(client, "/api/admin/ads/campaigns", csrf, campaign_body(pid, int(clock()))).json()["id"]
-    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB777"})
+    post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "MB777", "code": fresh(secrets_, clock)})
     r = post(client, f"/api/admin/ads/campaigns/{cid}/conversions", csrf, {"mbIds": ["MB777"]})
     assert r.status_code == 503 and r.json()["error"] == "telemetry_unavailable"
 

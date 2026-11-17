@@ -62,7 +62,16 @@ export function newIdempotencyKey(): string {
 const MESSAGES: Record<string, string> = {
   network: 'Сервер админки недоступен. Попробуйте обновить страницу через минуту.',
   invalid_credentials: 'Неверная электронная почта или пароль, либо вход временно заблокирован после нескольких ошибок.',
-  locked: 'Учётная запись временно заблокирована после нескольких ошибок. Попробуйте через 15 минут.',
+  locked: 'Учётная запись временно заблокирована после нескольких ошибок кода 2FA (от 15 минут, каждая следующая блокировка за сутки дольше).',
+  invalid_password: 'Неверный текущий пароль.',
+  weak_password: 'Новый пароль: от 12 до 200 символов.',
+  same_password: 'Новый пароль совпадает с текущим.',
+  conflict: 'Пароль только что изменили в другой вкладке. Обновите страницу.',
+  use_password_change: 'Свой вход сбросить нельзя: смените пароль в разделе «Безопасность».',
+  not_active: 'Сбросить вход можно только у активной учётной записи.',
+  broadcast_changed: 'Рассылку изменили после проверки. Проверьте текст и аудиторию ещё раз и запланируйте снова.',
+  audience_changed: 'Получатели изменились после проверки (или ещё не загрузились). Откройте подтверждение заново.',
+  message_rate_limited: 'Лимит личных сообщений: 60 в час и 300 в сутки на администратора. Попробуйте позже.',
   invalid_code: 'Неверный или уже использованный код. Дождитесь следующего кода.',
   expired: 'Время на ввод кода истекло. Войдите заново.',
   reason_required: 'Укажите причину (от 3 символов).',
@@ -283,6 +292,8 @@ export interface Broadcast {
   id: number; name: string; rules: Rules; body: string; buttons: { text: string; url: string }[];
   status: 'draft' | 'scheduled' | 'cancelled' | 'sent'; scheduledAt: number | null; recipients: number | null;
   createdAt: number; updatedAt: number; by: string | null; audience?: number;
+  /** Content the admin reviewed: sent back with the schedule request (refused if the draft changed since). */
+  digest: string;
   /** Jobs by status from the bot's queue (scheduled, sent and cancelled broadcasts). */
   delivery?: Partial<Record<'queued' | 'sending' | 'sent' | 'failed' | 'expired' | 'cancelled', number>>;
   /** Hours after sending at which the bot deletes the message in each chat (null = never). */

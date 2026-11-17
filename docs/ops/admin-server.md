@@ -58,6 +58,20 @@ There are four layers. A request arriving another way, such as the server's publ
    The password is asked twice (at least 14 characters). The 2FA secret and the `otpauth://` link are shown once. Add them to an authenticator app straight away and never paste them into a chat.
 6. Open `https://admin.proqnozai.com` and sign in through Access, then with the e-mail, password and 6-digit code.
 
+### Recovery from the server shell
+
+- A colleague lost the password or the 2FA phone: the owner presses «Сбросить вход» in Settings → Administrators and
+  sends the new one-time link.
+- The owner (or the only owner) lost the password or the 2FA phone, interactive like `create-owner` (new password asked
+  twice, the new 2FA secret shown once, every session of the account ends):
+  ```sh
+  ssh -t root@164.90.180.208 'docker exec -it $(docker ps -q -f name=proqnozai-admin | head -1) admin-entrypoint reset-credentials <e-mail>'
+  ```
+- An account locked after wrong 2FA codes (15 min, doubling for each further lock within 24 h, up to 24 h):
+  ```sh
+  ssh root@164.90.180.208 'docker exec $(docker ps -q -f name=proqnozai-admin | head -1) admin-entrypoint unlock <e-mail>'
+  ```
+
 ## Bot snapshot (value and top users)
 
 Install it once on the host, after the admin is deployed. It must be reinstalled when the scripts change.

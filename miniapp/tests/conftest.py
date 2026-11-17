@@ -24,6 +24,14 @@ class FakeClock:
         self.now += seconds
 
 
+@pytest.fixture(autouse=True)
+def _light_scrypt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Production hashes passwords with scrypt p=5 (~5x the work); hundreds of test logins use p=1 to stay fast.
+    test_admin_security_b checks the production parameters and the rehash explicitly."""
+    from miniapp.admin_web import accounts
+    monkeypatch.setattr(accounts, "SCRYPT_P", 1)
+
+
 @pytest.fixture()
 def clock() -> FakeClock:
     return FakeClock()

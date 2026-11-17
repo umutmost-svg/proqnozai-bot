@@ -99,7 +99,9 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
         for link in referrals.links():
             if mine is not None and link["code"] not in mine:
                 continue
-            items.append({**link, "by": link["by"] if personal else None, "param": PREFIX + link["code"],
+            # Who created a link (e-mail, admin id) is hidden from analysts and promotion managers (CRM audit B).
+            items.append({**link, "by": link["by"] if personal else None,
+                          "adminId": link["adminId"] if personal else None, "param": PREFIX + link["code"],
                           "url": link_url(link["channel"], link["code"], ctx.bot_username, ctx.miniapp_short_name),
                           "stats": per_code.get(link["code"], empty)})
         unknown = {code: s for code, s in per_code.items() if code not in {i["code"] for i in items}}
@@ -126,7 +128,10 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
     async def create(request: Request) -> dict:
         admin = ctx.admin_of(request, "manage_referrals")
         data = await ctx.body(request)
-        return referrals.create(admin, data.get("name"), data.get("channel"), data.get("code"), ctx.now(),
+        # A promotion manager never picks the code: one already circulating without a link would become "theirs"
+        # with its earlier starts (CRM audit B). The server generates it.
+        code = None if admin.role == "promoter" else data.get("code")
+        return referrals.create(admin, data.get("name"), data.get("channel"), code, ctx.now(),
                                 data.get("platform"), data.get("geo"), data.get("pid"))
 
     @app.post("/api/admin/referrals/{link_id}/archive")
