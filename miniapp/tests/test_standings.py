@@ -478,8 +478,15 @@ def test_background_model_history_loads_what_the_cache_lacks_then_reads_only_the
     assert loaded and len(t.calls) == 3
 
 
-def test_background_model_history_is_refused_while_another_background_load_runs(clock: FakeClock) -> None:
+def test_background_model_history_is_not_refused_by_a_running_warm_up_and_never_serves_an_old_calendar(
+        clock: FakeClock) -> None:
     t = FakeTransport()
     service = make_service(t, clock, per_minute=60, per_day=10000)
-    service._background_loads = 1  # e.g. settlement holds the background slot
-    assert run(service.background_model_history("fd:PL")) == (None, False) and t.calls == []
+    service._background_loads = 1  # a warm-up (started by users' activity) is between its loads
+    current = match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0))
+    t.script = [t.ok(season_payload(current)), t.ok(season_payload(match(1, "FINISHED", full=(3, 1)), season=PAST))]
+    history, loaded = run(service.background_model_history("fd:PL", 20 * 60))
+    assert loaded and history is not None                   # waited for the slot, not refused
+    clock.advance(30 * 60)
+    t.script = [HttpResponse(500, {}, b"")] * 3              # the refresh fails: only the old copy is left
+    assert run(service.background_model_history("fd:PL", 20 * 60)) == (None, True)
