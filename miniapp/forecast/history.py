@@ -292,12 +292,17 @@ class ForecastHistory:
             row = conn.execute("SELECT attempts FROM ai_paid_attempts WHERE analysis_key = ?", (key,)).fetchone()
         return int(row[0]) if row else 0
 
-    def add_attempt(self, key: str, kickoff_at: str) -> int:
-        """Counts one paid attempt for this analysis; returns the new total."""
+    def add_attempt(self, key: str, kickoff_at: str, cap: int | None = None) -> int | None:
+        """Counts one paid attempt for this analysis; returns the new total, or None when `cap` attempts are
+        already counted (checked inside the same write, so two processes cannot both pass it)."""
         with self._write() as conn:
             conn.execute("DELETE FROM ai_paid_attempts WHERE kickoff_at < ?", (self._iso_now(),))
-            conn.execute("INSERT INTO ai_paid_attempts (analysis_key, kickoff_at, attempts) VALUES (?, ?, 1) "
-                         "ON CONFLICT(analysis_key) DO UPDATE SET attempts = attempts + 1", (key, kickoff_at))
+            changed = conn.execute(
+                "INSERT INTO ai_paid_attempts (analysis_key, kickoff_at, attempts) VALUES (?, ?, 1) "
+                "ON CONFLICT(analysis_key) DO UPDATE SET attempts = attempts + 1 WHERE ? IS NULL OR attempts < ?",
+                (key, kickoff_at, cap, cap)).rowcount
+            if not changed:
+                return None
             return int(conn.execute("SELECT attempts FROM ai_paid_attempts WHERE analysis_key = ?",
                                     (key,)).fetchone()[0])
 

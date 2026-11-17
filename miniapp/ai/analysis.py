@@ -734,11 +734,13 @@ class AiService:
             self._paid_attempts[key] = self._paid_attempts.get(key, 0) + 1
             return True
         try:
-            await asyncio.to_thread(self.history.add_attempt, key, kickoff_at)
+            # The cap is enforced by the counting write itself: another process (e.g. the old task during a
+            # deploy) may have counted since this one read the total.
+            total = await asyncio.to_thread(self.history.add_attempt, key, kickoff_at, MAX_PAID_ATTEMPTS)
         except Exception as exc:  # noqa: BLE001 — log the type only
             logger.warning("ai.attempt_count_failed type=%s", type(exc).__name__)
             return False
-        return True
+        return total is not None
 
     async def _give_back(self, key: str, reserved: list[tuple[str, list[str]]]) -> None:
         """A call the provider refused unbilled: its attempt and the reserved daily allowances are returned, so a

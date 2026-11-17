@@ -176,3 +176,17 @@ def test_paid_attempts_survive_a_restart(tmp_path) -> None:
     again = ForecastHistory(path)
     again.init_schema()
     assert again.attempts("k") == 1 and again.add_attempt("k", "2099-01-01T00:00:00Z") == 2
+
+
+def test_the_paid_attempt_cap_holds_across_processes(tmp_path) -> None:
+    """Two processes that both read 1 attempt cannot both count a second one past the cap (Codex unstored r2)."""
+    path = tmp_path / "h.db"
+    a, b = ForecastHistory(path), ForecastHistory(path)
+    a.init_schema()
+    kickoff = "2099-01-01T00:00:00Z"
+    assert a.add_attempt("k", kickoff, 2) == 1
+    assert a.attempts("k") == 1 and b.attempts("k") == 1           # both saw room for one more
+    assert a.add_attempt("k", kickoff, 2) == 2
+    assert b.add_attempt("k", kickoff, 2) is None                  # refused by the counting write itself
+    assert b.attempts("k") == 2
+    assert b.add_attempt("other", kickoff, 2) == 1                 # a new key starts at one
