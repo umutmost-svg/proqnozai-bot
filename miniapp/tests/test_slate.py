@@ -31,7 +31,8 @@ class Sports:
     def tournaments(self, sport):
         return [SimpleNamespace(id=t) for t in self.served]
 
-    async def background_model_history(self, tournament):
+    async def background_model_history(self, tournament, max_age_s=None):
+        self.max_age = max_age_s
         if tournament in self.failing:
             raise RuntimeError("provider error")
         if tournament not in self.cached:
@@ -42,8 +43,9 @@ class Sports:
             loaded = True
         else:
             loaded = False
-        return ModelHistory([e for e in self.events if e.tournament_id == tournament], f"{DAY[:4]}-08-01", True,
-                            None, None), loaded
+        complete = tournament not in getattr(self, "partial", set())
+        return ModelHistory([e for e in self.events if e.tournament_id == tournament], f"{DAY[:4]}-08-01", complete,
+                            None if complete else "transient", None), loaded
 
 
 class Forecaster:
@@ -109,8 +111,22 @@ def test_the_next_pass_comes_right_after_utc_midnight(tmp_path) -> None:
     from datetime import datetime
 
     late = datetime.fromisoformat(f"{DAY}T23:50:00+00:00").timestamp()
-    recorder, _, _ = make(tmp_path, Sports([]), {}, Clock(late))
+    recorder, _, clock = make(tmp_path, Sports([]), {}, Clock(late))
     assert recorder.wait_s() == 10 * 60 + 5
+    started = datetime.fromisoformat(f"{DAY}T23:59:00+00:00").timestamp()
+    clock.now = started + 120                               # a pass that ran across midnight
+    assert recorder.wait_s(started) == 1.0                  # the post-midnight pass is due now, not in 30 min
+
+
+def test_a_transient_previous_season_is_retried_soon_and_the_calendar_must_be_fresh(tmp_path) -> None:
+    from miniapp.forecast.slate import CALENDAR_MAX_AGE_S
+
+    sports = Sports([ev(1)], cached={"fd:PL"})
+    sports.partial = {"fd:PL"}
+    recorder, history, _ = make(tmp_path, sports, {"fd:1": forecast(("1", 0.64, 0.45))})
+    run_pass(recorder)
+    assert history.list_forecasts(include_slate=True)[0] == 1 and recorder.wait_s() == RETRY_S
+    assert sports.max_age == CALENDAR_MAX_AGE_S
 
 
 def test_a_match_that_kicked_off_while_computing_is_not_recorded(tmp_path) -> None:

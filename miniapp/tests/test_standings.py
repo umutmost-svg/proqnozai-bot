@@ -472,6 +472,10 @@ def test_background_model_history_loads_what_the_cache_lacks_then_reads_only_the
     assert loaded and history.previous_season and [e.id for e in history.events] == ["fd:1", "fd:2"]
     again, loaded = run(service.background_model_history("fd:PL"))
     assert not loaded and again.previous_season and len(t.calls) == 2
+    clock.advance(25 * 60)                                  # older than the slate accepts: the calendar is reloaded
+    t.script = [t.ok(season_payload(current))]
+    _, loaded = run(service.background_model_history("fd:PL", 20 * 60))
+    assert loaded and len(t.calls) == 3
 
 
 def test_background_model_history_is_refused_while_another_background_load_runs(clock: FakeClock) -> None:

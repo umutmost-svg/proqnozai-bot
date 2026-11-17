@@ -36,6 +36,9 @@ logger = logging.getLogger("miniapp.forecast")
 
 PASS_EVERY_S = 30 * 60.0
 RETRY_S = 2 * 60.0
+# The slate reads a calendar at most this old (the provider cache's own TTL is 15 min): which matches it sees
+# never depends on whether a user happened to refresh the cache.
+CALENDAR_MAX_AGE_S = 20 * 60.0
 LOAD_SPACING_S = 15.0  # between competitions whose data had to be loaded: never a burst on the shared minute
 MIDNIGHT_DELAY_S = 5.0
 RECORDED_KEYS_MAX = 5000
@@ -76,6 +79,7 @@ class SlateRecorder:
     async def stop(self) -> None:
         if self._loop_task is not None:
             self._loop_task.cancel()
+            self._worker.shutdown(wait=False, cancel_futures=True)
             try:
                 await self._loop_task
             except asyncio.CancelledError:
@@ -84,16 +88,20 @@ class SlateRecorder:
 
     async def _loop(self) -> None:
         while True:
+            started = self._clock()
             await self.run_pass()
-            await self._sleep(self.wait_s())
+            await self._sleep(self.wait_s(started))
 
-    def wait_s(self) -> float:
-        """Until the next pass: PASS_EVERY_S (RETRY_S with a competition to retry), or just after UTC midnight."""
+    def wait_s(self, started: float | None = None) -> float:
+        """Until the next pass, counted from when this one started: PASS_EVERY_S (RETRY_S with a competition to
+        retry), or just after the first UTC midnight after that start (a pass running across midnight never
+        postpones the post-midnight one)."""
         now = self._clock()
-        day = datetime.fromtimestamp(now, UTC).date()
+        started = now if started is None else started
+        day = datetime.fromtimestamp(started, UTC).date()
         midnight = datetime.combine(day + timedelta(days=1), datetime.min.time(), UTC).timestamp()
         every = RETRY_S if self._retry else PASS_EVERY_S
-        return max(1.0, min(every, midnight + MIDNIGHT_DELAY_S - now))
+        return max(1.0, min(started + every, midnight + MIDNIGHT_DELAY_S) - now)
 
     async def run_pass(self) -> None:
         served = {t.id for t in self.sports.tournaments("football")}
@@ -115,9 +123,12 @@ class SlateRecorder:
 
     async def _competition(self, tournament: str) -> tuple[bool, bool]:
         """Records today's remaining matches of one competition: (done, whether the provider was asked)."""
-        history, loaded = await self.sports.background_model_history(tournament)
+        history, loaded = await self.sports.background_model_history(tournament, CALENDAR_MAX_AGE_S)
         if history is None:
             return False, loaded
+        # A previous season that may still load (transient): forecasts now are partial (outside the gate); retried
+        # soon so an eligible one can follow before kickoff.
+        complete = history.previous_season or history.season_start is None or history.previous_missing == "absent"
         today = datetime.fromtimestamp(self._clock(), UTC).date()
         upcoming = [e for e in history.events
                     if isinstance(e, FootballEvent) and e.tournament_id == tournament and e.status == "upcoming"
@@ -139,7 +150,7 @@ class SlateRecorder:
             while len(self._recorded) > RECORDED_KEYS_MAX:
                 self._recorded.popitem(last=False)
             logger.info("slate.recorded tournament=%s forecasts=%d", tournament, len(records))
-        return True, loaded
+        return complete, loaded
 
     def _records(self, events: list[FootballEvent], outcomes: list[Any], now: float) -> list[ForecastRecord]:
         created = datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

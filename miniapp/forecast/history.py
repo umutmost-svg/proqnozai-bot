@@ -202,6 +202,10 @@ def history_path(db_path: Path) -> Path:
     return db_path.with_name(f"{db_path.stem}.forecasts.db")
 
 
+def _instant(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -299,19 +303,22 @@ class ForecastHistory:
             for i in range(0, len(ids), 500):
                 chunk = ids[i:i + 500]
                 found += conn.execute(
-                    "SELECT forecast_key, event_id, final_home, final_away, settled_status, kickoff_at FROM ai_forecasts "
+                    "SELECT forecast_key, event_id, final_home, final_away, settled_status, kickoff_at, created_at "
+                    "FROM ai_forecasts "
                     f"WHERE event_id IN ({', '.join('?' * len(chunk))})", chunk).fetchall()
 
-        def target(event_id: str, kickoff_at: str) -> tuple[int | None, int | None, str]:
-            # A fixture played on another UTC day than the one the forecast was made for (postponed, moved) is not
-            # that forecast's match: void, so a forecast is never scored as a match-day one for a different day.
+        def target(event_id: str, kickoff_at: str, created_at: str) -> tuple[int | None, int | None, str]:
+            # The kickoff the match was really played at decides: a forecast made for another UTC day (postponed,
+            # moved) or made at/after the real kickoff (moved earlier) is not a prospective match-day forecast of
+            # that match — void, never scored.
             played = kickoffs.get(event_id)
-            if played is not None and played[:10] != kickoff_at[:10]:
+            if played is not None and (played[:10] != kickoff_at[:10]
+                                       or _instant(created_at) >= _instant(played)):
                 return (None, None, "void")
             return targets[event_id]
 
-        expected = {key: target(event_id, kickoff) for key, event_id, _, _, _, kickoff in found}
-        due = [key for key, _, fh, fa, st, _ in found if (fh, fa, st) != expected[key]]
+        expected = {key: target(event_id, kickoff, created) for key, event_id, _, _, _, kickoff, created in found}
+        due = [key for key, _, fh, fa, st, _, _ in found if (fh, fa, st) != expected[key]]
         if not due:
             return 0
         changed = 0

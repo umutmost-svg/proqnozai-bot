@@ -167,6 +167,13 @@ def test_a_fixture_played_on_another_day_voids_its_forecast(history: ForecastHis
     assert history.status_counts(include_slate=True)["settled"] == 1
 
 
+def test_a_forecast_made_after_the_real_kickoff_is_void(history: ForecastHistory) -> None:
+    """Moved earlier the same day: the row (stale 15:00 kickoff) was made at 12:00, after a 10:00 kickoff."""
+    history.record(record(key="slate:goals-1:fd:7:abc", created="2027-01-14T12:00:00Z"))
+    history.settle_events([replace(event(), starts_at="2027-01-14T10:00:00Z")])
+    assert history.status_counts(include_slate=True) == {"pending": 0, "settled": 0, "void": 1}
+
+
 def test_the_gate_compares_with_the_stored_baseline_on_the_same_matches() -> None:
     from miniapp.forecast.history import _gate
 

@@ -783,14 +783,18 @@ class SportsService:
             LOW_PRIORITY_DAY_SHARE.reset(share)
             LOW_PRIORITY_RESERVE.reset(reserve)
 
-    async def background_model_history(self, tournament_id: str) -> tuple[ModelHistory | None, bool]:
+    async def background_model_history(self, tournament_id: str, max_age_s: float = SEARCH_MAX_AGE_S,
+                                       ) -> tuple[ModelHistory | None, bool]:
         """model_history() for background work (the daily forecast slate): the cache first; a missing or old calendar
         and a missing previous season are loaded with the warm-up's low priority (minute reserve for users, its
         day share). Returns (history, whether the provider was asked). (None, …) when the background budget or
         slot refused — try again later; a previous season that cannot be had now leaves a partial history."""
         history = self.cached_model_history(tournament_id)
-        if history is not None and (history.previous_season or history.season_start is None
-                                    or history.previous_missing == "absent"):
+        code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
+        calendar = self.cache.peek(f"football:calendar:{code}")
+        fresh = calendar is not None and self._clock() - calendar.fetched_at <= max_age_s
+        if history is not None and fresh and (history.previous_season or history.season_start is None
+                                              or history.previous_missing == "absent"):
             return history, False
         if self.football is None or not self._warm_budget_left() or self.background_busy():
             return None, False
