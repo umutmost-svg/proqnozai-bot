@@ -28,7 +28,7 @@ export function Inquiries() {
       <PageHead title="Обращения" subtitle="Входящие сообщения боту и история переписки — только с момента включения сбора"
         actions={me.admin.role === 'owner' && list.data ? <button type="button" className="btn" onClick={() => setRetention(true)}>Срок хранения: {list.data.retentionDays} дн.</button> : undefined} />
       {denied ? (
-        <Empty title="Нет доступа к обращениям">Чтение переписки требует отдельного права «Диалоги», которое выдаёт владелец (Настройки → Администраторы).</Empty>
+        <Empty title="Нет доступа к обращениям">Чтение переписки требует отдельного права «Диалоги», которое выдаёт владелец (Настройки → Роли и права).</Empty>
       ) : list.error ? <ErrorBox error={list.error} onRetry={list.reload} /> : !list.data ? <Loading rows={6} /> : !list.data.collected ? (
         <Empty title="Обращения не собираются">Бот сохраняет новые входящие сообщения только при <span className="mono">BOT_INQUIRIES_ENABLED=true</span>, после одноразового уведомления пользователю. Старые сообщения не собираются.</Empty>
       ) : (

@@ -510,3 +510,30 @@ env-список (вход и каждая сессия). Данные поль�
   opens the confirmation, so a rule-based audience (e.g. "tag VIP") is whatever the data says at that moment. Closing
   it fully needs step-up on every tag change or a full recipient list to approve, both out of this part's scope. Tag
   changes are journalled with the admin's id (`user.tag_add` / `user.tag_remove`).
+
+## CRM audit fixes (17.11.2026, part B2: scale, analytics, UI)
+
+- **Every user is scanned**: audiences, the users list, analytics and the league chart read every row in one query
+  instead of stopping at 50 000 (the oldest or newest users silently dropped out). Broadcast recipients are always
+  computed from fresh data (no cached scan or telemetry facts); only the four chip counts on «Пользователи» (display
+  only) are reused for 30 s unless users, sign-ins or blocks changed. Broadcast names and bulk tags read only the users
+  concerned.
+- **Heatmaps** (activity and registrations): each weekday x hour cell is the average per occurrence of that slot in the
+  period (a 30-day window has some weekdays 5 times and others 4; raw sums favoured them by 25%).
+- **Analytics texts**: DAU points to «Продукт», retention to «Продукт», sources to «Рефералы» (they said "not collected"
+  although the data exists there). Mini App `requests` is labelled «Открытий» (sign-ins and session checks).
+- **Stale bot snapshot**: a warning above the bot metrics when the hourly snapshot is older than 2 hours.
+- **Session expiry**: a sign-in dialog over the open page (above its dialogs); unsaved text stays. Another account, or
+  the same account with another role or grants, reloads the page. A late 401 of a request sent before the new sign-in
+  is ignored; a brief failure right after sign-in is retried. A server that cannot be reached at start says so instead
+  of showing the sign-in form.
+- **No duplicates**: notes, new drafts, new segments and referral links carry a client key bound to the submitted data;
+  a double click or an unchanged retry after a lost response returns the first record (`create_keys` in admin.db),
+  edited fields get a new key. A replayed draft returns the digest of what that request submitted.
+- **UI fixes**: group credits only for the loaded list of the chosen segment (named in the dialog); the MB reject form is
+  a modal; `?schedule=1` opens the confirmation once and leaves the address; the top-bar search is hidden for roles that
+  cannot list users and the users page follows a new search; more error codes have texts; toasts keep their 4 s; dates
+  of another year show the year; user-card counters show "50+" when the list is full; journal filters and labels cover
+  broadcasts, segments, credits, inquiries, referrals, ads and failures.
+- **Phones**: below 860 px the sidebar becomes a top bar with a scrolling menu, columns stack, tables scroll sideways,
+  dialogs fit the screen.

@@ -97,14 +97,20 @@ export function MbQueue() {
         )
       )}
       {rejecting && (
-        <div className="note" role="dialog" aria-label="Отклонить MB ID" style={{ marginTop: 16 }}>
-          <div className="note-title">Отклонить MB ID {rejecting.mbId}</div>
-          <div className="field">
-            <label htmlFor="mb-reason">Причина (её увидит пользователь)</label>
-            <input id="mb-reason" className="control" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)} />
-          </div>
-          <button type="button" className="btn primary" disabled={reason.trim().length < 3 || busy !== null} onClick={() => void decide(rejecting, false, reason.trim())}>Отклонить</button>{' '}
-          <button type="button" className="btn link" onClick={() => setRejecting(null)}>Отмена</button>
+        // A modal, in view whatever the table's length (CRM audit B2: it opened below up to 500 rows).
+        <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && busy === null) setRejecting(null); }}>
+          <form className="modal" role="dialog" aria-modal="true" aria-labelledby="mb-reject-title"
+            onSubmit={(e) => { e.preventDefault(); if (reason.trim().length >= 3 && busy === null) void decide(rejecting, false, reason.trim()); }}>
+            <h2 id="mb-reject-title">Отклонить MB ID {rejecting.mbId}</h2>
+            <div className="field">
+              <label htmlFor="mb-reason">Причина (её увидит пользователь)</label>
+              <input id="mb-reason" className="control" maxLength={200} value={reason} autoFocus onChange={(e) => setReason(e.target.value)} />
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn" disabled={busy !== null} onClick={() => setRejecting(null)}>Отмена</button>
+              <button type="submit" className="btn danger" disabled={reason.trim().length < 3 || busy !== null}>Отклонить</button>
+            </div>
+          </form>
         </div>
       )}
       {approving && (

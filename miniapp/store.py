@@ -566,6 +566,14 @@ class Store:
             return [{"id": int(u), "createdAt": int(c)} for u, c in conn.execute(
                 "SELECT telegram_user_id, created_at FROM users WHERE created_at >= ?", (since,))]
 
+    def users_fingerprint(self) -> tuple:
+        """Changes when a user is added, removed, renamed or signs in: lets a reader reuse a full scan safely."""
+        with self._connect() as conn:
+            return tuple(conn.execute(
+                "SELECT COUNT(*), MAX(created_at), MAX(last_login_at), "
+                "TOTAL(length(COALESCE(username, '')) + length(COALESCE(first_name, '')) "
+                "+ length(COALESCE(last_name, '')) + length(COALESCE(lang, ''))) FROM users").fetchone())
+
     def users_by_ids(self, user_ids: list[int], now: int) -> list[dict]:
         """Rows like list_users for the given ids (batched IN queries; unknown ids are skipped)."""
         out: list[dict] = []

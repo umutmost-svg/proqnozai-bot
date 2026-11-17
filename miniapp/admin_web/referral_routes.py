@@ -132,7 +132,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
         # with its earlier starts (CRM audit B). The server generates it.
         code = None if admin.role == "promoter" else data.get("code")
         return referrals.create(admin, data.get("name"), data.get("channel"), code, ctx.now(),
-                                data.get("platform"), data.get("geo"), data.get("pid"))
+                                data.get("platform"), data.get("geo"), data.get("pid"), data.get("idempotencyKey"))
 
     @app.post("/api/admin/referrals/{link_id}/archive")
     async def archive(link_id: int, request: Request) -> dict:

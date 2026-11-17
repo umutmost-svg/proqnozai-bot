@@ -641,15 +641,18 @@ class CrmStore:
         self.accounts._event(conn, now, actor.id, "user.mb_id", "user", str(user_id),
                              {"set": had}, {"set": bool(mb_id)}, None, None, "done")
 
-    def add_note(self, actor: Admin, user_id: int, body: str, now: int) -> dict:
+    def add_note(self, actor: Admin, user_id: int, body: str, now: int, key: object = None) -> dict:
         body = _text(body, "note", 2000)
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "manage_users")
+            if (prior := self.accounts.created_before(conn, key, "note", actor.id, [user_id, body])) is not None:
+                return {"id": prior, "replayed": True}
             note_id = conn.execute("INSERT INTO crm_notes (user_id, body, created_at, admin_id) VALUES (?, ?, ?, ?)",
                                    (user_id, body, now, actor.id)).lastrowid
             # The journal records THAT a note was added, never its text (notes may hold personal data).
             self.accounts._event(conn, now, actor.id, "user.note_add", "user", str(user_id), None,
                                  {"noteId": note_id}, None, None, "done")
+            self.accounts.remember_create(conn, key, "note", actor.id, note_id, now, [user_id, body])
         return {"id": note_id}
 
     def send_message(self, actor: Admin, user_id: int, body: str, key: str, now: int, request_id: str) -> dict:
@@ -715,16 +718,21 @@ class CrmStore:
         return [{"requestId": r[0], "adminId": r[1], "messageId": json.loads(r[2])["messageId"], "userId": r[3],
                  "body": r[4]} for r in rows]
 
-    def save_segment(self, actor: Admin, name: str, rules: Any, now: int, segment_id: int | None = None) -> dict:
+    def save_segment(self, actor: Admin, name: str, rules: Any, now: int, segment_id: int | None = None,
+                     key: object = None) -> dict:
         name = _text(name, "name", 80)
         rules = validate_rules(rules)
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "manage_users")
+            if segment_id is None and (prior := self.accounts.created_before(conn, key, "segment", actor.id,
+                                                                              [name, rules])) is not None:
+                return {"id": prior, "replayed": True}
             try:
                 if segment_id is None:
                     segment_id = conn.execute(
                         "INSERT INTO crm_segments (name, rules_json, created_at, updated_at, admin_id) "
                         "VALUES (?, ?, ?, ?, ?)", (name, json.dumps(rules, sort_keys=True), now, now, actor.id)).lastrowid
+                    self.accounts.remember_create(conn, key, "segment", actor.id, segment_id, now, [name, rules])
                 elif not conn.execute("UPDATE crm_segments SET name = ?, rules_json = ?, updated_at = ?, admin_id = ? "
                                       "WHERE id = ?", (name, json.dumps(rules, sort_keys=True), now, actor.id,
                                                        segment_id)).rowcount:
@@ -736,6 +744,7 @@ class CrmStore:
         return {"id": segment_id}
 
     def save_broadcast(self, actor: Admin, data: dict, now: int, broadcast_id: int | None = None) -> dict:
+        key = data.get("idempotencyKey") if broadcast_id is None else None
         name = _text(data.get("name"), "name", 120)
         body = _text(data.get("body"), "body", MAX_TEXT)
         rules = validate_rules(data.get("rules") or {})
@@ -760,11 +769,18 @@ class CrmStore:
             raise ActionError("invalid_delete_after")
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "manage_users")
+            payload = [name, rules_json, body, buttons_json, delete_after]
+            if broadcast_id is None and (prior := self.accounts.created_before(conn, key, "broadcast", actor.id,
+                                                                                payload)) is not None:
+                # The digest of what THIS request submitted, never the draft as it is now: an edit by someone else
+                # since is then caught by the schedule check (Codex CRM-B2 r3).
+                return {"id": prior, "digest": broadcast_digest(*payload), "replayed": True}
             if broadcast_id is None:
                 broadcast_id = conn.execute(
                     "INSERT INTO crm_broadcasts (name, rules_json, body, buttons_json, status, created_at, updated_at, "
                     "admin_id, delete_after_h) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?)",
                     (name, rules_json, body, buttons_json, now, now, actor.id, delete_after)).lastrowid
+                self.accounts.remember_create(conn, key, "broadcast", actor.id, broadcast_id, now, payload)
             else:
                 status = conn.execute("SELECT status FROM crm_broadcasts WHERE id = ?", (broadcast_id,)).fetchone()
                 if status is None:

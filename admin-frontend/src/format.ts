@@ -10,7 +10,8 @@ export function localTime(value: string | number | null | undefined, withYear = 
   if (value === null || value === undefined || value === '') return '—';
   const d = typeof value === 'number' ? new Date(value * 1000) : new Date(value);
   if (Number.isNaN(d.getTime())) return '—';
-  const year = withYear ? ` ${d.getFullYear()}` : '';
+  // The year is shown when asked, and always for another year (card histories span years).
+  const year = withYear || d.getFullYear() !== new Date().getFullYear() ? ` ${d.getFullYear()}` : '';
   return `${d.getDate()} ${MONTHS[d.getMonth()]}${year} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 

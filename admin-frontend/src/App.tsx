@@ -23,7 +23,17 @@ function Gate() {
     return <div style={{ padding: 60, maxWidth: 600 }}><Loading rows={3} /></div>;
   }
   if (state.status === 'anonymous') return <LoginFlow />;
+  if (state.status === 'unreachable') {
+    return (
+      <div style={{ padding: 60, maxWidth: 600 }}>
+        <Empty title="Сервер админки недоступен" action={<button type="button" className="btn" onClick={() => window.location.reload()}>Обновить</button>}>
+          Не удалось связаться с сервером. Проверьте подключение и обновите страницу через минуту.
+        </Empty>
+      </div>
+    );
+  }
   return (
+    <>
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Analytics />} />
@@ -55,6 +65,8 @@ function Gate() {
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
+    {state.expired && <LoginFlow embedded />}
+    </>
   );
 }
 

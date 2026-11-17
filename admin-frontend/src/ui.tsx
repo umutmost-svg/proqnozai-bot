@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { ApiError, errorText, newIdempotencyKey } from './api';
-import { PERIOD_LABELS, useAuth, useMe, usePrefs, useServerMode, type Period } from './state';
+import { can, PERIOD_LABELS, useAuth, useMe, usePrefs, useServerMode, type Period } from './state';
 
 const NAV = [
   ['/', 'Аналитика'], ['/users', 'Пользователи'], ['/inquiries', 'Обращения'], ['/dialogs', 'Диалоги'], ['/broadcasts', 'Рассылки'],
@@ -119,10 +119,13 @@ export function Topbar({ crumb }: { crumb?: string }) {
   return (
     <>
       <div className="topbar">
-        <form className="topbar-search" role="search" onSubmit={(e) => { e.preventDefault(); navigate(`/users?q=${encodeURIComponent(q.trim())}`); }}>
-          <span aria-hidden="true" className="muted">⌕</span>
-          <input aria-label="Глобальный поиск" placeholder="Поиск: пользователь, @username, Telegram ID…" value={q} onChange={(e) => setQ(e.target.value)} />
-        </form>
+        {/* The search lists users: personal data, refused by the API to analysts and promotion managers. */}
+        {can(me.admin.role, 'read_personal') ? (
+          <form className="topbar-search" role="search" onSubmit={(e) => { e.preventDefault(); navigate(`/users?q=${encodeURIComponent(q.trim())}`); }}>
+            <span aria-hidden="true" className="muted">⌕</span>
+            <input aria-label="Глобальный поиск" placeholder="Поиск: пользователь, @username, Telegram ID…" value={q} onChange={(e) => setQ(e.target.value)} />
+          </form>
+        ) : <span />}
         <div className="topbar-right">
           {me.pilot.dataset === 'demo' && <span className="tag violet" title="Пользователи и прогнозы — демонстрационный набор, созданный локально">Демо-набор</span>}
           {server ? (
@@ -322,10 +325,13 @@ export function NotCollected({ what }: { what: string }) {
 }
 
 export function Toast({ text, onDone }: { text: string; onDone: () => void }) {
+  // 4 s from when this text appears: a parent re-render (a new onDone function) must not restart the timer.
+  const done = useRef(onDone);
+  done.current = onDone;
   useEffect(() => {
-    const t = setTimeout(onDone, 4000);
+    const t = setTimeout(() => done.current(), 4000);
     return () => clearTimeout(t);
-  }, [onDone]);
+  }, [text]);
   return <div className="toast" role="status">{text}</div>;
 }
 

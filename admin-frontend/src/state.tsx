@@ -1,9 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, setCsrf, setUnauthenticatedHandler, type Me } from './api';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { api, ApiError, setCsrf, setUnauthenticatedHandler, type Me } from './api';
 
 // ---- auth ----
 
-type AuthState = { status: 'loading' } | { status: 'anonymous' } | { status: 'signed-in'; me: Me };
+// `expired`: the session ended while pages were open (a 401): they stay mounted under a sign-in dialog (CRM audit B2).
+type AuthState = { status: 'loading' } | { status: 'anonymous' } | { status: 'unreachable' }
+  | { status: 'signed-in'; me: Me; expired?: boolean };
 interface AuthApi {
   state: AuthState;
   refresh: () => Promise<void>;
@@ -13,12 +15,36 @@ const AuthContext = createContext<AuthApi | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: 'loading' });
+  const current = useRef<AuthState>(state);
+  current.current = state;
   const refresh = useCallback(async () => {
     try {
-      const me = await api<Me>('/api/admin/auth/me');
+      // A brief network failure right after sign-in must not drop an expired page with its unsaved text: retried, and
+      // only "not signed in" (401) ends the session view (Codex CRM-B2 r2).
+      let me: Me | null = null;
+      for (let attempt = 0; me === null; attempt += 1) {
+        try {
+          me = await api<Me>('/api/admin/auth/me');
+        } catch (err) {
+          if ((err instanceof ApiError && err.status === 401) || attempt >= 2) throw err;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+      const prev = current.current;
+      const access = (m: Me) => JSON.stringify([m.admin.id, m.admin.role, [...(m.admin.grants ?? [])].sort()]);
+      if (prev.status === 'signed-in' && access(prev.me) !== access(me)) {
+        // Someone else, or the same account with another role or grants, signed in over an expired page: what it
+        // loaded is never shown under the new access, not even for a moment (the dialog stays until the reload).
+        window.location.assign('/');
+        return;
+      }
       setCsrf(me.csrf);
       setState({ status: 'signed-in', me });
-    } catch {
+    } catch (err) {
+      const prev = current.current;
+      if (prev.status === 'signed-in' && !(err instanceof ApiError && err.status === 401)) {
+        throw err;  // the page and its sign-in dialog stay; the dialog shows the error and the admin can retry
+      }
       setCsrf('');
       setState({ status: 'anonymous' });
     }
@@ -34,11 +60,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setUnauthenticatedHandler(() => {
       setCsrf('');
-      setState({ status: 'anonymous' });
+      setState((prev) => (prev.status === 'signed-in' ? { ...prev, expired: true } : { status: 'anonymous' }));
     });
     api<Me>('/api/admin/auth/me')
       .then((me) => { setCsrf(me.csrf); setState({ status: 'signed-in', me }); })
-      .catch(() => { setCsrf(''); setState({ status: 'anonymous' }); });
+      // Only "not signed in" leads to the sign-in form; a server that cannot be reached says so (CRM audit B2).
+      .catch((err: unknown) => {
+        setCsrf('');
+        setState(err instanceof ApiError && err.status === 401 ? { status: 'anonymous' } : { status: 'unreachable' });
+      });
   }, []);
   const value = useMemo(() => ({ state, refresh, logout }), [state, refresh, logout]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -50,7 +50,6 @@ def test_mb_search_applies_rules_before_any_cap(env, monkeypatch):
     post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "Q1", "code": fresh(secrets_, clock)})
     post(client, f"/api/admin/users/{U2}/mb-id", csrf, {"mbId": "Q2", "code": fresh(secrets_, clock)})
     post(client, f"/api/admin/users/{U2}/tags", csrf, {"tag": "VIP"})
-    monkeypatch.setattr(crm_routes, "MAX_SCAN", 1)
     assert [u["id"] for u in client.get("/api/admin/users?q=q&tag=VIP").json()["items"]] == [U2]
 
 
@@ -88,7 +87,6 @@ def test_mb_search_finds_owners_beyond_the_in_memory_scan(env, monkeypatch):
     _, clock, client, _, secrets_ = env
     csrf = login(client, clock, secrets_, "owner@x.test")
     post(client, f"/api/admin/users/{U1}/mb-id", csrf, {"mbId": "XyZ77", "code": fresh(secrets_, clock)})
-    monkeypatch.setattr(crm_routes, "MAX_SCAN", 1)  # the owner is outside the scanned page
     found = client.get("/api/admin/users?q=xyz7").json()
     assert [u["id"] for u in found["items"]] == [U1] and found["items"][0]["mbId"] == "XyZ77"
     assert client.get("/api/admin/users?q=xyz7&chip=blocked").json()["total"] == 0  # rules still apply

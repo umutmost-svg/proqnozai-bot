@@ -88,7 +88,10 @@ def test_the_admin_sees_aggregates_by_country_platform_and_hour(tmp_path: Path) 
     assert out["source"] == "telemetry" and out["activeUsers"] == 3
     assert out["geo"] == [{"code": "AZ", "count": 2}, {"code": "TR", "count": 1}]
     assert sorted(p["name"] for p in out["platforms"]) == ["android", "ios", "tdesktop"]
-    assert sum(map(sum, out["activityHeat"])) == 3
+    # An average per occurrence of each weekday x hour (CRM audit B2): the 3 users of one hour, over that slot's count.
+    from miniapp.admin_web.insights import slot_occurrences
+    occ = slot_occurrences(int(NOW) - 30 * 86400, int(NOW))
+    assert round(sum(v * occ[d][h] for d, row in enumerate(out["activityHeat"]) for h, v in enumerate(row))) == 3
     assert UserInsights(tmp_path / "t.db").edge_countries([1, 9]) == {1: "AZ", 9: "RU"}
     assert UserInsights(tmp_path / "missing.db").edge_overview(int(NOW), 30) == {"source": "not_collected"}
 

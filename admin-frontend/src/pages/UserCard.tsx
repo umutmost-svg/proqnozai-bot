@@ -1,12 +1,15 @@
 import { useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, errorText, type CrmProfile } from '../api';
+import { api, errorText, newIdempotencyKey, type CrmProfile } from '../api';
 import { geoLabel, num, sourceLabel, userName, localTime, localDay } from '../format';
 import { can, useLoad, useMe, usePrefs } from '../state';
 import { Avatar, Card, DangerDialog, Empty, ErrorBox, Loading, Status, Tag, tagTone, Toast, Topbar } from '../ui';
 import { CreditsDialog, TagDialog } from './dialogs';
 import { DayBars } from '../charts';
 import { CREDIT_KIND } from '../credits';
+
+/** The card lists at most 50 of each kind: a full list is shown as "50+", never as the total. */
+const capped = (n: number): string => (n >= 50 ? '50+' : String(n));
 
 /** Keyed by the id: moving to another user remounts the card, so no data or open dialog carries over. */
 export function UserCardRoute() {
@@ -36,6 +39,7 @@ function UserCard({ id }: { id: string }) {
     setMessageKey(`msg-${crypto.randomUUID()}`);
   };
   const [note, setNote] = useState('');
+  const [noteKey, setNoteKey] = useState(() => newIdempotencyKey());  // a retry of the same note never duplicates it
   const [mbEdit, setMbEdit] = useState<string | null>(null);
   const [mbCode, setMbCode] = useState('');
   const [mbError, setMbError] = useState<string | null>(null);
@@ -80,9 +84,9 @@ function UserCard({ id }: { id: string }) {
             <div className="stat"><div className="k">Источник</div><div className="v">{sourceLabel(data.source)}</div></div>
             <div className="stat"><div className="k">Активных сессий</div><div className="v">{active}</div></div>
             <div className="stat"><div className="k">Кредиты</div><div className="v" style={{ color: 'var(--demo)' }}>{data.credits.unlimitedUntil ? '∞ безлимит' : num(data.credits.balance)}</div></div>
-            <div className="stat"><div className="k">Сообщений от нас</div><div className="v">{data.messages.length}</div></div>
+            <div className="stat"><div className="k">Сообщений от нас</div><div className="v">{capped(data.messages.length)}</div></div>
             <div className="stat"><div className="k">AI-разборов</div><div className="v">{data.activity?.summary ? num(data.activity.summary.aiCreated) : data.aiCalls ? data.aiCalls.length : '—'}</div></div>
-            <div className="stat"><div className="k">Заметок</div><div className="v">{data.notes.length}</div></div>
+            <div className="stat"><div className="k">Заметок</div><div className="v">{capped(data.notes.length)}</div></div>
           </div>
           <div className="grid card-3">
             <section className="card" style={{ padding: 0 }} aria-label="История">
@@ -111,7 +115,7 @@ function UserCard({ id }: { id: string }) {
                       <div className="kv-row"><span>Активных дней за 30</span><b>{data.activity.summary.activeDays}</b></div>
                       <div className="kv-row"><span>Прогнозов (быстрые, купоны, AI)</span><b>{num(data.activity.summary.forecasts)}</b></div>
                       <div className="kv-row"><span>AI-разборов создано / открыто</span><b>{num(data.activity.summary.aiCreated)} / {num(data.activity.summary.aiOpened)}</b></div>
-                      <div className="kv-row"><span>Запросов к API</span><b>{num(data.activity.summary.requests)}</b></div>
+                      <div className="kv-row"><span title="Входы в Mini App и проверки сессии">Открытий приложения</span><b>{num(data.activity.summary.requests)}</b></div>
                       <h3 className="small muted" style={{ margin: '16px 0 8px' }}>Прогнозы по дням (UTC), 30 дней</h3>
                       <DayBars title="Прогнозы по дням" points={data.activity.daily.map((d) => ({ day: d.day, value: d.forecasts }))} />
                     </>
@@ -153,7 +157,7 @@ function UserCard({ id }: { id: string }) {
               </Card>
               <Card title="Кредиты" action={<Tag tone="warning">выключены</Tag>}>
                 <div className="kv-row"><span>Баланс</span><b style={{ color: 'var(--demo)' }}>{data.credits.unlimitedUntil ? `∞ до ${localDay(data.credits.unlimitedUntil)}` : num(data.credits.balance)}</b></div>
-                <div className="kv-row"><span>Операций</span><b>{data.ledger.length}</b></div>
+                <div className="kv-row"><span>Операций</span><b>{capped(data.ledger.length)}</b></div>
                 <div className="row" style={{ marginTop: 10 }}>
                   <button type="button" className="btn" disabled={!manage} onClick={() => setDialog('credits')}>Начислить / списать</button>
                 </div>
@@ -162,10 +166,10 @@ function UserCard({ id }: { id: string }) {
               <Card title="Заметки команды">
                 {data.notes.slice(0, 2).map((n) => <div className="note-card" key={n.id} style={{ marginBottom: 8 }}>{n.body}<div className="by">{n.by} · {localTime(n.at)}</div></div>)}
                 <textarea className="control" style={{ minHeight: 60 }} aria-label="Новая заметка" placeholder="Новая заметка (видна только команде)" maxLength={2000}
-                  value={note} onChange={(e) => setNote(e.target.value)} disabled={!manage} />
+                  value={note} onChange={(e) => { setNote(e.target.value); setNoteKey(newIdempotencyKey()); }} disabled={!manage} />
                 <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
                   <button type="button" className="btn" disabled={!manage || busy || !note.trim()}
-                    onClick={() => void act(() => api(`/api/admin/users/${data.id}/notes`, { method: 'POST', body: { body: note } }), 'Заметка добавлена', () => setNote(''))}>+ заметка</button>
+                    onClick={() => void act(() => api(`/api/admin/users/${data.id}/notes`, { method: 'POST', body: { body: note, idempotencyKey: noteKey } }), 'Заметка добавлена', () => { setNote(''); setNoteKey(newIdempotencyKey()); })}>+ заметка</button>
                 </div>
               </Card>
               <Card title="ID MB">

@@ -376,3 +376,38 @@ textarea.control { width: 100%; min-height: 96px; padding: 10px 12px; resize: ve
 .metric-hint { background: none; padding: 0; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-left: 6px;
   border-radius: 50%; border: 1px solid var(--line, #d0d5dd); font-size: 11px; line-height: 1; cursor: help; color: inherit; opacity: 0.7; }
 .metric-hint:hover, .metric-hint:focus { opacity: 1; }
+
+/* ---- dialogs never taller than the screen; long words (links in inquiries) wrap ---- */
+.modal { max-width: 100%; max-height: calc(100vh - 18vh - 16px); overflow-y: auto; }
+.table td { overflow-wrap: anywhere; }
+
+/* ---- phones and narrow windows (CRM audit B2: the panel had no layout below desktop width) ---- */
+@media (max-width: 860px) {
+  .shell { grid-template-columns: 1fr; background: var(--page); }
+  .sidebar { position: static; height: auto; padding: 12px 12px 10px; }
+  .sidebar .nav { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; gap: 4px; margin-top: 10px !important; padding-bottom: 4px; }
+  .sidebar .nav a { flex: none; height: 32px; padding: 0 10px; font-size: 13px; }
+  .sidebar .nav a::before { display: none; }
+  .nav-caption, .nav-grow { display: none; }
+  .account { border-top: 0; margin-top: 6px; padding: 6px 4px 0; }
+  .account-email { max-width: 60vw; }
+  .main { padding: 16px 16px 48px; }
+  .topbar { flex-wrap: wrap; }
+  .topbar-search { flex-basis: 100%; }
+  /* Page layouts set their columns inline: on a phone every multi-column block becomes one column. */
+  .cols, .grid, .grid.g2, .grid.g3, .grid.half, .grid.card-3, .field-row { grid-template-columns: minmax(0, 1fr) !important; gap: 16px !important; }
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .table-card { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table-card .table { min-width: 640px; }
+  .overlay { padding: 4vh 12px 0; }
+  .modal { width: 100%; padding: 24px 18px 26px; max-height: calc(100vh - 4vh - 16px); }
+  .modal h2 { font-size: 21px; }
+  .modal .lead { margin-bottom: 20px; }
+  .modal-actions { flex-wrap: wrap; gap: 10px; }
+  .modal-actions .btn, .modal-actions .btn.danger, .modal-actions .btn.primary { min-width: 0; flex: 1 1 140px; }
+  .auth { padding: 20px 16px; }
+  .auth-card { width: 100%; margin-top: 32px; padding: 28px 20px 32px; }
+}
+@media (max-width: 480px) {
+  .metrics { grid-template-columns: minmax(0, 1fr); }
+}

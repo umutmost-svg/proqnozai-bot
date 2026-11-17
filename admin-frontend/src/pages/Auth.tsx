@@ -1,11 +1,25 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { api, ApiError, errorText } from '../api';
 import { useAuth } from '../state';
 
 // Before sign-in the mode is not known yet: the local pilot is served on loopback names only.
 const LOOPBACK = new Set(['127.0.0.1', 'localhost']);
 
+// The session ended while a page was open: the same sign-in, in a dialog over the page (its unsaved text stays).
+const EmbeddedContext = createContext(false);
+
 function Frame({ children, foot }: { children: React.ReactNode; foot: string }) {
+  if (useContext(EmbeddedContext)) {
+    return (
+      <div className="overlay" style={{ zIndex: 40 }}>  {/* above any dialog of the page underneath */}
+        <div className="modal" role="dialog" aria-modal="true" aria-label="Сессия истекла">
+          <div className="form-error" role="status" style={{ marginBottom: 12 }}>Сессия истекла. Войдите снова — открытая страница и
+            несохранённый текст останутся.</div>
+          {children}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="auth">
       <div className="auth-brand">
@@ -18,13 +32,16 @@ function Frame({ children, foot }: { children: React.ReactNode; foot: string }) 
   );
 }
 
-export function LoginFlow() {
+export function LoginFlow({ embedded = false }: { embedded?: boolean }) {
   const [stage, setStage] = useState<'password' | 'totp'>('password');
   const [notice, setNotice] = useState<string | null>(null);
-  if (stage === 'totp') {
-    return <TwoFactor onBack={(message) => { setNotice(message); setStage('password'); }} />;
-  }
-  return <Login notice={notice} onNext={() => { setNotice(null); setStage('totp'); }} />;
+  return (
+    <EmbeddedContext.Provider value={embedded}>
+      {stage === 'totp'
+        ? <TwoFactor onBack={(message) => { setNotice(message); setStage('password'); }} />
+        : <Login notice={notice} onNext={() => { setNotice(null); setStage('totp'); }} />}
+    </EmbeddedContext.Provider>
+  );
 }
 
 function Login({ onNext, notice }: { onNext: () => void; notice: string | null }) {

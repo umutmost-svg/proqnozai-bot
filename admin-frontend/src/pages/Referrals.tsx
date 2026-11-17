@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { api, errorText, type ReferralsPage, type ReferralStats } from '../api';
+import { api, errorText, newIdempotencyKey, type ReferralsPage, type ReferralStats } from '../api';
 import { num, pct, localDay } from '../format';
 import { useLoad, useMe } from '../state';
 import { Card, Empty, ErrorBox, Loading, Metric, Metrics, PageHead, Tag, Toast } from '../ui';
@@ -45,15 +45,20 @@ export function Referrals() {
   const [toast, setToast] = useState<string | null>(null);
   const [archived, setArchived] = useState(false);
 
+  const createKey = useRef(newIdempotencyKey());  // one link per submitted form, even if the request is retried
+  // Edited fields are another link (a new key); an unchanged retry after an unclear failure keeps the key.
+  useEffect(() => { createKey.current = newIdempotencyKey(); }, [name, channel, code, platform, geo, pid]);
   const create = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     setBusy(true); setFormError(null);
     try {
       const r = await api<{ code: string }>('/api/admin/referrals', { method: 'POST', body: {
         name, channel, code: code.trim() || undefined, platform: platform || undefined,
-        geo: geo.trim().toUpperCase() || undefined, pid: pid.trim() || undefined } });
+        geo: geo.trim().toUpperCase() || undefined, pid: pid.trim() || undefined, idempotencyKey: createKey.current } });
+      createKey.current = newIdempotencyKey();
       setName(''); setCode(''); setPid(''); setToast(`Ссылка ref_${r.code} создана`); reload();
-    } catch (err) { setFormError(errorText(err)); } finally { setBusy(false); }
+    } catch (err) { setFormError(errorText(err)); } finally { setBusy(false); }  // same key: a retry never duplicates
   };
   const toggleArchive = async (id: number, value: boolean) => {
     try { await api(`/api/admin/referrals/${id}/archive`, { method: 'POST', body: { archived: value } }); reload(); }

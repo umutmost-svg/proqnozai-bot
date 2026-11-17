@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { api, describeRules, errorText, PLATFORM_LABELS, RULE_LABELS, SOURCE_LABELS, type Broadcast, type CreditsPage, type DialogThread, type Rules, type Segment, type TagCount } from '../api';
+import { api, describeRules, errorText, newIdempotencyKey, PLATFORM_LABELS, RULE_LABELS, SOURCE_LABELS, type Broadcast, type CreditsPage, type DialogThread, type Rules, type Segment, type TagCount } from '../api';
 import { localTime, num, parseLocalInput, toLocalInput, zoneLabel } from '../format';
 import { can, useLoad, useMe, usePrefs, useServerMode } from '../state';
 import { Avatar, Card, DangerDialog, Empty, ErrorBox, Loading, Metric, Metrics, NotCollected, PageHead, Tag, tagTone, Toast } from '../ui';
@@ -180,14 +180,26 @@ function useAudience(rules: Rules, forBroadcast = false) {
 export function BroadcastEditor() {
   const { id } = useParams();
   const isNew = !id || id === 'new';
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const existing = useLoad<{ items: Broadcast[] }>('/api/admin/broadcasts');
+  // `?schedule=1` opens the confirmation once (right after "Запланировать" on a new draft); it is dropped from the
+  // address then, so a refresh or a re-login never reopens it with a default time (CRM audit B2).
+  const [confirmFor, setConfirmFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (params.get('schedule') === '1') {
+      setConfirmFor(id ?? null);
+      const next = new URLSearchParams(params);
+      next.delete('schedule');
+      setParams(next, { replace: true });
+    }
+  }, [params, setParams, id]);
+  const autoConfirm = params.get('schedule') === '1' || (confirmFor !== null && confirmFor === id);
   const tags = useLoad<{ items: TagCount[] }>('/api/admin/tags');
   const item = isNew ? null : existing.data?.items.find((b) => String(b.id) === id) ?? null;
   return existing.loading && !existing.data ? <><PageHead title="Рассылка" subtitle="" /><Loading rows={6} /></>
     : !isNew && !item ? <><PageHead title="Рассылка" subtitle="" /><Empty title="Рассылка не найдена" action={<Link to="/broadcasts">← К рассылкам</Link>} /></>
-      : <BroadcastForm key={id ?? 'new'} item={item} initialRules={parseRules(params.get('rules'))} tags={tags.data?.items ?? []} autoConfirm={params.get('schedule') === '1'} onSaved={(bid, schedule) => navigate(`/broadcasts/${bid}${schedule ? '?schedule=1' : ''}`, { replace: true })} reload={existing.reload} />;
+      : <BroadcastForm key={id ?? 'new'} item={item} initialRules={parseRules(params.get('rules'))} tags={tags.data?.items ?? []} autoConfirm={autoConfirm} onSaved={(bid, schedule) => navigate(`/broadcasts/${bid}${schedule ? '?schedule=1' : ''}`, { replace: true })} reload={existing.reload} />;
 }
 
 function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm }: {
@@ -208,6 +220,10 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
   const [digest, setDigest] = useState(() => (item && pendingWhen?.id === item.id ? pendingWhen.digest : null) ?? item?.digest ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const createKey = useRef(newIdempotencyKey());  // a new draft is created once, even if the save is retried
+  // Edited fields are another draft (a new key; never a 409 that blocks saving); an unchanged retry keeps the key.
+  const formKey = JSON.stringify([name, body, rules, button, withButton, deleteAfter]);
+  useEffect(() => { createKey.current = newIdempotencyKey(); }, [formKey]);
   const [confirm, setConfirm] = useState(autoConfirm && item?.status === 'draft');
   // The recipients confirmed are exactly the ones previewed when the dialog opened (the server compares the set).
   const [shown, setShown] = useState<{ size: number; audienceDigest: string } | null>(null);
@@ -230,7 +246,7 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
     try {
       const r = await api<{ id: number; digest: string }>('/api/admin/broadcasts', { method: 'POST', body: {
         id: item?.id, name, body, rules, buttons: withButton ? [{ text: button, url: 'miniapp' }] : [],
-        deleteAfterHours: deleteAfter } });
+        deleteAfterHours: deleteAfter, idempotencyKey: item ? undefined : createKey.current } });
       setDigest(r.digest);
       setToast('Черновик сохранён'); reload(); return { id: r.id, digest: r.digest };
     } catch (e) { setError(errorText(e)); return null; } finally { setBusy(false); }
@@ -318,6 +334,11 @@ export function Segments() {
   const { data, error, loading, reload } = useLoad<{ items: Segment[]; tags: TagCount[] }>('/api/admin/segments');
   const draft = parseRules(params.get('draft'));
   const [editing, setEditing] = useState<{ id?: number; name: string; rules: Rules } | null>(Object.keys(draft).length ? { name: '', rules: draft } : null);
+  const [savingSegment, setSavingSegment] = useState(false);
+  const segmentKey = useRef(newIdempotencyKey());  // a new segment is created once, even on a double click or retry
+  // A different segment (another form or edited fields) gets a new key; an unchanged retry keeps it.
+  const editingKey = JSON.stringify(editing);
+  useEffect(() => { segmentKey.current = newIdempotencyKey(); }, [editingKey]);
   const [toast, setToast] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const size = useAudience(editing?.rules ?? {});
@@ -357,10 +378,11 @@ export function Segments() {
               </fieldset>
               {err && <div className="form-error" role="alert" style={{ marginTop: 12 }}>{err}</div>}
               <div className="row" style={{ marginTop: 16, flexWrap: 'wrap' }}>
-                <button type="button" className="btn primary" disabled={!manage || !editing.name.trim()} onClick={async () => {
-                  setErr(null);
-                  try { const r = await api<{ id: number }>('/api/admin/segments', { method: 'POST', body: { id: editing.id, name: editing.name, rules: editing.rules } }); setEditing({ ...editing, id: r.id }); setToast('Сегмент сохранён'); reload(); }
+                <button type="button" className="btn primary" disabled={!manage || !editing.name.trim() || savingSegment} onClick={async () => {
+                  setErr(null); setSavingSegment(true);
+                  try { const r = await api<{ id: number }>('/api/admin/segments', { method: 'POST', body: { id: editing.id, name: editing.name, rules: editing.rules, idempotencyKey: editing.id === undefined ? segmentKey.current : undefined } }); segmentKey.current = newIdempotencyKey(); setEditing({ ...editing, id: r.id }); setToast('Сегмент сохранён'); reload(); }
                   catch (e) { setErr(errorText(e)); }
+                  finally { setSavingSegment(false); }
                 }}>Сохранить</button>
                 <button type="button" className="btn" disabled={!manage} onClick={() => navigate(`/broadcasts/new?rules=${encodeURIComponent(JSON.stringify(editing.rules))}`)}>Рассылка по сегменту</button>
                 <button type="button" className="btn link" onClick={() => setEditing(null)}>Закрыть</button>
@@ -430,8 +452,10 @@ export function Credits() {
                   <select id="c-seg" className="control" value={group} onChange={(e) => setGroup(e.target.value)}>
                     <option value="">— выберите —</option>{segments.data?.items.map((s) => <option key={s.id} value={s.id}>{s.name} ({num(s.size)})</option>)}
                   </select></div>
-                <button type="button" className="btn primary" disabled={!manage || !users.data?.items.length} onClick={() => setDialog(users.data!.items.map((u) => u.id))}>
-                  Начислить группе{users.data ? ` (${users.data.items.length})` : ''}
+                {/* Only the loaded list of THIS segment: while it loads (or with none chosen) the previous one is stale. */}
+                <button type="button" className="btn primary" disabled={!manage || !group || users.loading || !users.data?.items.length}
+                  onClick={() => setDialog(users.data!.items.map((u) => u.id))}>
+                  Начислить группе{group && !users.loading && users.data ? ` (${users.data.items.length})` : ''}
                 </button>
                 {users.data && users.data.total > users.data.items.length && <p className="small muted">Пока групповая операция — до 100 человек за раз.</p>}
               </Card>
@@ -447,7 +471,7 @@ export function Credits() {
           </div>
         </>
       )}
-      {dialog && <CreditsDialog userIds={dialog} onClose={() => setDialog(null)} onDone={(t) => { setDialog(null); setToast(t); reload(); }} />}
+      {dialog && <CreditsDialog userIds={dialog} groupName={segments.data?.items.find((x) => String(x.id) === group)?.name} onClose={() => setDialog(null)} onDone={(t) => { setDialog(null); setToast(t); reload(); }} />}
       {toast && <Toast text={toast} onDone={() => setToast(null)} />}
     </>
   );

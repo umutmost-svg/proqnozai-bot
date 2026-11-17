@@ -90,7 +90,7 @@ class Referrals:
         return {link["code"]: link for link in self.links()}
 
     def create(self, actor: Admin, name: object, channel: object, code: object, now: int, platform: object = None,
-               geo: object = None, pid: object = None) -> dict:
+               geo: object = None, pid: object = None, key: object = None) -> dict:
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
             raise ActionError("invalid_name")
         platform, geo, pid = (None if v in (None, "") else v for v in (platform, geo, pid))
@@ -103,12 +103,17 @@ class Referrals:
             raise ActionError("invalid_pid")
         if channel not in CHANNELS:
             raise ActionError("invalid_channel")
+        code_given = None if code in (None, "") else code  # the payload a retry must repeat (not the generated code)
         if code in (None, ""):
             code = "".join(secrets.choice(_ALPHABET) for _ in range(8))
         if not isinstance(code, str) or not CODE.match(code):
             raise ActionError("invalid_code_format")
         with self.accounts._write() as conn:
             self.accounts._require_actor(conn, actor.id, "manage_referrals")
+            payload = [name.strip(), channel, code_given, platform, geo, pid]
+            if (prior := self.accounts.created_before(conn, key, "referral", actor.id, payload)) is not None:
+                row = conn.execute("SELECT code FROM crm_referral_links WHERE id = ?", (prior,)).fetchone()
+                return {"id": prior, "code": row[0], "replayed": True}
             try:
                 link_id = conn.execute(
                     "INSERT INTO crm_referral_links (code, name, channel, created_at, admin_id, platform, geo, pid) "
@@ -116,6 +121,7 @@ class Referrals:
                                                         pid)).lastrowid
             except sqlite3.IntegrityError:
                 raise ActionError("code_taken", 409) from None
+            self.accounts.remember_create(conn, key, "referral", actor.id, link_id, now, payload)
             self.accounts._event(conn, now, actor.id, "referral.create", "referral", str(link_id), None,
                                  {"code": code, "channel": channel, "platform": platform, "geo": geo, "pid": pid},
                                  None, None, "done")

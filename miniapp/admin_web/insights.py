@@ -201,7 +201,7 @@ class UserInsights:
         return {"source": "telemetry", "activeUsers": int(users),
                 "geo": [{"code": str(c).upper()[:2], "count": int(n)} for c, n in geo if isinstance(c, str) and len(c) == 2],
                 "platforms": [{"name": str(pl)[:32], "count": int(n)} for pl, n in platforms],
-                "activityHeat": heat}
+                "activityHeat": per_slot_average(heat, now - days * 86400, now)}
 
     def segment_extras(self, user_ids: list[int], now: int, parts: frozenset[str]) -> dict[int, dict] | None:
         """Per user, for segment rules, only the `parts` asked for: "activity" (forecasts, AI analyses and active days
@@ -328,3 +328,21 @@ def _product(ins: UserInsights, now: int, days: int, users: list[dict]) -> dict:
             # recorded by the Mini App, so this is not a count of requests.
             "totals": {**totals, "forecasts": totals["quick"] + totals["coupons"] + totals["aiCreated"]},
             "cohorts": cohorts}
+
+
+def slot_occurrences(start: int, end: int, offset_h: int = 4) -> list[list[int]]:
+    """How many times each weekday x hour (Baku time, UTC+4 without DST) occurs in [start, end] (whole hours touched)."""
+    occ = [[0] * 24 for _ in range(7)]
+    t = start - start % 3600
+    while t <= end:
+        local = datetime.fromtimestamp(t + offset_h * 3600, UTC)
+        occ[local.weekday()][local.hour] += 1
+        t += 3600
+    return occ
+
+
+def per_slot_average(heat: list[list[int]], start: int, end: int) -> list[list[float]]:
+    """Sums per weekday x hour divided by how often that slot occurs in the period: with a 30-day window two weekdays
+    occur 5 times and the others 4, so raw sums favoured them by 25% (CRM audit B2)."""
+    occ = slot_occurrences(start, end)
+    return [[round(heat[d][h] / occ[d][h], 4) if occ[d][h] else 0 for h in range(24)] for d in range(7)]

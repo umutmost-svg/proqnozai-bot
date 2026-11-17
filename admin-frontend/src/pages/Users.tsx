@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, type CrmUsersPage } from '../api';
 import { geoLabel, num, sourceLabel, userName, localTime, localDay } from '../format';
@@ -14,6 +14,11 @@ export function Users() {
   const me = useMe();
   const [params, setParams] = useSearchParams();
   const [query, setQuery] = useState(params.get('q') ?? '');
+  // A search started from the top bar while this page is open changes the address: the box follows it — but not the
+  // address this page wrote itself from the box (that would undo what is typed meanwhile).
+  const urlQuery = params.get('q') ?? '';
+  const written = useRef(urlQuery);
+  useEffect(() => { if (urlQuery !== written.current) { written.current = urlQuery; setQuery(urlQuery); } }, [urlQuery]);
   const chip = params.get('chip') ?? '';
   const tag = params.get('tag') ?? '';
   const segment = params.get('segment') ?? '';
@@ -34,7 +39,7 @@ export function Users() {
   };
   useEffect(() => {
     const t = setTimeout(() => {
-      if ((new URLSearchParams(window.location.search).get('q') ?? '') !== query) update({ q: query, page: '' });
+      if ((new URLSearchParams(window.location.search).get('q') ?? '') !== query) { written.current = query; update({ q: query, page: '' }); }
     }, 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -102,7 +107,7 @@ export function Users() {
           {data?.tags.map((t) => <option key={t.tag} value={t.tag}>{t.tag} ({t.users})</option>)}
         </select>
         {ref && <span className="tag accent">Ссылка: ref_{ref}</span>}
-        {filtered && <button type="button" className="btn link" onClick={() => { setQuery(''); setParams({}, { replace: true }); }}>Сбросить фильтры</button>}
+        {filtered && <button type="button" className="btn link" onClick={() => { setQuery(''); written.current = ''; setParams({}, { replace: true }); }}>Сбросить фильтры</button>}
       </div>
       {data && data.telemetry === false && (
         <p className="small muted" style={{ margin: '0 0 12px' }}>Активность и прогнозы считаются по телеметрии Mini App — она пока не ведётся, поэтому в колонках «—». Страна — только по языку интерфейса.</p>

@@ -24,11 +24,11 @@ from miniapp.admin_web.outbox import JOB_TTL_S, Outbox
 from miniapp.admin_web.accounts import ActionError
 from miniapp.credits import COST as CREDIT_COST, MONTHLY, WELCOME, Credits
 from miniapp.admin_web.crm import EXTRA_PARTS, RULE_FIELDS, CrmStore, matches, validate_rules
-from miniapp.admin_web.insights import UserInsights, geo
+from miniapp.admin_web.insights import UserInsights, geo, per_slot_average
 from miniapp.store import BurnWindow
 
 ACTIVITY_BULK = 500  # above this many rows the activity is read in one aggregate query over the whole table
-MAX_SCAN = 50_000  # pilot: audiences are evaluated in memory over at most this many users
+CHIPS_TTL_S = 30  # the chip counts on «Пользователи» are display only: never used to pick recipients
 CHIPS = {"new": {"registered_within_days": 7}, "active": {"active_within_days": 7},
          "inactive": {"inactive_for_days": 14}, "blocked": {"blocked": True}}
 _USER_SORT = {"id": "id", "created": "createdAt", "login": "lastLoginAt", "username": "username",
@@ -113,8 +113,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         html_mode = html_fits(item["body"])
         render = render_broadcast if html_mode else render_plain
         # {имя} per recipient (their Telegram first name from the Mini App) and Telegram HTML (render_broadcast).
-        _, known = store.list_users(ctx.now(), sort="created", descending=True, limit=MAX_SCAN)
-        names = {u["id"]: u.get("firstName") for u in known}
+        names = {u["id"]: u.get("firstName") for u in store.users_by_ids(sorted(recipients), ctx.now())}
         texts = {uid: render(item["body"], names.get(uid)) for uid in recipients}
         # A text with nothing left (an old body that was only {имя}, a recipient without a name) is skipped: one such
         # recipient must never stop the whole batch from queueing.
@@ -150,16 +149,17 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
 
     extras_cache: dict[tuple, tuple[int, dict[int, dict]]] = {}
 
-    def extras_for(rules: dict, users: list[dict], t: int) -> dict[int, dict]:
+    def extras_for(rules: dict, users: list[dict], t: int, fresh: bool = False) -> dict[int, dict]:
         """Telemetry and referral facts per user, only the parts the segment's rules use (crm.EXTRA_PARTS). A part that
         cannot be read leaves NO record, so its rules match nobody (never "did not"). Cached for 30 s: the segments
-        page computes every saved segment over the same users."""
+        page computes every saved segment over the same users. `fresh`: never the cache (broadcast recipients must
+        match the data as it is now: Codex CRM-B2 r2)."""
         parts = frozenset(EXTRA_PARTS[k] for k in rules if k in EXTRA_PARTS)
         if not parts or not users:
             return {}
         ids = [u["id"] for u in users]
         key = (parts, len(ids), hash(tuple(ids)))
-        if (hit := extras_cache.get(key)) is not None and t - hit[0] < 30:
+        if not fresh and (hit := extras_cache.get(key)) is not None and 0 <= t - hit[0] < 30:
             return hit[1]
         extras: dict[int, dict] = {uid: {} for uid in ids}
         tele = parts - {"source"}
@@ -183,12 +183,19 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         extras_cache[key] = (t, extras)
         return extras
 
-    def audience(rules: dict, query: str = "") -> list[dict]:
+    def all_users(query: str = "", descending: bool = True) -> list[dict]:
+        """Every matching user (newest first by default) in ONE read (one consistent snapshot, no paging across
+        concurrent inserts): audiences and analytics never drop anyone past a fixed limit (CRM audit B2). Always fresh:
+        recipients must match the data as it is now (Codex CRM-B2 r1)."""
+        _, users = store.list_users(ctx.now(), query=query, sort="created", descending=descending, limit=-1)
+        return users
+
+    def audience(rules: dict, query: str = "", fresh: bool = False) -> list[dict]:
         t = ctx.now()
-        _, users = store.list_users(t, query=query, sort="created", descending=True, limit=MAX_SCAN)
+        users = all_users(query)
         tags = crm.tags_by_user()
         blocked = crm.blocked()
-        extras = extras_for(rules, users, t)
+        extras = extras_for(rules, users, t, fresh)
         return [u for u in users
                 if matches(u, rules, set(tags.get(u["id"], [])), u["id"] in blocked, t, extras.get(u["id"]))]
 
@@ -196,7 +203,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         """Recipients of a broadcast: blocked users are always excluded, and so are users Telegram refused last time
         (they blocked the bot or never started it: CRM audit P2)."""
         unreachable = outbox.unreachable_users()
-        return [u for u in audience({**rules, "blocked": False})  # a rule cannot opt blocked users into a broadcast
+        return [u for u in audience({**rules, "blocked": False}, fresh=True)  # a rule cannot opt blocked users in
                 if u["id"] not in unreachable]
 
     def settle(item: dict) -> dict | None:
@@ -261,7 +268,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
 
     def mb_owners(query: str, rules: dict, known: set[int]) -> list[dict]:
         """Users whose MB id matches (SQL on crm_external_ids) and who are not in the scanned list yet, batch-loaded
-        and filtered by the same rules before any paging: found even beyond the in-memory scan (MAX_SCAN)."""
+        and filtered by the same rules before any paging: found even if the name search missed them."""
         missing = crm.users_by_mb(query) - known
         if not missing:
             return []
@@ -313,6 +320,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
 
     # ---- users -------------------------------------------------------------------------------
 
+    chips_cache: dict[str, Any] = {}
+
     @app.get("/api/admin/users")
     async def users(request: Request) -> dict:
         ctx.admin_of(request, "read_personal")
@@ -334,7 +343,13 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
                      reverse=q.get("order", "desc") != "asc")
         rows = present + [r for r in rows if r[key] is None]  # unknown values last in both directions
         t = ctx.now()
-        chip_counts = {name: len(audience(rules)) for name, rules in CHIPS.items()}
+        # Four full audiences: reused for CHIPS_TTL_S unless a user, a sign-in or a block changed meanwhile.
+        mark = (store.users_fingerprint(), frozenset(crm.blocked()))
+        fresh = 0 <= t - chips_cache.get("at", -CHIPS_TTL_S) < CHIPS_TTL_S and chips_cache.get("mark") == mark
+        chip_counts = chips_cache["counts"] if fresh else None
+        if chip_counts is None:
+            chip_counts = {name: len(audience(rules)) for name, rules in CHIPS.items()}
+            chips_cache.update({"at": t, "mark": mark, "counts": chip_counts})
         return {"total": len(rows), "page": offset // size + 1, "size": size,
                 "items": decorate(with_activity(rows[offset:offset + size])),
                 "telemetry": insights.available(),
@@ -416,8 +431,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         admin = ctx.admin_of(request, "manage_users")
         data = await ctx.body(request)
         ids = user_ids(data)
-        _, everyone = store.list_users(ctx.now(), limit=MAX_SCAN)
-        known = {u["id"] for u in everyone}
+        known = {u["id"] for u in store.users_by_ids(ids, ctx.now())}
         if not set(ids) <= known:
             raise ActionError("not_found", 404)
         return {"tagged": crm.add_tags(admin, ids, data.get("tag"), ctx.now())}
@@ -446,7 +460,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     async def add_note(user_id: int, request: Request) -> dict:
         admin = ctx.admin_of(request, "manage_users")
         exists(user_id)
-        return crm.add_note(admin, user_id, (await ctx.body(request)).get("body"), ctx.now())
+        data = await ctx.body(request)
+        return crm.add_note(admin, user_id, data.get("body"), ctx.now(), data.get("idempotencyKey"))
 
     @app.post("/api/admin/users/{user_id}/messages")
     async def message(user_id: int, request: Request) -> dict:
@@ -519,7 +534,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         sid = data.get("id")
         if sid is not None and (isinstance(sid, bool) or not isinstance(sid, int)):
             raise ActionError("invalid_segment")
-        return crm.save_segment(admin, data.get("name"), data.get("rules"), ctx.now(), sid)
+        return crm.save_segment(admin, data.get("name"), data.get("rules"), ctx.now(), sid, data.get("idempotencyKey"))
 
     @app.post("/api/admin/audience/preview")
     async def audience_preview(request: Request) -> dict:
@@ -672,7 +687,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         days = ctx.period(request)
         t = ctx.now()
         since = t - days * 86400
-        _, everyone = store.list_users(t, sort="created", descending=False, limit=MAX_SCAN)
+        everyone = all_users(descending=False)
         new = [u for u in everyone if u["createdAt"] >= since]
         by_day = Counter(datetime.fromtimestamp(u["createdAt"], UTC).strftime("%Y-%m-%d") for u in new)
         series = []
@@ -691,7 +706,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         leagues: list[dict] = []
         if h:
             _, rows = h.list_forecasts(created_since=datetime.fromtimestamp(since, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                                       limit=MAX_SCAN)
+                                       limit=-1)  # every forecast of the period (no silent cut)
             counts = Counter(ctx.tournament_name(r["tournamentId"]) for r in rows)
             leagues = [{"name": n, "count": c} for n, c in counts.most_common(8)]
         personal = ctx.can_personal(request)
@@ -700,7 +715,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
             # "measured" = computed from the Mini App files the panel reads; in the pilot that is the demo set.
             "dataset": ctx.dataset(),
             "real": {"totalUsers": len(everyone), "newUsers": len(new), "newByDay": series,
-                     "registrationHeat": heat, "languages": [{"lang": k, "count": v} for k, v in langs.most_common()],
+                     "registrationHeat": per_slot_average(heat, since, t), "languages": [{"lang": k, "count": v} for k, v in langs.most_common()],
                      "leagues": leagues, "tags": crm.all_tags() if personal else []},
         }
         out["demo"] = demo.audience(days, ctx.today()) if ctx.demo_allowed(request) else None

@@ -143,6 +143,16 @@ CREATE TABLE IF NOT EXISTS admin_invites (
     failures    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS admin_invites_admin ON admin_invites(admin_id);
+-- Creates (notes, drafts, segments, referral links) retried with the same client key return the first result: a double
+-- click or a retry after a lost response never makes a duplicate (CRM audit B2).
+CREATE TABLE IF NOT EXISTS create_keys (
+    key        TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    admin_id   INTEGER NOT NULL,
+    target_id  INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    payload    TEXT NOT NULL DEFAULT ''
+);
 CREATE TRIGGER IF NOT EXISTS admin_events_no_update BEFORE UPDATE ON admin_events
 BEGIN SELECT RAISE(ABORT, 'admin events are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS admin_events_no_delete BEFORE DELETE ON admin_events
@@ -186,6 +196,10 @@ def reason_digest(reason: str | None) -> str | None:
     """Binds idempotent replays to the reason without keeping its text in the immutable journal (the text is
     erasable in admin_event_reasons; a replay keeps working after an erasure)."""
     return None if not reason else hashlib.sha256(("reason:" + reason).encode()).hexdigest()
+
+
+def _payload_digest(payload: object) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
 
 
 def _digest(value: str) -> str:
@@ -640,6 +654,32 @@ class AdminStore:
                 after is not None and stored != after) or (reason is not None and prior_reason != reason_digest(reason)):
             raise ActionError("idempotency_key_reused", 409)
         return {"eventId": event_id, "after": stored, "replayed": True}
+
+    # ---- idempotent creates -------------------------------------------------------------------
+
+    @staticmethod
+    def created_before(conn: sqlite3.Connection, key: object, kind: str, admin_id: int, payload: object = None
+                       ) -> int | None:
+        """The id an earlier create with this client key made, or None (no key: no idempotency, older clients). The
+        key is bound to its kind, author and submitted data: a retry with edited data is a conflict, never a silent
+        return of the earlier record (Codex CRM-B2 r1)."""
+        if key is None:
+            return None
+        if not isinstance(key, str) or not 8 <= len(key) <= 80:
+            raise ActionError("idempotency_key_required")
+        row = conn.execute("SELECT kind, admin_id, target_id, payload FROM create_keys WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return None
+        if (row[0], row[1], row[3]) != (kind, admin_id, _payload_digest(payload)):
+            raise ActionError("idempotency_key_reused", 409)
+        return int(row[2])
+
+    @staticmethod
+    def remember_create(conn: sqlite3.Connection, key: object, kind: str, admin_id: int, target_id: int,
+                        now: int, payload: object = None) -> None:
+        if key is not None:
+            conn.execute("INSERT INTO create_keys (key, kind, admin_id, target_id, created_at, payload) "
+                         "VALUES (?, ?, ?, ?, ?, ?)", (key, kind, admin_id, target_id, now, _payload_digest(payload)))
 
     # ---- grants (explicit permissions, default deny) ------------------------------------------
 

@@ -7,6 +7,7 @@ import sqlite3
 from fastapi.testclient import TestClient
 
 from miniapp.admin_web.demo import DEMO_ID_BASE
+from miniapp.admin_web.insights import slot_occurrences
 from miniapp.credits import Credits
 from miniapp.store import Store
 from miniapp.tests.test_admin_web import digest_of, reviewed, fresh, ORIGIN, code, env, login, post  # noqa: F401 — env is a fixture
@@ -181,7 +182,9 @@ def test_analytics_real_parts_and_demo_only_on_request(env):
     login(client, clock, secrets_, "owner@x.test")
     a = client.get("/api/admin/analytics?days=90").json()
     assert a["real"]["totalUsers"] == 64 and sum(l["count"] for l in a["real"]["languages"]) == 64
-    assert len(a["real"]["newByDay"]) == 91 and sum(map(sum, a["real"]["registrationHeat"])) == a["real"]["newUsers"]
+    occ = slot_occurrences(int(clock()) - 90 * 86400, int(clock()))  # cells are averages per occurrence (CRM audit B2)
+    assert len(a["real"]["newByDay"]) == 91 and round(sum(
+        v * occ[d][h] for d, row in enumerate(a["real"]["registrationHeat"]) for h, v in enumerate(row))) == a["real"]["newUsers"]
     assert sum(d["new"] for d in a["real"]["newByDay"]) == a["real"]["newUsers"]
     day = client.get("/api/admin/analytics?days=1").json()["real"]
     assert sum(d["new"] for d in day["newByDay"]) == day["newUsers"] and len(day["newByDay"]) == 2

@@ -19,7 +19,7 @@ function Heatmap({ data, label }: { data: number[][]; label: string }) {
       {Array.from({ length: 24 }, (_, h) => <span key={h} className="hr">{h % 3 === 0 ? String(h).padStart(2, '0') : ''}</span>)}
       {data.map((row, d) => [
         <span key={`l${d}`} className="lbl">{DAYS[d]}</span>,
-        ...row.map((v, h) => <span key={`${d}-${h}`} className="cell" title={`${DAYS[d]} ${h}:00 — ${v}`} style={{ opacity: Math.max(0.06, v / max) }} />),
+        ...row.map((v, h) => <span key={`${d}-${h}`} className="cell" title={`${DAYS[d]} ${h}:00 — в среднем ${Math.round(v * 100) / 100}`} style={{ opacity: Math.max(0.06, v / max) }} />),
       ])}
     </div>
   );
@@ -54,6 +54,12 @@ function ValueTab() {
         <Card><Empty title="Снимок данных бота ещё не получен">Итоги из базы бота обновляются раз в час. Если бот остановлен, остаётся последний снимок.</Empty></Card>
       ) : (
         <>
+          {(Date.now() - Date.parse(bot.generatedAt)) / 3600_000 > 2 && (
+            <div className="banner warn" role="status" style={{ marginBottom: 14 }}>
+              Снимок данных бота устарел: последнее обновление {localTime(Math.floor(Date.parse(bot.generatedAt) / 1000))}.
+              Обычно он обновляется раз в час — проверьте, что бот и задание снимка на сервере работают.
+            </div>
+          )}
           <Metrics>
             <Metric label="Срок жизни" value={`${num(bot.value.avgLifespanDays, 1)} дн.`} caption="среднее у вернувшихся хотя бы раз"
               hint="Сколько дней в среднем проходит от регистрации до последнего визита — среди тех, кто вернулся хотя бы через день. Одноразовые визиты не учитываются." />
@@ -102,7 +108,7 @@ function ValueTab() {
           <Card title="Топ пользователей Mini App" sub={`по выданным прогнозам, затем по активности · за ${miniapp.windowDays} дней`}>
             {miniapp.topUsers.length === 0 ? <p className="small muted">Пока никто не открывал Mini App с начала сбора.</p> : (
               <table className="table">
-                <thead><tr><th>#</th><th>Пользователь</th><th>Прогнозов</th><th>Действий</th><th>Дней активности</th><th>Кликов</th><th>Последний день</th></tr></thead>
+                <thead><tr><th>#</th><th>Пользователь</th><th>Прогнозов</th><th title="Входы в Mini App и проверки сессии">Открытий</th><th>Дней активности</th><th>Кликов</th><th>Последний день</th></tr></thead>
                 <tbody>{miniapp.topUsers.map((u, i) => (
                   <tr key={i}>
                     <td>{i + 1}</td>
@@ -122,6 +128,11 @@ function ValueTab() {
 
 function DemoOnly({ what }: { what: string }) {
   return <Card><NotCollected what={what} /></Card>;
+}
+
+/** Real figures live on another page (CRM audit B2: these tabs said "not collected" although the data exists). */
+function SeeElsewhere({ title, to, page }: { title: string; to: string; page: string }) {
+  return <Card><Empty title={title} action={<Link className="btn" to={to}>Открыть «{page}»</Link>}>Реальные данные собираются и показаны на странице «{page}».</Empty></Card>;
 }
 
 const PLATFORM_NAMES: Record<string, string> = {
@@ -186,9 +197,9 @@ export function Analytics() {
             <>
               <Metrics>
                 <Metric label="Пользователи всего" value={!staff ? num(real.totalUsers) : <Link className="metric-link" to="/users">{num(real.totalUsers)}</Link>} caption={`+${num(real.newUsers)} за период · ${src}`} />
-                <Metric demo={Boolean(d)} hint="DAU (Daily Active Users) — сколько разных людей открыли Mini App сегодня (по UTC). Один человек считается один раз, сколько бы раз он ни заходил." label="Активные сегодня (DAU)" value={d ? num(d.activeByDay.at(-1)?.dau) : '—'} caption={d ? 'демо-телеметрия' : 'после D1'} />
+                <Metric demo={Boolean(d)} hint="DAU (Daily Active Users) — сколько разных людей открыли Mini App сегодня (по UTC). Один человек считается один раз, сколько бы раз он ни заходил." label="Активные сегодня (DAU)" value={d ? num(d.activeByDay.at(-1)?.dau) : '—'} caption={d ? 'демо-телеметрия' : <Link to="/product">реальные — в «Продукте»</Link>} />
                 <Metric label="Прогнозы модели" value={promoter ? num(ov.data?.forecasts.total) : <Link className="metric-link" to="/forecasts">{num(ov.data?.forecasts.total)}</Link>} caption={`сверено: ${num(ov.data?.forecasts.settled)}`} />
-                <Metric demo={Boolean(d)} label="Средняя сессия" value={d ? `${Math.floor(d.summary.avgSessionS / 60)} мин ${d.summary.avgSessionS % 60} с` : '—'} caption={d ? 'демо-телеметрия' : 'после D1'} />
+                <Metric demo={Boolean(d)} label="Средняя сессия" value={d ? `${Math.floor(d.summary.avgSessionS / 60)} мин ${d.summary.avgSessionS % 60} с` : '—'} caption={d ? 'демо-телеметрия' : 'не собирается'} />
               </Metrics>
               <div className="grid g2">
                 <Card title="Новые пользователи по дням" sub={`Регистрации в Mini App по UTC-дням · ${src}`} action={<Tag tone="accent">{num(real.newUsers)} за период</Tag>}>
@@ -317,12 +328,12 @@ export function Analytics() {
                 ])}
               </div>
             </Card>
-          ) : <DemoOnly what="Удержание по когортам" />)}
+          ) : <SeeElsewhere title="Удержание по когортам" to="/product" page="Продукт" />)}
           {tab === 'Источники' && (d ? (
             <Card title="Источники новых пользователей" sub="Откуда пришли за период" action={<Tag tone="violet">ДЕМО</Tag>}>
               <BarList tone="warning" rows={d.sources.map((s) => ({ label: s.name, value: s.count }))} />
             </Card>
-          ) : <DemoOnly what="Источники пользователей" />)}
+          ) : <SeeElsewhere title="Источники пользователей" to="/referrals" page="Рефералы" />)}
           <div className="banner info" style={{ marginTop: 16 }}>Из файлов Mini App ({src}): пользователи, регистрации, языки, лиги, теги{edge ? '; страна, платформа и часы активности — сбор Mini App с момента его включения' : ''}. Демо-данные помечены «ДЕМО».</div>
         </>
       )}

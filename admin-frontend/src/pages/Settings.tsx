@@ -292,6 +292,12 @@ const ACTIONS: Record<string, string> = {
   'admin.password_change': 'Смена своего пароля', 'admin.sessions_revoke_self': 'Выход на других устройствах',
   'admin.reset': 'Сброс входа сотрудника', 'admin.reset_cli': 'Сброс входа через CLI', 'admin.unlock_cli': 'Разблокировка через CLI',
   'admin.invite_link': 'Новая ссылка-приглашение', 'admin.activate': 'Активация по приглашению',
+  'broadcast.save': 'Сохранение рассылки', 'broadcast.schedule': 'Планирование рассылки', 'broadcast.cancel': 'Отмена рассылки',
+  'segment.save': 'Сохранение сегмента', 'credits.change': 'Операция с кредитами', 'user.message': 'Сообщение пользователю',
+  'user.note_add': 'Заметка', 'user.tag_add': 'Тег добавлен', 'user.tag_remove': 'Тег снят', 'user.block': 'Блокировка пользователя',
+  'user.mb_decision': 'Решение по MB ID', 'user.mb_id': 'Изменение MB ID', 'inquiry.view': 'Просмотр обращения',
+  'inquiry.status': 'Статус обращения', 'inquiry.retention': 'Срок хранения обращений', 'referral.create': 'Новая реферальная ссылка',
+  'referral.archive': 'Архив реферальной ссылки', 'ads.publish': 'Публикация рекламы',
 };
 
 function describe(e: AdminEvent): string {
@@ -326,10 +332,14 @@ export function SettingsJournal() {
           <option value="">Действие: все</option>
           <option value="settings.">Настройки</option><option value="admin.">Администраторы</option>
           <option value="user.">Пользователи</option><option value="auth.">Входы</option>
+          <option value="broadcast.">Рассылки</option><option value="segment.">Сегменты</option>
+          <option value="credits.">Кредиты</option><option value="inquiry.">Обращения</option>
+          <option value="referral.">Рефералы</option><option value="ads.">Реклама</option>
         </select>
         <select className="control" aria-label="Результат" value={result} onChange={(e) => setResult(e.target.value)}>
           <option value="">Результат: все</option><option value="done">Выполнено</option>
           <option value="requested">Запрошено</option><option value="completed">Завершено</option>
+          <option value="failed">Ошибка</option>
         </select>
       </div>
       <section className="section">

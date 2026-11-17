@@ -13,8 +13,14 @@ export class ApiError extends Error {
 
 let csrfToken = '';
 let onUnauthenticated: () => void = () => {};
+const SIGN_IN_PATHS = new Set(['/api/admin/auth/login', '/api/admin/auth/totp', '/api/admin/auth/invite',
+  '/api/admin/auth/invite/accept', '/api/admin/auth/me']);
+
+// Which session a request belongs to: a 401 of a request sent before a new sign-in is stale, not a lost session.
+let generation = 0;
 
 export function setCsrf(token: string): void {
+  if (token && token !== csrfToken) generation += 1;
   csrfToken = token;
 }
 
@@ -24,6 +30,7 @@ export function setUnauthenticatedHandler(fn: () => void): void {
 
 export async function api<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const method = init.method ?? 'GET';
+  const sentIn = generation;
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (init.body !== undefined) headers['Content-Type'] = 'application/json';
   if (method !== 'GET' && csrfToken) headers['X-CSRF-Token'] = csrfToken;
@@ -49,7 +56,8 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
     const payload = (data ?? {}) as { error?: string; requestId?: string };
     const error = new ApiError(response.status, payload.error ?? 'http_' + response.status,
       payload.requestId ?? response.headers.get('X-Request-ID'));
-    if (response.status === 401 && !path.startsWith('/api/admin/auth/')) onUnauthenticated();
+    // The sign-in steps answer 401 for a wrong password or an expired code: that is not a lost session.
+    if (response.status === 401 && !SIGN_IN_PATHS.has(path) && sentIn === generation) onUnauthenticated();
     throw error;
   }
   return data as T;
@@ -111,6 +119,17 @@ const MESSAGES: Record<string, string> = {
   retention_not_applied: 'Срок сохранён, но ещё не применён к файлу бота. Повторите — изменение применится.',
   inquiries_unavailable: 'Файл обращений сейчас не читается. Повторите позже.',
   dialogs_not_allowed: 'Нет права «Диалоги»: его выдаёт владелец.',
+  credits_unavailable: 'Кредиты Mini App сейчас недоступны. Повторите позже.',
+  invalid_days: 'Дней безлимита: от 0 до 366.',
+  invalid_credit: 'Проверьте операцию и сумму.',
+  invalid_users: 'Выберите от 1 до 5000 пользователей.',
+  group_too_large: 'Слишком большая группа для одной операции.',
+  too_large: 'Запрос слишком большой.',
+  bad_filter: 'Недопустимый фильтр.',
+  invalid_delete_after: 'Выберите срок автоудаления из списка.',
+  invalid_broadcast: 'Рассылка не найдена или повреждена. Обновите страницу.',
+  idempotency_key_required: 'Обновите страницу и повторите действие.',
+  rate_limited: 'Слишком много запросов. Повторите через минуту.',
   internal: 'Внутренняя ошибка сервера.',
 };
 
@@ -123,7 +142,7 @@ export function errorText(error: unknown): string {
 
 export type Role = 'owner' | 'admin' | 'analyst' | 'promoter';
 export interface Me {
-  admin: { id: number; email: string; role: Role };
+  admin: { id: number; email: string; role: Role; grants?: string[] };
   csrf: string;
   pilot: { dataset: string; demoTelemetry: boolean };
 }

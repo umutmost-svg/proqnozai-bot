@@ -40,15 +40,17 @@ export function TagDialog({ count, onSave, onClose }: { count: number; onSave: (
 }
 
 /** Credits change for one or many users: grant, debit or unlimited, with reason + 2FA. */
-export function CreditsDialog({ userIds, onDone, onClose, initialKind = 'grant' }: {
+export function CreditsDialog({ userIds, onDone, onClose, initialKind = 'grant', groupName }: {
   userIds: number[]; onDone: (text: string) => void; onClose: () => void; initialKind?: 'grant' | 'debit' | 'unlimited';
+  /** The segment the ids came from: named in the title, so a stale selection cannot pass unnoticed. */
+  groupName?: string;
 }) {
   const [kind, setKind] = useState<'grant' | 'debit' | 'unlimited'>(initialKind);
   const [amount, setAmount] = useState('10');
   const [days, setDays] = useState('30');
   return (
     <DangerDialog
-      title={userIds.length === 1 ? 'Кредиты пользователя' : `Кредиты: ${userIds.length} пользователей`}
+      title={userIds.length === 1 && !groupName ? 'Кредиты пользователя' : `Кредиты: ${groupName ? `сегмент «${groupName}», ` : ''}${userIds.length} пользователей`}
       lead="Кредиты выключены: операция записывается в журнал, но не влияет на доступ к прогнозам."
       confirmLabel="Провести операцию" tone="primary" onClose={onClose}
       onConfirm={async (input) => {

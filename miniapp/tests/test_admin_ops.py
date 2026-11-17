@@ -123,7 +123,6 @@ def test_a_late_week_registration_is_not_counted_before_its_week_is_over(tmp_pat
 def test_cohorts_are_not_capped_by_the_users_list(env, monkeypatch):
     config, clock, client, _, secrets_ = env
     from miniapp.admin_web import crm_routes
-    monkeypatch.setattr(crm_routes, "MAX_SCAN", 1)
     t = Telemetry(config.telemetry_db)
     t.init_schema()
     login(client, clock, secrets_, "analyst@x.test")
