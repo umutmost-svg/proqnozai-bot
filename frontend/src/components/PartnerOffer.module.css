@@ -26,6 +26,14 @@
   overflow-wrap: anywhere;
 }
 
+.odds {
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 20px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
 .body,
 .extra {
   font-size: 13px;

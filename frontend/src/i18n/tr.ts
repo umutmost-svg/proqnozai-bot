@@ -723,4 +723,5 @@ export const tr: Dictionary = {
   'credits.calcRate': 'İş ortağında {amount} {currency} yatırım = 1 tahmin.',
   'credits.calcForecasts': 'Tahmin sayısı',
   'credits.calcResult': '{n} tahmin ({credits} kredi) — yatırım {amount} {currency}',
+  'ads.odds': 'Oran: {odds}',
 };

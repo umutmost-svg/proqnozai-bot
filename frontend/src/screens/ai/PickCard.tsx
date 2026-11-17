@@ -3,6 +3,7 @@ import { FAMILY } from '../../data/markets';
 import type { Translate } from '../../i18n';
 import { plural } from '../../i18n';
 import { useSettings } from '../../state/contexts';
+import { PartnerOffer } from '../../components/PartnerOffer';
 import s from './Ai.module.css';
 import { PriceLine } from './Market';
 import { decimal, marketText } from './Model';
@@ -114,6 +115,7 @@ export function PickCard({ pick, event, values, basis, forecast, quote, lean, le
           ))}
         </ul>
       </div>
+      <PartnerOffer key={event.id} placement="ai_pick" eventId={event.id} />
     </section>
   );
 }

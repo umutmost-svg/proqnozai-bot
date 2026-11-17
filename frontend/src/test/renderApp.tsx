@@ -1,3 +1,4 @@
+import type { AdsApi } from '../data/ads';
 import { render } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { App } from '../App';
@@ -36,6 +37,8 @@ export function renderApp(
     /** Another fixed "now" than TEST_NOW. */
     clockAt?: string;
     clock?: Clock;
+    /** Partner offers (off unless given, as on a backend without MINIAPP_ADS_ENABLED). */
+    ads?: AdsApi;
   } = {},
 ) {
   const settings: Settings = { lang: 'ru', timeZone: 'Asia/Baku', reduceMotion: false, haptics: false, ...opts.settings };
@@ -51,6 +54,7 @@ export function renderApp(
     auth: new AuthController(opts.authApi ?? offlineAuthApi, () => opts.initData ?? null),
     scrollMemory: new Map<string, number>(),
     boot: new BootTracker(),
+    ads: opts.ads,
   };
   const app = <App services={services} />;
   return { ...render(opts.strict ? <StrictMode>{app}</StrictMode> : app), services };

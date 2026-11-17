@@ -31,28 +31,36 @@ logger = logging.getLogger("miniapp.ads")
 RELOAD_S = 30
 TOKEN_DAYS = 2  # a token from yesterday's offer still counts (the card may stay open over midnight)
 EVENT_KEY = re.compile(r"^[A-Za-z0-9:_.-]{1,40}$")
+MARKET_KEY = re.compile(r"^[A-Za-z0-9_.+-]{1,12}$")
 COUNTRY = re.compile(r"^[A-Z]{2}$")
 
 
 class RecentPicks:
-    """Matches the server itself recommended to a user (successful quick picks), for PICK_TTL_S. An offer, and so
-    an impression token, exists only for one of them: a client cannot invent event ids to inflate impressions.
-    Kept in telemetry.db, so every worker of the Mini App sees the same picks; an unreadable file = no offer."""
+    """Matches the server itself recommended to a user, per placement (a successful quick pick, an AI recommended
+    bet), with the recommended market, for PICK_TTL_S. An offer, and so an impression token, exists only for one of
+    them: a client cannot invent event ids to inflate impressions, and the offer's price is looked up for exactly
+    the market the server recommended. Kept in telemetry.db, so every worker sees the same picks; an unreadable
+    file = no offer."""
 
     PICK_TTL_S = 6 * 3600
 
     def __init__(self, telemetry: Telemetry) -> None:
         self.telemetry = telemetry
 
-    def add(self, user_id: int, event_ids: list[str], now: float) -> None:
-        self.telemetry.add_picks(user_id, [e for e in event_ids if EVENT_KEY.match(e)][:20],
-                                 int(now) + self.PICK_TTL_S)
+    def add(self, user_id: int, picks: list[tuple[str, str | None]], now: float, placement: str = "quick_pick") -> None:
+        if placement not in policy.PLACEMENTS:
+            raise ValueError(placement)
+        valid = [(e, m if isinstance(m, str) and MARKET_KEY.match(m) else None)
+                 for e, m in picks if isinstance(e, str) and EVENT_KEY.match(e)]
+        if valid:
+            self.telemetry.add_picks(user_id, placement, valid[:20], int(now) + self.PICK_TTL_S)
 
-    def has(self, user_id: int, event_id: str, now: float) -> bool:
+    def get(self, user_id: int, placement: str, event_id: str, now: float) -> tuple[bool, str | None]:
+        """(recommended, market) — (False, None) when not recommended or unreadable."""
         try:
-            return self.telemetry.has_pick(user_id, event_id, int(now))
+            return self.telemetry.pick(user_id, placement, event_id, int(now))
         except sqlite3.Error:
-            return False
+            return False, None
 
 
 class PolicyReader:
@@ -120,6 +128,7 @@ class Token:
     event_key: str
     placement: str
     day: str
+    market: str | None = None  # the market recommended when the offer was issued: its price is the one re-checked
 
 
 class TokenError(ValueError):
@@ -127,14 +136,15 @@ class TokenError(ValueError):
 
 
 class Tokens:
-    """Impression token = payload + HMAC(user, campaign, variant, event, placement, day): binds an offer to the
-    user it was chosen for; another user's token, a forged or an old one is refused."""
+    """Impression token = payload + HMAC(user, campaign, variant, event, placement, day, market): binds an offer to
+    the user it was chosen for and the market whose price it showed; another user's token, a forged or an old one is
+    refused."""
 
     def __init__(self, key_material: str) -> None:
         self._key = hashlib.sha256(("ads-impression-token:" + key_material).encode()).digest()
 
     def issue(self, t: Token) -> str:
-        payload = json.dumps([t.user_id, t.campaign_id, t.variant, t.event_key, t.placement, t.day],
+        payload = json.dumps([t.user_id, t.campaign_id, t.variant, t.event_key, t.placement, t.day, t.market],
                              separators=(",", ":")).encode()
         body = base64.urlsafe_b64encode(payload).rstrip(b"=")
         sig = base64.urlsafe_b64encode(hmac.new(self._key, body, hashlib.sha256).digest()).rstrip(b"=")
@@ -148,14 +158,17 @@ class Tokens:
         if not hmac.compare_digest(sig, expected):
             raise TokenError("bad_token")
         try:
-            uid, cid, variant, event_key, placement, day = json.loads(base64.urlsafe_b64decode(body + b"=" * (-len(body) % 4)))
+            uid, cid, variant, event_key, placement, day, market = json.loads(
+                base64.urlsafe_b64decode(body + b"=" * (-len(body) % 4)))
         except (ValueError, TypeError):
             raise TokenError("bad_token") from None
         if uid != user_id:
             raise TokenError("bad_token")
         if day not in {day_of(now - d * DAY) for d in range(TOKEN_DAYS)}:
             raise TokenError("token_expired")
-        return Token(uid, cid, variant, event_key, placement, day)
+        if market is not None and not isinstance(market, str):
+            raise TokenError("bad_token")
+        return Token(uid, cid, variant, event_key, placement, day, market)
 
 
 def country_from(header: str | None, trusted: bool) -> str | None:
@@ -187,6 +200,16 @@ class Segments:
     def _since(self, days: int) -> list[dict]:
         start = days_back(self.now, days - 1)  # "within 7 days" = today and the 6 days before
         return [r for r in self._activity() if r["day"] >= start]
+
+    def viewer_class(self) -> str | None:
+        """The coarse class stored with each ad event for analytics by segment (SEGMENT_CLASSES): registered
+        within 7 days, else active on 3+ days of the last 7, else other. None when the data is unreadable."""
+        try:
+            if self("new", {"days": 7}):
+                return "new"
+            return "active" if self("active", {"days": 7, "min_visits": 3}) else "other"
+        except sqlite3.Error:
+            return None
 
     def __call__(self, name: str, params: dict[str, int]) -> bool:
         today = day_of(self.now)

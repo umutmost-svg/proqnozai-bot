@@ -19,7 +19,7 @@ describe('partner offers client', () => {
     const answer = readOffer({ offer: { ...offer, url: 'https://evil.example/' } });
     expect(answer).toEqual({
       kind: 'offer',
-      offer: { ...offer, disclosure: { advertiser: 'Partner LLC', ageLabel: '18+' } },
+      offer: { ...offer, disclosure: { advertiser: 'Partner LLC', ageLabel: '18+' }, price: null, oddsRequired: false },
     });
     expect(JSON.stringify(answer)).not.toContain('evil');
     expect(readOffer({ offer: { ...offer, headline: 'x'.repeat(81) } })).toEqual({ kind: 'none' });
@@ -27,6 +27,17 @@ describe('partner offers client', () => {
     expect(readOffer({ offer: null })).toEqual({ kind: 'none' });
     expect(readOffer({ offer: null, ageGate: { min: 18 } })).toEqual({ kind: 'ageGate', min: 18 });
     expect(readOffer('nope')).toEqual({ kind: 'none' });
+  });
+
+  it('reads the verified price with its own deadline, and refuses a malformed or missing required one', () => {
+    const sent = { mono: 1_000, wall: 2_000 };
+    const odds = { market: 'X2', odds: 1.85, fetchedAt: '2026-11-08T06:00:00Z', validFor: 600 };
+    const answer = readOffer({ offer: { ...offer, odds, oddsRequired: true } }, sent);
+    expect(answer.kind === 'offer' && answer.offer.price).toEqual({ market: 'X2', odds: 1.85, expires: { mono: 601_000, wall: 602_000 } });
+    for (const bad of [{ ...odds, odds: 0.5 }, { ...odds, validFor: 901 }, { ...odds, market: 7 }, 'x']) {
+      expect(readOffer({ offer: { ...offer, odds: bad } }, sent)).toEqual({ kind: 'none' });
+    }
+    expect(readOffer({ offer: { ...offer, odds: null, oddsRequired: true } }, sent)).toEqual({ kind: 'none' });
   });
 
   it('opens only https links without user info', () => {

@@ -725,4 +725,5 @@ export const az: Dictionary = {
   'credits.calcRate': 'Tərəfdaşda {amount} {currency} depozit = 1 proqnoz.',
   'credits.calcForecasts': 'Proqnozların sayı',
   'credits.calcResult': '{n} proqnoz ({credits} kredit) — depozit {amount} {currency}',
+  'ads.odds': 'Əmsal: {odds}',
 };

@@ -11,7 +11,8 @@ import { Referrals } from './pages/Referrals';
 import { Account } from './pages/Account';
 import { MbQueue } from './pages/MbQueue';
 import { Inquiries } from './pages/Inquiries';
-import { AdsPlaceholder, Outbox, Product, SettingsRoles } from './pages/Ops';
+import { Outbox, Product, SettingsRoles } from './pages/Ops';
+import { AdsRoutes } from './ads';
 import { AuthProvider, PrefsProvider, useAuth } from './state';
 import { Empty, Layout, Loading, PageHead } from './ui';
 
@@ -58,10 +59,7 @@ function Gate() {
         <Route path="product" element={<Product />} />
         <Route path="settings/roles" element={<SettingsRoles />} />
         <Route path="account" element={<Account />} />
-        {/* Ads hookup point. After merging feat/ads-module replace this one line with:
-            import { AdsRoutes } from './ads';  <Route path="ads/*" element={<AdsRoutes />} />
-            (and use ADS_NAV_LINK from './ads' for the ['/ads', 'Реклама'] entry in ui.tsx NAV). */}
-        <Route path="ads/*" element={<AdsPlaceholder />} />
+        <Route path="ads/*" element={<AdsRoutes />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

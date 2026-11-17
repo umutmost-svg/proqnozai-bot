@@ -224,14 +224,3 @@ export function Product() {
     </>
   );
 }
-
-/** Placeholder for the Ads section: the ads module (branch feat/ads-module, admin-frontend/src/ads/**) replaces
- * this route's element. Kept isolated so the two branches touch only this one line in App.tsx. */
-export function AdsPlaceholder() {
-  return (
-    <>
-      <PageHead title="Реклама" subtitle="Раздел подключается модулем рекламы" />
-      <Empty title="Модуль рекламы ещё не подключён" />
-    </>
-  );
-}

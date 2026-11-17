@@ -723,4 +723,5 @@ export const es: Dictionary = {
   'credits.calcRate': 'Un depósito de {amount} {currency} en el socio = 1 pronóstico.',
   'credits.calcForecasts': 'Número de pronósticos',
   'credits.calcResult': '{n} pronósticos ({credits} créditos) — depósito de {amount} {currency}',
+  'ads.odds': 'Cuota: {odds}',
 };

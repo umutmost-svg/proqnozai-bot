@@ -723,4 +723,5 @@ export const ptBR: Dictionary = {
   'credits.calcRate': 'Depósito de {amount} {currency} no parceiro = 1 palpite.',
   'credits.calcForecasts': 'Número de palpites',
   'credits.calcResult': '{n} palpites ({credits} créditos) — depósito de {amount} {currency}',
+  'ads.odds': 'Odd: {odds}',
 };

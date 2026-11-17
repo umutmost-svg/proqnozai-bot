@@ -723,4 +723,5 @@ export const uz: Dictionary = {
   'credits.calcRate': 'Hamkorda {amount} {currency} depozit = 1 prognoz.',
   'credits.calcForecasts': 'Prognozlar soni',
   'credits.calcResult': '{n} prognoz ({credits} kredit) — depozit {amount} {currency}',
+  'ads.odds': 'Koeffitsiyent: {odds}',
 };

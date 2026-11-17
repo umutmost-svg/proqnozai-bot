@@ -5,7 +5,11 @@
  *
  * The backend registers /api/ads only with MINIAPP_ADS_ENABLED=true: a 404 switches this client off for
  * the rest of the page's life, so a disabled backend costs one request.
+ *
+ * A price in an offer is never the advertiser's: the server sends the verified odds store's current price
+ * of the market it recommended (or none), with the seconds it may be shown; the card hides it after that.
  */
+import type { PriceDeadline } from './models';
 
 export type Placement = 'quick_pick' | 'ai_pick';
 
@@ -17,6 +21,10 @@ export interface PartnerOffer {
   extra: string;
   cta: string;
   disclosure: { advertiser?: string; adId?: string; ageLabel?: string };
+  /** The verified price of the recommended market, until `expires`; null = shown without a price. */
+  price: { market: string; odds: number; expires: PriceDeadline } | null;
+  /** The campaign is shown only with a price: once the price expires, the whole offer goes. */
+  oddsRequired: boolean;
   impressionToken: string;
 }
 
@@ -32,14 +40,25 @@ export interface AdsApi {
 }
 
 const TIMEOUT_MS = 8_000;
+const MAX_VALID_FOR_S = 900; // the server never serves a price for longer (miniapp/odds/store.py MAX_AGE_S)
 const NONE: OfferAnswer = { kind: 'none' };
 
 type Json = Record<string, unknown>;
 const isObj = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 const text = (v: unknown, max: number): string | null => (typeof v === 'string' && v.length <= max ? v : null);
 
+function readPrice(v: unknown, sent: PriceDeadline): PartnerOffer['price'] | undefined {
+  if (v === null || v === undefined) return null;
+  if (!isObj(v)) return undefined;
+  const market = text(v.market, 12);
+  const { odds, validFor } = v;
+  if (!market || typeof odds !== 'number' || !Number.isFinite(odds) || odds < 1.01 || odds > 100) return undefined;
+  if (typeof validFor !== 'number' || !Number.isInteger(validFor) || validFor < 1 || validFor > MAX_VALID_FOR_S) return undefined;
+  return { market, odds, expires: { mono: sent.mono + validFor * 1000, wall: sent.wall + validFor * 1000 } };
+}
+
 /** Strict reading of the server's offer: anything unexpected means no offer (never a half-filled card). */
-export function readOffer(body: unknown): OfferAnswer {
+export function readOffer(body: unknown, sent: PriceDeadline = { mono: performance.now(), wall: Date.now() }): OfferAnswer {
   if (!isObj(body)) return NONE;
   const gate = body.ageGate;
   if (body.offer === null && isObj(gate) && typeof gate.min === 'number' && Number.isInteger(gate.min) && gate.min > 0) {
@@ -54,13 +73,20 @@ export function readOffer(body: unknown): OfferAnswer {
   const bodyText = text(o.body, 300);
   const extra = text(o.extra, 120);
   if (!headline || !cta || !variant || !token || bodyText === null || extra === null) return NONE;
+  const price = readPrice(o.odds, sent);
+  const oddsRequired = o.oddsRequired === true;
+  // A malformed price is no offer at all; a required one that is missing is no offer either.
+  if (price === undefined || (oddsRequired && price === null)) return NONE;
   const d = isObj(o.disclosure) ? o.disclosure : {};
   const disclosure: PartnerOffer['disclosure'] = {};
   for (const [key, max] of [['advertiser', 120], ['adId', 64], ['ageLabel', 8]] as const) {
     const value = text(d[key], max);
     if (value) disclosure[key] = value;
   }
-  return { kind: 'offer', offer: { id: o.id, variant, headline, body: bodyText, extra, cta, disclosure, impressionToken: token } };
+  return {
+    kind: 'offer',
+    offer: { id: o.id, variant, headline, body: bodyText, extra, cta, disclosure, price, oddsRequired, impressionToken: token },
+  };
 }
 
 /** Only an https link without user info; anything else is never opened. */
@@ -148,8 +174,10 @@ export function createAdsApi(options: {
   return {
     async offer(placement, eventId) {
       const query = new URLSearchParams({ placement, event_id: eventId }).toString();
+      // The price's validity counts from when the request left, not from when the answer arrived.
+      const sent = { mono: performance.now(), wall: Date.now() };
       const r = await call(`/ads/offer?${query}`, { method: 'GET' });
-      return r && r.status === 200 ? readOffer(r.body) : NONE;
+      return r && r.status === 200 ? readOffer(r.body, sent) : NONE;
     },
     async impression(token) {
       await post('/ads/impression', { impressionToken: token });
