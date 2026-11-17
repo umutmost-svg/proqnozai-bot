@@ -98,6 +98,9 @@ describe('v3 analysis is read strictly', () => {
     expect(other.forecast?.noBetReason).toBe('unvalidatedCompetition');
     const early = await read(v3({ pick: { market: 'NO_BET', reasons: [], probability: null }, alternatives: [] }, { noBetReason: 'early_forecast' }));
     expect(early.forecast?.noBetReason).toBe('earlyForecast');
+    // Every candidate priced below the minimum odds (selection rule 6, 18.11): a full NO_BET with its own reason.
+    const low = await read(v3({ pick: { market: 'NO_BET', reasons: [], probability: null }, alternatives: [] }, { noBetReason: 'low_odds' }));
+    expect(low.forecast?.noBetReason).toBe('lowOdds');
     const partial = await read(v3({ pick: { market: 'NO_BET', reasons: [], probability: null }, alternatives: [] }, { noBetReason: 'partial_history' }));
     expect(partial.forecast?.noBetReason).toBe('partialHistory');
   });

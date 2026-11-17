@@ -595,29 +595,46 @@ def test_the_market_book_keeps_compare_unchanged(clock: FakeClock) -> None:
         assert view[k]["marketProbability"] == round(fair * 100, 1)
 
 
-def test_a_recommendation_the_bookmaker_prices_below_the_minimum_is_not_served(clock: FakeClock) -> None:
-    """Selection rule 6 at serve time: 1X at 1.22 (likely, pays next to nothing) turns into NO_BET; an alternative
-    priced so is dropped; with a price at or above 1.30 the pick stays (owner 18.11)."""
+def test_a_market_the_bookmaker_prices_below_the_minimum_is_never_the_recommendation(clock: FakeClock,
+                                                                                       tmp_path) -> None:
+    """Selection rule 6 with prices, applied where the recommendation is made (before the explanation and the history):
+    1X at 1.22 drops out and X2 at 2.00 is recommended; with every candidate under 1.30 → NO_BET `low_odds`, no value
+    claim next to it (owner 18.11)."""
     from miniapp.tests.forecast_fakes import fake_forecast
     from miniapp.tests.test_ai_analysis import FakeForecaster, answer
 
-    model = FakeModel(answer("home_form", "home_rating", reasons=("home_better_form",)))
-    ai, _ = make_ai(clock, model, forecaster=FakeForecaster(fake_forecast("1X", alternatives=("12",))))
+    from miniapp.forecast.history import ForecastHistory
+
+    history = ForecastHistory(tmp_path / "h.db", clock)
+    history.init_schema()
+    model = FakeModel(answer("home_form", "home_rating"))
+    ai, _ = make_ai(clock, model, history=history, forecaster=FakeForecaster(fake_forecast("1X", alternatives=("X2",))))
     store = OddsStore(clock)
     ai.odds = store
-    ingest(store, clock, line())                                   # dc_1x 1.22, dc_12 1.25
+    ingest(store, clock, line())                                   # dc_1x 1.22, dc_x2 2.00, dc_12 1.25
     served = run(ai.analyse("fd:7", user_id=1))
-    assert served.pick.market == "NO_BET" and served.alternatives == ()
-    assert served.market is not None                              # the prices are still shown, without a pick
+    assert served.pick.market == "X2" and served.forecast["noBetReason"] is None
+    assert [r["pick"] for r in history.list_forecasts()[1]] == ["X2"]  # the history holds what was served
+
+    ai2, _ = make_ai(clock, FakeModel(answer("home_form", "home_rating")),
+                     forecaster=FakeForecaster(fake_forecast("1X", alternatives=("12",))))
+    ai2.odds = store
+    none = run(ai2.analyse("fd:7", user_id=1))
+    assert none.pick.market == "NO_BET" and none.alternatives == () and none.forecast["noBetReason"] == "low_odds"
+    assert all(q["edge"] is None and q["expectedValue"] is None for q in none.market["quotes"])
 
 
 def test_quick_never_chooses_a_market_priced_below_the_minimum() -> None:
+    from dataclasses import replace
+
     from miniapp.forecast.quick import Criteria, choose
+    from miniapp.forecast.selection import with_prices
     from miniapp.tests.test_quick import forecast, option
 
     f = forecast(("1X", 0.74, 0.50), ("2", 0.58, 0.40))
     criteria = Criteria("single", "any", "elevated", 1)
     assert choose([option(1, f)], criteria).legs[0].candidate.market == "1X"
-    low = choose([option(1, f)], criteria, {"fd:1": {"1X": 1.18, "2": 1.9}})
-    assert low.legs[0].candidate.market == "2"                    # 1X priced at 1.18: the next suitable market
-    assert choose([option(1, f)], criteria, {"fd:1": {"1X": 1.18, "2": 1.2}}).status == "no_bet"
+    low = replace(f, selection=with_prices(f.selection, {"1X": 1.18, "2": 1.9}))
+    assert choose([option(1, low)], criteria).legs[0].candidate.market == "2"   # the next suitable market
+    gone = with_prices(f.selection, {"1X": 1.18, "2": 1.2})
+    assert gone.pick is None and gone.no_bet_reason == "low_odds"

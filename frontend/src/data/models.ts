@@ -227,7 +227,8 @@ export type NoBetReason =
   | 'noQualifyingMarket'
   | 'partialHistory'
   | 'unvalidatedCompetition'
-  | 'earlyForecast';
+  | 'earlyForecast'
+  | 'lowOdds';
 
 /** The goal model's figures behind a v3 analysis (M3.5). Every number is computed, none written by the AI. */
 export interface ModelForecast {
@@ -419,6 +420,7 @@ export const QUICK_REASONS = [
   'early_forecast',
   'small_sample',
   'no_qualifying_market',
+  'low_odds',
   'partial_history',
   'model_small_sample',
   'model_team_history',

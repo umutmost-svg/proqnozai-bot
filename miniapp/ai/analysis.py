@@ -39,7 +39,7 @@ from miniapp.forecast.data import results_from_events
 from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast, Unavailable
 from miniapp.forecast.history import ForecastHistory, ForecastRecord
 from miniapp.forecast.markets import FAMILY, KEYS as MARKET_KEYS
-from miniapp.forecast.selection import below_min_odds
+from miniapp.forecast.selection import with_prices
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.odds.store import MatchOdds, OddsStore
 from miniapp.odds.value import book_json, compare, market_1x2_percent, market_book
@@ -409,6 +409,11 @@ class AiService:
             # table rows and the current market — never the model's numbers, never a pick.
             return await self._basis_analysis(event, home, away, basis, fixture, forecast.reason, has_form,
                                               user_id, create, odds)
+        if odds is not None:
+            # Selection rule 6 with the current checked prices, BEFORE the explanation, the identity digest and the
+            # history row: a market the bookmaker prices below the minimum odds is never the recommendation (the next
+            # one in the rules' order is, or NO_BET `low_odds`). Fixed with the answer: later price moves show as is.
+            forecast = replace(forecast, selection=with_prices(forecast.selection, odds.book))
         figures = forecast.to_json()
         shown = forecast.display
         probabilities = {"home": shown["1"], "draw": shown["X"], "away": shown["2"]}
@@ -694,14 +699,6 @@ class AiService:
         quotes = compare(found.book, forecast.exact)
         if not quotes:
             return result
-        # A recommendation the bookmaker prices below the minimum odds is never served (selection rule 6, owner
-        # 18.11): an alternative priced so is dropped, a pick priced so turns into NO_BET (its explanation was
-        # written for that pick, so no alternative is promoted in its place).
-        if result.pick.market != "NO_BET" and below_min_odds(found.book.get(result.pick.market)):
-            result = replace(result, pick=NO_BET, alternatives=())
-        elif result.alternatives:
-            result = replace(result, alternatives=tuple(a for a in result.alternatives
-                                                        if not below_min_odds(found.book.get(a["market"]))))
         market = {"fetchedAt": _iso_ts(found.fetched_at), "validFor": int(found.valid_for),
                   "quotes": [quotes[k].to_json(value=value_claimable(forecast, k)) for k in MARKET_KEYS if k in quotes]}
         if has_form:

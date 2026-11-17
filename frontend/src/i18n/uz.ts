@@ -580,6 +580,7 @@ export const uz: Dictionary = {
   'ai.basisOnlyText': 'Bu oʻyin uchun gollar modeli hisoblanmaydi, shuning uchun tavsiya yoʻq. Quyida jamoalar haqidagi tasdiqlangan maʼlumotlar va mavjud boʻlsa, bozor koeffitsiyentlari boʻyicha baho.',
   'ai.pick.noBet.unvalidatedCompetition': 'Bu turnir model tekshiruviga kirmagan: ehtimollar ko‘rsatiladi, lekin tavsiya yo‘q.',
   'ai.pick.noBet.earlyForecast': 'O‘yin kunigacha tavsiya yo‘q: tanlov qoidalari faqat o‘yin kuni prognozi uchun tekshirilgan. O‘yin kuni yana qarang — natija qoidalardan o‘tsa, tavsiya paydo bo‘lishi mumkin. Yuqoridagi ehtimollar — bugungi baho.',
+  'ai.pick.noBet.lowOdds': 'Qoidalardan o‘tgan barcha natijalarning koeffitsiyenti 1.30 dan past: ehtimoli yuqori, lekin deyarli hech narsa bermaydi, shuning uchun tavsiya yo‘q.',
   // M3.6: top matches of the day and quick prediction.
   'nav.quick': 'Tezkor prognoz',
   'top.title': 'Kunning asosiy o‘yinlari',
@@ -643,6 +644,7 @@ export const uz: Dictionary = {
   'quick.reason.early_forecast': 'UTC bo‘yicha o‘yin kuni emas: {n}',
   'quick.reason.small_sample': 'Jamoalarning o‘yinlari kam: {n}',
   'quick.reason.no_qualifying_market': 'Hech bir natija qoidalardan o‘tmadi: {n}',
+  'quick.reason.low_odds': 'Koeffitsiyent 1.30 dan past: {n}',
   'quick.reason.partial_history': 'Ma’lumotlarda o‘tgan mavsum yo‘q: {n}',
   'quick.reason.model_small_sample': 'Turnir natijalari kam: {n}',
   'quick.reason.model_team_history': 'Jamoaning o‘yinlari kam: {n}',

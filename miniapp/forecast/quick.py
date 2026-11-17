@@ -22,12 +22,12 @@ at least max(0, sum − (n − 1)). No odds, no payout, no value claim.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from .engine import MatchForecast
 from .markets import FAMILY, KEYS
-from .selection import P_MIN, Candidate, below_min_odds
+from .selection import P_MIN, Candidate
 
 MODES = ("single", "coupon")
 MARKET_FILTERS = ("any", "1x2", "double", "total", "btts", "handicap", "team_total")
@@ -81,17 +81,14 @@ class QuickResult:
     combined: tuple[float, float] | None  # coupon: Fréchet bounds of "every leg wins" (no independence assumed)
 
 
-def suitable_markets(forecast: MatchForecast, criteria: Criteria,
-                     prices: Mapping[str, float] | None = None) -> list[Candidate]:
-    """The selection's own candidates of this match that meet the user's criteria; `prices`: the match's checked
-    bookmaker odds by market (a market priced below MIN_ODDS is never offered)."""
+def suitable_markets(forecast: MatchForecast, criteria: Criteria) -> list[Candidate]:
+    """The selection's own candidates of this match that meet the user's criteria."""
     selection = forecast.selection
     if selection.pick is None:
         return []
     floor = RISK_MIN_PROBABILITY[criteria.risk]
     found = [c for c in (selection.pick, *selection.alternatives)
-             if c.probability >= floor and (criteria.market == "any" or FAMILY[c.market] == criteria.market)
-             and not below_min_odds((prices or {}).get(c.market))]
+             if c.probability >= floor and (criteria.market == "any" or FAMILY[c.market] == criteria.market)]
     return sorted(found, key=_rank)
 
 
@@ -99,12 +96,10 @@ def _rank(c: Candidate) -> tuple:
     return (-c.edge_over_league, -c.probability, KEYS.index(c.market))
 
 
-def choose(options: Iterable[Option], criteria: Criteria,
-           prices: Mapping[str, Mapping[str, float]] | None = None) -> QuickResult:
-    """`prices`: checked bookmaker odds by event id and market (none: the model's own bounds only)."""
+def choose(options: Iterable[Option], criteria: Criteria) -> QuickResult:
     best: list[Leg] = []
     for option in options:
-        markets = suitable_markets(option.forecast, criteria, (prices or {}).get(option.event_id))
+        markets = suitable_markets(option.forecast, criteria)
         if markets:
             best.append(Leg(option, markets[0]))
     best.sort(key=lambda leg: (*_rank(leg.candidate), leg.option.kickoff, leg.option.event_id))

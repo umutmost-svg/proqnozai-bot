@@ -20,8 +20,8 @@ A market qualifies only when ALL of these hold:
    move it by at most STABILITY_MAX;
 6. it is not a near-certainty: its fair odds 1/p are at least MIN_ODDS (probability at most
    P_MAX). An outcome at 1.01–1.20 is likely but pays next to nothing (owner 18.11.2026:
-   "a balance between certainty and price"). Where a checked bookmaker price exists, the
-   serving layers drop a market priced below MIN_ODDS too (`below_min_odds`).
+   "a balance between certainty and price"). Where a checked bookmaker price exists when the
+   recommendation is made, a market priced below MIN_ODDS drops out too (`with_prices`).
 
 Qualifying markets are ranked by the difference in (3); the first is the pick, up to
 three more from other market families are alternatives. Nothing qualifies → NO_BET.
@@ -56,6 +56,8 @@ NO_BET_UNVALIDATED = "unvalidated_competition"
 NO_BET_EARLY = "early_forecast"
 NO_BET_SAMPLE = "small_sample"
 NO_BET_NONE = "no_qualifying_market"
+# Every qualifying market is priced below MIN_ODDS by the bookmaker (rule 6).
+NO_BET_LOW_ODDS = "low_odds"
 # The previous season could not be loaded: the window differs from the validated one.
 NO_BET_PARTIAL = "partial_history"
 
@@ -100,6 +102,18 @@ def calibrated(table: CalibrationTable, market: str, p: float) -> bool:
 def below_min_odds(odds: float | None) -> bool:
     """A checked bookmaker price under MIN_ODDS: never recommended (None: no price, the model's own bound holds)."""
     return odds is not None and odds < MIN_ODDS
+
+
+def with_prices(selection: Selection, book: Mapping[str, float] | None) -> Selection:
+    """Rule 6 against the bookmaker's checked prices, applied where the recommendation is made (before the
+    explanation is written and the forecast stored): candidates priced below MIN_ODDS drop out, the next one in
+    the selection's own order becomes the pick; none left → NO_BET `low_odds`."""
+    if not book or selection.pick is None:
+        return selection
+    kept = [c for c in (selection.pick, *selection.alternatives) if not below_min_odds(book.get(c.market))]
+    if not kept:
+        return Selection(None, (), NO_BET_LOW_ODDS)
+    return Selection(kept[0], tuple(kept[1:]), None)
 
 
 def select(probs: Mapping[str, float], league_rates: Mapping[str, float], *, competition: str,

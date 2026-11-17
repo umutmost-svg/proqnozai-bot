@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from miniapp.forecast.selection import below_min_odds
 from miniapp.odds.store import OddsStore
 from miniapp.sports.models import FootballEvent
 
@@ -27,8 +28,8 @@ def make_odds_lookup(event_of: Callable[[str], Awaitable[tuple[Any, Any]]],
         if found is None:
             return None
         price = found.book.get(market)
-        if price is None:
-            return None
+        if price is None or below_min_odds(price):
+            return None  # never a price under the recommendation minimum next to a pick (selection rule 6)
         return {"market": market, "odds": price,
                 "fetchedAt": datetime.fromtimestamp(found.fetched_at, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 # Whole seconds the client may show it (it hides the price after that on its own clock).

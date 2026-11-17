@@ -580,6 +580,7 @@ export const en: Dictionary = {
   'ai.basisOnlyText': 'The goal model cannot be calculated for this match, so there is no recommendation. Below are the teams\' verified data and, when available, an estimate from the market odds.',
   'ai.pick.noBet.unvalidatedCompetition': 'This competition was not part of the model’s check: the probabilities are shown, but there is no recommendation.',
   'ai.pick.noBet.earlyForecast': 'No recommendation before match day: the selection rules were checked only for match-day forecasts. Check again on match day — a recommendation may appear if an outcome passes the rules. The probabilities above are today’s estimate.',
+  'ai.pick.noBet.lowOdds': 'Every outcome that passed the rules is priced below 1.30: likely, but it pays next to nothing, so there is no recommendation.',
   // M3.6: top matches of the day and quick prediction.
   'nav.quick': 'Quick pick',
   'top.title': 'Top matches of the day',
@@ -643,6 +644,7 @@ export const en: Dictionary = {
   'quick.reason.early_forecast': 'Not on the match’s UTC day: {n}',
   'quick.reason.small_sample': 'Too few matches for the teams: {n}',
   'quick.reason.no_qualifying_market': 'No outcome passed the rules: {n}',
+  'quick.reason.low_odds': 'Odds below 1.30: {n}',
   'quick.reason.partial_history': 'No previous season in the data: {n}',
   'quick.reason.model_small_sample': 'Too few results of the competition: {n}',
   'quick.reason.model_team_history': 'Too few matches for a team: {n}',

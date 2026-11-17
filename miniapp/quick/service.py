@@ -39,7 +39,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from collections import Counter, deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 
 from miniapp.ai.analysis import ModelForecaster
@@ -47,9 +47,9 @@ from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast
 from miniapp.forecast.markets import FAMILY, KEYS
 from miniapp.forecast.quick import (STATUS_NO_BET, STATUS_NOT_ENOUGH, STATUS_UNAVAILABLE, Criteria, Leg, Option,
                                     QuickResult, choose, coupon, frechet)
-from miniapp.forecast.selection import LIMITED_COMPETITIONS, NO_BET_EARLY, NO_BET_UNVALIDATED, P_MAX, below_min_odds
+from miniapp.forecast.selection import LIMITED_COMPETITIONS, NO_BET_EARLY, NO_BET_UNVALIDATED, P_MAX, below_min_odds, with_prices
 from miniapp.forecast.version import MODEL_VERSION
-from miniapp.odds.store import OddsStore
+from miniapp.odds.store import MatchOdds, OddsStore
 from miniapp.odds.value import MarketQuote, compare, market_book
 from miniapp.sports.client import LOW_PRIORITY_RESERVE, UpstreamError
 from miniapp.sports.models import FootballEvent
@@ -336,6 +336,7 @@ class QuickService:
         now = self._clock()
         reasons: Counter = Counter()
         options: list[Option] = []
+        books: dict[str, MatchOdds] = {}
         forecasts = 0
         for event, outcome in zip(usable, outcomes, strict=True):
             if parse_instant(event.starts_at).timestamp() <= now:
@@ -344,6 +345,11 @@ class QuickService:
                 reasons[f"model_{outcome.reason}"] += 1
                 continue
             forecasts += 1
+            # Selection rule 6 with the checked prices read once here (the shown price is the same read).
+            found = self.odds.lookup(event) if self.odds is not None else None
+            if found is not None:
+                books[event.id] = found
+                outcome = replace(outcome, selection=with_prices(outcome.selection, found.book))
             options.append(Option(event.id, event.starts_at, (event.home.id, event.away.id), outcome))
             if outcome.selection.no_bet_reason is not None:
                 reasons[outcome.selection.no_bet_reason] += 1
@@ -360,7 +366,7 @@ class QuickService:
         missing = sum(1 for e in todays if e.tournament_id in unavailable)
         if missing:
             reasons["source_unavailable"] = missing
-        result = choose(options, criteria, self._books(options, {e.id: e for e in usable}))
+        result = choose(options, criteria)
         # Nothing could be evaluated because data is missing (today's, or every day loaded was
         # empty while others were not checked): retry later, never "no bet" / "no matches".
         # Missing data of today could have changed an unsuccessful answer (any of those matches
@@ -407,7 +413,7 @@ class QuickService:
         return QuickAnswer(criteria, result, by_id, matches, forecasts, reasons,
                            tuple(unavailable), unchecked,
                            datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), next_match_at,
-                           self._prices(result, by_id), preview, _started(estimate, now))
+                           self._prices(result, books), preview, _started(estimate, now))
 
     async def _preview(self, tournaments: frozenset[str] | None, today: date,
                        ) -> tuple[tuple[FootballEvent, MatchForecast], ...]:
@@ -482,25 +488,11 @@ class QuickService:
             return None
         return Estimate(tuple(chosen), len(best))
 
-    def _books(self, options: list[Option], events: dict[str, FootballEvent]) -> dict[str, dict[str, float]]:
-        """Checked bookmaker odds of the candidate matches (no request: what the odds store holds), so a market
-        priced below the minimum odds is never chosen."""
-        if self.odds is None:
-            return {}
-        books: dict[str, dict[str, float]] = {}
-        for option in options:
-            found = self.odds.lookup(events[option.event_id])
-            if found is not None:
-                books[option.event_id] = dict(found.book)
-        return books
-
-    def _prices(self, result: QuickResult, events: dict[str, FootballEvent]) -> dict[str, tuple[MarketQuote, float, float]]:
-        """The chosen legs' prices: no request, only what the bot has pushed (matched strictly)."""
+    def _prices(self, result: QuickResult, books: dict[str, MatchOdds]) -> dict[str, tuple[MarketQuote, float, float]]:
+        """The chosen legs' prices: the same read the choice was made with (no request, matched strictly)."""
         prices: dict[str, tuple[MarketQuote, float, float]] = {}
-        if self.odds is None:
-            return prices
         for leg in result.legs:
-            found = self.odds.lookup(events[leg.option.event_id])
+            found = books.get(leg.option.event_id)
             if found is None:
                 continue
             quote = compare(found.book, leg.option.forecast.exact).get(leg.candidate.market)

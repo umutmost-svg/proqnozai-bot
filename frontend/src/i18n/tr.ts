@@ -580,6 +580,7 @@ export const tr: Dictionary = {
   'ai.basisOnlyText': 'Bu maç için gol modeli hesaplanamıyor, bu yüzden öneri yok. Aşağıda takımlarla ilgili doğrulanmış veriler ve varsa piyasa oranlarından bir tahmin yer alıyor.',
   'ai.pick.noBet.unvalidatedCompetition': 'Bu turnuva modelin kontrolüne dahil değildi: olasılıklar gösteriliyor ama öneri yok.',
   'ai.pick.noBet.earlyForecast': 'Maç gününden önce öneri yok: seçim kuralları yalnızca maç günü tahminleri için kontrol edildi. Maç günü tekrar bakın — bir sonuç kuralları geçerse öneri görünebilir. Yukarıdaki olasılıklar bugünkü tahmindir.',
+  'ai.pick.noBet.lowOdds': "Kuralları geçen tüm sonuçların oranı 1.30'un altında: olası ama neredeyse hiçbir şey kazandırmıyor, bu yüzden öneri yok.",
   // M3.6: top matches of the day and quick prediction.
   'nav.quick': 'Hızlı tahmin',
   'top.title': 'Günün önemli maçları',
@@ -643,6 +644,7 @@ export const tr: Dictionary = {
   'quick.reason.early_forecast': 'UTC’ye göre maç günü değil: {n}',
   'quick.reason.small_sample': 'Takımların maçı az: {n}',
   'quick.reason.no_qualifying_market': 'Hiçbir sonuç kuralları geçmedi: {n}',
+  'quick.reason.low_odds': "Oran 1.30'un altında: {n}",
   'quick.reason.partial_history': 'Verilerde önceki sezon yok: {n}',
   'quick.reason.model_small_sample': 'Turnuvanın sonucu az: {n}',
   'quick.reason.model_team_history': 'Takımın maçı az: {n}',
