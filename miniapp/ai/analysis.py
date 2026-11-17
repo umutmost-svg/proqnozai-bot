@@ -68,6 +68,7 @@ KICKOFF_MARGIN_S = 5 * 60.0
 # Paid calls per unchanged analysis, counted durably before each call: a successful answer is
 # restored from the history (never paid again), so this caps calls that failed in any way.
 MAX_PAID_ATTEMPTS = 2
+MAX_UNSTORED = 200  # paid answers kept in memory until their history write succeeds
 # Each key is rendered by the frontend from the basis numbers (form, goals, table) of
 # that team, or from the goal model's figures (rating, home advantage).
 FACTORS = ("home_form", "away_form", "home_goals", "away_goals", "home_table", "away_table",
@@ -357,6 +358,9 @@ class AiService:
         self._paid_attempts: dict[str, int] = {}  # only without a history store (tests, live check)
         # Analyses whose failed paid call could not be counted: fail closed in this process.
         self._uncounted: set[str] = set()
+        # Paid answers whose history write failed (e.g. a long SQLite lock): kept here and written again on the next
+        # request for the same analysis, then served — never paid for a second time (tech-debt P1).
+        self._unstored: dict[str, Callable[[], Awaitable[tuple[AnalysisResult, float]]]] = {}
         self._clock = clock
         self._cache = SportsCache(clock=clock, max_stale_s=0)
         self._ledger = ledger or MemoryLedger()
@@ -463,6 +467,14 @@ class AiService:
                 await self._remember(event, forecast, result, digest)
             except AiError:
                 self._uncounted.add(key)  # paid but not storable: never paid for again in this process
+
+                async def store_later() -> tuple[AnalysisResult, float]:
+                    await self._remember(event, forecast, result, digest)  # still failing: AiError again
+                    self._unstored.pop(key, None)
+                    self._uncounted.discard(key)
+                    return result, self._until_kickoff(event)
+
+                self._keep_unstored(key, store_later)
                 raise
             return result, self._until_kickoff(event)
 
@@ -634,6 +646,10 @@ class AiService:
                 # Only a NEW analysis needs the model: a made one (cache, history) is read without it.
                 if self.client is None:
                     raise AiError("not_configured")
+                pending = self._unstored.get(key)
+                if pending is not None:
+                    # Paid earlier, its history write failed: written now and served for free (no new call).
+                    return self._cache.start(key, _as_upstream(pending))
                 if key in self._uncounted or await self._attempts(key) >= MAX_PAID_ATTEMPTS:
                     raise AiError("upstream_error")  # this exact analysis was already paid for twice
                 # Counted durably BEFORE the call: an SDK crash or a process exit after dispatch
@@ -734,6 +750,13 @@ class AiService:
                 logger.warning("ai.release_failed type=%s", type(exc).__name__)
         reserved.clear()
         await self._uncount_attempt(key)
+
+    def _keep_unstored(self, key: str, store_later: Callable[[], Awaitable[tuple[AnalysisResult, float]]]) -> None:
+        """Bounded: the oldest kept answer is dropped first (it then stays unserved, as before, never re-paid)."""
+        self._unstored.pop(key, None)
+        while len(self._unstored) >= MAX_UNSTORED:
+            self._unstored.pop(next(iter(self._unstored)))
+        self._unstored[key] = store_later
 
     async def _uncount_attempt(self, key: str) -> None:
         if self.history is None:

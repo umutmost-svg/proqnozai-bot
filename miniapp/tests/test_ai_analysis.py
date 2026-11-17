@@ -6,6 +6,8 @@ import asyncio
 import json
 from dataclasses import replace
 
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -885,6 +887,52 @@ def test_a_paid_answer_that_cannot_be_stored_is_never_paid_for_again(tmp_path, c
         with pytest.raises(Exception):
             run(ai.analyse("fd:7", user_id=1))
     assert len(model.calls) == 1
+
+
+def test_a_paid_answer_whose_write_failed_is_stored_and_served_on_the_next_request(tmp_path, clock: FakeClock,
+                                                                                  caplog) -> None:
+    """A long SQLite lock after the paid call loses nothing: the next request writes the kept answer and serves it,
+    without a second call (tech-debt P1)."""
+    class Flaky(ForecastHistory):
+        failing = True
+
+        def record(self, r):
+            if self.failing:
+                raise sqlite3.OperationalError("database is locked")
+            return super().record(r)
+
+    history = Flaky(tmp_path / "x.db", clock)
+    history.init_schema()
+    model = FakeModel(answer("home_form", "home_rating", reasons=("home_better_form",)))
+    ai, _ = make_ai(clock, model, history=history, forecaster=FakeForecaster(fake_forecast("1X")))
+    with pytest.raises(Exception) as exc:
+        run(ai.analyse("fd:7", user_id=1))
+    assert getattr(exc.value, "code", None) == "upstream_error" and history.count() == 0
+    assert "ai.history_write_failed type=OperationalError" in caplog.text
+    new_analysis(ai, clock)            # the remembered failure has expired
+    with pytest.raises(Exception):     # still locked: still not shown, still not paid again
+        run(ai.analyse("fd:7", user_id=1))
+    history.failing = False
+    new_analysis(ai, clock)
+    served = run(ai.analyse("fd:7", user_id=1))
+    assert served.factors == ("home_form", "home_rating") and history.count() == 1 and len(model.calls) == 1
+    assert not ai._unstored and "ai:" not in "".join(ai._uncounted)
+    new_analysis(ai, clock)            # from now on it is an ordinary stored answer
+    assert run(ai.analyse("fd:7", user_id=2)).factors == ("home_form", "home_rating") and len(model.calls) == 1
+
+
+def test_kept_unstored_answers_are_bounded(clock: FakeClock, monkeypatch) -> None:
+    from miniapp.ai import analysis
+
+    monkeypatch.setattr(analysis, "MAX_UNSTORED", 2)
+    ai, _ = make_ai(clock, FakeModel())
+
+    async def later():
+        raise AssertionError("never called")
+
+    for key in ("a", "b", "c"):
+        ai._keep_unstored(key, later)
+    assert list(ai._unstored) == ["b", "c"]
 
 
 def test_an_attempt_is_counted_before_the_call_so_a_crash_still_counts(tmp_path, clock: FakeClock) -> None:
