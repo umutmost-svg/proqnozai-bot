@@ -252,9 +252,11 @@ def register_ads_routes(
             c, v = found
             ts = now()
             # A repeated tap on the same offer today reuses its click id: replays never add rows.
-            click_id = safe(lambda: telemetry.click_id_for(t.user_id, t.campaign_id, t.variant, c.partner_id,
-                                                           t.event_key, ts), None, "click_read") \
-                or secrets.token_urlsafe(18)
+            fresh_id = secrets.token_urlsafe(18)
+            # On a telemetry failure the fresh id still goes out (its conversion is then unattributed).
+            click_id = safe(lambda: telemetry.claim_click_id(t.user_id, t.campaign_id, t.variant, c.partner_id,
+                                                             t.placement, t.event_key, ts, fresh_id), fresh_id,
+                            "click_claim")
             # Already checked on read; once more, with this click's id in place, right before it leaves.
             url = policy.render_url(v.url, click_id, c.hosts)
             # A lost click record must not cost the user the link (its conversion is then unattributed).

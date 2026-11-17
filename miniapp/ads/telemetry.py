@@ -274,7 +274,7 @@ class Telemetry:
         """A click; the same offer (user, campaign, variant, match) counts once per UTC day. A signed click link lives
         two days and could be replayed without limit (CRM audit B3: ~8,600 counted clicks a day from one user); every
         tap still opens the partner. Every click id is kept in ad_clicks (the partner link carries that id; its
-        postback finds the click by it); a repeated tap reuses the day's id (`click_id_for`), so replays add no rows."""
+        postback finds the click by it); the route claims the day's id first (`claim_click_id`), so replays add no rows."""
         with self._write() as conn:
             if click_id is not None and partner_id is not None:
                 conn.execute("INSERT OR IGNORE INTO ad_clicks (click_id, at, user_id, campaign_id, variant, partner_id, placement, "
@@ -291,16 +291,22 @@ class Telemetry:
                 (now, day_of(now), user_id, campaign_id, variant, placement, event_key, country, segment))
         return True
 
-    def click_id_for(self, user_id: int, campaign_id: int, variant: str, partner_id: int, event_key: str,
-                     now: int) -> str | None:
-        """The click id this offer already got today (UTC day), if any: a replayed tap opens the same partner link
-        instead of adding a row (Codex ads merge r2 P1)."""
+    def claim_click_id(self, user_id: int, campaign_id: int, variant: str, partner_id: int, placement: str,
+                       event_key: str, now: int, new_id: str) -> str:
+        """The click id of this offer today (UTC day): the one already recorded, else `new_id`, recorded now. Read and
+        insert share one write transaction, so replayed or concurrent taps get one id and add no rows (Codex ads
+        merge r2 P1, r3 P2)."""
         start = now - now % DAY
-        with self._connect() as conn:
+        with self._write() as conn:
             row = conn.execute("SELECT click_id FROM ad_clicks WHERE user_id = ? AND campaign_id = ? AND variant = ? "
                                "AND partner_id = ? AND event_key = ? AND at >= ? AND at < ? ORDER BY at LIMIT 1",
                                (user_id, campaign_id, variant, partner_id, event_key, start, start + DAY)).fetchone()
-        return row[0] if row else None
+            if row is not None:
+                return row[0]
+            conn.execute("INSERT INTO ad_clicks (click_id, at, user_id, campaign_id, variant, partner_id, placement, "
+                         "event_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (new_id, now, user_id, campaign_id, variant, partner_id, placement, event_key))
+        return new_id
 
     def cap_reached(self, user_id: int, campaign_id: int, event_key: str, now: int, caps: tuple[int, int]) -> bool:
         """Whether the campaign's frequency caps (per day, in all; 0 = none) leave no room for this match now."""

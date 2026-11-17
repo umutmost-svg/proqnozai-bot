@@ -417,3 +417,15 @@ def test_disclosure_fields_cannot_carry_a_price_and_links_fit_once_expanded():
         policy.check_url("https://p.example.com/?a={click_id}&b={click_id}", hosts)
     ok = policy.check_url(base + "x" * (policy.MAX_URL - len(base) - 60), hosts)
     assert len(policy.render_url(ok, "k" * 64, hosts)) <= policy.MAX_URL
+
+
+def test_click_ids_are_claimed_once_per_offer_and_day(tmp_path):
+    t = Telemetry(tmp_path / "t.db")
+    t.init_schema()
+    first = t.claim_click_id(1, 7, "A", 3, "quick_pick", "fd:1", NOW, "a" * 24)
+    assert first == "a" * 24
+    assert t.claim_click_id(1, 7, "A", 3, "quick_pick", "fd:1", NOW + 5, "b" * 24) == first  # a replay
+    assert t.claim_click_id(1, 7, "A", 3, "quick_pick", "fd:2", NOW, "c" * 24) == "c" * 24    # another match
+    assert t.claim_click_id(1, 7, "A", 3, "quick_pick", "fd:1", NOW + DAY, "d" * 24) == "d" * 24  # next UTC day
+    with sqlite3.connect(tmp_path / "t.db") as db:
+        assert db.execute("SELECT COUNT(*) FROM ad_clicks").fetchone()[0] == 3
