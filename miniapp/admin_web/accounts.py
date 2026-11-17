@@ -31,7 +31,7 @@ Role = Literal["owner", "admin", "analyst", "promoter"]
 # promoter (owner 16.11): a promotion manager — analytics aggregates and only the referral links they created.
 ROLES: tuple[Role, ...] = ("owner", "admin", "analyst", "promoter")
 
-IDLE_S = 30 * 60
+IDLE_S = 8 * 3600   # owner 17.11: an idle session closes after 8 h (absolute cap stays 12 h)
 ABSOLUTE_S = 12 * 3600
 PRE_AUTH_S = 5 * 60
 MAX_FAILURES = 5
