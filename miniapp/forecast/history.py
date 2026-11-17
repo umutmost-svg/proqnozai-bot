@@ -1,9 +1,9 @@
 """Forecast history: every model forecast a user was shown, immutable, settled later.
 
-Two origins share the table: AI analyses (key `<version>:<event>:<digest>:<answer>`) and the quick pick's
-model forecasts of the day's matches (key `quick:<version>:<event>:<digest>`, no explanation, recorded for
-every match the quick pick evaluated, shown or not — a prospective sample for `evaluate`). Operator lists
-and counts show AI analyses unless asked otherwise; `evaluate` uses both.
+Two origins share the table: AI analyses (key `<version>:<event>:<digest>:<answer>`) and the daily slate
+(key `slate:<version>:<event>:<digest>`, no explanation): the model's forecast of every match of the validated
+competitions on its match day, recorded in the background whatever users open (slate.py) — the prospective
+sample for `evaluate`. Operator lists and counts show AI analyses unless asked otherwise; `evaluate` uses both.
 
 Its own SQLite file next to the Mini App database (``<db>.forecasts.db``): the app
 database keeps its table whitelist, and a rollback to an older release — which knows
@@ -174,8 +174,8 @@ def _values(r: ForecastRecord) -> tuple:
     )
 
 
-QUICK_PREFIX = "quick:"
-_AI_ONLY = "forecast_key NOT LIKE 'quick:%'"
+SLATE_PREFIX = "slate:"
+_AI_ONLY = "forecast_key NOT LIKE 'slate:%'"
 
 
 def model_record(event_id: str, tournament_id: str, home_id: str, away_id: str, kickoff_at: str, forecast,
@@ -377,9 +377,9 @@ class ForecastHistory:
                 "AND kickoff_at <= ? AND kickoff_at >= ? ORDER BY tournament_id",
                 (kicked_off_before, kicked_off_after))]
 
-    def status_counts(self, include_quick: bool = False) -> dict[str, int]:
-        """By settlement status; AI analyses only unless `include_quick` (the quick pick's model forecasts)."""
-        where = "" if include_quick else f" WHERE {_AI_ONLY}"
+    def status_counts(self, include_slate: bool = False) -> dict[str, int]:
+        """By settlement status; AI analyses only unless `include_slate` (the daily slate's model forecasts)."""
+        where = "" if include_slate else f" WHERE {_AI_ONLY}"
         with self._connect() as conn:
             counts = dict(conn.execute(
                 f"SELECT settled_status, COUNT(*) FROM ai_forecasts{where} GROUP BY settled_status"))
@@ -398,10 +398,10 @@ class ForecastHistory:
                        created_since: str | None = None, kickoff_from: str | None = None,
                        event_ids: list[str] | None = None, sort: str = "kickoff",
                        descending: bool = True, limit: int = 50, offset: int = 0,
-                       include_quick: bool = False) -> tuple[int, list[dict]]:
+                       include_slate: bool = False) -> tuple[int, list[dict]]:
         """A page of stored forecasts (one row per forecast key) without the explanation texts; AI analyses only
-        unless `include_quick`."""
-        where, args = ["1 = 1" if include_quick else _AI_ONLY], []
+        unless `include_slate`."""
+        where, args = ["1 = 1" if include_slate else _AI_ONLY], []
         if status in ("pending", "settled", "void"):
             where.append("settled_status = ?")
             args.append(status)

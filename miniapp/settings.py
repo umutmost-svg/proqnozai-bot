@@ -193,6 +193,10 @@ class Settings:
     # Referral links (`startapp=ref_<code>`): the code of a user's FIRST Mini App start is kept in miniapp.db
     # (user_attribution) for the admin panel. Off: the parameter is ignored and nothing is written.
     referrals_enabled: bool = False
+    # The daily slate (forecast/slate.py): the model's forecast of every validated match on its match day goes into
+    # the forecast history in the background (quality sample). On from the environment by default; off in a
+    # Settings built directly (tests: no background provider requests).
+    forecast_slate_enabled: bool = False
 
     @property
     def csrf_key_material(self) -> str:
@@ -435,4 +439,5 @@ class Settings:
             ads_policy_public_key=optional("MINIAPP_ADS_POLICY_PUBLIC_KEY"),
             access_policy_public_key=optional("MINIAPP_ACCESS_POLICY_PUBLIC_KEY"),
             referrals_enabled=boolean("MINIAPP_REFERRALS_ENABLED", False),
+            forecast_slate_enabled=boolean("MINIAPP_FORECAST_SLATE_ENABLED", True),
         )

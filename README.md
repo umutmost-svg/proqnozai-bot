@@ -120,6 +120,7 @@ Mini App (`miniapp/`, `frontend/`) читает только свои перем
 `MINIAPP_ADS_ENABLED` (по умолчанию `false`), `MINIAPP_ADS_POLICY_PUBLIC_KEY` (обязателен при включённой рекламе),
 `MINIAPP_ACCESS_POLICY_PUBLIC_KEY` (блокировки из админ-панели; не задан — только env-список),
 `MINIAPP_REFERRALS_ENABLED` (по умолчанию `false`; `true` — код `startapp=ref_<код>` первого запуска пишется в `user_attribution`),
+`MINIAPP_FORECAST_SLATE_ENABLED` (по умолчанию `true`; прогноз модели по каждому матчу проверенных турниров в день матча пишется в историю прогнозов — выборка для оценки качества),
 `MINIAPP_ENV`, `MINIAPP_EDGE_SECRET`, `MINIAPP_CSP_MODE`,
 `MINIAPP_LOGINS_ENABLED`, `MINIAPP_MAX_SESSIONS_PER_USER`,
 `MINIAPP_STATIC_DIR`, `MINIAPP_SESSION_TTL_S`, `MINIAPP_INIT_DATA_MAX_AGE_S`,

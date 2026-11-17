@@ -24,9 +24,11 @@ from starlette.staticfiles import StaticFiles
 from miniapp.credits import COST, Busy, Credits, MbError, NoCredits
 from miniapp.security import ACCESS_POLICY_FILE, AccessPolicy, CsrfTokens, LoginRateLimiter, origin_allowed
 from miniapp.settings import Settings
-from miniapp.ai.analysis import AI_ERROR_CODES, AiError, AiService, build_ai_service
+from miniapp.ai.analysis import AI_ERROR_CODES, AiError, AiService, ModelForecaster, build_ai_service
 from miniapp.forecast.history import ForecastHistory, history_path
+from miniapp.forecast.engine import FROZEN, ForecastEngine
 from miniapp.forecast.settlement import Settlement
+from miniapp.forecast.slate import SlateRecorder
 from miniapp.odds.feed import FeedReceiver
 from miniapp.odds.routes import register_odds_routes
 from miniapp.odds.source import OddsSource
@@ -648,6 +650,9 @@ def create_app(
     # Results of stored forecasts: from every loaded calendar plus a low-priority pass (internal only).
     settlement = Settlement(history, sports, clock)
     sports.calendar_listeners.append(settlement.on_calendar)
+    # The quality sample: the model's forecast of every validated match on its match day, whatever users open.
+    slate = (SlateRecorder(history, sports, ModelForecaster(sports, ForecastEngine(), clock=clock), FROZEN.validated,
+                           clock) if settings.forecast_slate_enabled else None)
     # Odds pushed by the bot: in memory only, served after strict matching (miniapp/odds).
     odds = OddsStore(clock, enabled=settings.odds_feed_enabled, catalog=settings.odds_catalog)
     receiver = FeedReceiver(settings.odds_feed_secret.encode(), clock) if settings.odds_feed_secret else None
@@ -671,6 +676,8 @@ def create_app(
         found = await current_session(request)
         if found is not None:
             settlement.ensure()
+            if slate is not None:
+                slate.ensure()
             if odds_source is not None:
                 odds_source.ensure_running()
         return found
@@ -700,9 +707,7 @@ def create_app(
         except sqlite3.Error as exc:
             logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
 
-    quick = QuickService(sports, clock=clock, odds=odds, history=history)
-    app.router.on_shutdown.append(quick.drain)  # history writes of the last picks finish before exit
-    register_quick_routes(app, quick, active_session, user_limiter=user_limiter,
+    register_quick_routes(app, QuickService(sports, clock=clock, odds=odds), active_session, user_limiter=user_limiter,
                           on_pick=on_pick if telemetry else None, credits=credits,
                           csrf_ok=lambda token, presented: csrf.verify(token, presented))
 
