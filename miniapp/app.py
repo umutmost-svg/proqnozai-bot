@@ -700,7 +700,9 @@ def create_app(
         except sqlite3.Error as exc:
             logger.warning("event=telemetry_write_failed type=%s", type(exc).__name__)
 
-    register_quick_routes(app, QuickService(sports, clock=clock, odds=odds, history=history), active_session, user_limiter=user_limiter,
+    quick = QuickService(sports, clock=clock, odds=odds, history=history)
+    app.router.on_shutdown.append(quick.drain)  # history writes of the last picks finish before exit
+    register_quick_routes(app, quick, active_session, user_limiter=user_limiter,
                           on_pick=on_pick if telemetry else None, credits=credits,
                           csrf_ok=lambda token, presented: csrf.verify(token, presented))
 

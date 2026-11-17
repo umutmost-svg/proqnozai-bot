@@ -677,3 +677,49 @@ def test_a_failed_history_write_never_breaks_a_pick(tmp_path, caplog) -> None:
 
     assert asyncio.run(once())["status"] == STATUS_OK
     assert "quick.history_write_failed type=OSError" in caplog.text and not svc._recorded
+
+
+def test_only_a_pick_over_every_competition_feeds_the_history(tmp_path) -> None:
+    """A user's league filter must not shape the quality sample (Codex quick-history r1 P1)."""
+    from miniapp.forecast.history import ForecastHistory
+
+    history = ForecastHistory(tmp_path / "h.db")
+    history.init_schema()
+    svc, _ = service([ev(1)], {"fd:1": forecast(("1", 0.64, 0.45))})
+    svc.history = history
+
+    async def filtered() -> None:
+        await svc.pick(1, START, at("2027-01-22T08:00:00Z"), frozenset({"fd:PL"}), SINGLE)
+        await asyncio.gather(*svc._writes)
+
+    asyncio.run(filtered())
+    assert history.status_counts(include_quick=True)["pending"] == 0
+
+
+def test_concurrent_picks_write_a_forecast_once_and_shutdown_waits(tmp_path) -> None:
+    import threading
+
+    class Slow:
+        def __init__(self) -> None:
+            self.batches: list[int] = []
+            self.release = threading.Event()
+
+        def record_many(self, records):
+            self.release.wait(2)
+            self.batches.append(len(records))
+            return len(records)
+
+    slow = Slow()
+    svc, _ = service([ev(1)], {"fd:1": forecast(("1", 0.64, 0.45))})
+    svc.history = slow  # type: ignore[assignment]
+
+    async def scenario() -> None:
+        await svc.pick(1, START, at("2027-01-22T08:00:00Z"), None, SINGLE)
+        await svc.pick(2, START, at("2027-01-22T08:00:00Z"), None, SINGLE)   # the first write is still running
+        assert len(svc._writes) == 1
+        slow.release.set()
+        await svc.drain()
+        assert not svc._writes and not svc._writing
+
+    asyncio.run(scenario())
+    assert slow.batches == [1]

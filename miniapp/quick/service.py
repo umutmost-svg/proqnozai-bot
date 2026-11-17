@@ -209,6 +209,7 @@ class QuickService:
         # quality sample, docs/miniapp/m35-goal-model.md); written in the background, never delaying the answer.
         self.history = history
         self._recorded: OrderedDict[str, None] = OrderedDict()
+        self._writing: set[str] = set()  # keys of writes still running: concurrent picks never repeat them
         self._writes: set[asyncio.Task] = set()
         self.odds = odds
         self._clock = clock
@@ -359,8 +360,11 @@ class QuickService:
             options.append(Option(event.id, event.starts_at, (event.home.id, event.away.id), outcome))
             if outcome.selection.no_bet_reason is not None:
                 reasons[outcome.selection.no_bet_reason] += 1
-        self._keep([(e, o) for e, o in zip(usable, outcomes, strict=True)
-                    if isinstance(o, MatchForecast) and parse_instant(e.starts_at).timestamp() > now], now)
+        if tournaments is None:
+            # Only a pick over every competition: then the matches written are the whole validated slate of the day
+            # (from now on), not the leagues a user chose — the quality sample must not follow users' choices.
+            self._keep([(e, o) for e, o in zip(usable, outcomes, strict=True)
+                        if isinstance(o, MatchForecast) and parse_instant(e.starts_at).timestamp() > now], now)
         skipped = sum(1 for e in todays if e.tournament_id in unvalidated and parse_instant(e.starts_at).timestamp() > now)
         if skipped:
             reasons[NO_BET_UNVALIDATED] += skipped
@@ -433,7 +437,7 @@ class QuickService:
         for event, forecast in forecasts:
             digest = _forecast_digest(forecast)
             key = f"{QUICK_PREFIX}{forecast.model_version}:{event.id}:{digest}"
-            if key in self._recorded:
+            if key in self._recorded or key in self._writing:
                 continue
             records.append(model_record(event.id, event.tournament_id, event.home.id, event.away.id, event.starts_at,
                                         forecast, key=key, created_at=created, digest=digest,
@@ -442,6 +446,8 @@ class QuickService:
         if not records:
             return
         history = self.history
+        keys = [r.forecast_key for r in records]
+        self._writing.update(keys)
 
         async def write() -> None:
             try:
@@ -449,14 +455,21 @@ class QuickService:
             except Exception as exc:  # noqa: BLE001 — log the type only, never the data
                 logger.warning("quick.history_write_failed type=%s", type(exc).__name__)
                 return
-            for r in records:
-                self._recorded[r.forecast_key] = None
+            finally:
+                self._writing.difference_update(keys)
+            for key in keys:
+                self._recorded[key] = None
             while len(self._recorded) > RECORDED_KEYS_MAX:
                 self._recorded.popitem(last=False)
 
         task = asyncio.get_running_loop().create_task(write())
         self._writes.add(task)
         task.add_done_callback(self._writes.discard)
+
+    async def drain(self, timeout_s: float = 5.0) -> None:
+        """At shutdown: lets history writes already started finish (a deploy right after a pick keeps its rows)."""
+        if self._writes:
+            await asyncio.wait(set(self._writes), timeout=timeout_s)
 
     async def _preview(self, tournaments: frozenset[str] | None, today: date,
                        ) -> tuple[tuple[FootballEvent, MatchForecast], ...]:
