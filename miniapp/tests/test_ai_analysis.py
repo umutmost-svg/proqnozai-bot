@@ -861,7 +861,7 @@ def test_a_provider_refusal_never_locks_the_analysis_nor_costs_users_their_limit
 
 def test_an_attempt_that_cannot_be_counted_is_refused_before_any_payment(tmp_path, clock: FakeClock) -> None:
     class NoCount(ForecastHistory):
-        def add_attempt(self, key, kickoff_at):
+        def add_attempt(self, key, kickoff_at, cap=None):
             raise OSError("disk full")
 
     history = NoCount(tmp_path / "x.db", clock)
