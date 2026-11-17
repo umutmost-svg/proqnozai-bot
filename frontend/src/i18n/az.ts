@@ -582,6 +582,7 @@ export const az: Dictionary = {
   'ai.basisOnlyText': 'Bu matç üçün qol modeli hesablanmır, ona görə tövsiyə yoxdur. Aşağıda komandalar haqqında yoxlanılmış məlumatlar və mövcud olduqda bazar əmsallarına görə qiymətləndirmə var.',
   'ai.pick.noBet.unvalidatedCompetition': 'Bu turnir modelin yoxlamasına daxil deyildi: ehtimallar göstərilir, lakin tövsiyə yoxdur.',
   'ai.pick.noBet.earlyForecast': 'Matç gününə qədər tövsiyə yoxdur: seçim qaydaları yalnız oyun günü proqnozu üçün yoxlanılıb. Matç günü yenidən baxın — nəticə qaydalardan keçərsə, tövsiyə görünə bilər. Yuxarıdakı ehtimallar bu günkü qiymətləndirmədir.',
+  'ai.pick.noBet.lowOdds': 'Qaydalardan keçən bütün nəticələrin əmsalı 1.30-dan aşağıdır: ehtimal yüksəkdir, amma demək olar ki, heç nə qazandırmır, ona görə tövsiyə yoxdur.',
   // M3.6: top matches of the day and quick prediction.
   'nav.quick': 'Sürətli proqnoz',
   'top.title': 'Günün əsas matçları',
@@ -645,6 +646,7 @@ export const az: Dictionary = {
   'quick.reason.early_forecast': 'UTC üzrə matç günü deyil: {n}',
   'quick.reason.small_sample': 'Komandaların matçı azdır: {n}',
   'quick.reason.no_qualifying_market': 'Heç bir nəticə qaydalardan keçmədi: {n}',
+  'quick.reason.low_odds': 'Əmsal 1.30-dan aşağı: {n}',
   'quick.reason.partial_history': 'Məlumatda keçən mövsüm yoxdur: {n}',
   'quick.reason.model_small_sample': 'Turnirin nəticələri azdır: {n}',
   'quick.reason.model_team_history': 'Komandanın matçı azdır: {n}',

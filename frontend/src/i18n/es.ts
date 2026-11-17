@@ -580,6 +580,7 @@ export const es: Dictionary = {
   'ai.basisOnlyText': 'El modelo de goles no se puede calcular para este partido, así que no hay recomendación. Abajo están los datos verificados de los equipos y, si existen, una estimación según las cuotas del mercado.',
   'ai.pick.noBet.unvalidatedCompetition': 'Este torneo no formó parte de la comprobación del modelo: se muestran las probabilidades, pero no hay recomendación.',
   'ai.pick.noBet.earlyForecast': 'Sin recomendación antes del día del partido: las reglas de selección solo se comprobaron para pronósticos del día del partido. Vuelve el día del partido: puede aparecer una recomendación si un resultado supera las reglas. Las probabilidades de arriba son la estimación de hoy.',
+  'ai.pick.noBet.lowOdds': 'Todos los resultados que pasaron las reglas tienen una cuota inferior a 1.30: son probables, pero casi no pagan nada, así que no hay recomendación.',
   // M3.6: top matches of the day and quick prediction.
   'nav.quick': 'Pronóstico rápido',
   'top.title': 'Partidos destacados del día',
@@ -643,6 +644,7 @@ export const es: Dictionary = {
   'quick.reason.early_forecast': 'No es el día del partido en UTC: {n}',
   'quick.reason.small_sample': 'Pocos partidos de los equipos: {n}',
   'quick.reason.no_qualifying_market': 'Ningún resultado superó las reglas: {n}',
+  'quick.reason.low_odds': 'Cuota inferior a 1.30: {n}',
   'quick.reason.partial_history': 'Sin temporada anterior en los datos: {n}',
   'quick.reason.model_small_sample': 'Pocos resultados del torneo: {n}',
   'quick.reason.model_team_history': 'Pocos partidos de un equipo: {n}',

@@ -858,6 +858,7 @@ const NO_BET_REASONS: Record<string, NoBetReason> = {
   partial_history: 'partialHistory',
   unvalidated_competition: 'unvalidatedCompetition',
   early_forecast: 'earlyForecast',
+  low_odds: 'lowOdds',
 };
 const PICK_REASONS: Record<string, PickReason> = {
   home_better_form: 'homeBetterForm',

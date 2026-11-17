@@ -36,12 +36,23 @@ def choose(p, rates=None, **kw):
 
 
 def test_the_pick_is_the_largest_difference_from_the_league_not_the_largest_probability() -> None:
-    p = probs(**{"1": 0.62, "1X": 0.80, "H2+1.5": 0.97})
-    rates = {k: 0.3 for k in KEYS} | {"1X": 0.70, "H2+1.5": 0.93}
+    p = probs(**{"1": 0.62, "1X": 0.76, "H2+1.5": 0.97})
+    rates = {k: 0.3 for k in KEYS} | {"1X": 0.66, "H2+1.5": 0.93}
     sel = choose(p, rates)
-    # 1X has 80 % and H2+1.5 97 %, but "1" differs most from what this league usually gives.
+    # 1X has 76 % (and H2+1.5 97 %, a near-certainty anyway), but "1" differs most from what this league gives.
     assert sel.pick.market == "1" and [c.market for c in sel.alternatives] == ["1X"]
     assert sel.no_bet_reason is None
+
+
+def test_a_near_certainty_is_never_recommended_fair_odds_below_the_minimum() -> None:
+    from miniapp.forecast.selection import MIN_ODDS, P_MAX, below_min_odds
+
+    assert MIN_ODDS == 1.30 and abs(P_MAX - 1 / 1.30) < 1e-12
+    p = probs(**{"1X": 0.80})                              # fair odds 1.25: likely, pays next to nothing
+    rates = {k: 0.3 for k in KEYS} | {"1X": 0.60}
+    assert choose(p, rates).pick is None
+    assert choose(probs(**{"1X": 0.76}), rates).pick.market == "1X"   # fair odds 1.32: allowed
+    assert below_min_odds(1.29) and not below_min_odds(1.30) and not below_min_odds(None)
 
 
 def test_a_very_likely_but_uninformative_market_is_never_picked() -> None:
