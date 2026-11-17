@@ -1,5 +1,10 @@
 """Forecast history: every model forecast a user was shown, immutable, settled later.
 
+Two origins share the table: AI analyses (key `<version>:<event>:<digest>:<answer>`) and the quick pick's
+model forecasts of the day's matches (key `quick:<version>:<event>:<digest>`, no explanation, recorded for
+every match the quick pick evaluated, shown or not — a prospective sample for `evaluate`). Operator lists
+and counts show AI analyses unless asked otherwise; `evaluate` uses both.
+
 Its own SQLite file next to the Mini App database (``<db>.forecasts.db``): the app
 database keeps its table whitelist, and a rollback to an older release — which knows
 nothing of this file — keeps working untouched.
@@ -157,6 +162,42 @@ class ForecastRecord:
     source: str
 
 
+def _values(r: ForecastRecord) -> tuple:
+    return (
+        r.forecast_key, r.event_id, r.tournament_id, r.home_team_id, r.away_team_id, r.created_at,
+        r.kickoff_at, r.model_version, r.parameters, r.data_until, r.sample, r.inputs_digest,
+        json.dumps(r.probabilities, sort_keys=True), json.dumps(r.baseline, sort_keys=True), int(r.gate_eligible),
+        json.dumps(r.display, sort_keys=True),
+        r.expected_goals[0], r.expected_goals[1], r.pick_market, r.pick_probability, r.no_bet_reason,
+        json.dumps(r.alternatives, sort_keys=True), json.dumps(r.explanation, sort_keys=True), r.llm_model,
+        r.source,
+    )
+
+
+QUICK_PREFIX = "quick:"
+_AI_ONLY = "forecast_key NOT LIKE 'quick:%'"
+
+
+def model_record(event_id: str, tournament_id: str, home_id: str, away_id: str, kickoff_at: str, forecast,
+                 *, key: str, created_at: str, digest: str, explanation: dict, llm_model: str | None,
+                 source: str) -> ForecastRecord:
+    """The stored row of one model forecast (`forecast`: engine.MatchForecast), for either origin."""
+    chosen = forecast.selection.pick
+    return ForecastRecord(
+        forecast_key=key, event_id=event_id, tournament_id=tournament_id, home_team_id=home_id,
+        away_team_id=away_id, created_at=created_at, kickoff_at=kickoff_at, model_version=forecast.model_version,
+        parameters=forecast.parameters, data_until=forecast.data_until, sample=forecast.sample, inputs_digest=digest,
+        probabilities={k: round(v, 6) for k, v in forecast.exact.items()},
+        baseline={k: round(v, 6) for k, v in forecast.baseline_1x2.items()},
+        gate_eligible=forecast.gate_eligible, display=forecast.display,
+        expected_goals=forecast.expected_goals, pick_market=chosen.market if chosen else "NO_BET",
+        pick_probability=round(chosen.probability, 6) if chosen else None,
+        no_bet_reason=forecast.selection.no_bet_reason,
+        alternatives=[c.to_json() for c in forecast.selection.alternatives],
+        explanation=explanation, llm_model=llm_model, source=source,
+    )
+
+
 def history_path(db_path: Path) -> Path:
     return db_path.with_name(f"{db_path.stem}.forecasts.db")
 
@@ -215,20 +256,23 @@ class ForecastHistory:
 
     def record(self, r: ForecastRecord) -> bool:
         """Stores the forecast once; True when this call created it."""
-        values = (
-            r.forecast_key, r.event_id, r.tournament_id, r.home_team_id, r.away_team_id, r.created_at,
-            r.kickoff_at, r.model_version, r.parameters, r.data_until, r.sample, r.inputs_digest,
-            json.dumps(r.probabilities, sort_keys=True), json.dumps(r.baseline, sort_keys=True), int(r.gate_eligible),
-            json.dumps(r.display, sort_keys=True),
-            r.expected_goals[0], r.expected_goals[1], r.pick_market, r.pick_probability, r.no_bet_reason,
-            json.dumps(r.alternatives, sort_keys=True), json.dumps(r.explanation, sort_keys=True), r.llm_model,
-            r.source,
-        )
+        values = _values(r)
         with self._write() as conn:
             cursor = conn.execute(
                 f"INSERT INTO ai_forecasts ({', '.join(_IMMUTABLE)}) VALUES ({', '.join('?' * len(_IMMUTABLE))}) "
                 "ON CONFLICT(forecast_key) DO NOTHING", values)
             return cursor.rowcount == 1
+
+    def record_many(self, records: Iterable[ForecastRecord]) -> int:
+        """Stores several forecasts in one transaction (existing keys are left as they are); returns how many
+        were new."""
+        created = 0
+        with self._write() as conn:
+            for r in records:
+                created += conn.execute(
+                    f"INSERT INTO ai_forecasts ({', '.join(_IMMUTABLE)}) VALUES ({', '.join('?' * len(_IMMUTABLE))}) "
+                    "ON CONFLICT(forecast_key) DO NOTHING", _values(r)).rowcount
+        return created
 
     def settle_events(self, events: Iterable[SportEvent]) -> int:
         """Writes the results of finished (or voided) events into their forecasts; returns
@@ -333,9 +377,12 @@ class ForecastHistory:
                 "AND kickoff_at <= ? AND kickoff_at >= ? ORDER BY tournament_id",
                 (kicked_off_before, kicked_off_after))]
 
-    def status_counts(self) -> dict[str, int]:
+    def status_counts(self, include_quick: bool = False) -> dict[str, int]:
+        """By settlement status; AI analyses only unless `include_quick` (the quick pick's model forecasts)."""
+        where = "" if include_quick else f" WHERE {_AI_ONLY}"
         with self._connect() as conn:
-            counts = dict(conn.execute("SELECT settled_status, COUNT(*) FROM ai_forecasts GROUP BY settled_status"))
+            counts = dict(conn.execute(
+                f"SELECT settled_status, COUNT(*) FROM ai_forecasts{where} GROUP BY settled_status"))
         return {status: int(counts.get(status, 0)) for status in ("pending", "settled", "void")}
 
     def count(self) -> int:
@@ -350,9 +397,11 @@ class ForecastHistory:
     def list_forecasts(self, *, status: str | None = None, tournament: str | None = None,
                        created_since: str | None = None, kickoff_from: str | None = None,
                        event_ids: list[str] | None = None, sort: str = "kickoff",
-                       descending: bool = True, limit: int = 50, offset: int = 0) -> tuple[int, list[dict]]:
-        """A page of stored forecasts (one row per forecast key) without the explanation texts."""
-        where, args = ["1 = 1"], []
+                       descending: bool = True, limit: int = 50, offset: int = 0,
+                       include_quick: bool = False) -> tuple[int, list[dict]]:
+        """A page of stored forecasts (one row per forecast key) without the explanation texts; AI analyses only
+        unless `include_quick`."""
+        where, args = ["1 = 1" if include_quick else _AI_ONLY], []
         if status in ("pending", "settled", "void"):
             where.append("settled_status = ?")
             args.append(status)
@@ -403,7 +452,7 @@ class ForecastHistory:
 
     def tournaments(self) -> list[str]:
         with self._connect() as conn:
-            return [r[0] for r in conn.execute("SELECT DISTINCT tournament_id FROM ai_forecasts ORDER BY 1")]
+            return [r[0] for r in conn.execute(f"SELECT DISTINCT tournament_id FROM ai_forecasts WHERE {_AI_ONLY} ORDER BY 1")]
 
     def evaluate(self) -> dict:
         """Quality of settled forecasts (latest row per event created before kickoff):

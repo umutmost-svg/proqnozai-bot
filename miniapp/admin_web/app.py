@@ -350,7 +350,8 @@ def create_admin_app(config: AdminWebConfig, clock: Callable[[], float] = time.t
                     "currentGateForecasts": 0, "versions": {}}
         evaluated = _finite(h.evaluate())
         current = evaluated.get(MODEL_VERSION, {}).get("prospectiveGate", {}).get("forecasts", 0)
-        return {"settled": h.status_counts()["settled"], "minimum": GATE_MIN_FORECASTS,
+        # Quality covers both origins (AI analyses and the quick pick's model forecasts): settled of both.
+        return {"settled": h.status_counts(include_quick=True)["settled"], "minimum": GATE_MIN_FORECASTS,
                 "currentVersion": MODEL_VERSION, "currentGateForecasts": current, "versions": evaluated}
 
     # ---- overview ----------------------------------------------------------------------------

@@ -33,17 +33,20 @@ analysis reads. Nothing is ever guessed:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import math
 import time
 from concurrent.futures import ThreadPoolExecutor
-from collections import Counter, deque
+from collections import Counter, OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
 from miniapp.ai.analysis import ModelForecaster
 from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast
+from miniapp.forecast.history import QUICK_PREFIX, ForecastHistory, model_record
 from miniapp.forecast.markets import FAMILY, KEYS
 from miniapp.forecast.quick import (STATUS_NO_BET, STATUS_NOT_ENOUGH, STATUS_UNAVAILABLE, Criteria, Leg, Option,
                                     QuickResult, choose, coupon, frechet)
@@ -51,6 +54,7 @@ from miniapp.forecast.selection import LIMITED_COMPETITIONS, NO_BET_EARLY, NO_BE
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.odds.store import OddsStore
 from miniapp.odds.value import MarketQuote, compare, market_book
+from miniapp.sports import football_data
 from miniapp.sports.client import LOW_PRIORITY_RESERVE, UpstreamError
 from miniapp.sports.models import FootballEvent
 from miniapp.sports.service import ModelHistory, RequestError, SportsService, parse_instant
@@ -73,6 +77,8 @@ PREVIEW_WAIT_S = 8.0
 # keeps near-certain outcomes (odds ~1.15 and below) out, which are no forecast worth giving.
 ESTIMATE_BANDS = {"conservative": (0.70, 0.85), "balanced": (0.60, 0.75), "elevated": (0.55, 0.65)}
 ESTIMATE_FAMILIES = frozenset({"1x2", "double", "total", "btts"})
+# Forecast keys already written to the history by this process (skip rewriting them on every pick).
+RECORDED_KEYS_MAX = 5000
 ESTIMATE_MAX_MATCHES = 80  # the period's nearest matches the estimate looks at (bounded model time; documented)
 ESTIMATE_WAIT_S = 8.0
 
@@ -196,8 +202,14 @@ class QuickAnswer:
 class QuickService:
     def __init__(self, sports: SportsService, *, clock: Callable[[], float] = time.time,
                  forecaster: ModelForecaster | None = None, reserve: int = UPSTREAM_RESERVE,
-                 odds: OddsStore | None = None, estimator: ModelForecaster | None = None) -> None:
+                 odds: OddsStore | None = None, estimator: ModelForecaster | None = None,
+                 history: ForecastHistory | None = None) -> None:
         self.sports = sports
+        # Every model forecast of the day's matches a pick evaluated goes into the forecast history (prospective
+        # quality sample, docs/miniapp/m35-goal-model.md); written in the background, never delaying the answer.
+        self.history = history
+        self._recorded: OrderedDict[str, None] = OrderedDict()
+        self._writes: set[asyncio.Task] = set()
         self.odds = odds
         self._clock = clock
         # Its own engine: the batch runs in a thread, the AI analysis on the event loop.
@@ -347,6 +359,8 @@ class QuickService:
             options.append(Option(event.id, event.starts_at, (event.home.id, event.away.id), outcome))
             if outcome.selection.no_bet_reason is not None:
                 reasons[outcome.selection.no_bet_reason] += 1
+        self._keep([(e, o) for e, o in zip(usable, outcomes, strict=True)
+                    if isinstance(o, MatchForecast) and parse_instant(e.starts_at).timestamp() > now], now)
         skipped = sum(1 for e in todays if e.tournament_id in unvalidated and parse_instant(e.starts_at).timestamp() > now)
         if skipped:
             reasons[NO_BET_UNVALIDATED] += skipped
@@ -408,6 +422,41 @@ class QuickService:
                            tuple(unavailable), unchecked,
                            datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), next_match_at,
                            self._prices(result, by_id), preview, _started(estimate, now))
+
+    def _keep(self, forecasts: list[tuple[FootballEvent, MatchForecast]], now: float) -> None:
+        """Writes the forecasts not yet stored into the history, in the background (best effort: a failure is
+        logged by type and retried by a later pick)."""
+        if self.history is None or not forecasts:
+            return
+        created = datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        records = []
+        for event, forecast in forecasts:
+            digest = _forecast_digest(forecast)
+            key = f"{QUICK_PREFIX}{forecast.model_version}:{event.id}:{digest}"
+            if key in self._recorded:
+                continue
+            records.append(model_record(event.id, event.tournament_id, event.home.id, event.away.id, event.starts_at,
+                                        forecast, key=key, created_at=created, digest=digest,
+                                        explanation={"factors": [], "reasons": []}, llm_model=None,
+                                        source=football_data.PROVIDER))
+        if not records:
+            return
+        history = self.history
+
+        async def write() -> None:
+            try:
+                await asyncio.to_thread(history.record_many, records)
+            except Exception as exc:  # noqa: BLE001 — log the type only, never the data
+                logger.warning("quick.history_write_failed type=%s", type(exc).__name__)
+                return
+            for r in records:
+                self._recorded[r.forecast_key] = None
+            while len(self._recorded) > RECORDED_KEYS_MAX:
+                self._recorded.popitem(last=False)
+
+        task = asyncio.get_running_loop().create_task(write())
+        self._writes.add(task)
+        task.add_done_callback(self._writes.discard)
 
     async def _preview(self, tournaments: frozenset[str] | None, today: date,
                        ) -> tuple[tuple[FootballEvent, MatchForecast], ...]:
@@ -497,6 +546,13 @@ class QuickService:
 
     def _forecast_all(self, events: list[FootballEvent], histories: dict[str, ModelHistory | None]):
         return [self.forecaster.compute(e, histories[e.tournament_id]) for e in events]
+
+
+def _forecast_digest(forecast: MatchForecast) -> str:
+    """Identity of what the model said: the same numbers on the same data are one history row."""
+    body = {"exact": {k: round(v, 9) for k, v in forecast.exact.items()}, "selection": forecast.selection.to_json(),
+            "dataUntil": forecast.data_until, "parameters": forecast.parameters}
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def _utc_days(start: datetime, end: datetime) -> list[date]:

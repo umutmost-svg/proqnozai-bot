@@ -631,3 +631,49 @@ def test_no_estimate_when_a_day_of_the_period_is_unchecked() -> None:
     sports.events = flaky
     body = pick(svc, "2027-01-17T00:00:00Z")
     assert body["uncheckedDays"] == 1 and body["estimate"] is None
+
+
+def test_the_days_model_forecasts_go_into_the_history_once(tmp_path) -> None:
+    """Every forecast of today's matches a pick evaluated is a prospective quality sample (shown or not); the same
+    numbers are written once; operator lists keep showing AI analyses only."""
+    from miniapp.forecast.history import ForecastHistory
+
+    history = ForecastHistory(tmp_path / "h.db")
+    history.init_schema()
+    events = [ev(1), ev(2, home=(1, "A FC"), away=(2, "B FC")),
+              ev(5, utc=f"{DAY}T07:00:00Z", home=(7, "G FC"), away=(8, "H FC"))]  # kicked off: never recorded
+    by_id = {"fd:1": forecast(("1", 0.64, 0.45)), "fd:2": forecast(None, reason="no_qualifying_market"),
+             "fd:5": forecast(("1", 0.64, 0.45))}
+    svc, _ = service(events, by_id)
+    svc.history = history
+
+    async def twice() -> None:
+        for _ in range(2):
+            await svc.pick(1, START, at("2027-01-22T08:00:00Z"), None, SINGLE)
+            await asyncio.gather(*svc._writes)
+
+    asyncio.run(twice())
+    assert history.status_counts(include_quick=True)["pending"] == 2
+    assert history.status_counts() == {"pending": 0, "settled": 0, "void": 0}       # AI analyses only
+    assert history.list_forecasts() == (0, []) and history.tournaments() == []
+    total, rows = history.list_forecasts(include_quick=True)
+    assert total == 2 and {r["eventId"] for r in rows} == {"fd:1", "fd:2"}
+    assert all(r["key"].startswith("quick:") for r in rows)
+    assert {r["pick"] for r in rows} == {"1", "NO_BET"}
+
+
+def test_a_failed_history_write_never_breaks_a_pick(tmp_path, caplog) -> None:
+    class Broken:
+        def record_many(self, records):
+            raise OSError("disk full")
+
+    svc, _ = service([ev(1)], {"fd:1": forecast(("1", 0.64, 0.45))})
+    svc.history = Broken()  # type: ignore[assignment]
+
+    async def once():
+        body = (await svc.pick(1, START, at("2027-01-22T08:00:00Z"), None, SINGLE)).to_json()
+        await asyncio.gather(*svc._writes)
+        return body
+
+    assert asyncio.run(once())["status"] == STATUS_OK
+    assert "quick.history_write_failed type=OSError" in caplog.text and not svc._recorded

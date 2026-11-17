@@ -37,7 +37,7 @@ from typing import Protocol
 
 from miniapp.forecast.data import results_from_events
 from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast, Unavailable
-from miniapp.forecast.history import ForecastHistory, ForecastRecord
+from miniapp.forecast.history import ForecastHistory, model_record
 from miniapp.forecast.markets import FAMILY, KEYS as MARKET_KEYS
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.odds.store import MatchOdds, OddsStore
@@ -778,24 +778,14 @@ class AiService:
         A forecast that cannot be stored is not shown: the load fails (upstream_error)."""
         if self.history is None or result.generated_at is None:
             return
-        chosen = forecast.selection.pick
-        record = ForecastRecord(
+        record = model_record(
+            event.id, event.tournament_id, event.home.id, event.away.id, event.starts_at, forecast,
             # The shown answer is part of the identity: a regenerated answer for the same evidence
             # (e.g. after a restart emptied the cache) is a row of its own, never silently dropped.
-            forecast_key=f"{forecast.model_version}:{event.id}:{digest}:{_answer_digest(result)}", event_id=event.id,
-            tournament_id=event.tournament_id, home_team_id=event.home.id, away_team_id=event.away.id,
-            created_at=result.generated_at, kickoff_at=event.starts_at, model_version=forecast.model_version,
-            parameters=forecast.parameters, data_until=forecast.data_until, sample=forecast.sample, inputs_digest=digest,
-            probabilities={k: round(v, 6) for k, v in forecast.exact.items()},
-            baseline={k: round(v, 6) for k, v in forecast.baseline_1x2.items()},
-            gate_eligible=forecast.gate_eligible, display=forecast.display,
-            expected_goals=forecast.expected_goals, pick_market=chosen.market if chosen else "NO_BET",
-            pick_probability=round(chosen.probability, 6) if chosen else None,
-            no_bet_reason=forecast.selection.no_bet_reason,
-            alternatives=[c.to_json() for c in forecast.selection.alternatives],
+            key=f"{forecast.model_version}:{event.id}:{digest}:{_answer_digest(result)}",
+            created_at=result.generated_at, digest=digest,
             explanation={"factors": list(result.factors), "reasons": list(result.pick.reasons if result.pick else ())},
-            llm_model=result.model, source=football_data.PROVIDER,
-        )
+            llm_model=result.model, source=football_data.PROVIDER)
         try:
             await asyncio.to_thread(self.history.record, record)
         except Exception as exc:  # noqa: BLE001 — log the type only, never the data
