@@ -278,9 +278,11 @@ class ForecastHistory:
         """Writes the results of finished (or voided) events into their forecasts; returns
         how many rows changed. Postponed and other open states stay pending."""
         targets: dict[str, tuple[int | None, int | None, str]] = {}
+        kickoffs: dict[str, str | None] = {}
         for event in events:
             if getattr(event, "sport", None) != "football":
                 continue
+            kickoffs[event.id] = getattr(event, "starts_at", None)
             if event.status == "finished" and getattr(event, "awarded", False):
                 targets[event.id] = (None, None, "void")  # decided at the table, not played
             elif event.status == "finished" and getattr(event, "regular_score", None) is not None:
@@ -297,9 +299,19 @@ class ForecastHistory:
             for i in range(0, len(ids), 500):
                 chunk = ids[i:i + 500]
                 found += conn.execute(
-                    "SELECT forecast_key, event_id, final_home, final_away, settled_status FROM ai_forecasts "
+                    "SELECT forecast_key, event_id, final_home, final_away, settled_status, kickoff_at FROM ai_forecasts "
                     f"WHERE event_id IN ({', '.join('?' * len(chunk))})", chunk).fetchall()
-        due = [key for key, event_id, fh, fa, st in found if (fh, fa, st) != targets[event_id]]
+
+        def target(event_id: str, kickoff_at: str) -> tuple[int | None, int | None, str]:
+            # A fixture played on another UTC day than the one the forecast was made for (postponed, moved) is not
+            # that forecast's match: void, so a forecast is never scored as a match-day one for a different day.
+            played = kickoffs.get(event_id)
+            if played is not None and played[:10] != kickoff_at[:10]:
+                return (None, None, "void")
+            return targets[event_id]
+
+        expected = {key: target(event_id, kickoff) for key, event_id, _, _, _, kickoff in found}
+        due = [key for key, _, fh, fa, st, _ in found if (fh, fa, st) != expected[key]]
         if not due:
             return 0
         changed = 0
@@ -309,7 +321,7 @@ class ForecastHistory:
                 row = conn.execute("SELECT event_id, final_home, final_away, settled_status, revision FROM ai_forecasts "
                                    "WHERE forecast_key = ?", (key,)).fetchone()
                 event_id, fh, fa, st, rev = row
-                home, away, status = targets[event_id]
+                home, away, status = expected[key]
                 if (fh, fa, st) == (home, away, status):
                     continue  # settled meanwhile by another process
                 # The journal row is written by the forecasts_journal trigger, in this transaction.
@@ -459,8 +471,9 @@ class ForecastHistory:
         1X2 log loss / Brier, per-market log loss, calibration, picks — per model version
         and competition — and the prospective gate. Read-only; nothing here changes a model.
 
-        The gate is the acceptance rule of the validation protocol applied to forecasts
-        stored before kickoff (the only independent sample for goals-1): paired 1X2 log
+        The gate is the acceptance rule of the validation protocol applied to the daily slate's
+        forecasts stored before kickoff (the only independent sample for goals-1; AI analyses follow
+        what users open and stay out of it): paired 1X2 log
         loss, model − B1, block bootstrap by calendar week, 95% interval fully below 0,
         with at least GATE_MIN_FORECASTS settled matches. Passing it is what may justify
         an owner-approved change of recommendationStatus to "confirmed"; it never changes
@@ -474,11 +487,27 @@ class ForecastHistory:
                 "    ORDER BY created_at DESC, rowid DESC) AS n FROM ai_forecasts WHERE created_at < kickoff_at"
                 ") WHERE n = 1 AND settled_status = 'settled'"
             ).fetchall()
-        groups: dict[str, list[tuple]] = {}
-        for version, tournament, probs, base, h, a, pick, kickoff, eligible in rows:
-            groups.setdefault(version, []).append(
-                (tournament, json.loads(probs), h, a, pick, json.loads(base) if eligible else {}, kickoff))
-        return {version: _evaluate(items) for version, items in groups.items()}
+            # The prospective gate: the daily slate only (every validated match, whatever users open). AI analyses
+            # follow users' choices; they count in the metrics above, never in the gate.
+            slate_rows = conn.execute(
+                "SELECT model_version, tournament_id, probabilities_json, baseline_json, final_home, final_away, "
+                "pick_market, kickoff_at, gate_eligible FROM ("
+                "  SELECT *, ROW_NUMBER() OVER (PARTITION BY event_id, model_version"
+                "    ORDER BY created_at DESC, rowid DESC) AS n FROM ai_forecasts"
+                f"   WHERE created_at < kickoff_at AND forecast_key LIKE '{SLATE_PREFIX}%'"
+                ") WHERE n = 1 AND settled_status = 'settled'"
+            ).fetchall()
+
+        def grouped(found: list) -> dict[str, list[tuple]]:
+            groups: dict[str, list[tuple]] = {}
+            for version, tournament, probs, base, h, a, pick, kickoff, eligible in found:
+                groups.setdefault(version, []).append(
+                    (tournament, json.loads(probs), h, a, pick, json.loads(base) if eligible else {}, kickoff))
+            return groups
+
+        gated = grouped(slate_rows)
+        return {version: {**_evaluate(items), "prospectiveGate": _gate(gated.get(version, []))}
+                for version, items in grouped(rows).items()}
 
 
 GATE_MIN_FORECASTS = 300
@@ -521,7 +550,6 @@ def _evaluate(items: list[tuple]) -> dict:
                   if picks else math.nan},
         "byTournament": {t: {"forecasts": len(v), "logLoss1x2": round(sum(v) / len(v), 4)}
                          for t, v in by_tournament.items()},
-        "prospectiveGate": _gate(items),
     }
 
 

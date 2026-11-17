@@ -144,10 +144,27 @@ def test_the_settlement_journal_cannot_be_replaced_either(history: ForecastHisto
 
 
 def test_the_prospective_gate_needs_enough_settled_forecasts_and_the_paired_rule(history: ForecastHistory) -> None:
-    history.record(record())
+    history.record(record(key="slate:goals-1:fd:7:abc"))
     history.settle_events([event()])
     gate = history.evaluate()["goals-1"]["prospectiveGate"]
     assert gate == {"forecasts": 1, "minimum": 300, "result": None, "passed": False}
+
+
+def test_only_the_daily_slate_feeds_the_gate_ai_analyses_count_in_the_metrics(history: ForecastHistory) -> None:
+    history.record(record())                                               # an AI analysis a user asked for
+    history.record(record(key="slate:goals-1:fd:8:x", event="fd:8"))
+    history.settle_events([event(), event(eid="fd:8")])
+    quality = history.evaluate()["goals-1"]
+    assert quality["forecasts"] == 2 and quality["prospectiveGate"]["forecasts"] == 1
+
+
+def test_a_fixture_played_on_another_day_voids_its_forecast(history: ForecastHistory) -> None:
+    history.record(record(key="slate:goals-1:fd:7:abc"))
+    moved = replace(event(), starts_at="2027-01-15T15:00:00Z")             # postponed by a day
+    history.settle_events([moved])
+    assert history.status_counts(include_slate=True) == {"pending": 0, "settled": 0, "void": 1}
+    history.settle_events([replace(event(), starts_at="2027-01-14T18:00:00Z")])  # same day, later: still its match
+    assert history.status_counts(include_slate=True)["settled"] == 1
 
 
 def test_the_gate_compares_with_the_stored_baseline_on_the_same_matches() -> None:
@@ -161,8 +178,8 @@ def test_the_gate_compares_with_the_stored_baseline_on_the_same_matches() -> Non
 
 
 def test_only_validated_complete_window_forecasts_count_toward_the_gate(history: ForecastHistory) -> None:
-    history.record(record())
-    history.record(replace(record(key="goals-1:fd:8:x", event="fd:8"), gate_eligible=False))
+    history.record(record(key="slate:goals-1:fd:7:abc"))
+    history.record(replace(record(key="slate:goals-1:fd:8:x", event="fd:8"), gate_eligible=False))
     history.settle_events([event(), event(eid="fd:8")])
     gate = history.evaluate()["goals-1"]["prospectiveGate"]
     assert gate["forecasts"] == 1  # the CL / incomplete-window forecast is evaluated, never gated

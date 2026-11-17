@@ -458,3 +458,24 @@ def test_no_season_guess_when_the_minute_has_no_room_for_a_wrong_one(clock: Fake
     _hinted(service, "2025-08-15")  # wrong guess: could spend requests the right season needs
     history = run(service.model_history("fd:PL"))
     assert history.previous_season and not any(u.endswith("season=2024") for u in t.calls)
+
+
+def test_background_model_history_loads_what_the_cache_lacks_then_reads_only_the_cache(clock: FakeClock) -> None:
+    """The daily slate's history: calendar AND previous season at low priority (an incomplete window would keep
+    its forecasts out of the gate), then from the cache with no request."""
+    t = FakeTransport()
+    service = make_service(t, clock, per_minute=60, per_day=10000)
+    current = match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0))
+    old = match(1, "FINISHED", utc="2026-01-10T15:00:00Z", full=(3, 1))
+    t.script = [t.ok(season_payload(current)), t.ok(season_payload(old, season=PAST))]
+    history, loaded = run(service.background_model_history("fd:PL"))
+    assert loaded and history.previous_season and [e.id for e in history.events] == ["fd:1", "fd:2"]
+    again, loaded = run(service.background_model_history("fd:PL"))
+    assert not loaded and again.previous_season and len(t.calls) == 2
+
+
+def test_background_model_history_is_refused_while_another_background_load_runs(clock: FakeClock) -> None:
+    t = FakeTransport()
+    service = make_service(t, clock, per_minute=60, per_day=10000)
+    service._background_loads = 1  # e.g. settlement holds the background slot
+    assert run(service.background_model_history("fd:PL")) == (None, False) and t.calls == []

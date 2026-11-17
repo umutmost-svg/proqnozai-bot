@@ -651,8 +651,11 @@ def create_app(
     settlement = Settlement(history, sports, clock)
     sports.calendar_listeners.append(settlement.on_calendar)
     # The quality sample: the model's forecast of every validated match on its match day, whatever users open.
-    slate = (SlateRecorder(history, sports, ModelForecaster(sports, ForecastEngine(), clock=clock), FROZEN.validated,
-                           clock) if settings.forecast_slate_enabled else None)
+    if settings.forecast_slate_enabled:
+        slate = SlateRecorder(history, sports, ModelForecaster(sports, ForecastEngine(), clock=clock),
+                              FROZEN.validated, clock)
+        app.router.on_startup.append(slate.start)
+        app.router.on_shutdown.append(slate.stop)
     # Odds pushed by the bot: in memory only, served after strict matching (miniapp/odds).
     odds = OddsStore(clock, enabled=settings.odds_feed_enabled, catalog=settings.odds_catalog)
     receiver = FeedReceiver(settings.odds_feed_secret.encode(), clock) if settings.odds_feed_secret else None
@@ -676,8 +679,6 @@ def create_app(
         found = await current_session(request)
         if found is not None:
             settlement.ensure()
-            if slate is not None:
-                slate.ensure()
             if odds_source is not None:
                 odds_source.ensure_running()
         return found

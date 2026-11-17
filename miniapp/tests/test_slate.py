@@ -6,7 +6,7 @@ import asyncio
 from types import SimpleNamespace
 
 from miniapp.forecast.history import ForecastHistory
-from miniapp.forecast.slate import PASS_EVERY_S, RETRY_S, SlateRecorder
+from miniapp.forecast.slate import LOAD_SPACING_S, PASS_EVERY_S, RETRY_S, SlateRecorder
 from miniapp.sports.service import ModelHistory
 from miniapp.tests.test_quick import NOW, ev, forecast
 from miniapp.tests.test_sports import DAY
@@ -23,26 +23,27 @@ class Clock:
 class Sports:
     """Cached histories per competition; `loadable`: competitions a background load can still fetch."""
 
-    def __init__(self, events, cached=(), loadable=(), served=("fd:PL", "fd:PD", "fd:BL1")) -> None:
+    def __init__(self, events, cached=(), loadable=(), served=("fd:PL", "fd:PD", "fd:BL1"), failing=()) -> None:
         self.events, self.cached, self.loadable = events, set(cached), set(loadable)
-        self.served = served
+        self.served, self.failing = served, set(failing)
         self.background_calls: list[str] = []
 
     def tournaments(self, sport):
         return [SimpleNamespace(id=t) for t in self.served]
 
-    def cached_model_history(self, tournament):
+    async def background_model_history(self, tournament):
+        if tournament in self.failing:
+            raise RuntimeError("provider error")
         if tournament not in self.cached:
-            return None
+            self.background_calls.append(tournament)
+            if tournament not in self.loadable:
+                return None, False
+            self.cached.add(tournament)
+            loaded = True
+        else:
+            loaded = False
         return ModelHistory([e for e in self.events if e.tournament_id == tournament], f"{DAY[:4]}-08-01", True,
-                            None, None)
-
-    async def background_calendar(self, tournament):
-        self.background_calls.append(tournament)
-        if tournament not in self.loadable:
-            return None
-        self.cached.add(tournament)
-        return object()
+                            None, None), loaded
 
 
 class Forecaster:
@@ -57,16 +58,18 @@ def make(tmp_path, sports, by_id, clock=None):
     history = ForecastHistory(tmp_path / "h.db")
     history.init_schema()
     clock = clock or Clock()
-    return SlateRecorder(history, sports, Forecaster(by_id), ["PL", "PD", "BL1", "SA"], clock), history, clock
+    sleeps: list[float] = []
+
+    async def sleep(s):
+        sleeps.append(s)
+
+    recorder = SlateRecorder(history, sports, Forecaster(by_id), ["PL", "PD", "BL1", "SA"], clock, sleep=sleep)
+    recorder.sleeps = sleeps  # type: ignore[attr-defined]
+    return recorder, history, clock
 
 
 def run_pass(recorder) -> None:
-    async def go():
-        task = recorder.ensure()
-        if task is not None:
-            await task
-
-    asyncio.run(go())
+    asyncio.run(recorder.run_pass())
 
 
 def test_every_remaining_match_of_today_is_recorded_once_whatever_users_open(tmp_path) -> None:
@@ -82,25 +85,50 @@ def test_every_remaining_match_of_today_is_recorded_once_whatever_users_open(tmp
     total, rows = history.list_forecasts(include_slate=True)
     assert {r["eventId"] for r in rows} == {"fd:1", "fd:2", "fd:5"} and all(r["key"].startswith("slate:") for r in rows)
     assert sports.background_calls == ["fd:BL1", "fd:PD"]   # only what the cache lacked; SA is not served
+    assert recorder.sleeps == [LOAD_SPACING_S, LOAD_SPACING_S]  # spaced loads, never a burst
     assert history.list_forecasts() == (0, []) and history.status_counts()["pending"] == 0  # admin: AI only
-    clock.now += PASS_EVERY_S
+    clock.now += 60
     run_pass(recorder)                                      # same numbers: nothing new
     assert history.list_forecasts(include_slate=True)[0] == 3
 
 
-def test_a_refused_background_load_keeps_the_cached_ones_and_retries_soon(tmp_path) -> None:
+def test_a_refused_or_failing_competition_never_stops_the_others_and_is_retried_soon(tmp_path, caplog) -> None:
     events = [ev(1), ev(5, code="PD", home=(7, "G FC"), away=(8, "H FC"))]
-    sports = Sports(events, cached={"fd:PL"}, loadable=set())
+    sports = Sports(events, cached={"fd:PL"}, loadable=set(), failing={"fd:BL1"})
     recorder, history, clock = make(tmp_path, sports, {e.id: forecast(("1", 0.64, 0.45)) for e in events})
     run_pass(recorder)
-    assert sports.background_calls == ["fd:BL1", "fd:PD"]
-    assert history.list_forecasts(include_slate=True)[0] == 1        # PL from the cache
-    clock.now += RETRY_S - 1
-    assert recorder.ensure() is None                        # not yet
-    sports.loadable = {"fd:PL", "fd:PD", "fd:BL1"}
-    clock.now += 1
+    assert "slate.competition_failed tournament=fd:BL1 type=RuntimeError" in caplog.text
+    assert history.list_forecasts(include_slate=True)[0] == 1        # PL from the cache all the same
+    assert recorder.wait_s() == RETRY_S
+    sports.loadable, sports.failing = {"fd:PD", "fd:BL1"}, set()
     run_pass(recorder)
-    assert history.list_forecasts(include_slate=True)[0] == 2
+    assert history.list_forecasts(include_slate=True)[0] == 2 and recorder.wait_s() == PASS_EVERY_S
+
+
+def test_the_next_pass_comes_right_after_utc_midnight(tmp_path) -> None:
+    from datetime import datetime
+
+    late = datetime.fromisoformat(f"{DAY}T23:50:00+00:00").timestamp()
+    recorder, _, _ = make(tmp_path, Sports([]), {}, Clock(late))
+    assert recorder.wait_s() == 10 * 60 + 5
+
+
+def test_a_match_that_kicked_off_while_computing_is_not_recorded(tmp_path) -> None:
+    from datetime import datetime
+
+    events = [ev(1, utc=f"{DAY}T08:00:30Z")]
+    clock = Clock()
+    sports = Sports(events, cached={"fd:PL"})
+
+    class Slow:
+        def compute(self, event, history):
+            clock.now += 60                                 # the computation outlasts the kickoff
+            return forecast(("1", 0.64, 0.45))
+
+    recorder, history, _ = make(tmp_path, sports, {}, clock)
+    recorder.forecaster = Slow()
+    run_pass(recorder)
+    assert history.list_forecasts(include_slate=True)[0] == 0
 
 
 def test_a_failed_history_write_is_logged_and_written_by_a_later_pass(tmp_path, caplog) -> None:
@@ -112,6 +140,6 @@ def test_a_failed_history_write_is_logged_and_written_by_a_later_pass(tmp_path, 
     run_pass(recorder)
     assert "slate.history_write_failed type=OSError" in caplog.text
     history.record_many = real  # type: ignore[method-assign]
-    clock.now += PASS_EVERY_S
+    assert recorder.wait_s() == RETRY_S
     run_pass(recorder)
     assert history.list_forecasts(include_slate=True)[0] == 1

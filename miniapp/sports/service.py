@@ -783,6 +783,36 @@ class SportsService:
             LOW_PRIORITY_DAY_SHARE.reset(share)
             LOW_PRIORITY_RESERVE.reset(reserve)
 
+    async def background_model_history(self, tournament_id: str) -> tuple[ModelHistory | None, bool]:
+        """model_history() for background work (the daily forecast slate): the cache first; a missing or old calendar
+        and a missing previous season are loaded with the warm-up's low priority (minute reserve for users, its
+        day share). Returns (history, whether the provider was asked). (None, …) when the background budget or
+        slot refused — try again later; a previous season that cannot be had now leaves a partial history."""
+        history = self.cached_model_history(tournament_id)
+        if history is not None and (history.previous_season or history.season_start is None
+                                    or history.previous_missing == "absent"):
+            return history, False
+        if self.football is None or not self._warm_budget_left() or self.background_busy():
+            return None, False
+        reserve = LOW_PRIORITY_RESERVE.set(STANDINGS_WARM_RESERVE)
+        share = LOW_PRIORITY_DAY_SHARE.set(STANDINGS_WARM_DAY_SHARE)
+        self._background_loads += 1
+        try:
+            async with self._background_slot:
+                try:
+                    current = await self.calendar("football", tournament_id)
+                    if current is not None and current.season.start is not None:
+                        await self._past_season(tournament_id, int(current.season.start[:4]) - 1, background=True)
+                except UpstreamError as exc:
+                    if not exc.low_priority_only:
+                        raise
+                    return None, True  # the background share is spent: the rest on a later try
+        finally:
+            self._background_loads -= 1
+            LOW_PRIORITY_DAY_SHARE.reset(share)
+            LOW_PRIORITY_RESERVE.reset(reserve)
+        return self.cached_model_history(tournament_id), True
+
     async def _search_warm_load(self, tournament_id: str) -> CalendarResult | None:
         """A calendar for the team-search warm-up: same low priority and day share as the other
         background work (users' requests keep the minute's reserve); refused when the budget is spent."""
