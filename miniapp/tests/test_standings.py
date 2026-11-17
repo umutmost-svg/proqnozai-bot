@@ -490,3 +490,19 @@ def test_background_model_history_is_not_refused_by_a_running_warm_up_and_never_
     clock.advance(30 * 60)
     t.script = [HttpResponse(500, {}, b"")] * 3              # the refresh fails: only the old copy is left
     assert run(service.background_model_history("fd:PL", 20 * 60)) == (None, True)
+
+
+def test_background_model_history_never_takes_a_copy_marked_stale(clock: FakeClock) -> None:
+    from miniapp.sports.cache import Cached
+
+    t = FakeTransport()
+    service = make_service(t, clock, per_minute=60, per_day=10000)
+    t.script = [t.ok(season_payload(match(2, "FINISHED", utc="2026-09-01T15:00:00Z", full=(1, 0)))),
+                t.ok(season_payload(match(1, "FINISHED", full=(3, 1)), season=PAST))]
+    run(service.background_model_history("fd:PL", 20 * 60))
+    entry = service.cache.peek("football:calendar:PL")
+    service.cache.peek = lambda key, real=service.cache.peek: (  # type: ignore[method-assign]
+        Cached(entry.value, entry.fetched_at, entry.expires_at, stale=True) if key == "football:calendar:PL"
+        else real(key))
+    t.script = [HttpResponse(500, {}, b"")] * 3
+    assert run(service.background_model_history("fd:PL", 20 * 60)) == (None, True)

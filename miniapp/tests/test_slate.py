@@ -159,3 +159,19 @@ def test_a_failed_history_write_is_logged_and_written_by_a_later_pass(tmp_path, 
     assert recorder.wait_s() == RETRY_S
     run_pass(recorder)
     assert history.list_forecasts(include_slate=True)[0] == 1
+
+
+def test_a_pass_running_across_midnight_restarts_from_the_first_competition(tmp_path) -> None:
+    from datetime import datetime
+
+    clock = Clock(datetime.fromisoformat(f"{DAY}T23:59:50+00:00").timestamp())
+    sports = Sports([], cached=set(), loadable={"fd:BL1", "fd:PD", "fd:PL"})
+    recorder, _, _ = make(tmp_path, sports, {}, clock)
+
+    async def sleep(s):
+        clock.now += s                                     # the spacing after a load crosses midnight
+
+    recorder._sleep = sleep
+    asyncio.run(recorder.run_pass())
+    assert sports.background_calls == ["fd:BL1"]           # stopped after the first load, at midnight
+    assert recorder.wait_s() == 1.0                        # the new day's pass starts at once

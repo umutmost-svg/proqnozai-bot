@@ -793,7 +793,7 @@ class SportsService:
         history = self.cached_model_history(tournament_id)
         code = tournament_id.removeprefix(f"{football_data.ID_PREFIX}:")
         calendar = self.cache.peek(f"football:calendar:{code}")
-        fresh = calendar is not None and self._clock() - calendar.fetched_at <= max_age_s
+        fresh = calendar is not None and not calendar.stale and self._clock() - calendar.fetched_at <= max_age_s
         if history is not None and fresh and (history.previous_season or history.season_start is None
                                               or history.previous_missing == "absent"):
             return history, False

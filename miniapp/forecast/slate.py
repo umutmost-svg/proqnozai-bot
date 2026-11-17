@@ -69,6 +69,7 @@ class SlateRecorder:
         self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="slate-model")
         self._loop_task: asyncio.Task | None = None
         self._retry: set[str] = set()
+        self._restart = False  # a pass interrupted by midnight: the next one starts without waiting
         self._recorded: OrderedDict[str, None] = OrderedDict()
 
     async def start(self) -> None:
@@ -97,6 +98,9 @@ class SlateRecorder:
         retry), or just after the first UTC midnight after that start (a pass running across midnight never
         postpones the post-midnight one)."""
         now = self._clock()
+        if self._restart:
+            self._restart = False
+            return 1.0
         started = now if started is None else started
         day = datetime.fromtimestamp(started, UTC).date()
         midnight = datetime.combine(day + timedelta(days=1), datetime.min.time(), UTC).timestamp()
@@ -106,7 +110,14 @@ class SlateRecorder:
     async def run_pass(self) -> None:
         served = {t.id for t in self.sports.tournaments("football")}
         retry: set[str] = set()
+        day = datetime.fromtimestamp(self._clock(), UTC).date()
         for code in self.competitions:
+            if datetime.fromtimestamp(self._clock(), UTC).date() != day:
+                # Midnight passed during this pass: a new pass starts at once from the first competition, so a
+                # match early in the new day never waits for the rest of the old pass.
+                self._retry = {"midnight"}
+                self._restart = True
+                return
             tournament = f"{football_data.ID_PREFIX}:{code}"
             if tournament not in served:
                 continue
