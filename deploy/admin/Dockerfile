@@ -3,7 +3,9 @@
 #   docker build -f deploy/admin/Dockerfile -t sporbot-admin .
 # Same pinned bases and hash-checked lock as the Mini App image.
 
-FROM node:24.22.2-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9 AS frontend
+# The frontend stage runs on the BUILD machine's platform: its output is static files, the same on any platform, and
+# `npm run build` under amd64 emulation on an arm64 Mac crashes (exit 139, 17.11).
+FROM --platform=$BUILDPLATFORM node:24.22.2-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9 AS frontend
 ENV CI=1 npm_config_fund=false npm_config_update_notifier=false
 WORKDIR /build/admin-frontend
 COPY admin-frontend/package.json admin-frontend/package-lock.json ./
