@@ -39,7 +39,7 @@ from miniapp.forecast.data import results_from_events
 from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast, Unavailable
 from miniapp.forecast.history import ForecastHistory, ForecastRecord
 from miniapp.forecast.markets import FAMILY, KEYS as MARKET_KEYS
-from miniapp.forecast.selection import with_prices
+from miniapp.forecast.selection import below_min_odds, with_prices
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.odds.store import MatchOdds, OddsStore
 from miniapp.odds.value import book_json, compare, market_1x2_percent, market_book
@@ -409,10 +409,17 @@ class AiService:
             # table rows and the current market — never the model's numbers, never a pick.
             return await self._basis_analysis(event, home, away, basis, fixture, forecast.reason, has_form,
                                               user_id, create, odds)
+        # Paid attempts are bounded per evidence (the match's verified facts and the model's own numbers), never per
+        # price-dependent recommendation: a price crossing the minimum odds makes a new analysis, not new attempts.
+        evidence = hashlib.sha256(json.dumps({"basis": basis, "fixture": fixture, "exact": {
+            k: round(v, 9) for k, v in forecast.exact.items()}, "selection": forecast.selection.to_json(),
+            "model": forecast.model_version}, sort_keys=True).encode()).hexdigest()[:16]
+        attempt_key = f"ai:{SCHEMA_VERSION}:{MODEL_VERSION}:{event.id}:e{evidence}"
         if odds is not None:
             # Selection rule 6 with the current checked prices, BEFORE the explanation, the identity digest and the
             # history row: a market the bookmaker prices below the minimum odds is never the recommendation (the next
-            # one in the rules' order is, or NO_BET `low_odds`). Fixed with the answer: later price moves show as is.
+            # one in the rules' order is, or NO_BET `low_odds`). A later price under the minimum is never shown next
+            # to the recommendation (`_with_odds`).
             forecast = replace(forecast, selection=with_prices(forecast.selection, odds.book))
         figures = forecast.to_json()
         shown = forecast.display
@@ -472,12 +479,12 @@ class AiService:
             try:
                 await self._remember(event, forecast, result, digest)
             except AiError:
-                self._uncounted.add(key)  # paid but not storable: never paid for again in this process
+                self._uncounted.add(attempt_key)  # paid but not storable: never paid for again in this process
 
                 async def store_later() -> tuple[AnalysisResult, float]:
                     await self._remember(event, forecast, result, digest)  # still failing: AiError again
                     self._unstored.pop(key, None)
-                    self._uncounted.discard(key)
+                    self._uncounted.discard(attempt_key)
                     return result, self._until_kickoff(event)
 
                 self._keep_unstored(key, store_later)
@@ -490,7 +497,8 @@ class AiService:
                          stored["created_at"]), self._until_kickoff(event)
 
         result = await self._obtain(event, key, user_id, create, load,
-                                    restore=restore, prefix=f"{forecast.model_version}:{event.id}:{digest}:")
+                                    restore=restore, prefix=f"{forecast.model_version}:{event.id}:{digest}:",
+                                    attempt_key=attempt_key)
         served = self._with_odds(result, event, forecast, has_form)
         if not has_form and served.kind == "partial" and served.market is None:
             # PARTIAL on the odds alone, and the line is gone (expired during the call or since):
@@ -586,18 +594,19 @@ class AiService:
     async def _obtain(self, event: FootballEvent, key: str, user_id: int, create: bool,
                       load: Callable[[], Awaitable[tuple[AnalysisResult, float]]], *,
                       restore: Callable[[dict], Awaitable[tuple[AnalysisResult, float]]] | None = None,
-                      prefix: str | None = None) -> AnalysisResult:
+                      prefix: str | None = None, attempt_key: str | None = None) -> AnalysisResult:
         """The cached answer, the running load, or a charged new load (single flight per key).
         With `prefix` (goal-model answers): restored from the forecast history, and a new one is
         paid for only while that history is writable."""
         reserved: list[tuple[str, list[str]]] = []  # (day, subjects) of this request's paid reservation
+        counted = attempt_key or key  # what MAX_PAID_ATTEMPTS bounds
 
         async def paid_load() -> tuple[AnalysisResult, float]:
             try:
                 return await load()
             except AiError as exc:
                 if exc.unbilled:
-                    await self._give_back(key, reserved)
+                    await self._give_back(counted, reserved)
                 raise
 
         loader = _as_upstream(paid_load)
@@ -658,21 +667,21 @@ class AiService:
                 if pending is not None:
                     # Paid earlier, its history write failed: written now and served for free (no new call).
                     return self._cache.start(key, _as_upstream(pending))
-                if key in self._uncounted or await self._attempts(key) >= MAX_PAID_ATTEMPTS:
+                if counted in self._uncounted or await self._attempts(counted) >= MAX_PAID_ATTEMPTS:
                     raise AiError("upstream_error")  # this exact analysis was already paid for twice
                 # Counted durably BEFORE the call: an SDK crash or a process exit after dispatch
                 # still counts. A failing count refuses before anything is paid.
-                if not await self._count_attempt(key, event.starts_at):
+                if not await self._count_attempt(counted, event.starts_at):
                     raise AiError("upstream_error")
                 day = self._today()
                 try:
                     used_up = await asyncio.to_thread(self._ledger.reserve_ai_call, day, limits)
                 except Exception as exc:  # noqa: BLE001 — e.g. a locked database: nothing was paid
                     logger.warning("ai.reserve_failed type=%s", type(exc).__name__)
-                    await self._uncount_attempt(key)  # no call followed: the attempt is given back
+                    await self._uncount_attempt(counted)  # no call followed: the attempt is given back
                     raise AiError("upstream_error") from None
                 if used_up is not None:
-                    await self._uncount_attempt(key)  # no call followed
+                    await self._uncount_attempt(counted)  # no call followed
                     raise AiError("limit_reached" if used_up == user else "budget_exhausted")
                 reserved.append((day, list(limits)))
                 return self._cache.start(key, loader)
@@ -697,6 +706,10 @@ class AiService:
         if found is None:
             return result
         quotes = compare(found.book, forecast.exact)
+        # The recommendation was made with the prices of its moment; a price that has since fallen under the
+        # minimum odds is never shown next to it (nor next to an alternative): the market panel leaves it out.
+        recommended = {result.pick.market, *(a["market"] for a in result.alternatives)} - {"NO_BET"}
+        quotes = {k: q for k, q in quotes.items() if not (k in recommended and below_min_odds(q.odds))}
         if not quotes:
             return result
         market = {"fetchedAt": _iso_ts(found.fetched_at), "validFor": int(found.valid_for),

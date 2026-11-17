@@ -638,3 +638,48 @@ def test_quick_never_chooses_a_market_priced_below_the_minimum() -> None:
     assert choose([option(1, low)], criteria).legs[0].candidate.market == "2"   # the next suitable market
     gone = with_prices(f.selection, {"1X": 1.18, "2": 1.2})
     assert gone.pick is None and gone.no_bet_reason == "low_odds"
+
+
+def test_a_price_that_falls_under_the_minimum_during_the_paid_call_is_never_shown_next_to_the_pick(
+        clock: FakeClock) -> None:
+    """The recommendation is made with the prices read before the call; if the pick's price falls under 1.30 while
+    the language model answers, the served card leaves that price out (Codex min-odds r2)."""
+    from miniapp.tests.forecast_fakes import fake_forecast
+    from miniapp.tests.test_ai_analysis import FakeForecaster, answer
+
+    store = OddsStore(clock)
+
+    class Moving(FakeModel):
+        async def complete(self, system, user, schema):
+            clock.advance(5)
+            ingest(store, clock, line(odds={**ODDS, "w1": 8.0, "x": 5.0, "w2": 1.25}))  # "2" collapses to 1.25
+            return await super().complete(system, user, schema)
+
+    ai, _ = make_ai(clock, Moving(answer("home_form", "home_rating")), forecaster=FakeForecaster(fake_forecast("2")))
+    ai.odds = store
+    ingest(store, clock, line())                                   # "2" at 4.50 when the pick is made
+    served = run(ai.analyse("fd:7", user_id=1))
+    assert served.pick.market == "2"
+    assert "2" not in {q["market"] for q in served.market["quotes"]} and "1" in {q["market"] for q in served.market["quotes"]}
+
+
+def test_paid_attempts_are_bounded_per_evidence_not_per_price_dependent_pick(clock: FakeClock) -> None:
+    from miniapp.tests.forecast_fakes import fake_forecast
+    from miniapp.tests.test_ai_analysis import FakeForecaster, new_analysis
+
+    class Failing(FakeModel):
+        async def complete(self, system, user, schema):
+            self.calls.append((system, user, schema))
+            raise RuntimeError("model down")
+
+    model = Failing()
+    ai, _ = make_ai(clock, model, forecaster=FakeForecaster(fake_forecast("1X", alternatives=("X2",))))
+    store = OddsStore(clock)
+    ai.odds = store
+    for i, price in enumerate((1.22, 1.9, 1.22, 1.9, 1.22)):       # the 1X price keeps crossing 1.30
+        clock.advance(1)
+        ingest(store, clock, line(odds={**ODDS, "dc_1x": price}, fetchedAt=None) if i else line())
+        new_analysis(ai, clock)
+        with pytest.raises(Exception):
+            run(ai.analyse("fd:7", user_id=10 + i))
+    assert len(model.calls) == 2                                   # MAX_PAID_ATTEMPTS for the same evidence
