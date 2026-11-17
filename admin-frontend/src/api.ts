@@ -63,6 +63,37 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   return data as T;
 }
 
+/** A file download (CSV) through the same session rules as api(): a lost session opens the sign-in flow instead of
+ * leaving the browser on a 401 page. */
+export async function download(path: string, filename: string): Promise<void> {
+  const sentIn = generation;
+  let response: Response;
+  try {
+    response = await fetch(path, { credentials: 'same-origin', signal: AbortSignal.timeout(30000) });
+  } catch {
+    throw new ApiError(0, 'network', null);
+  }
+  if (!response.ok) {
+    let payload: { error?: string; requestId?: string } = {};
+    try {
+      payload = (await response.json()) ?? {};
+    } catch {
+      /* not JSON */
+    }
+    if (response.status === 401 && sentIn === generation) onUnauthenticated();
+    throw new ApiError(response.status, payload.error ?? 'http_' + response.status,
+      payload.requestId ?? response.headers.get('X-Request-ID'));
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 export function newIdempotencyKey(): string {
   return crypto.randomUUID();
 }

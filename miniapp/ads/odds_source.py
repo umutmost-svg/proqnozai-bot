@@ -17,7 +17,7 @@ from miniapp.sports.models import FootballEvent
 
 def make_odds_lookup(event_of: Callable[[str], Awaitable[tuple[Any, Any]]],
                      odds: OddsStore) -> Callable[[str, str], Awaitable[dict | None]]:
-    """`event_of` is SportsService.event (cached; the match was just recommended, so it is known)."""
+    """`event_of` is SportsService.cached_event: never a provider request (no user share is charged here)."""
 
     async def lookup(event_id: str, market: str) -> dict | None:
         event, _ = await event_of(event_id)

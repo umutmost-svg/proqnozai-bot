@@ -40,7 +40,7 @@ export interface AdsApi {
 }
 
 const TIMEOUT_MS = 8_000;
-const MAX_VALID_FOR_S = 900; // the server never serves a price for longer (miniapp/odds/store.py MAX_AGE_S)
+const MAX_VALID_FOR_S = 3600; // the server never serves a price for longer (miniapp/odds/store.py MAX_VALID_FOR_S)
 const NONE: OfferAnswer = { kind: 'none' };
 
 type Json = Record<string, unknown>;

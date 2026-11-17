@@ -522,6 +522,11 @@ class SportsService:
         table = self._user_cost(f"football:standings:{code}") if code in self.football.codes else 0  # type: ignore[union-attr]
         return cost + forms + self.history_cost(event.tournament_id, user=True) + table, unknown
 
+    async def cached_event(self, event_id: str) -> tuple[SportEvent | None, None]:
+        """`event()` for callers outside a user's upstream share (ads offer prices): the cached match only, never a
+        provider request. The match was just recommended, so it is normally cached; when not, there is no price."""
+        return self._peek_event(event_id), None
+
     def _peek_event(self, event_id: str) -> SportEvent | None:
         """The match as already cached (fresh or not), from its calendar or its own lookup; never loads."""
         calendar_of = self._calendar_index.get(event_id)

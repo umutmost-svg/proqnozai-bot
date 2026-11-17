@@ -731,7 +731,7 @@ def create_app(
             write_check=ads_write_check, read_json=ads_read_json,
             # CF-IPCountry is trusted only when every request must come through the edge (secret checked above).
             trust_country=settings.edge_secret is not None, now=now, picks=picks,
-            odds_for=make_odds_lookup(sports.event, odds))
+            odds_for=make_odds_lookup(sports.cached_event, odds))
 
     @app.get("/api/ai/analysis")
     async def ai_analysis_cached(request: Request) -> JSONResponse:

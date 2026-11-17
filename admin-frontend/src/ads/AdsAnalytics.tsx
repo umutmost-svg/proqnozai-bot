@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { download } from '../api';
 import { num, pct } from '../format';
 import { useLoad } from '../state';
 import { Empty, ErrorBox, Loading } from '../ui';
@@ -17,6 +18,12 @@ export function AdsAnalyticsView({ manage }: { manage: boolean }) {
   const [campaign, setCampaign] = useState<number | null>(null);
   const campaigns = useLoad<{ items: Campaign[] }>('/api/admin/ads/campaigns');
   const report = useLoad<AdsReport>(`/api/admin/ads/analytics?days=${days}${campaign ? `&campaign=${campaign}` : ''}`);
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const exportCsv = () => {
+    setCsvError(null);
+    download(adsApi.csvUrl(days, campaign), `ads-${days}d${campaign ? `-${campaign}` : ''}.csv`)
+      .catch((e: unknown) => setCsvError(adsError(e)));
+  };
   return (
     <>
       <div className="filters row" style={{ gap: 8, marginBottom: 12 }}>
@@ -27,8 +34,9 @@ export function AdsAnalyticsView({ manage }: { manage: boolean }) {
           <option value="">Все кампании</option>
           {(campaigns.data?.items ?? []).map((c) => <option key={c.id} value={c.id}>#{c.id} {c.name}</option>)}
         </select>
-        <a className="btn" href={adsApi.csvUrl(days, campaign)}>CSV</a>
+        <button type="button" className="btn" onClick={exportCsv}>CSV</button>
       </div>
+      {csvError && <p className="error" role="alert">{csvError}</p>}
       {report.error ? <ErrorBox error={report.error} onRetry={report.reload} /> : !report.data ? <Loading /> : (
         <ReportView report={report.data} />
       )}

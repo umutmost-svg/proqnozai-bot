@@ -398,6 +398,18 @@ def test_sports_without_a_provider_are_not_connected_and_empty(clock: FakeClock)
     assert t.calls == []
 
 
+def test_cached_event_never_asks_the_provider(clock: FakeClock) -> None:
+    """Ads offer prices read the match outside any user's upstream share: cache only (Codex ads merge r1 P2)."""
+    t = FakeTransport()
+    t.script = [t.ok(match(7, "TIMED"))]
+    service = make_service(t, clock)
+    assert run(service.cached_event("fd:7")) == (None, None)
+    assert t.calls == []
+    run(service.event("fd:7"))
+    found, _ = run(service.cached_event("fd:7"))
+    assert found is not None and found.id == "fd:7" and len(t.calls) == 1
+
+
 def test_event_detail_cached_and_not_found_cached(clock: FakeClock) -> None:
     t = FakeTransport()
     t.script = [t.ok(match(7, "FINISHED", full=(3, 1))), HttpResponse(404, {}, b"")]

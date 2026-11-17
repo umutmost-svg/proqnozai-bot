@@ -34,10 +34,13 @@ describe('partner offers client', () => {
     const odds = { market: 'X2', odds: 1.85, fetchedAt: '2026-11-08T06:00:00Z', validFor: 600 };
     const answer = readOffer({ offer: { ...offer, odds, oddsRequired: true } }, sent);
     expect(answer.kind === 'offer' && answer.offer.price).toEqual({ market: 'X2', odds: 1.85, expires: { mono: 601_000, wall: 602_000 } });
-    for (const bad of [{ ...odds, odds: 0.5 }, { ...odds, validFor: 901 }, { ...odds, market: 7 }, 'x']) {
+    for (const bad of [{ ...odds, odds: 0.5 }, { ...odds, validFor: 3601 }, { ...odds, market: 7 }, 'x']) {
       expect(readOffer({ offer: { ...offer, odds: bad } }, sent)).toEqual({ kind: 'none' });
     }
     expect(readOffer({ offer: { ...offer, odds: null, oddsRequired: true } }, sent)).toEqual({ kind: 'none' });
+    // A far match's price may be served for up to an hour (miniapp/odds/store.py MAX_VALID_FOR_S).
+    const far = readOffer({ offer: { ...offer, odds: { ...odds, validFor: 3600 } } }, sent);
+    expect(far.kind === 'offer' && far.offer.price?.expires.mono).toBe(3_601_000);
   });
 
   it('opens only https links without user info', () => {
