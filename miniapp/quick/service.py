@@ -47,7 +47,7 @@ from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast
 from miniapp.forecast.markets import FAMILY, KEYS
 from miniapp.forecast.quick import (STATUS_NO_BET, STATUS_NOT_ENOUGH, STATUS_UNAVAILABLE, Criteria, Leg, Option,
                                     QuickResult, choose, coupon, frechet)
-from miniapp.forecast.selection import LIMITED_COMPETITIONS, NO_BET_EARLY, NO_BET_UNVALIDATED
+from miniapp.forecast.selection import LIMITED_COMPETITIONS, NO_BET_EARLY, NO_BET_UNVALIDATED, P_MAX, below_min_odds
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.odds.store import OddsStore
 from miniapp.odds.value import MarketQuote, compare, market_book
@@ -70,8 +70,8 @@ PREVIEW_MAX = 5
 PREVIEW_DAYS = 14
 PREVIEW_WAIT_S = 8.0
 # The estimate: (lowest, highest) probability per risk level. The floor is the strict rules' own level; the ceiling
-# keeps near-certain outcomes (odds ~1.15 and below) out, which are no forecast worth giving.
-ESTIMATE_BANDS = {"conservative": (0.70, 0.85), "balanced": (0.60, 0.75), "elevated": (0.55, 0.65)}
+# keeps near-certain outcomes (fair odds below MIN_ODDS, 1.30) out, which are no forecast worth giving.
+ESTIMATE_BANDS = {"conservative": (0.70, P_MAX), "balanced": (0.60, 0.75), "elevated": (0.55, 0.65)}
 ESTIMATE_FAMILIES = frozenset({"1x2", "double", "total", "btts"})
 ESTIMATE_MAX_MATCHES = 80  # the period's nearest matches the estimate looks at (bounded model time; documented)
 ESTIMATE_WAIT_S = 8.0
@@ -360,7 +360,7 @@ class QuickService:
         missing = sum(1 for e in todays if e.tournament_id in unavailable)
         if missing:
             reasons["source_unavailable"] = missing
-        result = choose(options, criteria)
+        result = choose(options, criteria, self._books(options, {e.id: e for e in usable}))
         # Nothing could be evaluated because data is missing (today's, or every day loaded was
         # empty while others were not checked): retry later, never "no bet" / "no matches".
         # Missing data of today could have changed an unsuccessful answer (any of those matches
@@ -466,7 +466,8 @@ class QuickService:
                 continue
             fits = [k for k, p in probs.items()
                     if k in FAMILY and FAMILY[k] in ESTIMATE_FAMILIES and low <= p <= high
-                    and (criteria.market == "any" or FAMILY[k] == criteria.market)]
+                    and (criteria.market == "any" or FAMILY[k] == criteria.market)
+                    and not below_min_odds(book[k][0] if k in book else None)]
             if not fits:
                 continue
             market = max(fits, key=lambda k: (probs[k], -KEYS.index(k)))
@@ -480,6 +481,18 @@ class QuickService:
         if len(chosen) < criteria.size:
             return None
         return Estimate(tuple(chosen), len(best))
+
+    def _books(self, options: list[Option], events: dict[str, FootballEvent]) -> dict[str, dict[str, float]]:
+        """Checked bookmaker odds of the candidate matches (no request: what the odds store holds), so a market
+        priced below the minimum odds is never chosen."""
+        if self.odds is None:
+            return {}
+        books: dict[str, dict[str, float]] = {}
+        for option in options:
+            found = self.odds.lookup(events[option.event_id])
+            if found is not None:
+                books[option.event_id] = dict(found.book)
+        return books
 
     def _prices(self, result: QuickResult, events: dict[str, FootballEvent]) -> dict[str, tuple[MarketQuote, float, float]]:
         """The chosen legs' prices: no request, only what the bot has pushed (matched strictly)."""

@@ -593,3 +593,31 @@ def test_the_market_book_keeps_compare_unchanged(clock: FakeClock) -> None:
     for k, (price, fair, group_margin) in market_book(book).items():
         assert quotes[k].odds == price and quotes[k].market == fair and quotes[k].margin == group_margin
         assert view[k]["marketProbability"] == round(fair * 100, 1)
+
+
+def test_a_recommendation_the_bookmaker_prices_below_the_minimum_is_not_served(clock: FakeClock) -> None:
+    """Selection rule 6 at serve time: 1X at 1.22 (likely, pays next to nothing) turns into NO_BET; an alternative
+    priced so is dropped; with a price at or above 1.30 the pick stays (owner 18.11)."""
+    from miniapp.tests.forecast_fakes import fake_forecast
+    from miniapp.tests.test_ai_analysis import FakeForecaster, answer
+
+    model = FakeModel(answer("home_form", "home_rating", reasons=("home_better_form",)))
+    ai, _ = make_ai(clock, model, forecaster=FakeForecaster(fake_forecast("1X", alternatives=("12",))))
+    store = OddsStore(clock)
+    ai.odds = store
+    ingest(store, clock, line())                                   # dc_1x 1.22, dc_12 1.25
+    served = run(ai.analyse("fd:7", user_id=1))
+    assert served.pick.market == "NO_BET" and served.alternatives == ()
+    assert served.market is not None                              # the prices are still shown, without a pick
+
+
+def test_quick_never_chooses_a_market_priced_below_the_minimum() -> None:
+    from miniapp.forecast.quick import Criteria, choose
+    from miniapp.tests.test_quick import forecast, option
+
+    f = forecast(("1X", 0.74, 0.50), ("2", 0.58, 0.40))
+    criteria = Criteria("single", "any", "elevated", 1)
+    assert choose([option(1, f)], criteria).legs[0].candidate.market == "1X"
+    low = choose([option(1, f)], criteria, {"fd:1": {"1X": 1.18, "2": 1.9}})
+    assert low.legs[0].candidate.market == "2"                    # 1X priced at 1.18: the next suitable market
+    assert choose([option(1, f)], criteria, {"fd:1": {"1X": 1.18, "2": 1.2}}).status == "no_bet"

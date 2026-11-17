@@ -17,7 +17,11 @@ A market qualifies only when ALL of these hold:
    market that holds this probability has at least CAL_MIN_COUNT matches and
    |observed − predicted| ≤ CAL_MAX_GAP;
 5. the probability is stable: refits with half and double the time-decay half-life
-   move it by at most STABILITY_MAX.
+   move it by at most STABILITY_MAX;
+6. it is not a near-certainty: its fair odds 1/p are at least MIN_ODDS (probability at most
+   P_MAX). An outcome at 1.01–1.20 is likely but pays next to nothing (owner 18.11.2026:
+   "a balance between certainty and price"). Where a checked bookmaker price exists, the
+   serving layers drop a market priced below MIN_ODDS too (`below_min_odds`).
 
 Qualifying markets are ranked by the difference in (3); the first is the pick, up to
 three more from other market families are alternatives. Nothing qualifies → NO_BET.
@@ -38,6 +42,8 @@ DELTA_MIN = 0.08
 CAL_MIN_COUNT = 100
 CAL_MAX_GAP = 0.05
 STABILITY_MAX = 0.05
+MIN_ODDS = 1.30
+P_MAX = 1 / MIN_ODDS
 MAX_ALTERNATIVES = 3
 # The same event under another name: never offered as a separate selection.
 DUPLICATES = frozenset({"H1-0.5", "H2+0.5"})
@@ -91,6 +97,11 @@ def calibrated(table: CalibrationTable, market: str, p: float) -> bool:
     return False
 
 
+def below_min_odds(odds: float | None) -> bool:
+    """A checked bookmaker price under MIN_ODDS: never recommended (None: no price, the model's own bound holds)."""
+    return odds is not None and odds < MIN_ODDS
+
+
 def select(probs: Mapping[str, float], league_rates: Mapping[str, float], *, competition: str,
            home_matches: int, away_matches: int, sample: int, calibration: CalibrationTable,
            alternatives: Sequence[Mapping[str, float]], families: frozenset[str]) -> Selection:
@@ -104,7 +115,7 @@ def select(probs: Mapping[str, float], league_rates: Mapping[str, float], *, com
         if market in DUPLICATES or FAMILY[market] not in families:
             continue
         p, base = probs[market], league_rates[market]
-        if p < P_MIN or p - base < DELTA_MIN or not calibrated(calibration, market, p):
+        if p < P_MIN or p > P_MAX or p - base < DELTA_MIN or not calibrated(calibration, market, p):
             continue
         if any(abs(p - alt[market]) > STABILITY_MAX for alt in alternatives):
             continue

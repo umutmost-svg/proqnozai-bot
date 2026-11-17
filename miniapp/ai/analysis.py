@@ -39,6 +39,7 @@ from miniapp.forecast.data import results_from_events
 from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast, Unavailable
 from miniapp.forecast.history import ForecastHistory, ForecastRecord
 from miniapp.forecast.markets import FAMILY, KEYS as MARKET_KEYS
+from miniapp.forecast.selection import below_min_odds
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.odds.store import MatchOdds, OddsStore
 from miniapp.odds.value import book_json, compare, market_1x2_percent, market_book
@@ -693,6 +694,14 @@ class AiService:
         quotes = compare(found.book, forecast.exact)
         if not quotes:
             return result
+        # A recommendation the bookmaker prices below the minimum odds is never served (selection rule 6, owner
+        # 18.11): an alternative priced so is dropped, a pick priced so turns into NO_BET (its explanation was
+        # written for that pick, so no alternative is promoted in its place).
+        if result.pick.market != "NO_BET" and below_min_odds(found.book.get(result.pick.market)):
+            result = replace(result, pick=NO_BET, alternatives=())
+        elif result.alternatives:
+            result = replace(result, alternatives=tuple(a for a in result.alternatives
+                                                        if not below_min_odds(found.book.get(a["market"]))))
         market = {"fetchedAt": _iso_ts(found.fetched_at), "validFor": int(found.valid_for),
                   "quotes": [quotes[k].to_json(value=value_claimable(forecast, k)) for k in MARKET_KEYS if k in quotes]}
         if has_form:
