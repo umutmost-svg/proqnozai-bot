@@ -31,6 +31,7 @@ MAX_TEAMS = 10
 MAX_EVENTS = 30
 WARM_SPACING_S = 15.0  # between upstream calendar loads of the warm-up
 REFRESH_AFTER_S = 30 * 60.0  # an indexed calendar older than this is refreshed in the background
+REFUSED_RETRY_S = 6 * 3600.0  # a calendar the source refuses (400/404) is asked again only after this
 # With many competitions the warm-up adapts to the plan (search_pacing): it may use at most this share of
 # the per-minute and of the daily request budget, so users' own requests always keep the rest.
 WARM_MINUTE_SHARE = 0.25
@@ -258,6 +259,9 @@ class SearchIndex:
         self.warm_past_seasons = warm_past_seasons
         self._seasons: dict[str, tuple[float, list[FootballEvent]]] = {}
         self._warm: asyncio.Task | None = None
+        # A calendar the source refuses (400/404: e.g. a play-off not scheduled this season) is not asked again
+        # for REFUSED_RETRY_S: it was re-requested on every search pass (CRM audit B3, fd:BLREL every 5 min).
+        self._refused_until: dict[str, float] = {}
         self._name_cache: dict[tuple[str, str, str | None], list[str]] = {}  # (id, name, short) -> search keys
 
     def store(self, tournament_id: str, events: list, fetched_at: float) -> None:
@@ -278,7 +282,8 @@ class SearchIndex:
 
     def _due(self) -> list[str]:
         now = self._clock()
-        return [t for t in self._ids() if t not in self._seasons or now - self._seasons[t][0] > self.refresh_after_s]
+        return [t for t in self._ids() if (t not in self._seasons or now - self._seasons[t][0] > self.refresh_after_s)
+                and self._refused_until.get(t, 0) <= now]
 
     @property
     def warming(self) -> bool:
@@ -300,6 +305,8 @@ class SearchIndex:
                     await self._load(tournament_id)
                 except UpstreamError as exc:
                     logger.info("search.warm_skipped tournament=%s code=%s", tournament_id, exc.code)
+                    if exc.status in (400, 404):  # refused, not a passing failure: asked again much later
+                        self._refused_until[tournament_id] = self._clock() + max(self.refresh_after_s, REFUSED_RETRY_S)
                     if exc.low_priority_only:
                         break  # the background budget is spent: the next search starts a new pass
                 except Exception as exc:  # optional background work: log and go on

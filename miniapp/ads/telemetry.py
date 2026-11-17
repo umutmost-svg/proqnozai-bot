@@ -20,7 +20,6 @@ SCHEMA_VERSION = 1
 DAY = 86400
 EVENTS_RETENTION_DAYS = 90
 ACTIVITY_RETENTION_DAYS = 400
-CLICK_DEDUP_S = 10
 ACTIVITY_FIELDS = ("requests", "ai_opened", "ai_created", "quick_single_ok", "quick_coupon_ok", "quick_failed")
 
 _SCHEMA = """
@@ -196,11 +195,13 @@ class Telemetry:
 
     def click(self, user_id: int, campaign_id: int, variant: str, placement: str, event_key: str,
               country: str | None, now: int) -> bool:
-        """A click; repeated taps on the same offer within CLICK_DEDUP_S count once."""
+        """A click; the same offer (user, campaign, variant, match) counts once per UTC day. A signed click link lives
+        two days and could be replayed without limit (CRM audit B3: ~8,600 counted clicks a day from one user); every
+        tap still opens the partner."""
         with self._write() as conn:
             recent = conn.execute(
                 "SELECT 1 FROM ad_events WHERE user_id = ? AND kind = 'click' AND campaign_id = ? AND variant = ? "
-                "AND event_key = ? AND at > ?", (user_id, campaign_id, variant, event_key, now - CLICK_DEDUP_S)).fetchone()
+                "AND event_key = ? AND day = ?", (user_id, campaign_id, variant, event_key, day_of(now))).fetchone()
             if recent is not None:
                 return False
             conn.execute(

@@ -66,7 +66,7 @@ function ValueTab() {
             <Metric label="Прогнозов на пользователя" value={num(bot.value.forecastsPerUser, 1)} caption={`за всё время, на зарегистрированного (${num(bot.value.users)})`}
               hint="Все прогнозы бота за всё время, делённые на число зарегистрированных пользователей." />
             <Metric label="Кликов на пользователя" value={num(bot.value.clicksPerUser, 2)} caption={`дошли до партнёра ${bot.value.clickConversion}% людей`}
-              hint="Переходы по партнёрским ссылкам, делённые на число зарегистрированных. Процент — доля людей, перешедших хотя бы раз." />
+              hint="Переходы по партнёрским ссылкам (не больше одного в день на человека и партнёра), делённые на число зарегистрированных. Процент — доля людей, перешедших хотя бы раз." />
             <Metric label="Взяли промокод" value={`${bot.value.promoConversion}%`} caption="от зарегистрированных"
               hint="Доля зарегистрированных пользователей, получивших хотя бы один промокод." />
             <Metric label="Доход на пользователя" value={bot.value.cpa && bot.value.revenuePerUser !== null ? num(bot.value.revenuePerUser, 2) : '—'}

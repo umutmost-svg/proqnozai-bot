@@ -51,9 +51,15 @@ def link_url(channel: str, code: str, bot_username: str | None, app_name: str | 
 
 
 def source_of(user_id: int, bot_starts: dict[int, dict], app_starts: dict[int, dict],
-              links: dict[str, dict]) -> dict | None:
-    """The user's acquisition source: the earlier of the bot and Mini App first starts with a referral code."""
-    seen = [(s["at"], "bot", s["code"]) for s in [bot_starts.get(user_id)] if s]
+              links: dict[str, dict], app_created: dict[int, int] | None = None) -> dict | None:
+    """The user's acquisition source: the earlier of the bot and Mini App first starts with a referral code. A bot
+    start of someone who already had a Mini App account is not an acquisition (CRM audit B3: a link posted to the
+    existing audience counted them as new); `app_created`: Mini App account creation times."""
+    bot = bot_starts.get(user_id)
+    created = (app_created or {}).get(user_id)
+    if bot and created is not None and created < bot["at"]:
+        bot = None
+    seen = [(s["at"], "bot", s["code"]) for s in [bot] if s]
     seen += [(s["at"], "miniapp", s["code"]) for s in [app_starts.get(user_id)] if s]
     if not seen:
         return None

@@ -281,6 +281,10 @@ def parse(raw: bytes, public_key: Ed25519PublicKey) -> Policy:
         raise PolicyError("bad_json") from None
     if not isinstance(data, dict) or data.get("schema") != SCHEMA:
         raise PolicyError("bad_schema")
+    # Domain separation from the access policy signed with the same key (kind "access"): an ads snapshot says
+    # "ads"; one published before the field existed has none (CRM audit B3).
+    if data.get("kind", "ads") != "ads":
+        raise PolicyError("bad_schema")
     content = canonical(_body(data))
     sha, signature = data.get("sha256"), data.get("signature")
     if not isinstance(sha, str) or hashlib.sha256(content).hexdigest() != sha:

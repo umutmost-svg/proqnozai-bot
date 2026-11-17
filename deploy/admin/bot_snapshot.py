@@ -28,7 +28,10 @@ def one(sql: str, args: tuple = ()) -> float:
 
 users = int(one("SELECT COUNT(*) FROM users WHERE is_registered=1"))
 forecasts = int(one("SELECT COUNT(*) FROM requests WHERE msg_type='FORECAST'"))
-clicks = int(one("SELECT COUNT(*) FROM partner_clicks"))
+# A user's signed /r/ link can be replayed without limit (partner_links.py): one click per user, partner and day
+# counts, so the revenue estimate (clicks x CPA) cannot be inflated by one person (CRM audit B3).
+UNIQUE_CLICKS = "SELECT COUNT(*) FROM (SELECT DISTINCT user_id, partner, date(created_at) FROM partner_clicks{where})"
+clicks = int(one(UNIQUE_CLICKS.format(where="")))
 clickers = int(one("SELECT COUNT(DISTINCT user_id) FROM partner_clicks"))
 lifespan = one("SELECT AVG(julianday(last_active) - julianday(joined_at)) FROM users WHERE is_registered=1 "
                "AND last_active != '' AND julianday(last_active) - julianday(joined_at) >= 1")
@@ -44,7 +47,7 @@ for uid, name, username, total, last_active, joined in conn.execute(
         "SELECT user_id, display_name, username, total_requests, last_active, joined_at FROM users "
         "WHERE is_registered=1 ORDER BY total_requests DESC, user_id LIMIT ?", (TOP,)):  # as the bot dashboard
     uf = int(one("SELECT COUNT(*) FROM requests WHERE user_id=? AND msg_type='FORECAST'", (uid,)))
-    uc = int(one("SELECT COUNT(*) FROM partner_clicks WHERE user_id=?", (uid,)))
+    uc = int(one(UNIQUE_CLICKS.format(where=" WHERE user_id=?"), (uid,)))
     promo = bool(one("SELECT COUNT(*) FROM promo_claims WHERE user_id=?", (uid,)))
     top.append({"userId": int(uid), "name": (name or "")[:64], "username": (username or "")[:64],
                 "requests": int(total or 0), "forecasts": uf, "clicks": uc, "promo": promo,

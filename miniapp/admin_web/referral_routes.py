@@ -38,7 +38,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
         bot = bot_file.starts(user_ids, strict=strict)
         app_starts = {uid: a for uid, a in store.attributions(strict=strict).items() if uid in wanted}
         links = referrals.by_code()
-        return {uid: source_of(uid, bot, app_starts, links) for uid in user_ids}
+        created = {u["id"]: u["createdAt"] for u in store.users_by_ids(sorted(set(bot) & wanted), ctx.now())}
+        return {uid: source_of(uid, bot, app_starts, links, created) for uid in user_ids}
 
     def own_codes(request: Request) -> set[str] | None:
         """A promotion manager sees only the links they created (owner 16.11); None = every link."""
@@ -53,12 +54,13 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
         app_starts = store.attributions()
         links = referrals.by_code()
         users = set(bot) | set(app_starts)
+        known = {u["id"]: u for u in store.users_by_ids(sorted(users), t)} if users else {}
+        created = {uid: u["createdAt"] for uid, u in known.items()}
         by_code: dict[str, set[int]] = {}
         for uid in users:
-            src = source_of(uid, bot, app_starts, links)
+            src = source_of(uid, bot, app_starts, links, created)
             if src is not None:
                 by_code.setdefault(src["code"], set()).add(uid)
-        known = {u["id"]: u for u in store.users_by_ids(sorted(users), t)} if users else {}
         # A telemetry file that exists but cannot be read: conversion unknown (None), never a measured zero.
         try:
             collected = insights.available(strict=True)
@@ -73,7 +75,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> SimpleNamespace:
             in_app = [uid for uid in ids if uid in known]
             out[code] = {
                 "starts": len(ids),
-                "botStarts": sum(1 for uid in ids if uid in bot and bot[uid]["code"] == code),
+                "botStarts": sum(1 for uid in ids if uid in bot and bot[uid]["code"] == code
+                                 and not (created.get(uid) is not None and created[uid] < bot[uid]["at"])),
                 "miniappStarts": sum(1 for uid in ids if uid in app_starts and app_starts[uid]["code"] == code),
                 "inMiniApp": len(in_app),
                 "active7d": sum(1 for uid in in_app if seen[uid] >= t - 7 * DAY),

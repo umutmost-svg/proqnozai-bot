@@ -47,9 +47,10 @@ def test_create_archive_and_funnel(env):
     auto = post(client, "/api/admin/referrals", csrf, {"name": "Авто", "channel": "miniapp"}).json()
     assert len(auto["code"]) == 8
     now = int(clock())
-    _bot_start(config, U1, "insta01", now - 100)       # bot start, also a Mini App user (demo set)
-    _bot_start(config, 55, "insta01", now - 100)       # bot-only user: a start, nothing else
-    _bot_start(config, U2, "ghost99", now - 100)       # a code with no link: shown as unknown
+    # Bot starts BEFORE the users' Mini App accounts existed (a start after the account would not be an acquisition).
+    _bot_start(config, U1, "insta01", 1)               # bot start, later also a Mini App user (demo set)
+    _bot_start(config, 55, "insta01", 1)               # bot-only user: a start, nothing else
+    _bot_start(config, U2, "ghost99", 1)               # a code with no link: shown as unknown
     Store(config.miniapp_db).upsert_user(TelegramUser(66, "N", None, None, "ru"), now - 50, auto["code"])
     t = Telemetry(config.telemetry_db)
     t.init_schema()
@@ -131,3 +132,18 @@ def test_links_carry_platform_geo_pid_and_are_summarised(env):
     assert by_platform == {"tiktok": (2, 3), "—": (1, 1)}
     assert {g["value"]: g["starts"] for g in page["breakdown"]["geo"]} == {"AZ": 2, "TR": 1, "—": 1}
     assert {g["value"]: g["starts"] for g in page["breakdown"]["pid"]} == {"p-1": 2, "—": 2}
+
+
+def test_a_bot_start_of_an_existing_mini_app_user_is_not_an_acquisition(env):
+    """CRM audit B3: a link posted to the existing audience counted Mini App users who then started the bot as new."""
+    config, clock, client, _, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    link = post(client, "/api/admin/referrals", csrf, {"name": "Пост", "channel": "bot", "code": "post01"}).json()
+    now = int(clock())
+    Store(config.miniapp_db).upsert_user(TelegramUser(81, "A", None, None, "ru"), now - 500)  # in the Mini App first
+    _bot_start(config, 81, "post01", now - 100)
+    _bot_start(config, 82, "post01", now - 100)                                                 # new through the link
+    Store(config.miniapp_db).upsert_user(TelegramUser(82, "B", None, None, "ru"), now - 50)
+    stats = next(i for i in client.get("/api/admin/referrals").json()["items"] if i["id"] == link["id"])["stats"]
+    assert (stats["starts"], stats["botStarts"], stats["inMiniApp"]) == (1, 1, 1)
+    assert client.get("/api/admin/users/81").json()["source"] is None

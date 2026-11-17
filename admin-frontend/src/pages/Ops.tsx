@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type AdminAccount, type OutboxPage, type ProductPage, type RolesPage } from '../api';
+import { api, JOB_ERROR, type AdminAccount, type OutboxPage, type ProductPage, type RolesPage } from '../api';
 import { num, pct, localTime } from '../format';
 import { useLoad, useMe, usePrefs } from '../state';
 import { Card, DangerDialog, Empty, ErrorBox, Loading, Metric, Metrics, PageHead, PeriodSelect, pagePeriod, Status, Tag, Toast } from '../ui';
@@ -26,6 +26,11 @@ export function Outbox() {
       {error ? <ErrorBox error={error} onRetry={reload} /> : loading && !data ? <Loading rows={6} /> : data && s && (
         <>
           {!s.connected && <p className="small muted">Файл очереди ещё не создан: ни одного задания не было.</p>}
+          {s.pausedUntil && (
+            <div className="banner warn" role="status" style={{ marginBottom: 14 }}>
+              Отправка на паузе до {localTime(s.pausedUntil)}: лимит Telegram или нет связи. Бот продолжит сам, ничего делать не нужно.
+            </div>
+          )}
           <Metrics>
             <Metric label="В очереди" value={num(s.byStatus.queued ?? 0)} caption={s.nextDueAt ? `ближайшее: ${localTime(s.nextDueAt)}` : 'нет ожидающих'} />
             <Metric label="Отправлено" value={num(s.byStatus.sent ?? 0)} caption={`за 24 ч: ${num(s.last24h.sent ?? 0)} · последнее ${localTime(s.lastSentAt)}`} />
@@ -49,7 +54,7 @@ export function Outbox() {
           {data.items.length === 0 ? <Empty title="Заданий нет" /> : (
             <div className="table-card">
               <table className="table">
-                <thead><tr><th>Создано</th><th>Тип</th><th>Получатель</th><th>Статус</th><th className="num">Попыток</th><th>Код ошибки</th><th>Отправлено</th></tr></thead>
+                <thead><tr><th>Создано</th><th>Тип</th><th>Получатель</th><th>Статус</th><th className="num">Попыток</th><th>Причина</th><th>Отправлено</th></tr></thead>
                 <tbody>{data.items.map((j) => (
                   <tr key={j.key}>
                     <td>{localTime(j.createdAt)}{j.notBefore > j.createdAt && <span className="sub">не раньше {localTime(j.notBefore)}</span>}</td>
@@ -57,7 +62,7 @@ export function Outbox() {
                     <td><Link to={`/users/${j.userId}`} className="mono">{j.userId}</Link></td>
                     <td><Status value={j.status} label={JOB_STATUS[j.status] ?? j.status} /></td>
                     <td className="num">{j.attempts}</td>
-                    <td className="mono">{j.error ?? '—'}</td>
+                    <td>{j.error ? <span title={j.error}>{JOB_ERROR[j.error] ?? j.error}</span> : '—'}</td>
                     <td>{localTime(j.sentAt)}</td>
                   </tr>
                 ))}</tbody>

@@ -524,7 +524,7 @@ class AdsStore:
             included.append(c["id"])
         if sum(len(v) for v in audiences.values()) > policy.MAX_AUDIENCE_IDS:
             raise ActionError("snapshot_too_large", 409)
-        body = {"schema": policy.SCHEMA, "version": version, "generatedAt": now, "campaigns": campaigns,
+        body = {"schema": policy.SCHEMA, "kind": "ads", "version": version, "generatedAt": now, "campaigns": campaigns,
                 "audiences": {k: sorted(v) for k, v in sorted(audiences.items())}}
         if len(campaigns) > policy.MAX_CAMPAIGNS:
             raise ActionError("too_many_campaigns", 409)

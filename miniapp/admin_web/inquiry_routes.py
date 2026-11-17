@@ -127,7 +127,8 @@ def register(app: FastAPI, ctx: SimpleNamespace, crm: CrmStore, outbox_status) -
         delivered = outbox_status([f"msg:{m['id']}" for m in info["messages"]])
         history = [{"from": "user", "at": m["at"], "text": m["text"], "id": f"in:{m['id']}"} for m in inbound]
         history += [{"from": "admin", "at": m["at"], "text": m["body"], "by": m["by"], "id": f"out:{m['id']}",
-                     "status": (delivered.get(f"msg:{m['id']}") or {}).get("status", m["status"])}
+                     "status": (delivered.get(f"msg:{m['id']}") or {}).get("status", m["status"]),
+                     "error": (delivered.get(f"msg:{m['id']}") or {}).get("error")}
                     for m in info["messages"]]
         history.sort(key=lambda h: (h["at"], h["id"]))
         with accounts._write() as conn:  # who read whose messages: ids only, never the text

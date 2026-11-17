@@ -209,7 +209,8 @@ class Outbox:
         """Jobs by status (all; and outcomes of the last 24 h by when they happened: sent by sent_at, failed by the
         last attempt, expired by expiry, the others by creation), the next due time and the last send."""
         if not self.path.exists():
-            return {"connected": False, "byStatus": {}, "last24h": {}, "nextDueAt": None, "lastSentAt": None}
+            return {"connected": False, "byStatus": {}, "last24h": {}, "nextDueAt": None, "lastSentAt": None,
+                    "pausedUntil": None}
         with self._connect() as conn:
             by_status = dict(conn.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall())
             # Failures by their last attempt (claimed_at), expiry by expires_at; cancellations have no own
@@ -224,7 +225,16 @@ class Outbox:
                                     "WHERE status = 'queued' AND COALESCE(retry_at, 0) != ?", (HOLD,)).fetchone()[0]
             last_sent = conn.execute("SELECT MAX(sent_at) FROM jobs WHERE status = 'sent'").fetchone()[0]
         return {"connected": True, "byStatus": by_status, "last24h": recent, "nextDueAt": next_due,
-                "lastSentAt": last_sent}
+                "lastSentAt": last_sent, "pausedUntil": self.paused_until(now)}
+
+    def paused_until(self, now: int) -> int | None:
+        """The bot's pause (flood limit or network outage) from its own file next to the queue (bot_outbox.py), or None
+        when not paused now. The admin only reads it (CRM audit B3: overdue jobs showed no reason)."""
+        try:
+            until = int(self.path.with_name(self.path.name + ".pause").read_text().strip() or 0)
+        except (OSError, ValueError):
+            return None
+        return until if until > now else None
 
     def recent(self, limit: int = 100, status: str | None = None) -> list[dict]:
         """Newest jobs without their text: kind (message / broadcast), recipient, status, attempts, times."""

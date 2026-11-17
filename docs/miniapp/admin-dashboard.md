@@ -537,3 +537,29 @@ env-список (вход и каждая сессия). Данные поль�
   broadcasts, segments, credits, inquiries, referrals, ads and failures.
 - **Phones**: below 860 px the sidebar becomes a top bar with a scrolling menu, columns stack, tables scroll sideways,
   dialogs fit the screen.
+
+## CRM audit fixes (17.11.2026, part B3: inflation, bot details, hardening)
+
+- **Referral attribution**: a bot start with a referral code from someone who already had a Mini App account is not an
+  acquisition (a link posted to the existing audience counted them as new). Known limit: a Mini App start of someone
+  who used the bot earlier WITHOUT a code is still counted (the admin has no record of plain bot starts).
+- **Ad clicks**: the same offer (user, campaign, variant, match) is counted once per UTC day (a signed click link lives
+  two days and could be replayed); every tap still opens the partner.
+- **Bot partner clicks** (`/r/` links, value page and the revenue estimate): one per user, partner and day.
+- **Outbox**: a connection to Telegram that never opened (connect error or timeout, pool timeout) is `not_sent` and
+  retried after the network pause without using an attempt; `unknown_outcome` stays for failures after the request may
+  have reached Telegram. The queue page shows the bot's pause, and failure reasons are written out («исход неизвестен …
+  не отправляйте повторно вручную», «нет связи — бот повторит сам», …), also in inquiry replies.
+- **Inquiries**: photos, voice and video messages, audio and files are kept as a label plus the caption
+  («[фото] не открывается»); the file stays in Telegram. A `bot-crm.db` the bot creates goes to its directory's owner at
+  once (it was root-owned until the Mini App's next start). The admin's purge reads the retention strictly: a busy file
+  no longer falls back to the 90-day default.
+- **Search warm-up**: a calendar the source refuses (400/404, e.g. a play-off not scheduled this season) is asked again
+  only after 6 hours (fd:BLREL was requested every pass).
+- **Hardening**: the hourly bot snapshot is staged in a root-only directory and placed through file descriptors
+  (O_NOFOLLOW, fchown, rename inside the directory): a symlink planted in the admin's volume can no longer make root
+  overwrite a host file. Ads snapshots carry `kind: "ads"` (refused when another kind; older ones without it accepted),
+  separating them from access snapshots signed with the same key.
+- **Accepted, documented**: the policy version floor (`*.applied` marks) lives on the Mini App's data volume; replaying
+  an older signed snapshot needs write access to that volume and a Mini App restart. A signed expiry with periodic
+  re-signing would close it; not done now.

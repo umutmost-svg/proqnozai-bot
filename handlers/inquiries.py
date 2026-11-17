@@ -27,13 +27,29 @@ _notice_lock = asyncio.Lock()
 ACTIVE_SINCE = time.time()
 
 
+# A media message is kept as a label and its caption: the file itself stays in Telegram (the team opens the chat).
+_MEDIA = (("photo", "[фото]"), ("voice", "[голосовое]"), ("video_note", "[видеосообщение]"), ("video", "[видео]"),
+          ("audio", "[аудио]"), ("document", "[файл]"))
+
+
+def inquiry_text(msg) -> str:
+    """What is stored for one message: its text, or a media label plus the caption (CRM audit B3)."""
+    if msg.text:
+        return msg.text.strip()
+    label = next((name for attr, name in _MEDIA if getattr(msg, attr, None)), None)
+    if label is None:
+        return ""
+    caption = (msg.caption or "").strip()
+    return f"{label} {caption}".strip()
+
+
 async def inquiry_hook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
     chat = update.effective_chat
     if not bot_crm.BOT_INQUIRIES_ENABLED or msg is None or chat is None or chat.type != "private":
         return
     uid = update.effective_user.id
-    text = (msg.text or "").strip()
+    text = inquiry_text(msg)
     if uid == ADMIN_ID or not text or text.startswith("/") or text in _MENU:
         return
     sent_at = msg.date.timestamp() if getattr(msg, "date", None) is not None else 0.0

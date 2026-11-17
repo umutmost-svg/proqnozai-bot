@@ -37,7 +37,7 @@ afterEach(() => vi.unstubAllGlobals());
 it('shows the queue with statuses, error codes and limits', async () => {
   window.history.pushState({}, '', '/outbox');
   render(<App />);
-  expect(await screen.findByText('blocked_by_user')).toBeInTheDocument();
+  expect(await screen.findByText('пользователь заблокировал бота или не запускал его')).toHaveAttribute('title', 'blocked_by_user');
   expect(screen.getByText('Личное сообщение')).toBeInTheDocument();
   expect(screen.getByText('25')).toBeInTheDocument();
 });

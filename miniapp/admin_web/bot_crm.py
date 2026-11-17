@@ -171,8 +171,8 @@ class BotCrmFile:
         rows = self._read("SELECT at FROM inquiry_notices WHERE user_id = ?", (user_id,))
         return int(rows[0][0]) if rows else None
 
-    def retention_days(self) -> int:
-        rows = self._read("SELECT value FROM config WHERE key = 'retention_days'")
+    def retention_days(self, strict: bool = False) -> int:
+        rows = self._read("SELECT value FROM config WHERE key = 'retention_days'", strict=strict)
         return clamp_retention(rows[0][0]) if rows else DEFAULT_RETENTION_DAYS
 
     def apply_retention(self, days: int, now: int) -> int:
@@ -196,7 +196,9 @@ class BotCrmFile:
         """Deletes inquiries past the retention (admin side: runs even while the bot is down). Raises on failure."""
         if not self.exists():
             return 0
-        days = self.retention_days()
+        # Strict: a busy or unreadable file raises instead of falling back to the 90-day default, which would delete
+        # inquiries a longer owner setting still keeps (CRM audit B3).
+        days = self.retention_days(strict=True)
         with self._connect() as conn:
             if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'inquiries'").fetchone() is None:
                 return 0

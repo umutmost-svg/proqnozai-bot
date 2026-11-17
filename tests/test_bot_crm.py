@@ -250,3 +250,30 @@ def test_inquiries_are_capped_per_user(tmp_path):
     crm.record_inquiry(7, "an hour later", t + 3601)
     with sqlite3.connect(tmp_path / "bot-crm.db") as conn:
         assert conn.execute("SELECT COUNT(*) FROM inquiries WHERE user_id = 7").fetchone()[0] == bot_crm.INQUIRIES_PER_HOUR + 1
+
+
+def test_media_inquiries_are_kept_as_a_label_and_caption(temp_db, tmp_path, monkeypatch):
+    """CRM audit B3: a screenshot or a voice message sent to support left no trace."""
+    from handlers.inquiries import inquiry_hook, inquiry_text
+    monkeypatch.setattr(bot_crm, "_instance", None)
+    monkeypatch.setattr(bot_crm, "BOT_CRM_DB", str(tmp_path / "bot-crm.db"))
+    monkeypatch.setattr(bot_crm, "BOT_INQUIRIES_ENABLED", True)
+    photo = _msg_update(904, None)
+    photo.message.photo, photo.message.caption = [object()], "  не открывается  "
+    voice = _msg_update(904, None)
+    voice.message.voice, voice.message.caption = object(), None
+    sticker = _msg_update(904, None)  # neither text nor a kept media type: nothing stored
+    sticker.message.caption = None
+    for update in (photo, voice, sticker):
+        asyncio.run(inquiry_hook(update, None))
+    assert _stored(tmp_path / "bot-crm.db") == [(904, "[фото] не открывается"), (904, "[голосовое]")]
+    assert inquiry_text(SimpleNamespace(text=" hi ")) == "hi"
+
+
+def test_a_new_bot_crm_file_goes_to_the_directory_owner(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(bot_crm.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(bot_crm.os, "fchown", lambda fd, u, g: calls.append((isinstance(fd, int), u, g)))
+    st = (tmp_path).stat()
+    bot_crm.secure_file(tmp_path / "bot-crm.db")
+    assert calls == [(True, st.st_uid, st.st_gid)]  # by descriptor, never by name

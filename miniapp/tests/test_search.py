@@ -373,3 +373,30 @@ def test_names_are_keyed_once_and_the_fuzzy_pass_runs_only_with_room(clock: Fake
                                    for i in range(12)]})
     assert len(many.search("barca").teams) == search_module.MAX_TEAMS
     assert closes == []                      # enough substring hits: no near-spelling pass at all
+
+
+def test_a_refused_calendar_is_not_asked_again_until_the_back_off_ends(clock: FakeClock) -> None:
+    """CRM audit B3: a play-off the source refuses (400) was re-requested on every search pass."""
+    loads = []
+
+    async def load(tid):
+        loads.append(tid)
+        if tid == "fd:BLREL":
+            raise UpstreamError("upstream_error", status=400)
+        if tid == "fd:PL" and loads.count("fd:PL") == 1:
+            raise UpstreamError("upstream_error", status=503)  # a passing failure: tried again on the next pass
+        idx.store(tid, [], clock.now)
+
+    idx = SearchIndex(load, lambda: ["fd:BLREL", "fd:PL"], clock, sleep=no_sleep)
+
+    async def warm():
+        task = idx.ensure_warm()
+        if task is not None:
+            await task
+
+    run(warm())
+    run(warm())
+    assert loads == ["fd:BLREL", "fd:PL", "fd:PL"]
+    clock.advance(search_module.REFUSED_RETRY_S + 1)
+    run(warm())
+    assert loads[-2:] == ["fd:BLREL", "fd:PL"]

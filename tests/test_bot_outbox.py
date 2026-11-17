@@ -387,3 +387,33 @@ async def test_a_broadcast_is_claimed_with_its_parse_mode(tmp_path):
         return Outcome("sent", message_id=1)
     await bot.run_once(send, lambda: NOW)
     assert modes == {61: "HTML", 62: None}
+
+
+async def test_a_connection_that_never_opened_is_retried_without_using_attempts(tmp_path):
+    """CRM audit B3: nothing reached Telegram (connect error / timeout), so the job is retried after the pause and
+    keeps its attempts; the admin sees the pause."""
+    import httpx
+    from telegram.error import NetworkError, TimedOut
+
+    admin, bot = setup(tmp_path)
+    admin.enqueue([("msg:1", 11, "x", [])], batch_id=None, not_before=NOW, admin_event_id=None, now=NOW)
+    errors = [NetworkError("httpx.ConnectError"), TimedOut("connect"), NetworkError("httpx.ConnectError"),
+              NetworkError("httpx.ConnectError")]
+    causes = [httpx.ConnectError("down"), httpx.ConnectTimeout("slow"), httpx.PoolTimeout("pool"),
+              httpx.ConnectError("down")]
+    for err, cause in zip(errors, causes):
+        err.__cause__ = cause
+    t = [NOW]
+
+    async def send(job):
+        if errors:
+            raise errors.pop(0)
+        return Outcome("sent")
+
+    for _ in range(4):  # more outages than MAX_ATTEMPTS
+        assert await bot.run_once(send, lambda: t[0]) == {"retry": 1}
+        assert admin.summary(t[0])["pausedUntil"] == bot.paused_until
+        t[0] = bot.paused_until
+    assert await bot.run_once(send, lambda: t[0]) == {"sent": 1}
+    assert statuses(tmp_path) == {"msg:1": ("sent", None)}
+    assert admin.summary(t[0] + 1)["pausedUntil"] is None

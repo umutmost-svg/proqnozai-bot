@@ -42,12 +42,18 @@ async def support_handler(update, context):
     raise ApplicationHandlerStop
 
 
+# Texts and media a user may send to support (CRM audit B3: screenshots and voice messages left no trace).
+INQUIRY_FILTER = filters.ChatType.PRIVATE & ~filters.COMMAND & (
+    filters.TEXT | filters.PHOTO | filters.VOICE | filters.VIDEO | filters.VIDEO_NOTE | filters.AUDIO
+    | filters.Document.ALL)
+
+
 def register_launcher(app):
     """Launcher mode: inquiries, admin tools, then "open the app" for everything else (callback_data of old buttons
     still answered, so no client spinner is left turning)."""
     from handlers.launcher import launcher_callback, launcher_message, launcher_start
     if bot_crm.BOT_INQUIRIES_ENABLED:
-        app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, inquiry_hook),
+        app.add_handler(MessageHandler(INQUIRY_FILTER, inquiry_hook),
                         group=-1)
     app.add_handler(CommandHandler("start", launcher_start))
     # /testapi is left out: it calls the sports and odds APIs, which the launcher no longer reads.
@@ -73,7 +79,7 @@ def register_handlers(app):
         return
     if bot_crm.BOT_INQUIRIES_ENABLED:
         # Group -1 runs before every other handler and never stops them (admin inquiries, flag off by default).
-        app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, inquiry_hook),
+        app.add_handler(MessageHandler(INQUIRY_FILTER, inquiry_hook),
                         group=-1)
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("lang",    lang_cmd))

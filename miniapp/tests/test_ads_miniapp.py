@@ -153,7 +153,10 @@ def test_click_returns_the_current_link_and_is_deduplicated(tmp_path):
     env.clock.advance(5)
     assert post(c, "/api/ads/click", csrf, {"impressionToken": token}).status_code == 200
     assert len(env.rows("click")) == 1
-    env.clock.advance(11)
+    env.clock.advance(11)  # a replay later the same UTC day opens the link but is not counted (CRM audit B3)
+    assert post(c, "/api/ads/click", csrf, {"impressionToken": token}).json() == {"url": "https://p.example.com/promo"}
+    assert len(env.rows("click")) == 1
+    env.clock.advance(DAY - int(env.clock()) % DAY)  # the next UTC day: counted again
     post(c, "/api/ads/click", csrf, {"impressionToken": token})
     assert len(env.rows("click")) == 2
     # The link changes for everyone with the next snapshot; a removed campaign is gone at once.

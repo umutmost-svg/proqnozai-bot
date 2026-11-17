@@ -8,7 +8,8 @@ Rules: a job is claimed atomically (queued -> sending) right before it is sent, 
 its outcome, so two bot instances never send it twice. Delivery is AT MOST ONCE: a job left in `sending` past
 STUCK_S (the bot died mid-send, Telegram's outcome unknown) is marked `failed/interrupted`, never re-sent;
 only Telegram's explicit "retry after" (the message was refused, not sent) is retried, up to MAX_ATTEMPTS;
-a timeout or network error is `failed/unknown_outcome`. Either one PAUSES the whole outbox (Fable audit 16.11): a
+a timeout or network error once the request may have reached Telegram is `failed/unknown_outcome`; a connection that
+never opened (`not_sent`: nothing reached Telegram, CRM audit B3) is retried without using an attempt. Each PAUSES the whole outbox (Fable audit 16.11): a
 "retry after" for the time Telegram names (the flood limit is per bot, so every other job would be refused too, and
 that retry does not use up an attempt — the job's expiry bounds it), a network error for NETWORK_PAUSE_S doubling up
 to NETWORK_PAUSE_MAX_S while it lasts, so an outage costs one job its delivery, never the whole batch. Expired jobs
@@ -50,6 +51,7 @@ STUCK_S = 600
 MAX_ATTEMPTS = 3
 BATCH = 25  # per run: below Telegram's ~30 messages/s; the caller runs it about once a second
 NETWORK_PAUSE_S = 30
+NOTHING_SENT = ("rate_limited", "not_sent")  # refused or never connected: retried without using an attempt
 NETWORK_PAUSE_MAX_S = 300
 TEXT_RETENTION_DAYS = 30
 ROW_RETENTION_DAYS = 400
@@ -139,6 +141,16 @@ class Outcome:
     message_id: int | None = None
 
 
+def _never_connected(exc: BaseException) -> bool:
+    """True when python-telegram-bot's network error comes from httpx failing BEFORE the request was written."""
+    try:
+        import httpx
+    except ImportError:  # pragma: no cover — httpx ships with python-telegram-bot
+        return False
+    cause = exc.__cause__
+    return isinstance(cause, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
+
+
 def classify(exc: BaseException) -> Outcome:
     """python-telegram-bot errors -> outcome codes (codes only: the error text may echo user data)."""
     from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
@@ -152,6 +164,10 @@ def classify(exc: BaseException) -> Outcome:
     if isinstance(exc, BadRequest):
         return Outcome("failed", "bad_request")
     if isinstance(exc, (TimedOut, NetworkError)):
+        if _never_connected(exc):
+            # The connection to Telegram never opened (DNS, refused, connect or pool timeout): nothing was sent, so a
+            # retry cannot duplicate it (CRM audit B3: an outage used to fail one job per pause cycle for nothing).
+            return Outcome("retry", "not_sent")
         # Telegram may have accepted the message before the answer was lost: unknown, so never re-sent.
         return Outcome("failed", "unknown_outcome")
     return Outcome("failed", "error")
@@ -250,10 +266,11 @@ class BotOutbox:
             if outcome.kind == "sent":
                 cur = conn.execute(f"UPDATE jobs SET status = 'sent', sent_at = ?, message_id = ?, last_error_code = NULL, "
                                    f"claim_token = NULL {fence}", (now, outcome.message_id, job.id, job.token))
-            elif outcome.kind == "retry" and (outcome.code == "rate_limited" or job.attempts < MAX_ATTEMPTS):
+            elif outcome.kind == "retry" and (outcome.code in NOTHING_SENT or job.attempts < MAX_ATTEMPTS):
                 # A batch cancelled while this job was being sent: never queued again. A flood limit refused the
-                # message (nothing was sent) and pauses the whole outbox: it gives its attempt back.
-                given_back = 1 if outcome.code == "rate_limited" else 0
+                # message, or the connection never opened (nothing was sent either way), and the whole outbox
+                # pauses: it gives its attempt back (the job's expiry bounds the retries).
+                given_back = 1 if outcome.code in NOTHING_SENT else 0
                 cur = conn.execute(f"UPDATE jobs SET status = CASE WHEN batch_id IN (SELECT batch_id FROM "
                                    f"cancelled_batches) THEN 'cancelled' ELSE 'queued' END, retry_at = ?, "
                                    f"attempts = attempts - ?, last_error_code = ?, claim_token = NULL {fence}",
@@ -282,10 +299,10 @@ class BotOutbox:
                     outcome = await send(job)
                 except Exception as exc:  # noqa: BLE001 — classified by type, never logged with its text
                     outcome = classify(exc)
-            stop = outcome.code in ("rate_limited", "unknown_outcome")
+            stop = outcome.code in ("rate_limited", "unknown_outcome", "not_sent")
             if outcome.code == "rate_limited":
                 self._pause(now() + max(1, outcome.retry_after))
-            elif outcome.code == "unknown_outcome":
+            elif outcome.code in ("unknown_outcome", "not_sent"):
                 self._network_pause = min(NETWORK_PAUSE_MAX_S, max(NETWORK_PAUSE_S, self._network_pause * 2))
                 self._pause(now() + self._network_pause)
                 logger.warning("event=outbox_paused reason=network seconds=%s", self._network_pause)
@@ -335,7 +352,7 @@ class BotOutbox:
                 state = "deleted"
             except Exception as exc:  # noqa: BLE001 — classified by type, never logged with its text
                 transient = classify(exc)
-                if transient.code in ("rate_limited", "unknown_outcome"):
+                if transient.code in ("rate_limited", "unknown_outcome", "not_sent"):
                     state = None  # Telegram's limit or the network: tried again after the pause (before 48 h ends)
                 else:
                     transient, state = None, "failed"  # the user deleted the chat, the message is gone, …

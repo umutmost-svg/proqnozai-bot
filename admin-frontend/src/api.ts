@@ -133,6 +133,18 @@ const MESSAGES: Record<string, string> = {
   internal: 'Внутренняя ошибка сервера.',
 };
 
+/** Why the bot could not deliver a job (codes from bot_outbox.py). "Unknown outcome" must not invite a manual resend. */
+export const JOB_ERROR: Record<string, string> = {
+  blocked_by_user: 'пользователь заблокировал бота или не запускал его',
+  bad_request: 'Telegram отклонил сообщение',
+  unknown_outcome: 'исход неизвестен (сбой сети во время отправки) — возможно, доставлено; не отправляйте повторно вручную',
+  interrupted: 'исход неизвестен (бот перезапустился во время отправки) — возможно, доставлено',
+  not_sent: 'нет связи с Telegram — бот повторит сам',
+  rate_limited: 'лимит Telegram — бот повторит сам',
+  bot_ban: 'пользователь заблокирован в боте',
+  error: 'ошибка',
+};
+
 export function errorText(error: unknown): string {
   if (error instanceof ApiError) return MESSAGES[error.code] ?? `Ошибка: ${error.code}`;
   return 'Неизвестная ошибка.';
@@ -237,10 +249,12 @@ export interface InquiriesPage {
 export interface InquiryThread {
   userId: number; noticeAt: number | null; status: 'open' | 'closed'; truncated?: { inbound: boolean; outbound: boolean };
   user: { firstName: string | null; lastName: string | null; username: string | null; lang: string } | null;
-  history: { id: string; from: 'user' | 'admin'; at: number; text: string; by?: string | null; status?: string }[];
+  history: { id: string; from: 'user' | 'admin'; at: number; text: string; by?: string | null; status?: string; error?: string | null }[];
 }
 export interface OutboxPage {
-  summary: { connected: boolean; byStatus: Record<string, number>; last24h: Record<string, number>; nextDueAt: number | null; lastSentAt: number | null };
+  summary: { connected: boolean; byStatus: Record<string, number>; last24h: Record<string, number>; nextDueAt: number | null; lastSentAt: number | null;
+    /** The bot paused sending (flood limit or network outage) until then; null when not paused. */
+    pausedUntil?: number | null };
   limits: { batchPerRun: number; maxAttempts: number; stuckS: number; textRetentionDays: number; rowRetentionDays: number; jobTtlS: number };
   statuses: string[];
   items: { key: string; kind: 'message' | 'broadcast'; userId: number; batch: string | null; status: string; attempts: number;

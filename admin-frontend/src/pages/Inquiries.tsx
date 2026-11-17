@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ApiError, api, errorText, newIdempotencyKey, type InquiriesPage, type InquiryThread } from '../api';
+import { ApiError, api, errorText, JOB_ERROR, newIdempotencyKey, type InquiriesPage, type InquiryThread } from '../api';
 import { localTime } from '../format';
 import { can, useLoad, useMe } from '../state';
 import { Card, DangerDialog, Empty, ErrorBox, Loading, PageHead, Tag, Toast } from '../ui';
@@ -96,7 +96,7 @@ function Thread({ userId, onChanged, onToast }: { userId: string; onChanged: () 
         {data.history.map((h) => (
           <div key={h.id} className={`bubble-box ${h.from === 'admin' ? 'out' : 'in'}`} style={{ marginLeft: h.from === 'admin' ? 40 : 0, marginRight: h.from === 'user' ? 40 : 0 }}>
             {h.text}
-            <div className="small muted" style={{ marginTop: 4 }}>{localTime(h.at)} · {h.from === 'user' ? 'пользователь' : `${h.by ?? 'команда'} · ${DELIVERY[h.status ?? ''] ?? h.status ?? ''}`}</div>
+            <div className="small muted" style={{ marginTop: 4 }}>{localTime(h.at)} · {h.from === 'user' ? 'пользователь' : `${h.by ?? 'команда'} · ${DELIVERY[h.status ?? ''] ?? h.status ?? ''}${h.status === 'failed' && h.error ? `: ${JOB_ERROR[h.error] ?? h.error}` : ''}`}</div>
           </div>
         ))}
       </div>

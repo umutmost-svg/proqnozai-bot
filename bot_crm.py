@@ -99,12 +99,29 @@ def secure_file(path: Path) -> None:
                 pass
     else:
         try:
-            os.close(os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o660))
-            os.chmod(path, 0o660)  # the umask may have dropped group write
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o660)
         except FileExistsError:  # the other process created it at the same moment: checked below
             pass
+        else:
+            try:  # through the descriptor of the file just created: a name swapped meanwhile is never followed
+                os.fchmod(fd, 0o660)  # the umask may have dropped group write
+                _give_to_directory_owner(fd, path)
+            finally:
+                os.close(fd)
     if os.stat(path).st_mode & 0o007:
         raise PermissionError(f"{path.name} is readable by other local users")
+
+def _give_to_directory_owner(fd: int, path: Path) -> None:
+    """The bot runs as root; the admin (uid 10001 on the shared volume) must open the file too. A file the bot creates
+    goes to the owner of its directory at once, instead of root:root until the Mini App's next start (CRM audit B3)."""
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return
+    try:
+        st = os.stat(path.parent)
+        os.fchown(fd, st.st_uid, st.st_gid)
+    except OSError:
+        pass  # best effort: the Mini App's entrypoint also restores ownership of its volume on every start
+
 
 class BotCrm:
     def __init__(self, path: Path) -> None:
