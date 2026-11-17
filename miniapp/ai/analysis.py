@@ -612,7 +612,9 @@ class AiService:
                 try:
                     found = self._cache.existing(key)
                 except UpstreamError:
-                    if create:
+                    # A paid answer whose history write failed is retried at once, not after the failure's backoff
+                    # (near kickoff the backoff could outlast the margin and lose the answer).
+                    if create and key not in self._unstored:
                         raise
                     # A remembered failure of a paid attempt is not an answer: reading goes on
                     # to the stored history and otherwise says "not created".

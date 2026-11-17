@@ -909,11 +909,10 @@ def test_a_paid_answer_whose_write_failed_is_stored_and_served_on_the_next_reque
         run(ai.analyse("fd:7", user_id=1))
     assert getattr(exc.value, "code", None) == "upstream_error" and history.count() == 0
     assert "ai.history_write_failed type=OperationalError" in caplog.text
-    new_analysis(ai, clock)            # the remembered failure has expired
     with pytest.raises(Exception):     # still locked: still not shown, still not paid again
         run(ai.analyse("fd:7", user_id=1))
     history.failing = False
-    new_analysis(ai, clock)
+    # Retried at once: the remembered failure (its 30 s backoff) does not hold the kept answer back.
     served = run(ai.analyse("fd:7", user_id=1))
     assert served.factors == ("home_form", "home_rating") and history.count() == 1 and len(model.calls) == 1
     assert not ai._unstored and "ai:" not in "".join(ai._uncounted)
