@@ -550,7 +550,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
                "langs": dict(Counter(r["lang"] for r in rows))}
         if for_broadcast:  # sent back with the schedule request: the recipients confirmed are the ones shown
             out["audienceDigest"] = audience_digest(r["id"] for r in rows)
-            out["recentTagChanges"] = recent_tag_changes({r["id"] for r in rows})
+            if data.get("withTagChanges") is True:  # the confirmation only (not every preview while editing)
+                out["recentTagChanges"] = recent_tag_changes({r["id"] for r in rows})
         return out
 
     def recent_tag_changes(ids: set[int]) -> dict:
@@ -558,17 +559,18 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
         whatever the tags say when the broadcast is confirmed, so the confirmation shows recent changes."""
         since = ctx.now() - RECENT_TAGS_S
         with ctx.accounts._connect() as conn:
+            # One row per changed user (bulk tags journal a row per user): bounded by the number of users.
             rows = conn.execute(
-                "SELECT e.target_id, u.email FROM admin_events e LEFT JOIN admin_users u ON u.id = e.admin_id "
-                "WHERE e.action IN ('user.tag_add', 'user.tag_remove') AND e.target_type = 'user' AND e.at >= ?",
-                (since,)).fetchall()
+                "SELECT e.target_id, GROUP_CONCAT(DISTINCT u.email) FROM admin_events e "
+                "LEFT JOIN admin_users u ON u.id = e.admin_id "
+                "WHERE e.at >= ? AND e.action IN ('user.tag_add', 'user.tag_remove') AND e.target_type = 'user' "
+                "GROUP BY e.target_id", (since,)).fetchall()
         touched: set[int] = set()
         by: set[str] = set()
-        for target, email in rows:
+        for target, emails in rows:
             if target.isdigit() and int(target) in ids:
                 touched.add(int(target))
-                if email:
-                    by.add(email)
+                by.update(e for e in (emails or "").split(",") if e)
         return {"recipients": len(touched), "by": sorted(by), "hours": RECENT_TAGS_S // 3600}
 
     # ---- broadcasts --------------------------------------------------------------------------

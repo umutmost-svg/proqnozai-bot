@@ -231,7 +231,7 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
   useEffect(() => {
     if (!confirm) { setShown(null); return; }
     let alive = true;
-    api<{ size: number; audienceDigest: string; recentTagChanges?: { recipients: number; by: string[]; hours: number } }>('/api/admin/audience/preview', { method: 'POST', body: { rules: JSON.parse(rulesKey), forBroadcast: true } })
+    api<{ size: number; audienceDigest: string; recentTagChanges?: { recipients: number; by: string[]; hours: number } }>('/api/admin/audience/preview', { method: 'POST', body: { rules: JSON.parse(rulesKey), forBroadcast: true, withTagChanges: true } })
       .then((r) => { if (alive) setShown(r); }).catch(() => { if (alive) setShown(null); });
     return () => { alive = false; };
   }, [confirm, rulesKey]);

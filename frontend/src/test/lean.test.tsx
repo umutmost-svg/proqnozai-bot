@@ -65,12 +65,12 @@ describe('the model forecast is read strictly', () => {
 
 describe('ties and confidence (readLean)', () => {
   it('a tied top two is their double chance with the summed percent; a single outcome is then wrong', () => {
-    expect(readLean({ market: '12', probability: 80, confidence: 'estimate' }, [40, 20, 40], false))
-      .toEqual({ market: '12', probability: 80, confidence: 'estimate' });
+    expect(readLean({ market: '12', probability: 72, confidence: 'estimate' }, [36, 28, 36], false))
+      .toEqual({ market: '12', probability: 72, confidence: 'estimate' });
     expect(readLean({ market: '1X', probability: 76, confidence: 'estimate' }, [38, 38, 24], false))
       .toEqual({ market: '1X', probability: 76, confidence: 'estimate' });
-    expect(readLean({ market: '1', probability: 40, confidence: 'estimate' }, [40, 20, 40], false)).toBeNull();
-    expect(readLean({ market: '12', probability: 79, confidence: 'estimate' }, [40, 20, 40], false)).toBeNull();
+    expect(readLean({ market: '1', probability: 36, confidence: 'estimate' }, [36, 28, 36], false)).toBeNull();
+    expect(readLean({ market: '12', probability: 71, confidence: 'estimate' }, [36, 28, 36], false)).toBeNull();
   });
 
   it('model confidence only where allowed (READY in the validated population)', () => {
@@ -146,5 +146,7 @@ describe('a near-certain favourite has no lean (selection rule 6, min odds 1.30)
     expect(readLean(null, [80, 12, 8], false)).toBeUndefined();
     expect(readLean(null, [40, 20, 40], false)).toBeUndefined();   // a tied pair summing to 80 %
     expect(readLean(null, [60, 25, 15], false)).toBeNull();        // an open match must carry its lean
+    // An older backend still sending a near-certain lean: not shown.
+    expect(readLean({ market: '1', probability: 80, confidence: 'estimate' }, [80, 12, 8], false)).toBeUndefined();
   });
 });

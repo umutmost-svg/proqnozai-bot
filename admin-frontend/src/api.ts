@@ -210,7 +210,7 @@ export interface ForecastDetail extends ForecastRow {
 export interface QualityVersion {
   forecasts: number; logLoss1x2: number; brier1x2: number;
   markets: Record<string, { logLoss: number; ece: number }>;
-  picks: { count: number; hitRate: number | null };
+  picks: { count: number; hitRate: number | null; since?: string };
   byTournament: Record<string, { forecasts: number; logLoss1x2: number }>;
   prospectiveGate: { forecasts: number; minimum: number; passed: boolean };
 }

@@ -650,10 +650,13 @@ def test_the_broadcast_confirmation_points_out_recent_tag_changes(env):
     """A tag-based audience is whatever the tags say at confirmation: recent changes are shown (CRM B1 r4 P2)."""
     _, clock, client, accounts, secrets_ = env
     csrf = login(client, clock, secrets_, "admin@x.test")
-    before = post(client, "/api/admin/audience/preview", csrf, {"rules": {}, "forBroadcast": True}).json()
+    ask = {"rules": {}, "forBroadcast": True, "withTagChanges": True}
+    assert "recentTagChanges" not in post(client, "/api/admin/audience/preview", csrf,
+                                          {"rules": {}, "forBroadcast": True}).json()  # previews while editing
+    before = post(client, "/api/admin/audience/preview", csrf, ask).json()
     assert before["recentTagChanges"]["recipients"] == 0
     post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "VIP"})
-    after = post(client, "/api/admin/audience/preview", csrf, {"rules": {}, "forBroadcast": True}).json()
+    after = post(client, "/api/admin/audience/preview", csrf, ask).json()
     assert after["recentTagChanges"]["recipients"] == 1 and after["recentTagChanges"]["by"] and \
         after["recentTagChanges"]["hours"] == 24
     plain = post(client, "/api/admin/audience/preview", csrf, {"rules": {}}).json()

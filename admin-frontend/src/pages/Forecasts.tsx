@@ -115,7 +115,7 @@ export function Forecasts() {
                 <li><span className="k">Версия модели</span><span className="v mono">{v[0]}</span></li>
                 <li><span className="k">LogLoss 1X2</span><span className="v">{v[1].logLoss1x2.toFixed(4)}</span></li>
                 <li><span className="k">Brier 1X2</span><span className="v">{v[1].brier1x2.toFixed(4)}</span></li>
-                <li><span className="k">Попадание рекомендаций</span><span className="v">{pct(v[1].picks.hitRate)} <span className="small muted">из {v[1].picks.count}</span></span></li>
+                <li><span className="k">Попадание рекомендаций</span><span className="v">{pct(v[1].picks.hitRate)} <span className="small muted">из {v[1].picks.count}{v[1].picks.since ? ` с ${v[1].picks.since.split('-').reverse().join('.')}` : ''}</span></span></li>
                 <li><span className="k">Проспективная проверка</span><span className="v">{v[1].prospectiveGate.forecasts} / {v[1].prospectiveGate.minimum}</span></li>
               </ul>
               <div className="small muted" style={{ margin: '22px 0 8px' }}>LogLoss по турнирам</div>

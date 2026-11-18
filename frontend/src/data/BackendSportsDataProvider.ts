@@ -1059,6 +1059,8 @@ export function readLean(v: unknown, values: readonly number[], modelAllowed: bo
   const expected = tops.length === 1 ? [tops[0]] : tops.slice(0, 2);
   if (parts.length !== expected.length || parts.some((i, k) => i !== expected[k])) return null;
   if (v.probability !== parts.reduce<number>((a, i) => a + values[i]!, 0)) return null;
+  // A near-certain favourite is never shown as the lean, even if an older backend still sends one.
+  if ((v.probability as number) > LEAN_MAX_PERCENT) return undefined;
   return { market, probability: v.probability as number, confidence: v.confidence };
 }
 
