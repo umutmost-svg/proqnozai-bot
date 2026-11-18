@@ -659,5 +659,7 @@ def test_the_broadcast_confirmation_points_out_recent_tag_changes(env):
     after = post(client, "/api/admin/audience/preview", csrf, ask).json()
     assert after["recentTagChanges"]["recipients"] == 1 and after["recentTagChanges"]["by"] and \
         after["recentTagChanges"]["hours"] == 24
+    vip = post(client, "/api/admin/audience/preview", csrf, {**ask, "rules": {"tag_not": "VIP"}}).json()
+    assert vip["recentTagChanges"]["outside"] == 1         # U1 is out of this audience but was just retagged
     plain = post(client, "/api/admin/audience/preview", csrf, {"rules": {}}).json()
     assert "recentTagChanges" not in plain

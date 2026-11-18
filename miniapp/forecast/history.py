@@ -547,7 +547,8 @@ def _evaluate(items: list[tuple]) -> dict:
             markets[key] = {"logLoss": round(sum(log_loss_binary(q, w) for q, w in pairs) / len(pairs), 4),
                             "ece": round(expected_calibration_error(calibration(pairs)), 4)}
     # Only recommendations made under the current selection rules (rule 6 since SELECTION_RULES_SINCE; a pick is only
-    # ever made on its match day, so the kickoff date tells the rules apart).
+    # ever made on its match day, so the kickoff date tells the rules apart — the rule went live 17.11.2026 23:16 UTC,
+    # before that day began, with no old release serving after it).
     picks = [(pick, settle(pick, h, a) == "win") for _, _, h, a, pick, _, kickoff in items
              if pick != "NO_BET" and kickoff[:10] >= SELECTION_RULES_SINCE]
     by_tournament: dict[str, list[float]] = {}

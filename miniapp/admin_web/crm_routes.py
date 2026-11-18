@@ -566,12 +566,17 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
                 "WHERE e.at >= ? AND e.action IN ('user.tag_add', 'user.tag_remove') AND e.target_type = 'user' "
                 "GROUP BY e.target_id", (since,)).fetchall()
         touched: set[int] = set()
+        outside = 0  # changed but not in the audience now: e.g. a removed tag took them out of it
         by: set[str] = set()
         for target, emails in rows:
-            if target.isdigit() and int(target) in ids:
+            if not target.isdigit():
+                continue
+            if int(target) in ids:
                 touched.add(int(target))
-                by.update(e for e in (emails or "").split(",") if e)
-        return {"recipients": len(touched), "by": sorted(by), "hours": RECENT_TAGS_S // 3600}
+            else:
+                outside += 1
+            by.update(e for e in (emails or "").split(",") if e)
+        return {"recipients": len(touched), "outside": outside, "by": sorted(by), "hours": RECENT_TAGS_S // 3600}
 
     # ---- broadcasts --------------------------------------------------------------------------
 
