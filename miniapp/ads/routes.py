@@ -220,7 +220,8 @@ def register_ads_routes(
         def record() -> tuple[bool, bool]:
             """(counted, gone): `gone` — the offer may no longer be shown (paused, retargeted, or the frequency caps
             were filled by another tab or match); the card is then hidden, as its click would be refused."""
-            found = current_variant(t, country, odds is not None)
+            # The newest snapshot on disk (one stat): a campaign paused after the offer was issued hides at once.
+            found = current_variant(t, country, odds is not None, fresh=True)
             if found is None:
                 return False, True
             c = found[0]

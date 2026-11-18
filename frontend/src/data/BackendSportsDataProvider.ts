@@ -1034,9 +1034,20 @@ const LEAN_PARTS: Record<AiLean['market'], readonly (0 | 1 | 2)[]> = { '1': [0],
  * their double chance) with the matching percent; "model" only where `modelAllowed`. undefined: none sent (older
  * answers, no probabilities); null: a contract violation.
  */
+/** Selection rule 6 (backend `MIN_ODDS`): a favourite above 1/1.30 ≈ 76.9 % is never shown as the lean. */
+const LEAN_MAX_PERCENT = 100 / 1.3;
+
+function topLean(values: readonly number[]): number {
+  const top = Math.max(...values);
+  const tops = values.filter((n) => n === top);
+  return tops.length === 1 ? top : top * 2;
+}
+
 export function readLean(v: unknown, values: readonly number[], modelAllowed: boolean): AiLean | null | undefined {
   if (v === undefined) return undefined; // an answer from before the field existed
-  // The backend sends null only without probabilities; here they are shown, so null breaks the contract.
+  // With probabilities shown the backend sends null only for a near-certain favourite (no lean then); any other
+  // null breaks the contract.
+  if (v === null && values.length === 3) return topLean(values) > LEAN_MAX_PERCENT ? undefined : null;
   if (!isObj(v) || typeof v.market !== 'string' || !Object.hasOwn(LEAN_PARTS, v.market) || values.length !== 3) return null;
   if (v.confidence !== 'model' && v.confidence !== 'estimate') return null;
   if (v.confidence === 'model' && !modelAllowed) return null;

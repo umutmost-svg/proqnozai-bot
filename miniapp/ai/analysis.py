@@ -39,7 +39,7 @@ from miniapp.forecast.data import results_from_events
 from miniapp.forecast.engine import FROZEN, ForecastEngine, MatchForecast, Unavailable
 from miniapp.forecast.history import ForecastHistory, model_record
 from miniapp.forecast.markets import FAMILY, KEYS as MARKET_KEYS
-from miniapp.forecast.selection import below_min_odds, with_prices
+from miniapp.forecast.selection import P_MAX, below_min_odds, with_prices
 from miniapp.forecast.version import MODEL_VERSION
 from miniapp.odds.store import MatchOdds, OddsStore
 from miniapp.odds.value import book_json, compare, market_1x2_percent, market_book
@@ -219,9 +219,12 @@ class AnalysisResult:
         p = self.probabilities
         if not isinstance(p, dict) or not all(isinstance(p.get(k), int) for k in ("home", "draw", "away")):
             return None
-        return lean_of(p["home"], p["draw"], p["away"],
+        lean = lean_of(p["home"], p["draw"], p["away"],
                        "model" if self.kind == "ready" and not self.estimated and bool((self.forecast or {}).get("gateEligible"))
                        else "estimate")
+        # A near-certain favourite (fair odds under MIN_ODDS, selection rule 6) is never put in the recommended-bet
+        # card, even as an estimate: the card then says there is no recommendation.
+        return None if lean["probability"] > P_MAX * 100 else lean
 
     def to_json(self) -> dict:
         return {

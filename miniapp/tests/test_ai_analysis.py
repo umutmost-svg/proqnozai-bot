@@ -1125,3 +1125,12 @@ def test_delivered_and_opened_analyses_are_counted_in_telemetry(tmp_path, clock:
     assert client.get("/api/ai/analysis", params={"event_id": "fd:7"}).status_code == 200
     with sqlite3.connect(telemetry_path(settings.db_path)) as conn:
         assert conn.execute("SELECT SUM(ai_created), SUM(ai_opened) FROM user_activity").fetchone() == (1, 1)
+
+
+def test_a_near_certain_favourite_is_never_the_lean() -> None:
+    from miniapp.ai.analysis import AnalysisResult
+
+    sure = AnalysisResult("fd:7", "partial", (), probabilities={"home": 80, "draw": 12, "away": 8}, estimated=True)
+    assert sure.lean() is None and sure.to_json()["lean"] is None
+    open_ = AnalysisResult("fd:7", "partial", (), probabilities={"home": 70, "draw": 18, "away": 12}, estimated=True)
+    assert open_.lean()["market"] == "1"

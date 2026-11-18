@@ -89,7 +89,7 @@ def test_evaluation_reads_settled_forecasts_only(history: ForecastHistory) -> No
     history.record(record(key="goals-1:fd:9:x", event="fd:9"))
     history.settle_events([event()])
     report = history.evaluate()["goals-1"]
-    assert report["forecasts"] == 1 and report["picks"] == {"count": 1, "hitRate": 1.0}
+    assert report["forecasts"] == 1 and report["picks"] == {"count": 1, "hitRate": 1.0, "since": "2026-11-18"}
     assert report["logLoss1x2"] == pytest.approx(0.6931, abs=1e-3) and "O2.5" in report["markets"]
 
 
@@ -214,3 +214,15 @@ def test_the_paid_attempt_cap_holds_across_processes(tmp_path) -> None:
     assert b.add_attempt("k", kickoff, 2) is None                  # refused by the counting write itself
     assert b.attempts("k") == 2
     assert b.add_attempt("other", kickoff, 2) == 1                 # a new key starts at one
+
+
+def test_pick_metrics_count_only_recommendations_under_the_current_rules(history: ForecastHistory) -> None:
+    """Before rule 6 (min odds, 18.11.2026) a pick could be a near-certainty: its hit rate is not mixed in."""
+    history.record(record())                                               # kickoff 2027-01-14: current rules
+    old = replace(record(key="goals-1:fd:8:x", event="fd:8", created="2026-11-10T08:00:00Z"),
+                  kickoff_at="2026-11-10T15:00:00Z")
+    history.record(old)
+    old_event = replace(event(eid="fd:8"), starts_at="2026-11-10T15:00:00Z")
+    history.settle_events([event(), old_event])
+    picks = history.evaluate()["goals-1"]["picks"]
+    assert picks["count"] == 1 and picks["since"] == "2026-11-18"

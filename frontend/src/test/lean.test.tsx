@@ -140,3 +140,11 @@ describe('the validated-model lean card', () => {
     vi.doUnmock('../state/contexts');
   });
 });
+
+describe('a near-certain favourite has no lean (selection rule 6, min odds 1.30)', () => {
+  it('null is read as "no lean" only when the favourite is above 1/1.30', () => {
+    expect(readLean(null, [80, 12, 8], false)).toBeUndefined();
+    expect(readLean(null, [40, 20, 40], false)).toBeUndefined();   // a tied pair summing to 80 %
+    expect(readLean(null, [60, 25, 15], false)).toBeNull();        // an open match must carry its lean
+  });
+});

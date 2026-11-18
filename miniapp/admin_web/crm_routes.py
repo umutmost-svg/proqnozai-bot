@@ -37,6 +37,8 @@ _USER_SORT = {"id": "id", "created": "createdAt", "login": "lastLoginAt", "usern
 
 logger = logging.getLogger("miniapp.admin_web")
 
+RECENT_TAGS_S = 24 * 3600  # tag changes the broadcast confirmation points out
+
 def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
     store = ctx.store
     # The Mini App's credits, written straight into miniapp.db (docs/miniapp/credits.md).
@@ -548,7 +550,26 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> CrmStore:
                "langs": dict(Counter(r["lang"] for r in rows))}
         if for_broadcast:  # sent back with the schedule request: the recipients confirmed are the ones shown
             out["audienceDigest"] = audience_digest(r["id"] for r in rows)
+            out["recentTagChanges"] = recent_tag_changes({r["id"] for r in rows})
         return out
+
+    def recent_tag_changes(ids: set[int]) -> dict:
+        """Recipients whose tags were changed in the last RECENT_TAGS_S and by whom (journal): a tag-based audience is
+        whatever the tags say when the broadcast is confirmed, so the confirmation shows recent changes."""
+        since = ctx.now() - RECENT_TAGS_S
+        with ctx.accounts._connect() as conn:
+            rows = conn.execute(
+                "SELECT e.target_id, u.email FROM admin_events e LEFT JOIN admin_users u ON u.id = e.admin_id "
+                "WHERE e.action IN ('user.tag_add', 'user.tag_remove') AND e.target_type = 'user' AND e.at >= ?",
+                (since,)).fetchall()
+        touched: set[int] = set()
+        by: set[str] = set()
+        for target, email in rows:
+            if target.isdigit() and int(target) in ids:
+                touched.add(int(target))
+                if email:
+                    by.add(email)
+        return {"recipients": len(touched), "by": sorted(by), "hours": RECENT_TAGS_S // 3600}
 
     # ---- broadcasts --------------------------------------------------------------------------
 

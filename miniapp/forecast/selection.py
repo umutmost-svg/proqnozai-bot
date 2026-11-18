@@ -21,7 +21,8 @@ A market qualifies only when ALL of these hold:
 6. it is not a near-certainty: its fair odds 1/p are at least MIN_ODDS (probability at most
    P_MAX). An outcome at 1.01–1.20 is likely but pays next to nothing (owner 18.11.2026:
    "a balance between certainty and price"). Where a checked bookmaker price exists when the
-   recommendation is made, a market priced below MIN_ODDS drops out too (`with_prices`).
+   recommendation is made, a market priced below MIN_ODDS drops out too (`with_prices`; the next
+   qualifying market in the rules' order takes its place, of any family).
 
 Qualifying markets are ranked by the difference in (3); the first is the pick, up to
 three more from other market families are alternatives. Nothing qualifies → NO_BET.
@@ -30,7 +31,7 @@ three more from other market families are alternatives. Nothing qualifies → NO
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .markets import FAMILY, KEYS
 
@@ -43,6 +44,8 @@ CAL_MIN_COUNT = 100
 CAL_MAX_GAP = 0.05
 STABILITY_MAX = 0.05
 MIN_ODDS = 1.30
+# The day the current rules (rule 6 included) took effect: recommendation metrics count picks from then on.
+SELECTION_RULES_SINCE = "2026-11-18"
 P_MAX = 1 / MIN_ODDS
 MAX_ALTERNATIVES = 3
 # The same event under another name: never offered as a separate selection.
@@ -82,6 +85,9 @@ class Selection:
     pick: Candidate | None
     alternatives: tuple[Candidate, ...]
     no_bet_reason: str | None
+    # Every qualifying market in the rules' order (pick first): what `with_prices` falls back on when the bookmaker
+    # prices the pick under MIN_ODDS — also a same-family market the alternatives leave out. Not part of the JSON.
+    qualified: tuple[Candidate, ...] = field(default=(), compare=False)
 
     def to_json(self) -> dict:
         return {"pick": self.pick.to_json() if self.pick else None,
@@ -110,10 +116,11 @@ def with_prices(selection: Selection, book: Mapping[str, float] | None) -> Selec
     the selection's own order becomes the pick; none left → NO_BET `low_odds`."""
     if not book or selection.pick is None:
         return selection
-    kept = [c for c in (selection.pick, *selection.alternatives) if not below_min_odds(book.get(c.market))]
+    ordered = selection.qualified or (selection.pick, *selection.alternatives)
+    kept = [c for c in ordered if not below_min_odds(book.get(c.market))]
     if not kept:
         return Selection(None, (), NO_BET_LOW_ODDS)
-    return Selection(kept[0], tuple(kept[1:]), None)
+    return _arranged(kept)
 
 
 def select(probs: Mapping[str, float], league_rates: Mapping[str, float], *, competition: str,
@@ -137,14 +144,19 @@ def select(probs: Mapping[str, float], league_rates: Mapping[str, float], *, com
     if not qualified:
         return Selection(None, (), NO_BET_NONE)
     qualified.sort(key=lambda c: (-c.edge_over_league, -c.probability, KEYS.index(c.market)))
-    pick = qualified[0]
+    return _arranged(qualified)
+
+
+def _arranged(ordered: Sequence[Candidate]) -> Selection:
+    """The first is the pick; up to MAX_ALTERNATIVES more from other market families are alternatives."""
+    pick = ordered[0]
     seen = {FAMILY[pick.market]}
     extra: list[Candidate] = []
-    for c in qualified[1:]:
+    for c in ordered[1:]:
         if FAMILY[c.market] in seen:
             continue
         seen.add(FAMILY[c.market])
         extra.append(c)
         if len(extra) == MAX_ALTERNATIVES:
             break
-    return Selection(pick, tuple(extra), None)
+    return Selection(pick, tuple(extra), None, tuple(ordered))

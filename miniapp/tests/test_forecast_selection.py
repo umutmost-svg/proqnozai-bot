@@ -291,3 +291,15 @@ def test_before_the_match_day_probabilities_are_shown_but_nothing_is_recommended
     assert early.selection.pick is None and early.selection.no_bet_reason == "early_forecast"
     assert early.exact == today.exact and today.selection.no_bet_reason != "early_forecast"
     assert not early.gate_eligible and today.gate_eligible  # only match-day forecasts are gated
+
+
+def test_the_price_fallback_may_take_a_same_family_market_the_alternatives_left_out() -> None:
+    from miniapp.forecast.selection import with_prices
+
+    p = probs(**{"1X": 0.74, "X2": 0.66, "1": 0.58})
+    rates = {k: 0.3 for k in KEYS} | {"1X": 0.50, "X2": 0.50, "1": 0.45}
+    sel = choose(p, rates)
+    assert sel.pick.market == "1X" and "X2" not in [c.market for c in sel.alternatives]
+    priced = with_prices(sel, {"1X": 1.22, "X2": 1.9})
+    assert priced.pick.market == "X2"                      # the next qualifying market in the rules' order
+    assert "qualified" not in sel.to_json()                # not part of the stored or digested JSON

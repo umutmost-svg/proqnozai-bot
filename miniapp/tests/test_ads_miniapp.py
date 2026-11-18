@@ -435,3 +435,15 @@ def test_a_click_follows_the_newest_publication_at_once(tmp_path):
     publish(tmp_path, version=12)  # paused: an empty snapshot
     env.clock.advance(1)
     assert post(c, "/api/ads/click", csrf, {"impressionToken": token}).status_code == 410
+
+
+def test_a_campaign_paused_after_the_offer_hides_at_its_impression(tmp_path):
+    """The impression reads the newest snapshot on disk: a pause published after the offer was issued hides the card
+    at once (gone), not after the 30 s reload."""
+    env = Env(tmp_path)
+    publish(tmp_path, campaign())
+    c, csrf = env.user()
+    token = env.offer(c).json()["offer"]["impressionToken"]
+    publish(tmp_path, version=11)                          # emergency stop: an empty snapshot
+    assert post(c, "/api/ads/impression", csrf, {"impressionToken": token}).json() == {
+        "ok": True, "counted": False, "gone": True}

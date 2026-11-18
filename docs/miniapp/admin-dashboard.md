@@ -509,7 +509,9 @@ env-список (вход и каждая сессия). Данные поль�
 - **Remaining P2 (documented, Codex CRM-B1 r4)**: a session without the 2FA device can still change tags BEFORE an admin
   opens the confirmation, so a rule-based audience (e.g. "tag VIP") is whatever the data says at that moment. Closing
   it fully needs step-up on every tag change or a full recipient list to approve, both out of this part's scope. Tag
-  changes are journalled with the admin's id (`user.tag_add` / `user.tag_remove`).
+  changes are journalled with the admin's id (`user.tag_add` / `user.tag_remove`). Mitigation (18.11): the
+  confirmation dialog shows how many recipients had their tags changed in the last 24 h and by whom
+  (`recentTagChanges` of the broadcast audience preview).
 
 ## CRM audit fixes (17.11.2026, part B2: scale, analytics, UI)
 

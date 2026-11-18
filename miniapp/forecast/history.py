@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from miniapp.forecast.selection import SELECTION_RULES_SINCE
 from miniapp.sports.models import SportEvent
 
 from .markets import KEYS, settle
@@ -545,7 +546,10 @@ def _evaluate(items: list[tuple]) -> dict:
         if pairs:
             markets[key] = {"logLoss": round(sum(log_loss_binary(q, w) for q, w in pairs) / len(pairs), 4),
                             "ece": round(expected_calibration_error(calibration(pairs)), 4)}
-    picks = [(pick, settle(pick, h, a) == "win") for _, _, h, a, pick, *_ in items if pick != "NO_BET"]
+    # Only recommendations made under the current selection rules (rule 6 since SELECTION_RULES_SINCE; a pick is only
+    # ever made on its match day, so the kickoff date tells the rules apart).
+    picks = [(pick, settle(pick, h, a) == "win") for _, _, h, a, pick, _, kickoff in items
+             if pick != "NO_BET" and kickoff[:10] >= SELECTION_RULES_SINCE]
     by_tournament: dict[str, list[float]] = {}
     for tournament, p, h, a, *_ in items:
         by_tournament.setdefault(tournament, []).append(log_loss_1x2(p, outcome_1x2(h, a)))
@@ -554,7 +558,7 @@ def _evaluate(items: list[tuple]) -> dict:
         "logLoss1x2": round(ll, 4), "brier1x2": round(br, 4),
         "markets": markets,
         "picks": {"count": len(picks), "hitRate": round(sum(w for _, w in picks) / len(picks), 4)
-                  if picks else math.nan},
+                  if picks else math.nan, "since": SELECTION_RULES_SINCE},
         "byTournament": {t: {"forecasts": len(v), "logLoss1x2": round(sum(v) / len(v), 4)}
                          for t, v in by_tournament.items()},
     }

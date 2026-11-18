@@ -644,3 +644,17 @@ def test_a_due_broadcast_with_no_recipients_settles_as_sent(env):
     post(client, f"/api/admin/broadcasts/{bid}/schedule", csrf, {**dangerous(secrets_, clock), **reviewed(client, bid), "at": at})
     clock.t = at + 301
     assert next(b for b in client.get("/api/admin/broadcasts").json()["items"] if b["id"] == bid)["status"] == "sent"
+
+
+def test_the_broadcast_confirmation_points_out_recent_tag_changes(env):
+    """A tag-based audience is whatever the tags say at confirmation: recent changes are shown (CRM B1 r4 P2)."""
+    _, clock, client, accounts, secrets_ = env
+    csrf = login(client, clock, secrets_, "admin@x.test")
+    before = post(client, "/api/admin/audience/preview", csrf, {"rules": {}, "forBroadcast": True}).json()
+    assert before["recentTagChanges"]["recipients"] == 0
+    post(client, f"/api/admin/users/{U1}/tags", csrf, {"tag": "VIP"})
+    after = post(client, "/api/admin/audience/preview", csrf, {"rules": {}, "forBroadcast": True}).json()
+    assert after["recentTagChanges"]["recipients"] == 1 and after["recentTagChanges"]["by"] and \
+        after["recentTagChanges"]["hours"] == 24
+    plain = post(client, "/api/admin/audience/preview", csrf, {"rules": {}}).json()
+    assert "recentTagChanges" not in plain

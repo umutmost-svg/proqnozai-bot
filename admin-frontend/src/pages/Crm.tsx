@@ -226,12 +226,12 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
   useEffect(() => { createKey.current = newIdempotencyKey(); }, [formKey]);
   const [confirm, setConfirm] = useState(autoConfirm && item?.status === 'draft');
   // The recipients confirmed are exactly the ones previewed when the dialog opened (the server compares the set).
-  const [shown, setShown] = useState<{ size: number; audienceDigest: string } | null>(null);
+  const [shown, setShown] = useState<{ size: number; audienceDigest: string; recentTagChanges?: { recipients: number; by: string[]; hours: number } } | null>(null);
   const rulesKey = JSON.stringify(rules);
   useEffect(() => {
     if (!confirm) { setShown(null); return; }
     let alive = true;
-    api<{ size: number; audienceDigest: string }>('/api/admin/audience/preview', { method: 'POST', body: { rules: JSON.parse(rulesKey), forBroadcast: true } })
+    api<{ size: number; audienceDigest: string; recentTagChanges?: { recipients: number; by: string[]; hours: number } }>('/api/admin/audience/preview', { method: 'POST', body: { rules: JSON.parse(rulesKey), forBroadcast: true } })
       .then((r) => { if (alive) setShown(r); }).catch(() => { if (alive) setShown(null); });
     return () => { alive = false; };
   }, [confirm, rulesKey]);
@@ -314,7 +314,10 @@ function BroadcastForm({ item, initialRules, tags, onSaved, reload, autoConfirm 
       </div>
       {confirm && item && (
         <DangerDialog title="Запланировать рассылку?" confirmLabel="Запланировать" tone="primary" onClose={() => setConfirm(false)}
-          lead={<>«{name}» · {shown ? num(shown.size) : '…'} получателей · {localTime(at)} ({zoneLabel(at !== null ? new Date(at * 1000) : new Date())}). {server ? 'В это время бот начнёт отправку.' : 'В пилоте сообщение не уйдёт в Telegram.'}</>}
+          lead={<>«{name}» · {shown ? num(shown.size) : '…'} получателей · {localTime(at)} ({zoneLabel(at !== null ? new Date(at * 1000) : new Date())}). {server ? 'В это время бот начнёт отправку.' : 'В пилоте сообщение не уйдёт в Telegram.'}
+            {shown?.recentTagChanges && shown.recentTagChanges.recipients > 0 && (
+              <span className="small" role="note" data-testid="recent-tags"> У {num(shown.recentTagChanges.recipients)} получателей за последние {shown.recentTagChanges.hours} ч менялись теги{shown.recentTagChanges.by.length ? ` (${shown.recentTagChanges.by.join(', ')})` : ''}: проверьте, что аудитория та, что задумана.</span>
+            )}</>}
           onConfirm={async (input) => {
             await api(`/api/admin/broadcasts/${item.id}/schedule`, { method: 'POST', body: { ...input, at, digest, audienceDigest: shown?.audienceDigest ?? '' } });
             setConfirm(false); setToast('Рассылка запланирована'); reload();

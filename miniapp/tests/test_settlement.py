@@ -273,7 +273,7 @@ def test_admin_reports_counts_and_quality_without_writing_anything(tmp_path, cap
     out = json.loads(capsys.readouterr().out)
     assert out["forecasts"] == {"pending": 1, "settled": 1, "void": 0}
     quality = out["quality"]["goals-1"]
-    assert quality["forecasts"] == 1 and quality["picks"] == {"count": 1, "hitRate": 1.0}
+    assert quality["forecasts"] == 1 and quality["picks"] == {"count": 1, "hitRate": 1.0, "since": "2026-11-18"}
     assert not (tmp_path / "m.db").exists()
     assert {k: v for k, v in snapshot(tmp_path).items() if k in before} == before
 
